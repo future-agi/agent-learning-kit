@@ -65,4 +65,9 @@ protocol-specific coverage/quality metrics.
 V1 release-check now runs the same cookbook as `protocol_adapter_readiness` and
 requires the selected `execute_task(dict)` adapter, `mcp_tool_session` state,
 required MCP event types, protocol artifacts, and
-`mcp_tool_session_coverage` / `mcp_tool_session_quality` scores of 1.0.
+`mcp_tool_session_coverage` / `mcp_tool_session_quality` scores of 1.0. The
+cookbook is also promoted through `framework_adapter_probe_readiness` as
+`mcp_tool_session_promotion`, where release-check requires discovery/probe
+metadata, protocol state/event/artifact/summary evidence, and closed MCP metric
+floors before counting it under the native adapter axis in
+`environment_10x_robustness`.

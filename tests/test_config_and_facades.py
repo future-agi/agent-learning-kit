@@ -22639,6 +22639,14 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         adapter_axis_evidence["surface_checks"]["orchestration_trace_promotion"]
         is True
     )
+    assert (
+        adapter_axis_evidence["surface_checks"]["mcp_tool_session_promotion"]
+        is True
+    )
+    assert (
+        adapter_axis_evidence["surface_checks"]["a2a_protocol_trace_promotion"]
+        is True
+    )
     for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES:
         contract = native_adapter_contracts[surface]
         promotion = adapter_axis_evidence["promotions"][surface]
@@ -23842,6 +23850,152 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "orchestration_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    mcp_tool_session_promotion = adapter_probes["mcp_tool_session_promotion"]
+    assert mcp_tool_session_promotion["result_kind"] == "agent-learning.run.v1"
+    assert mcp_tool_session_promotion["result_status"] == "passed"
+    assert mcp_tool_session_promotion["manifest_present"] is True
+    assert mcp_tool_session_promotion["manifest_agent"] == {
+        "framework": "mcp",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert mcp_tool_session_promotion["selected_probe_summary"][
+        "call_styles"
+    ] == ["positional"]
+    assert mcp_tool_session_promotion["probe_proof_status"] == "passed"
+    assert mcp_tool_session_promotion["probe_proof_failed_check_ids"] == []
+    assert mcp_tool_session_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert mcp_tool_session_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert mcp_tool_session_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert mcp_tool_session_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert {
+        "framework_runtime",
+        "framework_trace",
+        "mcp_tool_session",
+    } <= set(mcp_tool_session_promotion["state_keys"])
+    assert mcp_tool_session_promotion["runtime_required_state_keys"] == [
+        "mcp_tool_session"
+    ]
+    assert {
+        "mcp_server",
+        "mcp_tool_schema",
+        "mcp_resource",
+        "mcp_tool_call",
+        "mcp_tool_result",
+        "mcp_tool_session",
+    } <= set(mcp_tool_session_promotion["event_types"])
+    assert {
+        "framework_runtime",
+        "framework_trace",
+        "mcp_tool_session",
+    } <= set(mcp_tool_session_promotion["artifact_kinds"])
+    mcp_protocol_summary = mcp_tool_session_promotion["protocol_summary"]
+    assert mcp_protocol_summary["server_count"] == 1
+    assert mcp_protocol_summary["schema_count"] == 2
+    assert mcp_protocol_summary["resource_count"] == 1
+    assert mcp_protocol_summary["call_count"] == 2
+    assert mcp_protocol_summary["result_count"] == 2
+    assert mcp_protocol_summary["tool_count"] == 2
+    assert mcp_protocol_summary["tool_response_count"] == 2
+    assert mcp_protocol_summary["error_count"] == 0
+    assert set(mcp_protocol_summary["server_names"]) == {"refund-tools"}
+    assert set(mcp_protocol_summary["session_ids"]) == {"mcp-session-refund-42"}
+    assert set(mcp_protocol_summary["tool_names"]) == {
+        "refund_policy_lookup",
+        "refund_status",
+    }
+    assert mcp_tool_session_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "mcp_tool_session_coverage": pytest.approx(1.0),
+        "mcp_tool_session_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    a2a_protocol_trace_promotion = adapter_probes["a2a_protocol_trace_promotion"]
+    assert a2a_protocol_trace_promotion["result_kind"] == "agent-learning.run.v1"
+    assert a2a_protocol_trace_promotion["result_status"] == "passed"
+    assert a2a_protocol_trace_promotion["manifest_present"] is True
+    assert a2a_protocol_trace_promotion["manifest_agent"] == {
+        "framework": "a2a",
+        "method": "send_message",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert a2a_protocol_trace_promotion["selected_probe_summary"][
+        "call_styles"
+    ] == ["positional"]
+    assert a2a_protocol_trace_promotion["probe_proof_status"] == "passed"
+    assert a2a_protocol_trace_promotion["probe_proof_failed_check_ids"] == []
+    assert a2a_protocol_trace_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert a2a_protocol_trace_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert a2a_protocol_trace_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert a2a_protocol_trace_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert {
+        "a2a_protocol_trace",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(a2a_protocol_trace_promotion["state_keys"])
+    assert a2a_protocol_trace_promotion["runtime_required_state_keys"] == [
+        "a2a_protocol_trace"
+    ]
+    assert {
+        "a2a_agent_card",
+        "a2a_message_send",
+        "a2a_task_status",
+        "a2a_task_artifact",
+        "a2a_artifact",
+        "a2a_protocol_trace",
+    } <= set(a2a_protocol_trace_promotion["event_types"])
+    assert {
+        "a2a_artifact",
+        "a2a_protocol_trace",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(a2a_protocol_trace_promotion["artifact_kinds"])
+    a2a_protocol_summary = a2a_protocol_trace_promotion["protocol_summary"]
+    assert a2a_protocol_summary["agent_card_count"] == 1
+    assert a2a_protocol_summary["message_count"] == 3
+    assert a2a_protocol_summary["task_count"] == 1
+    assert a2a_protocol_summary["artifact_count"] == 1
+    assert a2a_protocol_summary["protocol_event_count"] == 5
+    assert a2a_protocol_summary["status_update_count"] == 3
+    assert a2a_protocol_summary["artifact_update_count"] == 1
+    assert a2a_protocol_summary["terminal_task_count"] == 1
+    assert a2a_protocol_summary["error_count"] == 0
+    assert set(a2a_protocol_summary["agent_names"]) == {"refund-review-agent"}
+    assert set(a2a_protocol_summary["skill_names"]) == {"refund_review"}
+    assert set(a2a_protocol_summary["roles"]) == {"agent", "user"}
+    assert a2a_protocol_summary["states"] == ["completed"]
+    assert a2a_protocol_trace_promotion["metric_averages"] == {
+        "a2a_protocol_coverage": pytest.approx(1.0),
+        "a2a_protocol_quality": pytest.approx(1.0),
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
@@ -23857,6 +24011,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "browser_cua_trace_promotion",
         "workflow_trace_promotion",
         "orchestration_trace_promotion",
+        "mcp_tool_session_promotion",
+        "a2a_protocol_trace_promotion",
     ):
         promoted = adapter_probes[surface]
         assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True

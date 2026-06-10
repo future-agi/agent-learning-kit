@@ -60,4 +60,9 @@ generated eval config requires the resulting events, trace/json artifacts, and
 V1 release-check now runs the same cookbook as `protocol_adapter_readiness` and
 requires the selected `send_message(dict)` adapter, `a2a_protocol_trace` state,
 required A2A event types, protocol/json artifacts, and
-`a2a_protocol_coverage` / `a2a_protocol_quality` scores of 1.0.
+`a2a_protocol_coverage` / `a2a_protocol_quality` scores of 1.0. The cookbook is
+also promoted through `framework_adapter_probe_readiness` as
+`a2a_protocol_trace_promotion`, where release-check requires discovery/probe
+metadata, protocol state/event/artifact/summary evidence, and closed A2A metric
+floors before counting it under the native adapter axis in
+`environment_10x_robustness`.

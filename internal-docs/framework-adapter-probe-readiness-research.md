@@ -35,13 +35,17 @@ promotion plus LiveKit `run_session(dict)` session promotion and
 provider-response promotion with required provider kwargs and normalized
 `provider_response` state plus Browser Use `execute_task(dict)` CUA trace
 promotion plus LangGraph `execute_task(dict)` workflow and orchestration trace
-promotions, callable
+promotions plus MCP `execute_task(dict)` tool-session promotion and A2A
+`send_message(dict)` protocol-trace promotion, callable
 signatures to be inspectable, observed I/O contracts and call contracts to cover
 the selected probe cases, discovery to be used where expected, probe proofs to
 pass, promoted manifests to carry proof/discovery metadata, and evaluated runs
 to close framework runtime, adapter call-contract, observed-I/O,
-adapter-contract, framework-trace, workflow, orchestration, and tool-selection
-metrics.
+adapter-contract, framework-trace, workflow, orchestration, protocol, and
+tool-selection metrics. The MCP/A2A promotions additionally require protocol
+state keys, runtime required-state keys, event types, artifact kinds, summary
+counts, and summary membership evidence so protocol semantics cannot regress
+behind passing metric averages.
 
 The optimization surfaces also render a first-class `framework_adapter_probe`
 report/action card. Release-check verifies that the card is local-only,

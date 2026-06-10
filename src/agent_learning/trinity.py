@@ -2660,6 +2660,8 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "browser_cua_trace_promotion",
     "workflow_trace_promotion",
     "orchestration_trace_promotion",
+    "mcp_tool_session_promotion",
+    "a2a_protocol_trace_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3504,6 +3506,8 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_browser_cua_trace.py",
     "examples/sdk_framework_adapter_workflow_trace.py",
     "examples/sdk_framework_adapter_orchestration_trace.py",
+    "examples/sdk_framework_adapter_mcp_tool_session.py",
+    "examples/sdk_framework_adapter_a2a_protocol_trace.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3825,6 +3829,123 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
             "framework_trace_coverage": 1.0,
             "orchestration_flow_quality": 1.0,
             "orchestration_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "mcp_tool_session_promotion",
+        "path": "examples/sdk_framework_adapter_mcp_tool_session.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "mcp",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "expected_call_style": "positional",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "state_key": "mcp_tool_session",
+        "required_state_keys": [
+            "framework_runtime",
+            "framework_trace",
+            "mcp_tool_session",
+        ],
+        "required_runtime_state_keys": ["mcp_tool_session"],
+        "required_events": [
+            "mcp_server",
+            "mcp_tool_schema",
+            "mcp_resource",
+            "mcp_tool_call",
+            "mcp_tool_result",
+            "mcp_tool_session",
+        ],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+            "mcp_tool_session",
+        ],
+        "summary_minimums": {
+            "server_count": 1,
+            "schema_count": 2,
+            "resource_count": 1,
+            "call_count": 2,
+            "result_count": 2,
+            "tool_count": 2,
+            "tool_response_count": 2,
+        },
+        "summary_maximums": {"error_count": 0},
+        "summary_contains": {
+            "server_names": ["refund-tools"],
+            "session_ids": ["mcp-session-refund-42"],
+            "tool_names": ["refund_policy_lookup", "refund_status"],
+        },
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "mcp_tool_session_coverage": 1.0,
+            "mcp_tool_session_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "a2a_protocol_trace_promotion",
+        "path": "examples/sdk_framework_adapter_a2a_protocol_trace.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "a2a",
+        "expected_method": "send_message",
+        "expected_input_mode": "dict",
+        "expected_call_style": "positional",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "state_key": "a2a_protocol_trace",
+        "required_state_keys": [
+            "a2a_protocol_trace",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "required_runtime_state_keys": ["a2a_protocol_trace"],
+        "required_events": [
+            "a2a_agent_card",
+            "a2a_message_send",
+            "a2a_task_status",
+            "a2a_task_artifact",
+            "a2a_artifact",
+            "a2a_protocol_trace",
+        ],
+        "required_artifact_kinds": [
+            "a2a_artifact",
+            "a2a_protocol_trace",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "summary_minimums": {
+            "agent_card_count": 1,
+            "message_count": 3,
+            "task_count": 1,
+            "artifact_count": 1,
+            "protocol_event_count": 5,
+            "status_update_count": 3,
+            "artifact_update_count": 1,
+            "terminal_task_count": 1,
+        },
+        "summary_maximums": {"error_count": 0},
+        "summary_contains": {
+            "agent_names": ["refund-review-agent"],
+            "skill_names": ["refund_review"],
+            "roles": ["agent", "user"],
+            "states": ["completed"],
+        },
+        "min_metrics": {
+            "a2a_protocol_coverage": 1.0,
+            "a2a_protocol_quality": 1.0,
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
             "tool_selection_accuracy": 1.0,
         },
     },
@@ -34021,6 +34142,12 @@ def _framework_adapter_probe_record(
     best_adapter = _as_mapping(best_config.get("adapter"))
     manifest_agent = _as_mapping(manifest.get("agent"))
     manifest_simulation = _as_mapping(manifest.get("simulation"))
+    manifest_evaluation = _as_mapping(manifest.get("evaluation"))
+    manifest_agent_report = _as_mapping(manifest_evaluation.get("agent_report"))
+    manifest_eval_config = _as_mapping(manifest_agent_report.get("config"))
+    runtime_contract = _as_mapping(
+        manifest_eval_config.get("framework_runtime_contract")
+    )
     manifest_metadata = _as_mapping(manifest.get("metadata"))
     manifest_agent_metadata = _as_mapping(manifest_agent.get("metadata"))
     manifest_probe_proof = _as_mapping(
@@ -34079,6 +34206,40 @@ def _framework_adapter_probe_record(
     ) or _as_mapping(proof_evidence.get("framework_adapter_callable_signature"))
     metric_averages = _as_mapping(summary.get("metric_averages"))
     expected_metrics = _as_mapping(contract.get("min_metrics"))
+    result_report = _as_mapping(result.get("report"))
+    cases = [
+        item
+        for item in _as_list(result_report.get("results"))
+        if isinstance(item, Mapping)
+    ]
+    case = _as_mapping(cases[0]) if cases else {}
+    case_metadata = _as_mapping(case.get("metadata"))
+    environment_state = _as_mapping(case_metadata.get("environment_state"))
+    state_key = contract.get("state_key")
+    protocol_state = (
+        _as_mapping(environment_state.get(str(state_key)))
+        if state_key is not None
+        else {}
+    )
+    protocol_summary = _as_mapping(protocol_state.get("summary"))
+    events = [item for item in _as_list(case.get("events")) if isinstance(item, Mapping)]
+    artifacts = [
+        item for item in _as_list(case.get("artifacts")) if isinstance(item, Mapping)
+    ]
+    event_types = sorted(
+        {
+            str(event.get("type") or "")
+            for event in events
+            if event.get("type")
+        }
+    )
+    artifact_kinds = sorted(
+        {
+            str(_as_mapping(artifact.get("metadata")).get("kind") or "")
+            for artifact in artifacts
+            if _as_mapping(artifact.get("metadata")).get("kind")
+        }
+    )
     manifest_discovery_used = manifest_metadata.get("framework_adapter_discovery_used")
     if manifest_discovery_used is None:
         manifest_discovery_used = manifest_agent_metadata.get(
@@ -34155,6 +34316,13 @@ def _framework_adapter_probe_record(
             or discovery_summary.get("candidate_count")
             or len(_as_list(discovery.get("adapter_candidates")))
         ),
+        "state_keys": sorted(str(key) for key in environment_state),
+        "runtime_required_state_keys": list(
+            runtime_contract.get("required_state_keys") or []
+        ),
+        "event_types": event_types,
+        "artifact_kinds": artifact_kinds,
+        "protocol_summary": protocol_summary,
         "probe_proof_status": proof.get("status"),
         "probe_proof_failed_check_ids": list(proof.get("failed_check_ids") or []),
         "probe_proof_check_ids": [
@@ -34406,6 +34574,80 @@ def _append_framework_adapter_probe_errors(
                     "field": "manifest_simulation.modality",
                     "expected": expected_modality,
                     "observed": observed_modality,
+                }
+            )
+
+    for contract_key, record_key, field in (
+        (
+            "required_state_keys",
+            "state_keys",
+            "report.results[0].metadata.environment_state",
+        ),
+        (
+            "required_runtime_state_keys",
+            "runtime_required_state_keys",
+            (
+                "evaluation.agent_report.config.framework_runtime_contract."
+                "required_state_keys"
+            ),
+        ),
+        ("required_events", "event_types", "report.results[0].events"),
+        ("required_artifact_kinds", "artifact_kinds", "report.results[0].artifacts"),
+    ):
+        required_values = [str(item) for item in _as_list(contract.get(contract_key))]
+        if not required_values:
+            continue
+        observed_values = {str(item) for item in _as_list(record.get(record_key))}
+        missing_values = sorted(set(required_values) - observed_values)
+        if missing_values:
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": field,
+                    "required": required_values,
+                    "observed": sorted(observed_values),
+                    "missing": missing_values,
+                }
+            )
+
+    protocol_summary = _as_mapping(record.get("protocol_summary"))
+    for field, minimum in _as_mapping(contract.get("summary_minimums")).items():
+        if _float_or_zero(protocol_summary.get(field)) < float(minimum):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"protocol_summary.{field}",
+                    "expected": f">={minimum}",
+                    "observed": protocol_summary.get(field),
+                }
+            )
+    for field, maximum in _as_mapping(contract.get("summary_maximums")).items():
+        if _float_or_zero(protocol_summary.get(field)) > float(maximum):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"protocol_summary.{field}",
+                    "expected": f"<={maximum}",
+                    "observed": protocol_summary.get(field),
+                }
+            )
+    for field, required_values in _as_mapping(contract.get("summary_contains")).items():
+        observed_values = {str(item) for item in _as_list(protocol_summary.get(field))}
+        missing_values = sorted(
+            {str(item) for item in _as_list(required_values)} - observed_values
+        )
+        if missing_values:
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"protocol_summary.{field}",
+                    "required": list(required_values),
+                    "observed": sorted(observed_values),
+                    "missing": missing_values,
                 }
             )
 

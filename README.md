@@ -704,7 +704,9 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_provider_response.py` and
 `examples/sdk_framework_adapter_browser_cua_trace.py` and
 `examples/sdk_framework_adapter_workflow_trace.py` and
-`examples/sdk_framework_adapter_orchestration_trace.py` for local
+`examples/sdk_framework_adapter_orchestration_trace.py` and
+`examples/sdk_framework_adapter_mcp_tool_session.py` and
+`examples/sdk_framework_adapter_a2a_protocol_trace.py` for local
 target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)`,
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`,
 OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
@@ -713,7 +715,8 @@ OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
 `execute_task(dict)` promotion with local CUA trace evidence, LangGraph-style
 workflow promotion with checkpoints/interrupt/replay evidence, and
 LangGraph-style orchestration promotion with supervisor/delegate trace
-evidence.
+evidence, plus MCP `execute_task(dict)` tool-session promotion and A2A
+`send_message(dict)` protocol-trace promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -724,7 +727,7 @@ promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
 `run_session(dict)` session promotion plus provider-response promotion and
 Browser/CUA trace promotion plus LangGraph workflow and orchestration trace
-promotions. It requires
+promotions plus MCP tool-session and A2A protocol-trace promotions. It requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
 promotion, LiveKit session promotion, and provider-response promotion with
@@ -735,10 +738,14 @@ avoidance, plus LangGraph `execute_task(dict)` with `workflow_trace` state,
 checkpoint/interrupt/replay evidence, workflow graph metrics, and
 `orchestration_trace` state, supervisor/delegate/handoff evidence, retry
 recovery, trace artifacts, and orchestration coverage/flow-quality metrics,
+plus MCP `execute_task(dict)` with `mcp_tool_session` state, protocol events,
+tool schemas/resources/results, and MCP coverage/quality metrics, and A2A
+`send_message(dict)` with `a2a_protocol_trace` state, protocol events,
+artifacts, terminal task state, and A2A coverage/quality metrics,
 callable-signature evidence, observed I/O contracts, passing probe proofs,
 discovery metadata where expected, promoted manifest proof metadata, and
 evaluated framework runtime, adapter call-contract, observed-I/O,
-adapter-contract, framework-trace, and tool metrics. Probe
+adapter-contract, framework-trace, protocol, and tool metrics. Probe
 optimization artifacts also render a
 `framework_adapter_probe` report/action card with exportable proof, selected
 probe report, contract, callable signature, observed I/O contract, and
@@ -903,7 +910,9 @@ cards, skills, messages, tasks, artifacts, status updates, terminal tasks, roles
 and states. See `examples/sdk_framework_adapter_a2a_protocol_trace.py`.
 `agent-learn release-check` runs this cookbook locally and requires the selected
 `send_message(dict)` adapter to emit A2A state, events, artifacts, and passing
-coverage/quality metrics.
+coverage/quality metrics. The same cookbook is release-gated as
+`a2a_protocol_trace_promotion` in `framework_adapter_probe_readiness` and
+counts under native adapter promotion in `environment_10x_robustness`.
 
 MCP client/server sessions normalize protocol-native tool evidence. Outputs
 carrying MCP `tools/list`, `tools/call`, resource, JSON-RPC, or `{tools, calls}`
@@ -914,7 +923,10 @@ resources, tool calls, tool results, and tool names. See
 `examples/sdk_framework_adapter_mcp_tool_session.py`. `agent-learn
 release-check` runs this cookbook locally and requires the selected
 `execute_task(dict)` adapter to emit MCP session state, tool schemas,
-calls/results, resources, artifacts, and passing coverage/quality metrics.
+calls/results, resources, artifacts, and passing coverage/quality metrics. The
+same cookbook is release-gated as `mcp_tool_session_promotion` in
+`framework_adapter_probe_readiness` and counts under native adapter promotion
+in `environment_10x_robustness`.
 
 OpenEnv/Gymnasium-style framework outputs normalize into environment replay
 evidence. Local adapters can return `openenv`, `open_env`, reset/step
@@ -2156,8 +2168,8 @@ hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
 native adapter probe promotion including provider-response, Browser/CUA trace,
-workflow trace, and orchestration trace promotion, and authenticated hooks are
-counted as native proof-backed axes;
+workflow trace, orchestration trace, MCP tool-session, and A2A protocol-trace
+promotion, and authenticated hooks are counted as native proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:

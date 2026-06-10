@@ -7,9 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `6ae97a6 Gate OpenEnv compatibility boundary`.
+  `eb8daba Package release handover proof plan`.
 - Current handoff slice:
-  Release-proof handover packaging and dry-run command plan.
+  MCP/A2A protocol adapter probe promotions.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -39,7 +39,9 @@ What is done:
   provider-response `chat.completions.create(messages=..., model=...)`, plus
   Browser Use `execute_task(dict)` CUA trace promotion, LangGraph-style
   `execute_task(dict)` workflow trace promotion, and LangGraph-style
-  `execute_task(dict)` orchestration trace promotion.
+  `execute_task(dict)` orchestration trace promotion, plus MCP
+  `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
+  protocol-trace promotion.
 
 What is not done:
 
@@ -50,7 +52,67 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest Release-Proof Handover Packaging Slice
+## Latest MCP/A2A Protocol Adapter Probe Promotion Slice
+
+This handoff slice promotes the existing local MCP and A2A protocol cookbooks
+through the generic adapter-probe release gate and the environment 10x native
+adapter axis.
+
+Implemented behavior:
+
+- Reuses `examples/sdk_framework_adapter_mcp_tool_session.py` and
+  `examples/sdk_framework_adapter_a2a_protocol_trace.py`.
+- `mcp_tool_session_promotion` requires a selected local
+  `execute_task(dict)` adapter with `framework=mcp`, positional call style,
+  discovery/probe metadata, `mcp_tool_session` state, runtime required-state
+  evidence, MCP events, framework/runtime/tool-session artifacts, summary
+  counts/membership checks, and closed MCP coverage/quality metrics.
+- `a2a_protocol_trace_promotion` requires a selected local
+  `send_message(dict)` adapter with `framework=a2a`, positional call style,
+  discovery/probe metadata, `a2a_protocol_trace` state, runtime required-state
+  evidence, A2A events, framework/runtime/protocol/artifact outputs, summary
+  counts/membership checks, and closed A2A coverage/quality metrics.
+- `_framework_adapter_probe_record()` now extracts protocol state keys, runtime
+  required-state keys, event types, artifact kinds, and protocol summaries from
+  the promoted run report.
+- `_append_framework_adapter_probe_errors()` enforces optional contract fields
+  for protocol state, events, artifacts, and summary evidence so these
+  promotions cannot pass on metrics alone.
+- `environment_10x_robustness` counts both promotions through the generic
+  per-surface contract path.
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
+- `mcp_tool_session_coverage == 1.0`
+- `mcp_tool_session_quality == 1.0`
+- `a2a_protocol_coverage == 1.0`
+- `a2a_protocol_quality == 1.0`
+
+Current slice verification:
+
+- `uv run python -m py_compile src/agent_learning/trinity.py tests/test_config_and_facades.py`
+  passed.
+- `uv run ruff check src/agent_learning/trinity.py tests/test_config_and_facades.py`
+  passed.
+- Focused MCP/A2A example and behavior tests passed:
+  `4 passed, 5 warnings in 8.20s`.
+- `uv run pytest tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones -q`
+  passed: `1 passed, 8 warnings in 609.97s (0:10:09)`.
+- `git diff --check` passed.
+- `uv run ruff check .` passed.
+- Selected release-proof passed for `release_check` and `git_diff_check`, writing
+  `/tmp/agent-learning-protocol-promotion-release-proof.json`. Its
+  `summary.ready` is `false` because non-selected checks are intentionally
+  skipped.
+- `uv run pytest -q` passed: `300 passed, 10 warnings in 1161.68s (0:19:21)`.
+
+## Previous Release-Proof Handover Packaging Slice
 
 This handoff slice makes release-proof packaging executable and
 machine-readable.
@@ -489,7 +551,8 @@ tool-selection, and any trace-specific metrics required by its contract.
 The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
 session promoted adapter contracts plus provider-response, Browser/CUA trace,
-workflow trace, and orchestration trace promotion.
+workflow trace, orchestration trace, MCP tool-session, and A2A protocol-trace
+promotion.
 
 Implemented behavior:
 
@@ -499,7 +562,8 @@ Implemented behavior:
   `langchain_invoke_promotion`, `pipecat_process_promotion`,
   `nested_method_promotion`, `livekit_run_session_promotion`, and
   `provider_response_promotion`, `browser_cua_trace_promotion`,
-  `workflow_trace_promotion`, and `orchestration_trace_promotion`.
+  `workflow_trace_promotion`, `orchestration_trace_promotion`,
+  `mcp_tool_session_promotion`, and `a2a_protocol_trace_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
   mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
@@ -817,6 +881,8 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_browser_cua_trace.py`
 - `examples/sdk_framework_adapter_workflow_trace.py`
 - `examples/sdk_framework_adapter_orchestration_trace.py`
+- `examples/sdk_framework_adapter_mcp_tool_session.py`
+- `examples/sdk_framework_adapter_a2a_protocol_trace.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
@@ -824,6 +890,8 @@ Cookbooks, docs, and tests:
 - `internal-docs/framework-adapter-probe-research.md`
 - `internal-docs/framework-adapter-probe-readiness-research.md`
 - `internal-docs/environment-10x-robustness-research.md`
+- `internal-docs/mcp-tool-session-adapter-research.md`
+- `internal-docs/a2a-protocol-adapter-research.md`
 - `internal-docs/workflow-graph-probe-research.md`
 - `internal-docs/orchestration-trace-adapter-research.md`
 
@@ -872,9 +940,10 @@ Rules:
 
 Suggested next packets:
 
-1. Additional local framework control-plane promotion.
+1. Additional non-protocol framework control-plane promotion.
    - Goal: promote another local framework-shaped adapter through the BYO probe
-     path only if it adds a new runtime contract, not another wrapper variant.
+     path only if it adds a new runtime contract beyond the protocol, workflow,
+     orchestration, browser, provider, and realtime shapes already covered.
    - Constraint: keep it local-only and map claims to release-check metrics.
 2. Full release proof hardening.
    - Goal: run and preserve the full `agent-learn release-proof --project-root .`
@@ -903,12 +972,15 @@ Commit locally with a message that names the proof surface. For this slice:
 
 ```bash
 git add src/agent_learning/trinity.py \
-  src/agent_learning/cli.py \
   tests/test_config_and_facades.py \
   README.md \
   V1_RELEASE_ROADMAP.md \
+  internal-docs/framework-adapter-probe-readiness-research.md \
+  internal-docs/environment-10x-robustness-research.md \
+  internal-docs/a2a-protocol-adapter-research.md \
+  internal-docs/mcp-tool-session-adapter-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Package release handover proof plan"
+git commit -m "Promote protocol adapter probes"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

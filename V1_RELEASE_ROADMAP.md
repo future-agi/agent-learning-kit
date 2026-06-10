@@ -473,12 +473,14 @@ Current checkpoint:
   `run_session(dict)` session promotion plus provider-response promotion with
   required provider kwargs and normalized `provider_response` state plus Browser
   Use `execute_task(dict)` CUA trace promotion plus LangGraph
-  `execute_task(dict)` workflow and orchestration trace promotions,
+  `execute_task(dict)` workflow and orchestration trace promotions plus MCP
+  `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
+  protocol-trace promotion,
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
-  adapter-contract, trace, workflow, orchestration, and tool metrics. The same
-  gate now renders the
+  adapter-contract, trace, workflow, orchestration, protocol, and tool metrics.
+  The same gate now renders the
   `framework_adapter_probe` report/action card and exports the native probe
   proof, callable signature, observed I/O contract, selected probe report,
   contract, and replay lock through report/action artifacts.
@@ -532,6 +534,11 @@ Current checkpoint:
   `orchestration_trace_promotion`, so their adapter discovery/proof metadata
   and workflow/orchestration metric floors count toward the native adapter 10x
   axis.
+- MCP and A2A protocol adapter cookbooks are also promoted under
+  `framework_adapter_probe_readiness` as `mcp_tool_session_promotion` and
+  `a2a_protocol_trace_promotion`, so protocol state/events/artifacts, selected
+  adapter discovery/proof metadata, and MCP/A2A coverage/quality metric floors
+  count toward the native adapter 10x axis.
 - Workflow hook readiness is now an executable release-check gate:
   `examples/sdk_workflow_hook_optimization.py` must run a local authenticated
   HTTP workflow hook, select the verified authenticated hook over mocked/missing
@@ -588,7 +595,8 @@ Current checkpoint:
   certification, red-team suite coverage, and regression replay. Workspace
   import certification, local HTTP framework transport, local WebSocket
   framework transport, framework matrix optimization, native adapter probe
-  promotion, and authenticated hooks are counted as native proof-backed axes;
+  promotion including MCP/A2A protocol-native adapter promotions, and
+  authenticated hooks are counted as native proof-backed axes;
   OpenEnv/Gymnasium-shaped traces are compatibility inputs inside that bar.
 
 Acceptance gates:
