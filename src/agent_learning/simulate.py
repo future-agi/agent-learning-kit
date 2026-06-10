@@ -105,6 +105,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "ToolMockEnvironment",
     "VoiceEnvironment",
     "WorkflowHookEnvironment",
+    "WorkflowTraceEnvironment",
     "WorldAttackReplayEnvironment",
     "WorldContractEnvironment",
     "WorldOrchestrationReplayEnvironment",

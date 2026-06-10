@@ -838,6 +838,86 @@ V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
     "framework_trace_spans"
 )
 
+V1_WORKFLOW_TARGET_OPTIMIZER_FILES = [
+    "examples/sdk_workflow_target_optimization.py",
+    "internal-docs/workflow-target-optimizer-readiness-research.md",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments.0.data.trace",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS = [
+    "agent",
+    "agent.responses",
+    "agent.prompt",
+    "prompt",
+    "agent.method",
+    "simulation.environments.0.data.hooks",
+    "simulation.environments.0.data.endpoint",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS = [
+    "graph",
+    "router",
+    "orchestration",
+    "harness",
+    "evaluator",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS = [
+    "workflow_trace_coverage",
+    "workflow_graph_quality",
+    "tool_selection_accuracy",
+    "artifact_coverage",
+    "task_completion",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES = [
+    "workflow_trace",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS = [
+    "workflow_trace",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK = "langgraph"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL = "workflow_trace_status"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL = "policy_lookup"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS = {
+    "node_count": 4,
+    "edge_count": 3,
+    "step_count": 4,
+    "checkpoint_count": 2,
+    "route_decision_count": 1,
+    "interrupt_count": 1,
+    "replay_count": 1,
+    "write_count": 1,
+}
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS = [
+    "approval",
+    "decision",
+    "policy_result",
+]
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE = "intake"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE = "finalize"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
+    "agent_learning.optimize.build_target_optimization_manifest"
+)
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE = "workflow_trace_graph"
+
+V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM = 0.98
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -4381,6 +4461,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=orchestration_target_optimizer,
     )
+    workflow_target_optimizer = _release_workflow_target_optimizer_status(root)
+    _append_release_check(
+        checks,
+        check_id="workflow_target_optimizer_readiness",
+        passed=(
+            not workflow_target_optimizer["missing_files"]
+            and not workflow_target_optimizer["execution_errors"]
+            and not workflow_target_optimizer["manifest_errors"]
+            and not workflow_target_optimizer["optimization_errors"]
+            and not workflow_target_optimizer["metric_errors"]
+            and not workflow_target_optimizer["runtime_errors"]
+            and not workflow_target_optimizer["security_errors"]
+        ),
+        milestone="M3",
+        evidence=workflow_target_optimizer,
+    )
     optimizer_governance = _release_optimizer_governance_status(root)
     _append_release_check(
         checks,
@@ -5427,6 +5523,60 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_orchestration_target_optimizer_surface": (
             V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
+        ),
+        "required_workflow_target_optimizer_files": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_FILES
+        ),
+        "required_workflow_target_optimizer_search_paths": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_workflow_target_optimizer_search_paths": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_workflow_target_optimizer_layers": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_workflow_target_optimizer_metrics": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_workflow_target_optimizer_environment_types": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_workflow_target_optimizer_state_keys": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+        ),
+        "required_workflow_target_optimizer_framework": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+        ),
+        "required_workflow_target_optimizer_tool": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
+        ),
+        "required_workflow_target_optimizer_workflow_tool": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
+        ),
+        "required_workflow_target_optimizer_counts": dict(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
+        ),
+        "required_workflow_target_optimizer_final_state_keys": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+        ),
+        "required_workflow_target_optimizer_entry_node": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+        ),
+        "required_workflow_target_optimizer_terminal_node": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+        ),
+        "required_workflow_target_optimizer_source": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE
+        ),
+        "required_workflow_target_optimizer_task_kind": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_workflow_target_optimizer_surface": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE
+        ),
+        "required_workflow_target_optimizer_score_minimum": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -11847,6 +11997,654 @@ def _release_orchestration_target_optimizer_status(root: Path) -> dict[str, Any]
         "metric_errors": metric_errors,
         "runtime_errors": runtime_errors,
         "proof_errors": proof_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_WORKFLOW_TARGET_OPTIMIZER_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = "release-check-workflow-target-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def forbidden_paths(paths: Iterable[str]) -> list[str]:
+        findings: list[str] = []
+        for path in paths:
+            for forbidden in V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS:
+                if path == forbidden or path.startswith(f"{forbidden}."):
+                    findings.append(path)
+                    break
+        return sorted(findings)
+
+    def environment_types(environments: Any) -> list[str]:
+        return [
+            str(_as_mapping(environment).get("type"))
+            for environment in _as_list(environments)
+            if _as_mapping(environment).get("type")
+        ]
+
+    def trace_from_environment(environment: Mapping[str, Any]) -> dict[str, Any]:
+        data = _as_mapping(environment.get("data"))
+        return _as_mapping(data.get("trace") or data.get("workflow_trace") or data)
+
+    def without_workflow_trace(environments: Any) -> list[dict[str, Any]]:
+        copied = copy.deepcopy(_as_list(environments))
+        for environment in copied:
+            env = _as_mapping(environment)
+            if env.get("type") == "workflow_trace":
+                data = _as_mapping(env.get("data"))
+                data["trace"] = {}
+                env["data"] = data
+                environment.clear()
+                environment.update(env)
+        return copied
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_WORKFLOW_TARGET_OPTIMIZATION_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_workflow_target_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_workflow_target_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = release_secret
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-workflow-target-optimizer-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-workflow-target.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_config = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_config.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        search_paths = sorted(str(path) for path in search_space)
+        forbidden_search_paths = forbidden_paths(search_paths)
+        candidates = _as_list(
+            search_space.get(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS[0])
+        )
+        candidate_counts = [
+            {
+                key: len(
+                    _as_list(
+                        _as_mapping(candidate).get(
+                            {
+                                "node_count": "nodes",
+                                "edge_count": "edges",
+                                "step_count": "steps",
+                                "checkpoint_count": "checkpoints",
+                                "route_decision_count": "route_decisions",
+                                "interrupt_count": "interrupts",
+                                "replay_count": "replay",
+                                "write_count": "writes",
+                            }[key]
+                        )
+                    )
+                )
+                for key in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
+            }
+            for candidate in candidates
+        ]
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            _as_mapping(environment)
+            for environment in _as_list(simulation.get("environments"))
+        ]
+        env_types = environment_types(environments)
+        workflow_environment = environments[0] if environments else {}
+        base_trace = trace_from_environment(workflow_environment)
+        agent = _as_mapping(manifest.get("agent"))
+        target_base_agent = _as_mapping(
+            _as_mapping(target.get("base_config")).get("agent")
+        )
+        evaluation_config = _as_mapping(
+            _as_mapping(manifest.get("evaluation")).get("agent_report")
+        )
+        evaluation_config = _as_mapping(evaluation_config.get("config"))
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        workflow_quality = _as_mapping(evaluation_config.get("workflow_trace_quality"))
+
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_source": target_metadata.get("source"),
+            "target_task_kind": target_metadata.get("task_kind"),
+            "optimized_surface": target_metadata.get("optimized_surface"),
+            "target_layers": list(target.get("layers") or []),
+            "threshold": optimization_config.get("threshold"),
+            "search_paths": search_paths,
+            "forbidden_search_paths_present": forbidden_search_paths,
+            "candidate_count": len(candidates),
+            "candidate_counts": candidate_counts,
+            "auto_execute_tools": simulation.get("auto_execute_tools"),
+            "min_turns": simulation.get("min_turns"),
+            "max_turns": simulation.get("max_turns"),
+            "environment_types": env_types,
+            "framework": base_trace.get("framework"),
+            "base_node_count": len(_as_list(base_trace.get("nodes"))),
+            "agent_type": agent.get("type"),
+            "target_base_agent_type": target_base_agent.get("type"),
+            "required_tools": list(evaluation_config.get("required_tools") or []),
+            "required_events": list(evaluation_config.get("required_events") or []),
+            "required_artifact_types": list(
+                evaluation_config.get("required_artifact_types") or []
+            ),
+            "required_workflow_trace": list(
+                evaluation_config.get("required_workflow_trace") or []
+            ),
+            "workflow_trace_quality": dict(workflow_quality),
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_WORKFLOW_TARGET_OPTIMIZATION_KEY"],
+            ),
+            "optimization.threshold": (
+                optimization_config.get("threshold"),
+                V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM,
+            ),
+            "optimization.target.metadata.source": (
+                target_metadata.get("source"),
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+            ),
+            "optimization.target.metadata.task_kind": (
+                target_metadata.get("task_kind"),
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+            ),
+            "optimization.target.metadata.optimized_surface": (
+                target_metadata.get("optimized_surface"),
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS,
+            ),
+            "optimization.target.search_space": (
+                search_paths,
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "optimization.target.forbidden_search_paths_present": (
+                forbidden_search_paths,
+                [],
+            ),
+            "simulation.auto_execute_tools": (simulation.get("auto_execute_tools"), True),
+            "simulation.min_turns": (simulation.get("min_turns"), 1),
+            "simulation.max_turns": (simulation.get("max_turns"), 1),
+            "workflow_trace.framework": (
+                base_trace.get("framework"),
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+            ),
+            "agent.type": (agent.get("type"), "scripted"),
+            "optimization.target.base_config.agent.type": (
+                target_base_agent.get("type"),
+                "scripted",
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if missing_values(
+            env_types,
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        ):
+            append_error(
+                manifest_errors,
+                field="simulation.environments.type",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=env_types,
+            )
+        if len(candidates) != 2:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.workflow_trace",
+                expected=2,
+                observed=len(candidates),
+            )
+        if not any(
+            counts.get("node_count", 0)
+            >= V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS["node_count"]
+            for counts in candidate_counts
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.workflow_trace.strong",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS,
+                observed=candidate_counts,
+            )
+        for metric in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            if _float_or_zero(metric_weights.get(metric)) <= 0.0:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.metric_weights.{metric}",
+                    expected=">0",
+                    observed=metric_weights.get(metric),
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        best_history = max(
+            histories,
+            key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            default={},
+        )
+        best_history = _as_mapping(best_history)
+        selected_metrics = _as_mapping(best_history.get("metrics"))
+        selected_patch = _as_mapping(best_history.get("patch"))
+        selected_patch_paths = sorted(str(path) for path in selected_patch)
+        forbidden_patch_paths = forbidden_paths(selected_patch_paths)
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        manifest_agent = _as_mapping(manifest.get("agent"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(best_simulation.get("environments"))
+        ]
+        manifest_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(
+                _as_mapping(manifest.get("simulation")).get("environments")
+            )
+        ]
+        best_environment_types = environment_types(best_environments)
+        fixed_environment_fields_unchanged = without_workflow_trace(
+            best_environments
+        ) == without_workflow_trace(manifest_environments)
+        report = _as_mapping(best_history.get("report"))
+        result_rows = _as_list(report.get("results"))
+        result_row = _as_mapping(result_rows[0]) if result_rows else {}
+        metadata = _as_mapping(result_row.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        workflow_state = _as_mapping(environment_state.get("workflow_trace"))
+        topology = _as_mapping(workflow_state.get("topology"))
+        summary_metrics = _as_mapping(summary.get("metric_averages"))
+        tool_calls = [
+            _as_mapping(tool_call)
+            for tool_call in _as_list(result_row.get("tool_calls"))
+            if isinstance(tool_call, Mapping)
+        ]
+        tool_call_names = sorted(
+            {
+                str(tool_call.get("name") or "")
+                for tool_call in tool_calls
+                if tool_call.get("name")
+            }
+        )
+        release_secret_absent = (
+            release_secret not in json.dumps(result, sort_keys=True, default=str)
+        )
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "selected_patch_paths": selected_patch_paths,
+            "forbidden_patch_paths_present": forbidden_patch_paths,
+            "best_history_score": best_history.get("score"),
+            "agent_unchanged": best_agent == manifest_agent,
+            "fixed_environment_fields_unchanged": (
+                fixed_environment_fields_unchanged
+            ),
+            "selected_environment_types": best_environment_types,
+            "optimizer_governance_status": summary.get(
+                "optimizer_governance_status"
+            ),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["metrics"] = {
+            "summary_metric_averages": {
+                metric: summary_metrics.get(metric)
+                for metric in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+        evidence["runtime"] = {
+            "state_keys": sorted(str(key) for key in environment_state),
+            "framework": workflow_state.get("framework"),
+            "counts": {
+                key: _int_or_zero(workflow_state.get(key))
+                for key in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
+            },
+            "tool_call_names": tool_call_names,
+            "workflow_tool_names": list(workflow_state.get("tool_names") or []),
+            "final_state_keys": list(workflow_state.get("final_state_keys") or []),
+            "entry_nodes": list(topology.get("entry_nodes") or []),
+            "terminal_nodes": list(topology.get("terminal_nodes") or []),
+            "has_replay": workflow_state.get("has_replay"),
+            "has_interrupts": workflow_state.get("has_interrupts"),
+            "has_routes": workflow_state.get("has_routes"),
+        }
+        evidence["security"] = {
+            "serialized_secret_absent": release_secret_absent,
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+            "best_history.patch": (
+                selected_patch_paths,
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "best_history.forbidden_patch_paths_present": (
+                forbidden_patch_paths,
+                [],
+            ),
+            "optimization.best_config.agent_unchanged": (
+                best_agent == manifest_agent,
+                True,
+            ),
+            "optimization.best_config.fixed_environment_fields_unchanged": (
+                fixed_environment_fields_unchanged,
+                True,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field, observed in {
+            "summary.optimization_score": summary.get("optimization_score"),
+            "summary.evaluation_score": summary.get("evaluation_score"),
+            "best_history.score": best_history.get("score"),
+        }.items():
+            if _float_or_zero(observed) < (
+                V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+            ):
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=f">={V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM}",
+                    observed=observed,
+                )
+        for field, observed in {
+            "summary.total_evaluations": summary.get("total_evaluations"),
+            "summary.total_iterations": summary.get("total_iterations"),
+            "summary.candidate_lineage_count": summary.get(
+                "candidate_lineage_count"
+            ),
+        }.items():
+            if _int_or_zero(observed) < 2:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=2",
+                    observed=observed,
+                )
+        if missing_values(
+            best_environment_types,
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.simulation.environments",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=best_environment_types,
+            )
+        for metric in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            observed = selected_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"best_history.metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+
+        if missing_values(
+            environment_state,
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+        ):
+            append_error(
+                runtime_errors,
+                field="report.results.0.metadata.environment_state",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+                observed=sorted(str(key) for key in environment_state),
+            )
+        if workflow_state.get("framework") != V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK:
+            append_error(
+                runtime_errors,
+                field="workflow_trace.framework",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+                observed=workflow_state.get("framework"),
+            )
+        for field, expected in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS.items():
+            observed = _int_or_zero(workflow_state.get(field))
+            if observed < expected:
+                append_error(
+                    runtime_errors,
+                    field=f"workflow_trace.{field}",
+                    expected=f">={expected}",
+                    observed=observed,
+                )
+        if V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL not in tool_call_names:
+            append_error(
+                runtime_errors,
+                field="report.results.0.tool_calls.name",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL,
+                observed=tool_call_names,
+            )
+        if V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL not in _as_list(
+            workflow_state.get("tool_names")
+        ):
+            append_error(
+                runtime_errors,
+                field="workflow_trace.tool_names",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL,
+                observed=workflow_state.get("tool_names") or [],
+            )
+        if missing_values(
+            workflow_state.get("final_state_keys"),
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS,
+        ):
+            append_error(
+                runtime_errors,
+                field="workflow_trace.final_state_keys",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS,
+                observed=workflow_state.get("final_state_keys") or [],
+            )
+        if (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+            not in _as_list(topology.get("entry_nodes"))
+        ):
+            append_error(
+                runtime_errors,
+                field="workflow_trace.topology.entry_nodes",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE,
+                observed=topology.get("entry_nodes") or [],
+            )
+        if (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+            not in _as_list(topology.get("terminal_nodes"))
+        ):
+            append_error(
+                runtime_errors,
+                field="workflow_trace.topology.terminal_nodes",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE,
+                observed=topology.get("terminal_nodes") or [],
+            )
+        for field in ("has_replay", "has_interrupts", "has_routes"):
+            if workflow_state.get(field) is not True:
+                append_error(
+                    runtime_errors,
+                    field=f"workflow_trace.{field}",
+                    expected=True,
+                    observed=workflow_state.get(field),
+                )
+        if not release_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_WORKFLOW_TARGET_OPTIMIZER_FILES),
+        "required_search_paths": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_search_paths": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_layers": list(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS),
+        "required_metrics": list(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS),
+        "required_environment_types": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_state_keys": list(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS),
+        "required_framework": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+        "required_tool": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL,
+        "required_workflow_tool": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL,
+        "required_counts": dict(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS),
+        "required_final_state_keys": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+        ),
+        "required_entry_node": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE,
+        "required_terminal_node": (
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+        ),
+        "required_source": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+        "required_task_kind": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+        "required_surface": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+        "required_score_minimum": V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
         "security_errors": security_errors,
         "evidence": evidence,
     }
@@ -38456,6 +39254,24 @@ __all__ = [
     "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
     "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL",
     "V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_FILES",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",

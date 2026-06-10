@@ -180,6 +180,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.discover_framework_adapter is not None
     assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
     assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
+    assert simulate.WorkflowTraceEnvironment is fi_simulate.WorkflowTraceEnvironment
     assert simulate.run_eval_suite_file is not None
     assert evals.behavior_entropy_report is not None
     assert simulate.behavior_entropy_artifact is not None
@@ -580,6 +581,8 @@ def test_facades_expose_unified_agent_learning_modules():
         "framework_capability",
         "framework_probe",
         "framework_portability",
+        "workflow_trace",
+        "workflow_graph",
         "openenv",
         "open_env",
         "gymnasium_env",
@@ -2571,6 +2574,73 @@ def test_workflow_framework_adapter_accepts_nested_trace_export():
     } <= {event.type for event in response.events}
 
 
+def test_workflow_trace_manifest_environment_preserves_native_graph_state(tmp_path):
+    from agent_learning import simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_workflow_target_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_workflow_target_optimization_manifest_environment",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module._base_config()
+    manifest["scenario"] = module._scenario()
+    manifest["simulation"]["environments"][0]["data"]["trace"] = (
+        module._strong_workflow_trace()
+    )
+    manifest["evaluation"] = {
+        "agent_report": {
+            "threshold": 0.9,
+            "config": module._evaluation_config(),
+        }
+    }
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "workflow-trace-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert "workflow_trace" in simulate.supported_manifest_environment_types()
+    assert "workflow_graph" in simulate.supported_manifest_environment_types()
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["workflow_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["workflow_graph_quality"] == (
+        pytest.approx(1.0)
+    )
+    row = result["report"]["results"][0]
+    workflow = row["metadata"]["environment_state"]["workflow_trace"]
+    assert workflow["framework"] == "langgraph"
+    assert workflow["node_count"] == 4
+    assert workflow["edge_count"] == 3
+    assert workflow["step_count"] == 4
+    assert workflow["checkpoint_count"] == 2
+    assert workflow["route_decision_count"] == 1
+    assert workflow["interrupt_count"] == 1
+    assert workflow["replay_count"] == 1
+    assert workflow["write_count"] == 1
+    assert workflow["tool_names"] == ["policy_lookup"]
+    assert workflow["final_state_keys"] == ["approval", "decision", "policy_result"]
+    assert workflow["topology"]["entry_nodes"] == ["intake"]
+    assert workflow["topology"]["terminal_nodes"] == ["finalize"]
+    assert [tool_call["name"] for tool_call in row["tool_calls"]] == [
+        "workflow_trace_status"
+    ]
+    assert {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    } <= {event["type"] for event in row["events"]}
+
+
 def test_lifecycle_framework_adapter_preserves_recovery_trace(tmp_path):
     from agent_learning import simulate
 
@@ -4197,6 +4267,102 @@ def test_sdk_orchestration_target_optimization_example_runs(
     assert proof["assurance_level"] == "l3_native_orchestration_stack_verified"
     assert proof["failed_check_ids"] == []
     assert proof["warning_check_ids"] == []
+
+
+def test_sdk_workflow_target_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_WORKFLOW_TARGET_OPTIMIZATION_KEY",
+        "real-local-sdk-workflow-target-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_workflow_target_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_workflow_target_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_WORKFLOW_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
+    target = manifest["optimization"]["target"]
+    assert target["metadata"]["source"] == (
+        "agent_learning.optimize.build_target_optimization_manifest"
+    )
+    assert target["metadata"]["task_kind"] == "generic_target"
+    assert target["metadata"]["optimized_surface"] == "workflow_trace_graph"
+    assert target["layers"] == [
+        "graph",
+        "router",
+        "orchestration",
+        "harness",
+        "evaluator",
+    ]
+    assert list(target["search_space"]) == [module.TARGET_PATH]
+    assert "agent" not in target["search_space"]
+    assert "agent.prompt" not in target["search_space"]
+    environments = manifest["simulation"]["environments"]
+    assert [environment["type"] for environment in environments] == [
+        "workflow_trace"
+    ]
+    assert len(environments[0]["data"]["trace"]["nodes"]) == 1
+    strong_candidate = target["search_space"][module.TARGET_PATH][1]
+    assert len(strong_candidate["nodes"]) == 4
+    assert len(strong_candidate["edges"]) == 3
+    assert len(strong_candidate["steps"]) == 4
+    assert len(strong_candidate["checkpoints"]) == 2
+
+    output_path = tmp_path / "sdk-workflow-target-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["optimizer_governance_status"] == "passed"
+    assert result["summary"]["optimizer_governance_failed_check_count"] == 0
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] >= 0.98
+    assert set(best_history["patch"]) == {module.TARGET_PATH}
+    assert "agent" not in best_history["patch"]
+    assert result["optimization"]["best_config"]["agent"] == manifest["agent"]
+    best_environment = result["optimization"]["best_config"]["simulation"][
+        "environments"
+    ][0]
+    assert best_environment["type"] == "workflow_trace"
+    assert best_environment["data"]["trace"] == best_history["patch"][
+        module.TARGET_PATH
+    ]
+    for metric in [
+        "workflow_trace_coverage",
+        "workflow_graph_quality",
+        "tool_selection_accuracy",
+        "artifact_coverage",
+        "task_completion",
+    ]:
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    workflow = state["workflow_trace"]
+    assert workflow["framework"] == "langgraph"
+    assert workflow["node_count"] == 4
+    assert workflow["edge_count"] == 3
+    assert workflow["step_count"] == 4
+    assert workflow["checkpoint_count"] == 2
+    assert workflow["route_decision_count"] == 1
+    assert workflow["interrupt_count"] == 1
+    assert workflow["replay_count"] == 1
+    assert workflow["write_count"] == 1
+    assert workflow["tool_names"] == ["policy_lookup"]
+    assert workflow["final_state_keys"] == ["approval", "decision", "policy_result"]
+    assert workflow["topology"]["entry_nodes"] == ["intake"]
+    assert workflow["topology"]["terminal_nodes"] == ["finalize"]
 
 
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
@@ -16227,6 +16393,60 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_orchestration_target_optimizer_surface"] == (
         trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
     )
+    assert payload["required_workflow_target_optimizer_files"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_FILES
+    )
+    assert payload["required_workflow_target_optimizer_search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["forbidden_workflow_target_optimizer_search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert payload["required_workflow_target_optimizer_layers"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_workflow_target_optimizer_metrics"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert payload["required_workflow_target_optimizer_environment_types"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_workflow_target_optimizer_state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_workflow_target_optimizer_framework"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert payload["required_workflow_target_optimizer_tool"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
+    )
+    assert payload["required_workflow_target_optimizer_workflow_tool"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
+    )
+    assert payload["required_workflow_target_optimizer_counts"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
+    )
+    assert payload["required_workflow_target_optimizer_final_state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+    )
+    assert payload["required_workflow_target_optimizer_entry_node"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+    )
+    assert payload["required_workflow_target_optimizer_terminal_node"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+    )
+    assert payload["required_workflow_target_optimizer_source"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert payload["required_workflow_target_optimizer_task_kind"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert payload["required_workflow_target_optimizer_surface"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert payload["required_workflow_target_optimizer_score_minimum"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -17117,6 +17337,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "multi_agent_target_optimizer_readiness",
         "memory_target_optimizer_readiness",
         "orchestration_target_optimizer_readiness",
+        "workflow_target_optimizer_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -18485,6 +18706,237 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     }
     orchestration_target_security = orchestration_target_evidence["security"]
     assert orchestration_target_security["serialized_secret_absent"] is True
+
+    workflow_target = checks["workflow_target_optimizer_readiness"]["evidence"]
+    assert workflow_target["required_files"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_FILES
+    )
+    assert workflow_target["required_search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert workflow_target["forbidden_search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert workflow_target["required_layers"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert workflow_target["required_metrics"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert workflow_target["required_environment_types"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert workflow_target["required_state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert workflow_target["required_framework"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert workflow_target["required_tool"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
+    )
+    assert workflow_target["required_workflow_tool"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
+    )
+    assert workflow_target["required_counts"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
+    )
+    assert workflow_target["required_final_state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+    )
+    assert workflow_target["required_entry_node"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+    )
+    assert workflow_target["required_terminal_node"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+    )
+    assert workflow_target["required_source"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert workflow_target["required_task_kind"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert workflow_target["required_surface"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert workflow_target["required_score_minimum"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+    )
+    assert workflow_target["missing_files"] == []
+    assert workflow_target["execution_errors"] == []
+    assert workflow_target["manifest_errors"] == []
+    assert workflow_target["optimization_errors"] == []
+    assert workflow_target["metric_errors"] == []
+    assert workflow_target["runtime_errors"] == []
+    assert workflow_target["security_errors"] == []
+    workflow_target_evidence = workflow_target["evidence"]
+    workflow_target_manifest = workflow_target_evidence["manifest"]
+    assert workflow_target_manifest["version"] == "agent-learning.optimization.v1"
+    assert workflow_target_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_WORKFLOW_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert workflow_target_manifest["target_source"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert workflow_target_manifest["target_task_kind"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert workflow_target_manifest["optimized_surface"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert workflow_target_manifest["target_layers"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert workflow_target_manifest["threshold"] == pytest.approx(0.98)
+    assert workflow_target_manifest["search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert workflow_target_manifest["forbidden_search_paths_present"] == []
+    assert workflow_target_manifest["candidate_count"] == 2
+    assert workflow_target_manifest["candidate_counts"][0]["node_count"] == 1
+    assert any(
+        counts["node_count"]
+        >= trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS["node_count"]
+        for counts in workflow_target_manifest["candidate_counts"]
+    )
+    assert workflow_target_manifest["auto_execute_tools"] is True
+    assert workflow_target_manifest["min_turns"] == 1
+    assert workflow_target_manifest["max_turns"] == 1
+    assert workflow_target_manifest["environment_types"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert workflow_target_manifest["framework"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert workflow_target_manifest["base_node_count"] == 1
+    assert workflow_target_manifest["agent_type"] == "scripted"
+    assert workflow_target_manifest["target_base_agent_type"] == "scripted"
+    assert workflow_target_manifest["required_tools"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
+    ]
+    assert set(workflow_target_manifest["required_events"]) >= {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    }
+    assert workflow_target_manifest["required_artifact_types"] == ["trace"]
+    assert set(workflow_target_manifest["required_workflow_trace"]) >= {
+        "workflow_trace",
+        "trace",
+        "graph",
+        "node",
+        "edge",
+        "step",
+        "checkpoint",
+        "route",
+        "interrupt",
+        "replay",
+        "write",
+        "state",
+        "tool",
+        "tool_call",
+        "final_state",
+        "topology",
+        "framework",
+    }
+    workflow_quality = workflow_target_manifest["workflow_trace_quality"]
+    assert workflow_quality["framework"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert workflow_quality["required_tools"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
+    ]
+    assert workflow_quality["required_final_state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+    )
+    assert workflow_quality["required_entry_nodes"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+    ]
+    assert workflow_quality["required_terminal_nodes"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+    ]
+    assert workflow_quality["require_replay"] is True
+    assert workflow_quality["require_interrupts"] is True
+    assert workflow_quality["require_routes"] is True
+    assert workflow_quality["require_topology"] is True
+    for metric in trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS:
+        assert workflow_target_manifest["metric_weights"][metric] > 0.0
+
+    workflow_target_optimization = workflow_target_evidence["optimization"]
+    assert workflow_target_optimization["kind"] == "agent-learning.optimization.v1"
+    assert workflow_target_optimization["schema_version"] == (
+        "agent-learning.cli.v1"
+    )
+    assert workflow_target_optimization["status"] == "passed"
+    assert workflow_target_optimization["output_roundtrip"] is True
+    assert workflow_target_optimization["optimization_passed"] is True
+    assert workflow_target_optimization["evaluation_passed"] is True
+    assert workflow_target_optimization["optimization_score"] >= (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+    )
+    assert workflow_target_optimization["evaluation_score"] >= (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+    )
+    assert workflow_target_optimization["total_evaluations"] >= 2
+    assert workflow_target_optimization["total_iterations"] >= 2
+    assert workflow_target_optimization["candidate_lineage_count"] >= 2
+    assert workflow_target_optimization["selected_patch_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert workflow_target_optimization["forbidden_patch_paths_present"] == []
+    assert workflow_target_optimization["agent_unchanged"] is True
+    assert workflow_target_optimization["fixed_environment_fields_unchanged"] is True
+    assert workflow_target_optimization["selected_environment_types"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert workflow_target_optimization["best_history_score"] >= (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+    )
+    assert workflow_target_optimization["optimizer_governance_status"] == "passed"
+    assert workflow_target_optimization[
+        "optimizer_governance_failed_check_count"
+    ] == 0
+    workflow_target_metrics = workflow_target_evidence["metrics"]
+    for metric in trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS:
+        assert workflow_target_metrics["selected_metrics"][metric] == (
+            pytest.approx(1.0)
+        )
+        summary_metric = workflow_target_metrics["summary_metric_averages"][metric]
+        if summary_metric is not None:
+            assert summary_metric == pytest.approx(1.0)
+    workflow_target_runtime = workflow_target_evidence["runtime"]
+    assert workflow_target_runtime["state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert workflow_target_runtime["framework"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert workflow_target_runtime["counts"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
+    )
+    assert workflow_target_runtime["tool_call_names"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
+    ]
+    assert workflow_target_runtime["workflow_tool_names"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
+    ]
+    assert workflow_target_runtime["final_state_keys"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+    )
+    assert workflow_target_runtime["entry_nodes"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+    ]
+    assert workflow_target_runtime["terminal_nodes"] == [
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+    ]
+    assert workflow_target_runtime["has_replay"] is True
+    assert workflow_target_runtime["has_interrupts"] is True
+    assert workflow_target_runtime["has_routes"] is True
+    workflow_target_security = workflow_target_evidence["security"]
+    assert workflow_target_security["serialized_secret_absent"] is True
 
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
@@ -24270,6 +24722,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "orchestration_target_optimizer_readiness"
         in milestones["M3"]["check_ids"]
     )
+    assert "workflow_target_optimizer_readiness" in milestones["M3"]["check_ids"]
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]

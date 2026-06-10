@@ -1133,6 +1133,16 @@ fixed, uses generic `optimize_target` search over exactly
 `planner.invoke` framework span to pass native L3 orchestration-stack proof as
 `orchestration_target_optimizer_readiness`.
 
+For a deterministic workflow graph target path, see
+`examples/sdk_workflow_target_optimization.py`. It keeps the scripted agent and
+task fixed, uses generic `optimize_target` search over exactly
+`simulation.environments.0.data.trace`, and requires the selected LangGraph
+workflow trace to restore graph topology, route decisions, checkpoints, replay,
+interrupts, writes, final state, and step-level tool evidence as
+`workflow_target_optimizer_readiness`. The evidence bar is deterministic and
+local-only: no prompt patching, no external workflow provider dependency, and
+no secret leakage.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can

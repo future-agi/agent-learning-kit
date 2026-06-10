@@ -10485,6 +10485,220 @@ class FrameworkTraceEnvironment(EnvironmentAdapter):
         return sessions
 
 
+class WorkflowTraceEnvironment(EnvironmentAdapter):
+    """Replay a deterministic workflow graph as evaluator-visible state."""
+
+    name = "workflow_trace"
+
+    def __init__(
+        self,
+        trace: Optional[Mapping[str, Any]] = None,
+        *,
+        framework: str = "langgraph",
+        workflow_id: str = "workflow-trace",
+        thread_id: str = "workflow-thread",
+        run_id: str = "workflow-run",
+        nodes: Optional[Iterable[Mapping[str, Any]]] = None,
+        edges: Optional[Iterable[Mapping[str, Any]]] = None,
+        steps: Optional[Iterable[Mapping[str, Any]]] = None,
+        checkpoints: Optional[Iterable[Mapping[str, Any]]] = None,
+        route_decisions: Optional[Iterable[Mapping[str, Any]]] = None,
+        interrupts: Optional[Iterable[Mapping[str, Any]]] = None,
+        replay: Optional[Iterable[Mapping[str, Any]]] = None,
+        writes: Optional[Iterable[Mapping[str, Any]]] = None,
+        state_snapshots: Optional[Iterable[Mapping[str, Any]]] = None,
+        final_state: Optional[Mapping[str, Any]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        source = copy.deepcopy(dict(trace or {}))
+        self.initial_trace = _normalize_workflow_trace_manifest(
+            source,
+            framework=framework,
+            workflow_id=workflow_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            nodes=nodes,
+            edges=edges,
+            steps=steps,
+            checkpoints=checkpoints,
+            route_decisions=route_decisions,
+            interrupts=interrupts,
+            replay=replay,
+            writes=writes,
+            state_snapshots=state_snapshots,
+            final_state=final_state,
+            metadata=metadata,
+        )
+        self.trace: Dict[str, Any] = {}
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self.trace = copy.deepcopy(self.initial_trace)
+        return EnvironmentSnapshot(
+            tools=self._tool_specs(),
+            artifacts=[self._trace_artifact()],
+            events=[
+                SimulationEvent(
+                    type="workflow_trace",
+                    name="workflow_trace_ready",
+                    payload={
+                        "framework": self.trace.get("framework"),
+                        "workflow_id": self.trace.get("workflow_id"),
+                        "node_count": self.trace.get("node_count"),
+                        "edge_count": self.trace.get("edge_count"),
+                        "step_count": self.trace.get("step_count"),
+                        "checkpoint_count": self.trace.get("checkpoint_count"),
+                        "route_decision_count": self.trace.get(
+                            "route_decision_count"
+                        ),
+                        "interrupt_count": self.trace.get("interrupt_count"),
+                        "replay_count": self.trace.get("replay_count"),
+                    },
+                ),
+                *_workflow_trace_events_from_payload(self.trace),
+            ],
+            state={"workflow_trace": self._state_payload()},
+            metadata={"workflow_trace": self._state_payload()},
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        name = _tool_name(tool_call)
+        if name not in {
+            "workflow_trace_status",
+            "list_workflow_steps",
+            "inspect_workflow_checkpoint",
+        }:
+            return None
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+
+        if name == "workflow_trace_status":
+            result = self._trace_payload()
+            event_name = "workflow_trace_status"
+            content = "Workflow trace status recorded."
+            success = True
+            error = None
+        elif name == "list_workflow_steps":
+            status = _normalize_workflow_trace_name(arguments.get("status") or "")
+            steps = [copy.deepcopy(dict(step)) for step in self.trace.get("steps", [])]
+            if status:
+                steps = [
+                    step
+                    for step in steps
+                    if _normalize_workflow_trace_name(step.get("status")) == status
+                ]
+            result = {
+                "workflow_id": self.trace.get("workflow_id"),
+                "steps": steps,
+                "count": len(steps),
+            }
+            event_name = "workflow_steps_listed"
+            content = f"Listed {len(steps)} workflow step(s)."
+            success = True
+            error = None
+        else:
+            checkpoint_id = str(
+                arguments.get("id")
+                or arguments.get("checkpoint_id")
+                or arguments.get("name")
+                or ""
+            )
+            checkpoint = next(
+                (
+                    checkpoint
+                    for checkpoint in self.trace.get("checkpoints", [])
+                    if checkpoint_id
+                    and checkpoint_id
+                    in {
+                        str(checkpoint.get("checkpoint_id")),
+                        str(checkpoint.get("id")),
+                        str(checkpoint.get("name")),
+                    }
+                ),
+                None,
+            )
+            success = checkpoint is not None
+            result = {
+                "workflow_id": self.trace.get("workflow_id"),
+                "checkpoint": copy.deepcopy(checkpoint),
+                "query": checkpoint_id,
+            }
+            event_name = (
+                "workflow_checkpoint_inspected"
+                if success
+                else "workflow_checkpoint_missing"
+            )
+            content = (
+                f"Inspected workflow checkpoint {checkpoint_id}."
+                if success
+                else f"Workflow checkpoint not found: {checkpoint_id}"
+            )
+            error = None if success else "checkpoint_not_found"
+
+        return ToolExecutionResult(
+            tool_call_id=call_id,
+            tool_name=name,
+            content=content,
+            result=result,
+            success=success,
+            error=error,
+            state_updates={"workflow_trace": self._state_payload()},
+            artifacts=[self._trace_artifact()],
+            events=[
+                SimulationEvent(
+                    type="workflow_trace",
+                    name=event_name,
+                    payload=result,
+                )
+            ],
+        )
+
+    def _tool_specs(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "workflow_trace_status",
+                "description": "Return normalized workflow graph, route, checkpoint, interrupt, replay, and final-state evidence.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "list_workflow_steps",
+                "description": "List workflow steps, optionally filtered by status.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"status": {"type": "string"}},
+                },
+            },
+            {
+                "name": "inspect_workflow_checkpoint",
+                "description": "Inspect one workflow checkpoint by id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                },
+            },
+        ]
+
+    def _trace_artifact(self) -> SimulationArtifact:
+        return SimulationArtifact(
+            type="trace",
+            role="environment",
+            data=self._trace_payload(),
+            metadata={
+                "kind": "workflow_trace",
+                "framework": self.trace.get("framework"),
+            },
+        )
+
+    def _trace_payload(self) -> Dict[str, Any]:
+        return copy.deepcopy(self.trace)
+
+    def _state_payload(self) -> Dict[str, Any]:
+        return self._trace_payload()
+
+
 class FrameworkLifecycleEnvironment(EnvironmentAdapter):
     """
     Replay framework/session lifecycle evidence for arbitrary agent runtimes.
@@ -21697,6 +21911,246 @@ def _coerce_event(value: SimulationEvent | Dict[str, Any]) -> SimulationEvent:
     if isinstance(value, SimulationEvent):
         return value
     return SimulationEvent(**value)
+
+
+def _normalize_workflow_trace_manifest(
+    trace: Mapping[str, Any],
+    *,
+    framework: str,
+    workflow_id: str,
+    thread_id: str,
+    run_id: str,
+    nodes: Optional[Iterable[Mapping[str, Any]]],
+    edges: Optional[Iterable[Mapping[str, Any]]],
+    steps: Optional[Iterable[Mapping[str, Any]]],
+    checkpoints: Optional[Iterable[Mapping[str, Any]]],
+    route_decisions: Optional[Iterable[Mapping[str, Any]]],
+    interrupts: Optional[Iterable[Mapping[str, Any]]],
+    replay: Optional[Iterable[Mapping[str, Any]]],
+    writes: Optional[Iterable[Mapping[str, Any]]],
+    state_snapshots: Optional[Iterable[Mapping[str, Any]]],
+    final_state: Optional[Mapping[str, Any]],
+    metadata: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    wrapper_payload = _coerce_plain_dict(trace)
+    payload = (
+        _coerce_plain_dict(wrapper_payload.get("trace"))
+        or _coerce_plain_dict(wrapper_payload.get("workflow_trace"))
+        or wrapper_payload
+    )
+    normalized_nodes = _workflow_trace_records(
+        nodes if nodes is not None else payload.get("nodes") or payload.get("workflow_nodes")
+    )
+    normalized_edges = _workflow_trace_records(
+        edges if edges is not None else payload.get("edges") or payload.get("workflow_edges")
+    )
+    normalized_steps = _workflow_trace_records(
+        steps if steps is not None else payload.get("steps") or payload.get("workflow_steps")
+    )
+    normalized_checkpoints = _workflow_trace_records(
+        checkpoints
+        if checkpoints is not None
+        else payload.get("checkpoints") or payload.get("workflow_checkpoints")
+    )
+    normalized_routes = _workflow_trace_records(
+        route_decisions
+        if route_decisions is not None
+        else payload.get("route_decisions") or payload.get("routes")
+    )
+    normalized_interrupts = _workflow_trace_records(
+        interrupts
+        if interrupts is not None
+        else payload.get("interrupts") or payload.get("workflow_interrupts")
+    )
+    normalized_replay = _workflow_trace_records(
+        replay if replay is not None else payload.get("replay") or payload.get("workflow_replay")
+    )
+    normalized_writes = _workflow_trace_records(
+        writes if writes is not None else payload.get("writes") or payload.get("pending_writes")
+    )
+    normalized_state_snapshots = _workflow_trace_records(
+        state_snapshots
+        if state_snapshots is not None
+        else payload.get("state_snapshots") or payload.get("state_history")
+    )
+    normalized_final_state = _coerce_plain_dict(
+        final_state
+        if final_state is not None
+        else payload.get("final_state") or payload.get("workflow_state")
+    )
+    tool_names: List[str] = []
+    for step in normalized_steps:
+        for raw_call in _as_iterable(step.get("tool_calls")):
+            call = _coerce_plain_dict(raw_call)
+            name = str(call.get("name") or call.get("tool") or "")
+            if name:
+                tool_names.append(name)
+    tool_names = sorted(set(tool_names))
+    step_statuses = sorted(
+        {
+            _normalize_workflow_trace_name(step.get("status"))
+            for step in normalized_steps
+            if _normalize_workflow_trace_name(step.get("status"))
+        }
+    )
+    topology = _workflow_trace_topology_payload(
+        normalized_nodes,
+        normalized_edges,
+        _coerce_plain_dict(payload.get("topology")),
+    )
+    normalized_metadata = {
+        **_coerce_plain_dict(wrapper_payload.get("metadata")),
+        **_coerce_plain_dict(payload.get("metadata")),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    return {
+        "kind": "workflow_trace",
+        "framework": str(payload.get("framework") or framework),
+        "workflow_id": str(payload.get("workflow_id") or workflow_id),
+        "thread_id": str(payload.get("thread_id") or thread_id),
+        "run_id": str(payload.get("run_id") or run_id),
+        "nodes": normalized_nodes,
+        "edges": normalized_edges,
+        "steps": normalized_steps,
+        "checkpoints": normalized_checkpoints,
+        "route_decisions": normalized_routes,
+        "interrupts": normalized_interrupts,
+        "replay": normalized_replay,
+        "writes": normalized_writes,
+        "state_snapshots": normalized_state_snapshots,
+        "final_state": normalized_final_state,
+        "topology": topology,
+        "node_count": len(normalized_nodes),
+        "edge_count": len(normalized_edges),
+        "step_count": len(normalized_steps),
+        "checkpoint_count": len(normalized_checkpoints),
+        "route_decision_count": len(normalized_routes),
+        "interrupt_count": len(normalized_interrupts),
+        "replay_count": len(normalized_replay),
+        "write_count": len(normalized_writes),
+        "state_snapshot_count": len(normalized_state_snapshots),
+        "tool_call_count": len(tool_names),
+        "tool_names": tool_names,
+        "step_statuses": step_statuses,
+        "final_state_keys": sorted(str(key) for key in normalized_final_state),
+        "has_replay": bool(normalized_replay),
+        "has_interrupts": bool(normalized_interrupts),
+        "has_routes": bool(normalized_routes),
+        "summary": {
+            "node_count": len(normalized_nodes),
+            "edge_count": len(normalized_edges),
+            "step_count": len(normalized_steps),
+            "checkpoint_count": len(normalized_checkpoints),
+            "route_decision_count": len(normalized_routes),
+            "interrupt_count": len(normalized_interrupts),
+            "replay_count": len(normalized_replay),
+            "write_count": len(normalized_writes),
+            "state_snapshot_count": len(normalized_state_snapshots),
+            "tool_call_count": len(tool_names),
+            "tool_names": tool_names,
+            "step_statuses": step_statuses,
+            "final_state_keys": sorted(str(key) for key in normalized_final_state),
+            "entry_nodes": list(topology.get("entry_nodes") or []),
+            "terminal_nodes": list(topology.get("terminal_nodes") or []),
+        },
+        "metadata": normalized_metadata,
+    }
+
+
+def _workflow_trace_records(values: Any) -> List[Dict[str, Any]]:
+    return [
+        _coerce_plain_dict(value)
+        for value in _as_iterable(values)
+        if _coerce_plain_dict(value)
+    ]
+
+
+def _workflow_trace_topology_payload(
+    nodes: Sequence[Mapping[str, Any]],
+    edges: Sequence[Mapping[str, Any]],
+    explicit: Mapping[str, Any],
+) -> Dict[str, Any]:
+    if explicit:
+        return copy.deepcopy(dict(explicit))
+    node_ids = {
+        str(node.get("id") or node.get("name"))
+        for node in nodes
+        if node.get("id") or node.get("name")
+    }
+    targets = {str(edge.get("target")) for edge in edges if edge.get("target")}
+    sources = {str(edge.get("source")) for edge in edges if edge.get("source")}
+    entry_nodes = sorted(node_ids - targets)
+    terminal_nodes = sorted(node_ids - sources)
+    return {
+        "entry_nodes": entry_nodes,
+        "terminal_nodes": terminal_nodes,
+    }
+
+
+def _workflow_trace_events_from_payload(payload: Mapping[str, Any]) -> List[SimulationEvent]:
+    events: List[SimulationEvent] = []
+    for step in payload.get("steps", []):
+        events.append(
+            SimulationEvent(
+                type="workflow_step",
+                name=str(step.get("name") or step.get("id") or "workflow_step"),
+                payload=copy.deepcopy(dict(step)),
+                metadata={"kind": "workflow_trace"},
+            )
+        )
+    for route in payload.get("route_decisions", []):
+        events.append(
+            SimulationEvent(
+                type="workflow_route",
+                name=str(route.get("selected") or route.get("target") or "workflow_route"),
+                payload=copy.deepcopy(dict(route)),
+                metadata={"kind": "workflow_trace"},
+            )
+        )
+    for checkpoint in payload.get("checkpoints", []):
+        events.append(
+            SimulationEvent(
+                type="workflow_checkpoint",
+                name=str(
+                    checkpoint.get("checkpoint_id")
+                    or checkpoint.get("id")
+                    or "workflow_checkpoint"
+                ),
+                payload=copy.deepcopy(dict(checkpoint)),
+                metadata={"kind": "workflow_trace"},
+            )
+        )
+    for item in payload.get("interrupts", []):
+        events.append(
+            SimulationEvent(
+                type="workflow_interrupt",
+                name=str(item.get("id") or item.get("node") or "workflow_interrupt"),
+                payload=copy.deepcopy(dict(item)),
+                metadata={"kind": "workflow_trace"},
+            )
+        )
+    for item in payload.get("replay", []):
+        events.append(
+            SimulationEvent(
+                type="workflow_replay",
+                name=str(item.get("id") or "workflow_replay"),
+                payload=copy.deepcopy(dict(item)),
+                metadata={"kind": "workflow_trace"},
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="workflow_trace",
+            name="workflow_trace",
+            payload=copy.deepcopy(dict(payload)),
+            metadata={"kind": "workflow_trace"},
+        )
+    )
+    return events
+
+
+def _normalize_workflow_trace_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
 def _normalize_participants(

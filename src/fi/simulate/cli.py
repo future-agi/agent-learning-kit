@@ -58,6 +58,7 @@ from fi.simulate import (
     VoiceEnvironment,
     WebSocketAgentWrapper,
     WorkflowHookEnvironment,
+    WorkflowTraceEnvironment,
     WorkspaceRunEnvironment,
     WorldAttackReplayEnvironment,
     WorldContractEnvironment,
@@ -421,6 +422,8 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "tool_mock",
         "workflow_hook",
         "workflow_hooks",
+        "workflow_trace",
+        "workflow_graph",
         "http_workflow_hook",
         "http_tool_hook",
         "trust_boundary",
@@ -982,6 +985,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             "http_tool_hook",
         }:
             environments.append(_build_workflow_hook_environment(payload))
+        elif env_type in {"workflow_trace", "workflow_graph"}:
+            environments.append(_build_workflow_trace_environment(payload))
         elif env_type in {"browser", "browser_cua", "cua", "computer_use", "computer_use_browser"}:
             environments.append(_build_browser_environment(payload, base_dir))
         elif env_type in {"file", "files"}:
@@ -1121,6 +1126,18 @@ def _build_workflow_hook_environment(payload: Mapping[str, Any]) -> WorkflowHook
         auth=dict(source.get("auth") or {}),
         timeout=float(source.get("timeout") or 30.0),
         initial_state=dict(source.get("initial_state") or source.get("state") or {}),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_workflow_trace_environment(payload: Mapping[str, Any]) -> WorkflowTraceEnvironment:
+    source = dict(payload)
+    return WorkflowTraceEnvironment(
+        source,
+        framework=str(source.get("framework") or "langgraph"),
+        workflow_id=str(source.get("workflow_id") or "workflow-trace"),
+        thread_id=str(source.get("thread_id") or "workflow-thread"),
+        run_id=str(source.get("run_id") or "workflow-run"),
         metadata=dict(source.get("metadata") or {}),
     )
 
