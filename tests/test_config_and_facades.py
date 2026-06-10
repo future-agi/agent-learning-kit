@@ -4443,8 +4443,8 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
     assert result["status"] == "passed"
     assert result["frameworks"] == module.PROFILE_FRAMEWORKS
     assert result["summary"] == {
-        "profile_count": 3,
-        "passed_profile_count": 3,
+        "profile_count": len(module.PROFILE_FRAMEWORKS),
+        "passed_profile_count": len(module.PROFILE_FRAMEWORKS),
         "failed_profiles": [],
         "all_patch_paths": [module.TARGET_PATH],
     }
@@ -4453,6 +4453,7 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
     for framework, profile in profiles.items():
         assert profile["status"] == "passed"
         assert profile["workflow_framework"] == framework
+        assert profile["source_export_type"] == module.SOURCE_EXPORT_TYPES[framework]
         assert profile["selected_patch_paths"] == [module.TARGET_PATH]
         assert profile["optimization_score"] >= 0.98
         assert profile["evaluation_score"] == pytest.approx(1.0)
@@ -4504,8 +4505,8 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
     assert workflow_card["requires_external_service"] is False
     assert workflow_card["target_path"] == module.TARGET_PATH
     assert workflow_card["frameworks"] == module.PROFILE_FRAMEWORKS
-    assert workflow_card["profile_count"] == 3
-    assert workflow_card["passed_profile_count"] == 3
+    assert workflow_card["profile_count"] == len(module.PROFILE_FRAMEWORKS)
+    assert workflow_card["passed_profile_count"] == len(module.PROFILE_FRAMEWORKS)
     assert workflow_card["failed_profiles"] == []
     assert workflow_card["all_patch_paths"] == [module.TARGET_PATH]
     assert workflow_card["artifacts"]["replay_lock"]["local_only"] is True
@@ -4525,6 +4526,7 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
     for framework, profile in card_profiles.items():
         assert profile["status"] == "passed"
         assert profile["workflow_framework"] == framework
+        assert profile["source_export_type"] == module.SOURCE_EXPORT_TYPES[framework]
         assert profile["selected_patch_paths"] == [module.TARGET_PATH]
         assert profile["node_count"] == module.REQUIRED_COUNTS["node_count"]
         assert profile["edge_count"] == module.REQUIRED_COUNTS["edge_count"]
@@ -4600,6 +4602,7 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
     assert set(exported_profiles) == set(module.PROFILE_FRAMEWORKS)
     for framework, profile in exported_profiles.items():
         assert profile["workflow_framework"] == framework
+        assert profile["source_export_type"] == module.SOURCE_EXPORT_TYPES[framework]
         assert profile["selected_patch_paths"] == [module.TARGET_PATH]
         assert profile["counts"] == module.REQUIRED_COUNTS
         for metric in module.REQUIRED_METRICS:
@@ -16700,6 +16703,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workflow_target_profile_matrix_frameworks"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
     )
+    assert payload[
+        "required_workflow_target_profile_matrix_source_export_types"
+    ] == trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
     assert payload["required_workflow_target_profile_matrix_search_paths"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
     )
@@ -19243,6 +19249,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_profile_matrix["required_frameworks"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
     )
+    assert workflow_profile_matrix["required_source_export_types"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
+    )
     assert workflow_profile_matrix["required_search_paths"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
     )
@@ -19336,6 +19345,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     for framework in trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS:
         profile = workflow_profiles[framework]
         assert profile["workflow_framework"] == framework
+        assert profile["source_export_type"] == (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES[framework]
+        )
         assert profile["selected_patch_paths"] == (
             trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
         )
@@ -19399,6 +19411,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(workflow_profile_report["profile_frameworks"]) == set(
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
     )
+    assert workflow_profile_report["profile_source_export_types"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
+    )
     assert set(workflow_profile_report["action_ids"]) >= set(
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
     )
@@ -19422,6 +19437,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert set(export_profiles["frameworks"]) == set(
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert export_profiles["source_export_types"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
     )
     workflow_profile_security = workflow_profile_evidence["security"]
     assert workflow_profile_security["serialized_secret_absent"] is True

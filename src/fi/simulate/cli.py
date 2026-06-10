@@ -3470,6 +3470,7 @@ def _workflow_target_profile_matrix_profile_rows(
                 "framework": profile.get("framework"),
                 "status": profile.get("status"),
                 "workflow_framework": profile.get("workflow_framework"),
+                "source_export_type": profile.get("source_export_type"),
                 "optimization_score": profile.get("optimization_score"),
                 "evaluation_score": profile.get("evaluation_score"),
                 "best_score": profile.get("best_score"),

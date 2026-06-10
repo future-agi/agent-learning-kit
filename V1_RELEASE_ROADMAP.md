@@ -209,11 +209,11 @@ Current checkpoint:
   writes, final state, and step-level tool evidence.
 - Workflow target profile matrix readiness is now an executable release-check
   gate: `examples/sdk_workflow_target_profile_matrix.py` must run the same
-  generic target path as separate LangGraph, CrewAI, and LlamaIndex profiles,
-  select the strong trace for every profile, close workflow trace
-  coverage/graph quality/tool/artifact/task metrics, and keep the Agent
-  Learning workflow target contract primary while treating outside framework
-  shapes as compatibility inputs. The same gate now renders the
+  generic target path as separate LangGraph, CrewAI, LlamaIndex, LangChain,
+  Pipecat, and LiveKit profiles, select the strong trace for every profile,
+  close workflow trace coverage/graph quality/tool/artifact/task metrics, and
+  keep the Agent Learning workflow target contract primary while treating
+  outside framework shapes as compatibility inputs. The same gate now renders the
   `workflow_target_profile_matrix` report/action card, verifies catalog actions,
   and exports profile evidence through `action-run`.
 - Optimizer governance readiness is now an executable release-check gate:
@@ -612,12 +612,12 @@ Next implementation focus:
   world/framework/memory stacks, multi-agent framework handoffs, framework
   certification, and framework import repair before V1 claims prompt-agnostic
   optimization.
-- Broaden workflow profile-matrix coverage only when the
-  LangGraph/CrewAI/LlamaIndex report/action matrix stays green. Keep proving
-  local selection over graph topology, route decisions, checkpoints, replay,
-  interrupts, and recovery while `ai-evaluation` scores workflow trace
-  coverage/graph quality and `simulate-sdk` supplies deterministic workflow
-  trace simulation.
+- Broaden workflow profile-matrix coverage only when the six-profile
+  LangGraph/CrewAI/LlamaIndex/LangChain/Pipecat/LiveKit report/action matrix
+  stays green. Keep proving local selection over graph topology, route
+  decisions, checkpoints, replay, interrupts, and recovery while
+  `ai-evaluation` scores workflow trace coverage/graph quality and
+  `simulate-sdk` supplies deterministic workflow trace simulation.
 - Keep the adapter-probe gate as the BYO-framework entry bar: unknown local
   framework objects should be discoverable, optimizable, promotable, and
   evaluable without external services before adding live framework-specific

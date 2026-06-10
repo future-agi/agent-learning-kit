@@ -937,7 +937,19 @@ V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS = [
     "langgraph",
     "crewai",
     "llamaindex",
+    "langchain",
+    "pipecat",
+    "livekit",
 ]
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES = {
+    "langgraph": "langgraph_checkpoint_graph",
+    "crewai": "crewai_flow_route_state",
+    "llamaindex": "llamaindex_workflow_events",
+    "langchain": "langchain_runnable_graph",
+    "pipecat": "pipecat_pipeline_workflow_graph",
+    "livekit": "livekit_agent_session_workflow_graph",
+}
 
 V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS = [
     "simulation.environments.0.data.trace",
@@ -5670,6 +5682,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_workflow_target_profile_matrix_frameworks": list(
             V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+        ),
+        "required_workflow_target_profile_matrix_source_export_types": dict(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
         ),
         "required_workflow_target_profile_matrix_search_paths": list(
             V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
@@ -13152,6 +13167,17 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                     observed=profile.get("workflow_framework"),
                     profile=framework,
                 )
+            expected_source_export_type = (
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES.get(framework)
+            )
+            if profile.get("source_export_type") != expected_source_export_type:
+                append_error(
+                    runtime_errors,
+                    field="source_export_type",
+                    expected=expected_source_export_type,
+                    observed=profile.get("source_export_type"),
+                    profile=framework,
+                )
             for metric in V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS:
                 observed = _as_mapping(profile.get("selected_metrics")).get(metric)
                 if _float_or_zero(observed) < 1.0:
@@ -13251,6 +13277,11 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                 for profile in card_profiles
                 if profile.get("framework")
             ]
+            card_profile_source_export_types = {
+                str(profile.get("framework")): profile.get("source_export_type")
+                for profile in card_profiles
+                if profile.get("framework")
+            }
             evidence["report"] = {
                 "kind": report.get("kind"),
                 "status": report.get("status"),
@@ -13272,6 +13303,7 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                 "failed_profiles": list(card.get("failed_profiles") or []),
                 "all_patch_paths": list(card.get("all_patch_paths") or []),
                 "profile_frameworks": card_profile_frameworks,
+                "profile_source_export_types": card_profile_source_export_types,
                 "action_ids": action_ids,
             }
             report_expectations = {
@@ -13344,6 +13376,23 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                     expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
                     observed=card_profile_frameworks,
                 )
+            for framework, expected_source_export_type in (
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES.items()
+            ):
+                observed_source_export_type = card_profile_source_export_types.get(
+                    framework
+                )
+                if observed_source_export_type != expected_source_export_type:
+                    append_error(
+                        report_errors,
+                        field=(
+                            "report.workflow_target_profile_matrix.profiles."
+                            "source_export_type"
+                        ),
+                        expected=expected_source_export_type,
+                        observed=observed_source_export_type,
+                        profile=framework,
+                    )
             missing_report_actions = sorted(
                 set(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS)
                 - set(action_ids)
@@ -13372,6 +13421,13 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                 for profile in _as_list(exported_profiles)
                 if _as_mapping(profile).get("framework")
             ]
+            exported_source_export_types = {
+                str(_as_mapping(profile).get("framework")): _as_mapping(profile).get(
+                    "source_export_type"
+                )
+                for profile in _as_list(exported_profiles)
+                if _as_mapping(profile).get("framework")
+            }
             evidence["actions"] = {
                 "kind": catalog.get("kind"),
                 "status": catalog.get("status"),
@@ -13388,6 +13444,7 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                     "artifact_ref": export_run.get("artifact_ref"),
                     "profile_count": len(exported_profiles),
                     "frameworks": exported_frameworks,
+                    "source_export_types": exported_source_export_types,
                 },
             }
             action_expectations = {
@@ -13441,6 +13498,20 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                     expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
                     observed=exported_frameworks,
                 )
+            for framework, expected_source_export_type in (
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES.items()
+            ):
+                observed_source_export_type = exported_source_export_types.get(
+                    framework
+                )
+                if observed_source_export_type != expected_source_export_type:
+                    append_error(
+                        action_errors,
+                        field="exported_profiles.source_export_type",
+                        expected=expected_source_export_type,
+                        observed=observed_source_export_type,
+                        profile=framework,
+                    )
         serialized = json.dumps(result, sort_keys=True, default=str)
         serialized_report = json.dumps(
             {
@@ -13472,6 +13543,9 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
         "required_files": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES),
         "required_env": V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV,
         "required_frameworks": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+        "required_source_export_types": dict(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
+        ),
         "required_search_paths": list(
             V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
         ),
@@ -40118,6 +40192,7 @@ __all__ = [
     "V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV",

@@ -11,7 +11,22 @@ from agent_learning import configure, optimize
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY"
 TARGET_PATH = "simulation.environments.0.data.trace"
-PROFILE_FRAMEWORKS = ["langgraph", "crewai", "llamaindex"]
+PROFILE_FRAMEWORKS = [
+    "langgraph",
+    "crewai",
+    "llamaindex",
+    "langchain",
+    "pipecat",
+    "livekit",
+]
+SOURCE_EXPORT_TYPES = {
+    "langgraph": "langgraph_checkpoint_graph",
+    "crewai": "crewai_flow_route_state",
+    "llamaindex": "llamaindex_workflow_events",
+    "langchain": "langchain_runnable_graph",
+    "pipecat": "pipecat_pipeline_workflow_graph",
+    "livekit": "livekit_agent_session_workflow_graph",
+}
 REQUIRED_METRICS = [
     "workflow_trace_coverage",
     "workflow_graph_quality",
@@ -193,10 +208,10 @@ def _base_workflow_trace(framework: str, *, strong: bool) -> dict[str, Any]:
 def _profile_trace(framework: str, *, strong: bool) -> dict[str, Any]:
     trace = _base_workflow_trace(framework, strong=strong)
     if framework == "langgraph":
-        trace["metadata"] = {"source_export_type": "langgraph_checkpoint_graph"}
+        trace["metadata"] = {"source_export_type": SOURCE_EXPORT_TYPES[framework]}
         return trace
     if framework == "crewai":
-        trace["metadata"] = {"source_export_type": "crewai_flow_route_state"}
+        trace["metadata"] = {"source_export_type": SOURCE_EXPORT_TYPES[framework]}
         return {
             "kind": trace["kind"],
             "framework": trace["framework"],
@@ -216,7 +231,7 @@ def _profile_trace(framework: str, *, strong: bool) -> dict[str, Any]:
             "metadata": trace["metadata"],
         }
     if framework == "llamaindex":
-        trace["metadata"] = {"source_export_type": "llamaindex_workflow_events"}
+        trace["metadata"] = {"source_export_type": SOURCE_EXPORT_TYPES[framework]}
         return {
             **trace,
             "routes": trace["route_decisions"],
@@ -224,6 +239,15 @@ def _profile_trace(framework: str, *, strong: bool) -> dict[str, Any]:
             "state_history": trace["state_snapshots"],
             "workflow_state": trace["final_state"],
         }
+    if framework == "langchain":
+        trace["metadata"] = {"source_export_type": SOURCE_EXPORT_TYPES[framework]}
+        return trace
+    if framework == "pipecat":
+        trace["metadata"] = {"source_export_type": SOURCE_EXPORT_TYPES[framework]}
+        return trace
+    if framework == "livekit":
+        trace["metadata"] = {"source_export_type": SOURCE_EXPORT_TYPES[framework]}
+        return trace
     raise ValueError(f"Unsupported workflow profile: {framework}")
 
 
@@ -401,6 +425,9 @@ def _profile_summary(framework: str, result: dict[str, Any]) -> dict[str, Any]:
     )
     row = best_history["report"]["results"][0]
     workflow = row["metadata"]["environment_state"]["workflow_trace"]
+    workflow_metadata = workflow.get("metadata")
+    if not isinstance(workflow_metadata, dict):
+        workflow_metadata = {}
     topology = workflow["topology"]
     selected_metrics = {
         metric: best_history["metrics"].get(metric)
@@ -416,6 +443,7 @@ def _profile_summary(framework: str, result: dict[str, Any]) -> dict[str, Any]:
         "selected_metrics": selected_metrics,
         "state_keys": sorted(row["metadata"].get("environment_state", {})),
         "workflow_framework": workflow.get("framework"),
+        "source_export_type": workflow_metadata.get("source_export_type"),
         "counts": {key: workflow.get(key) for key in REQUIRED_COUNTS},
         "tool_names": list(workflow.get("tool_names") or []),
         "tool_call_names": [

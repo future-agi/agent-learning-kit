@@ -13,7 +13,7 @@ export shapes instead of depending on one canonical LangGraph-style payload.
 
 `workflow_target_profile_matrix_readiness` runs
 `examples/sdk_workflow_target_profile_matrix.py` locally. The cookbook executes
-three deterministic optimizer profiles over the exact same target path:
+six deterministic optimizer profiles over the exact same target path:
 
 - `simulation.environments.0.data.trace`
 
@@ -26,6 +26,12 @@ The profiles are:
   `state_history`, and `workflow_state`.
 - `llamaindex`: LlamaIndex workflow/event-style trace fields with route,
   pending-write, state-history, and workflow-state aliases.
+- `langchain`: LangChain runnable-graph source-export metadata with canonical
+  workflow graph fields.
+- `pipecat`: Pipecat pipeline-workflow source-export metadata with canonical
+  workflow graph fields.
+- `livekit`: LiveKit agent-session workflow source-export metadata with
+  canonical workflow graph fields.
 
 Each profile must keep the scripted agent fixed, keep prompt and whole-agent
 paths out of the search space, select only
