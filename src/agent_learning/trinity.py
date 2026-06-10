@@ -1563,6 +1563,7 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_adapter_langchain_invoke_promotion.py",
     "examples/sdk_framework_adapter_pipecat_process_promotion.py",
     "examples/sdk_framework_adapter_nested_method_promotion.py",
+    "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -2501,6 +2502,7 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "langchain_invoke_promotion",
     "pipecat_process_promotion",
     "nested_method_promotion",
+    "livekit_run_session_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3340,6 +3342,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_langchain_invoke_promotion.py",
     "examples/sdk_framework_adapter_pipecat_process_promotion.py",
     "examples/sdk_framework_adapter_nested_method_promotion.py",
+    "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3517,6 +3520,28 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_framework": "pipecat",
         "expected_method": "process",
         "expected_input_mode": "dict",
+        "expected_modality": "voice",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "livekit_run_session_promotion",
+        "path": "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "livekit",
+        "expected_method": "run_session",
+        "expected_input_mode": "dict",
+        "expected_modality": "voice",
+        "expected_call_style": "positional",
         "require_manifest": True,
         "require_promoted_metadata": True,
         "require_discovery": True,
@@ -31015,6 +31040,7 @@ def _release_environment_10x_robustness_status(
         metric_averages = _as_mapping(record.get("metric_averages"))
         metric_floors = _as_mapping(expected_contract.get("min_metrics"))
         selected_probe_summary = _as_mapping(record.get("selected_probe_summary"))
+        manifest_simulation = _as_mapping(record.get("manifest_simulation"))
         discovery_ok = True
         if expected_contract.get("require_discovery") is True:
             discovery_ok = (
@@ -31040,6 +31066,11 @@ def _release_environment_10x_robustness_status(
                 for item in _as_list(selected_probe_summary.get("call_styles"))
             ]
         )
+        modality_ok = (
+            expected_contract.get("expected_modality") is None
+            or manifest_simulation.get("modality")
+            == expected_contract.get("expected_modality")
+        )
         adapter_probe_promotion_checks[surface] = (
             bool(record)
             and record.get("result_kind") == "agent-learning.run.v1"
@@ -31055,6 +31086,7 @@ def _release_environment_10x_robustness_status(
             and input_key_ok
             and input_kwargs_ok
             and call_style_ok
+            and modality_ok
             and manifest_agent.get("trace_runtime") is True
             and manifest_metadata.get("promoted_from_framework_adapter_probe")
             is True
@@ -33307,6 +33339,7 @@ def _framework_adapter_probe_record(
     best_config = _as_mapping(optimization.get("best_config"))
     best_adapter = _as_mapping(best_config.get("adapter"))
     manifest_agent = _as_mapping(manifest.get("agent"))
+    manifest_simulation = _as_mapping(manifest.get("simulation"))
     manifest_metadata = _as_mapping(manifest.get("metadata"))
     manifest_agent_metadata = _as_mapping(manifest_agent.get("metadata"))
     manifest_probe_proof = _as_mapping(
@@ -33518,6 +33551,9 @@ def _framework_adapter_probe_record(
                 else {}
             ),
         },
+        "manifest_simulation": {
+            "modality": manifest_simulation.get("modality"),
+        },
         "manifest_metadata": {
             "promoted_from_framework_adapter_probe": manifest_metadata.get(
                 "promoted_from_framework_adapter_probe"
@@ -33673,6 +33709,22 @@ def _append_framework_adapter_probe_errors(
                     "field": "selected_probe_summary.call_styles",
                     "expected": expected_call_style,
                     "observed": observed_call_styles,
+                }
+            )
+
+    expected_modality = contract.get("expected_modality")
+    if expected_modality is not None:
+        observed_modality = _as_mapping(record.get("manifest_simulation")).get(
+            "modality"
+        )
+        if observed_modality != expected_modality:
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "manifest_simulation.modality",
+                    "expected": expected_modality,
+                    "observed": observed_modality,
                 }
             )
 

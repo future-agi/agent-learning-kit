@@ -31,11 +31,12 @@ optimization, auto-discovery, promotion, and one-call cookbooks as
 `execute_task(dict)` coverage plus LangGraph-style `ainvoke(dict)` and
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`, and
 OpenAI-compatible `chat.completions.create(messages=...)` nested-method
-promotion, callable signatures to be inspectable, observed I/O contracts and
-call contracts to cover the selected probe cases, discovery to be used where
-expected, probe proofs to pass, promoted manifests to carry proof/discovery
-metadata, and evaluated runs to close framework runtime, adapter call-contract,
-observed-I/O, adapter-contract, framework-trace, and tool-selection metrics.
+promotion plus LiveKit `run_session(dict)` session promotion, callable
+signatures to be inspectable, observed I/O contracts and call contracts to cover
+the selected probe cases, discovery to be used where expected, probe proofs to
+pass, promoted manifests to carry proof/discovery metadata, and evaluated runs
+to close framework runtime, adapter call-contract, observed-I/O,
+adapter-contract, framework-trace, and tool-selection metrics.
 
 The optimization surfaces also render a first-class `framework_adapter_probe`
 report/action card. Release-check verifies that the card is local-only,

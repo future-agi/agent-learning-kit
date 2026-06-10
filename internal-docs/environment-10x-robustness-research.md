@@ -52,7 +52,8 @@ outputs and requires at least ten independent axes to pass:
 - `native_framework_adapter_probe_promotion`: Agent Learning's adapter probe
   optimizer promotes custom `execute_task(dict)`, LangGraph `ainvoke(dict)`,
   LangChain `invoke(dict)`, Pipecat `process(dict)`, and OpenAI-compatible
-  `chat.completions.create(messages=...)` nested-method adapters into normal
+  `chat.completions.create(messages=...)` nested-method adapters plus LiveKit
+  `run_session(dict)` session adapters into normal
   `agent-learning.run.v1` artifacts with proof metadata, discovery evidence
   where required, adapter call-contract metrics, observed-I/O metrics, and
   framework runtime/trace/tool metric floors.

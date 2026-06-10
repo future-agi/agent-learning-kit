@@ -2022,6 +2022,82 @@ def test_sdk_framework_adapter_nested_method_promotion_example_runs(tmp_path):
     assert state["nested_client"]["input_key"] == "messages"
 
 
+def test_sdk_framework_adapter_livekit_run_session_promotion_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_livekit_run_session_promotion.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_livekit_run_session_promotion",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-livekit-run-session-promotion.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        output_path.with_suffix(".manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    assert manifest["agent"]["framework"] == "livekit"
+    assert manifest["agent"]["method"] == "run_session"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["simulation"]["modality"] == "voice"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    assert manifest["agent"]["metadata"]["framework_adapter_discovery_used"] is True
+    assert (
+        manifest["agent"]["metadata"]["framework_adapter_discovery"]["status"]
+        == "passed"
+    )
+    proof = manifest["agent"]["metadata"]["framework_adapter_probe_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+    assert proof["method"] == "run_session"
+    assert proof["input_mode"] == "dict"
+    assert manifest["evaluation"]["enabled"] is True
+
+    result_row = result["report"]["results"][0]
+    state = result_row["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["methods"] == ["run_session"]
+    assert runtime["summary"]["input_modes"] == ["dict"]
+    assert runtime["summary"]["call_styles"] == ["positional"]
+    assert state["framework_trace"]["framework"] == "livekit"
+    assert state["framework_trace"]["summary"]["status"] == "passed"
+    assert state["livekit_session"]["session_id"] == "livekit-session-refund-42"
+    assert state["livekit_session"]["room"] == "local-refund-room"
+    assert state["livekit_session"]["modality"] == "voice"
+    assert state["livekit_session"]["closed"] is True
+    assert "approved refund" in state["livekit_session"]["final_transcript"]
+    event_types = {event["type"] for event in result_row["events"]}
+    assert {"framework_trace", "livekit_session_event", "livekit_transcript"} <= (
+        event_types
+    )
+
+
 def test_sdk_framework_adapter_one_call_run_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_one_call_run.py"
     spec = importlib.util.spec_from_file_location(

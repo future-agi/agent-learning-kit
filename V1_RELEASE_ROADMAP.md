@@ -464,7 +464,8 @@ Current checkpoint:
   run SDK cookbooks must run locally, prove custom `execute_task(dict)` plus
   LangGraph-style `ainvoke(dict)`, LangChain-style `invoke(dict)`, and
   Pipecat-style `process(dict)` plus OpenAI-compatible
-  `chat.completions.create(messages=...)` nested-method promotion,
+  `chat.completions.create(messages=...)` nested-method promotion and LiveKit
+  `run_session(dict)` session promotion,
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
@@ -616,7 +617,8 @@ Next implementation focus:
   local environment replay gates, framework adapter cookbooks, non-custom
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat
   `process(dict)` plus OpenAI-compatible
-  `chat.completions.create(messages=...)` promotion evidence, and
+  `chat.completions.create(messages=...)` plus LiveKit `run_session(dict)`
+  promotion evidence, and
   release-checked agent-opt bundle search. OpenEnv-specific fixtures are
   compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove

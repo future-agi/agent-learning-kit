@@ -7,10 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `8367a91 Gate Pipecat process adapter promotion`.
+  `d3898e1 Gate nested method adapter promotion`.
 - Current handoff slice:
-  OpenAI-compatible `chat.completions.create(messages=...)` nested-method BYO
-  framework adapter promotion.
+  LiveKit-style `run_session(dict)` BYO framework adapter promotion.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -35,8 +34,8 @@ What is done:
   the primary product abstraction.
 - Non-custom adapter promotion now covers custom `execute_task(dict)`,
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, Pipecat
-  `process(dict)`, and OpenAI-compatible
-  `chat.completions.create(messages=...)`.
+  `process(dict)`, OpenAI-compatible
+  `chat.completions.create(messages=...)`, and LiveKit `run_session(dict)`.
 
 What is not done:
 
@@ -88,7 +87,57 @@ release bar Agent Learning-native: deterministic local simulation, adapter
 contracts, optimizer proof, evaluation metrics, reports/actions, and
 release-check gates.
 
-## Latest Nested Provider Slice
+## Latest LiveKit Session Slice
+
+This handoff slice adds a LiveKit-style room/session adapter promotion path.
+
+Implemented behavior:
+
+- Added `examples/sdk_framework_adapter_livekit_run_session_promotion.py`.
+- The cookbook uses weak `respond(text)` and passing `run_session(dict)`
+  candidates so adapter discovery and optimization must select the session path.
+- The promoted manifest preserves:
+  - `framework = livekit`
+  - `method = run_session`
+  - `input_mode = dict`
+  - `trace_runtime = true`
+  - `simulation.modality = voice`
+- The selected adapter emits:
+  - content containing `approved refund`
+  - `framework_trace_status` tool evidence
+  - `framework_trace`, `livekit_session_event`, and `livekit_transcript` events
+  - `framework_runtime`, `framework_trace`, and `livekit_session` state evidence
+  - positional-call proof through call-contract `call_styles = ["positional"]`
+- `agent-learn release-check` includes `livekit_run_session_promotion` under
+  `framework_adapter_probe_readiness`.
+- `environment_10x_robustness` counts the LiveKit session promotion through the
+  same generic per-surface contract path and now also checks optional
+  `expected_modality`.
+
+The promoted manifest should select:
+
+```json
+{
+  "framework": "livekit",
+  "method": "run_session",
+  "input_mode": "dict",
+  "trace_runtime": true,
+  "simulation": {
+    "modality": "voice"
+  }
+}
+```
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
+
+## Previous Nested Provider Slice
 
 This handoff slice adds an OpenAI-compatible nested provider method promotion
 path.
@@ -196,6 +245,7 @@ The release-check adapter-probe gate now runs:
 - LangChain `invoke(dict)` promotion
 - Pipecat `process(dict)` promotion
 - OpenAI-compatible `chat.completions.create(messages=...)` promotion
+- LiveKit `run_session(dict)` promotion
 
 Every promoted run must preserve proof/discovery metadata and close framework
 runtime, adapter call-contract, observed-I/O, adapter-contract, framework-trace,
@@ -204,25 +254,25 @@ and tool-selection metrics.
 ## Latest Environment 10x Slice
 
 The native adapter promotion axis in `environment_10x_robustness` now counts
-custom, LangGraph, LangChain, Pipecat, and nested provider-method promoted
-adapter contracts.
+custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
+session promoted adapter contracts.
 
 Implemented behavior:
 
 - `V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES` includes
   `probe_promotion`, `auto_discovery_promotion`, `one_call_promotion`,
   `one_call_run`, `langgraph_ainvoke_promotion`,
-  `langchain_invoke_promotion`, `pipecat_process_promotion`, and
-  `nested_method_promotion`.
+  `langchain_invoke_promotion`, `pipecat_process_promotion`,
+  `nested_method_promotion`, and `livekit_run_session_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
-  mode, input key, input kwargs, call style, discovery, and metric-floor
+  mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
 - The native adapter axis enforces each contract's own `min_metrics`, including
   call-contract and observed-I/O metrics.
 
 ## Verification Ledger
 
-Latest full-suite verification before this nested-provider handoff slice:
+Latest full-suite verification before this LiveKit handoff slice:
 
 ```bash
 uv run pytest -q
@@ -335,6 +385,42 @@ Result:
 - CLI release-check: passed
 - full suite: `297 passed, 6 warnings in 895.88s (0:14:55)`
 
+LiveKit handoff verification passed:
+
+```bash
+uv run python examples/sdk_framework_adapter_livekit_run_session_promotion.py \
+  /tmp/sdk-framework-adapter-livekit-run-session-promotion.json
+uv run python -m py_compile \
+  examples/sdk_framework_adapter_livekit_run_session_promotion.py \
+  src/agent_learning/trinity.py \
+  tests/test_cli_examples.py \
+  tests/test_config_and_facades.py
+uv run pytest \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_livekit_run_session_promotion_example_runs \
+  -q
+uv run pytest \
+  tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones \
+  -q
+uv run ruff check .
+git diff --check
+uv run python -m agent_learning.cli release-check --project-root . --quiet
+uv run pytest -q
+```
+
+Result:
+
+- LiveKit cookbook run: passed and wrote
+  `/tmp/sdk-framework-adapter-livekit-run-session-promotion.json`
+- `py_compile`: passed
+- focused LiveKit cookbook:
+  `1 passed, 5 warnings in 3.81s`
+- release milestone test:
+  `1 passed, 5 warnings in 462.46s (0:07:42)`
+- `uv run ruff check .`: passed
+- `git diff --check`: passed
+- CLI release-check: passed
+- full suite: `298 passed, 6 warnings in 835.34s (0:13:55)`
+
 ## Key Files
 
 Runtime and simulation:
@@ -401,6 +487,7 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_langchain_invoke_promotion.py`
 - `examples/sdk_framework_adapter_pipecat_process_promotion.py`
 - `examples/sdk_framework_adapter_nested_method_promotion.py`
+- `examples/sdk_framework_adapter_livekit_run_session_promotion.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
@@ -453,24 +540,19 @@ Rules:
 
 Suggested next packets:
 
-1. LiveKit session promotion.
-   - Goal: add a deterministic local `respond(text)` or session-like adapter
-     distinct from Pipecat `process(dict)`.
-   - Constraint: no external LiveKit service dependency.
-   - Output: voice modality proof with framework runtime and trace metrics.
-2. Provider response promotion.
+1. Provider response promotion.
    - Goal: promote a local provider-response shape that requires
      `input_kwargs={"model": "local-provider-model"}` and normalized
      `provider_response` state.
    - Constraint: keep it local-only; do not call hosted provider APIs.
    - Output: one cookbook or promoted variant, release-check contract, and
      assertions for `provider_choice` / `provider_tool_call` evidence.
-3. Browser Use / CUA promotion.
+2. Browser Use / CUA promotion.
    - Goal: promote a local browser/CUA-shaped adapter through the BYO probe
      path.
    - Constraint: use existing browser/CUA trace metrics; do not invent a
      separate product claim.
-4. OpenEnv boundary audit.
+3. OpenEnv boundary audit.
    - Goal: verify OpenEnv/Gymnasium remain compatibility-only.
    - Files: `pyproject.toml`, `typescript/agent-learning-kit/package.json`,
      `README.md`, `V1_RELEASE_ROADMAP.md`, `internal-docs/*openenv*`.
@@ -495,7 +577,7 @@ uv run python -m agent_learning.cli release-proof \
 Commit locally with a message that names the proof surface. For this slice:
 
 ```bash
-git add examples/sdk_framework_adapter_nested_method_promotion.py \
+git add examples/sdk_framework_adapter_livekit_run_session_promotion.py \
   src/agent_learning/trinity.py \
   tests/test_cli_examples.py \
   tests/test_config_and_facades.py \
@@ -504,7 +586,7 @@ git add examples/sdk_framework_adapter_nested_method_promotion.py \
   internal-docs/framework-adapter-probe-readiness-research.md \
   internal-docs/environment-10x-robustness-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Gate nested method adapter promotion"
+git commit -m "Gate LiveKit session adapter promotion"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

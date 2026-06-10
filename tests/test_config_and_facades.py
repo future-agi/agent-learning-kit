@@ -22456,6 +22456,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
             assert contract["expected_call_style"] in promotion[
                 "selected_probe_summary"
             ]["call_styles"]
+        if contract.get("expected_modality") is not None:
+            assert promotion["manifest_simulation"]["modality"] == contract[
+                "expected_modality"
+            ]
         assert promotion["manifest_metadata"][
             "promoted_from_framework_adapter_probe"
         ] is True
@@ -23438,6 +23442,39 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    livekit_run_session_promotion = adapter_probes["livekit_run_session_promotion"]
+    assert livekit_run_session_promotion["result_kind"] == "agent-learning.run.v1"
+    assert livekit_run_session_promotion["result_status"] == "passed"
+    assert livekit_run_session_promotion["manifest_present"] is True
+    assert livekit_run_session_promotion["manifest_agent"] == {
+        "framework": "livekit",
+        "method": "run_session",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert livekit_run_session_promotion["manifest_simulation"] == {
+        "modality": "voice",
+    }
+    assert livekit_run_session_promotion["selected_probe_summary"]["call_styles"] == [
+        "positional"
+    ]
+    assert livekit_run_session_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert livekit_run_session_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert livekit_run_session_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert livekit_run_session_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
@@ -23449,6 +23486,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "langchain_invoke_promotion",
         "pipecat_process_promotion",
         "nested_method_promotion",
+        "livekit_run_session_promotion",
     ):
         promoted = adapter_probes[surface]
         assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True
