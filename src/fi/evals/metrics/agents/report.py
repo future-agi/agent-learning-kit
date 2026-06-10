@@ -9071,6 +9071,22 @@ def _workflow_graph_quality_metric(
             match=normalized in observed["frameworks"],
             finding_type="workflow_framework_mismatch",
         )
+    for expected in _string_list(
+        requirements.get("required_frameworks")
+        or requirements.get("required_source_frameworks")
+        or requirements.get("source_frameworks")
+        or requirements.get("frameworks")
+    ):
+        normalized = _normalize_workflow_trace_key(expected)
+        _append_workflow_graph_check(
+            checks,
+            findings,
+            check="required_frameworks",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="workflow_framework_missing",
+        )
 
     count_checks = (
         ("min_node_count", "node_count", "workflow_node_count_below_minimum"),
@@ -30290,6 +30306,15 @@ def _workflow_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, 
         if framework:
             frameworks.add(framework)
         summary = _as_dict(payload_dict.get("summary"))
+        for source_framework in [
+            *_as_list(payload_dict.get("source_frameworks")),
+            *_as_list(payload_dict.get("frameworks")),
+            *_as_list(summary.get("source_frameworks")),
+            *_as_list(summary.get("frameworks")),
+        ]:
+            normalized = _normalize_workflow_trace_key(source_framework)
+            if normalized:
+                frameworks.add(normalized)
         for count_key in counts:
             counts[count_key] = max(counts[count_key], _as_int(summary.get(count_key)) or 0)
             counts[count_key] = max(counts[count_key], _as_int(payload_dict.get(count_key)) or 0)

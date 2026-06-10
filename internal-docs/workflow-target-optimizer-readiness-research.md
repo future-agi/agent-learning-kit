@@ -39,6 +39,9 @@ target optimization cookbook and requires:
 - Selected workflow evidence that restores complete graph topology, route
   decisions, durable checkpoints, replay, resolved interrupt, writes, final
   state, and step-level tool evidence.
+- Selected workflow evidence must retain source-framework coverage for
+  LangGraph, CrewAI, and LlamaIndex exports while remaining one canonical Agent
+  Learning workflow trace.
 - Passing local `ai-evaluation` workflow trace coverage and graph-quality
   metrics, plus task completion and tool-selection metrics.
 - Deterministic local-only execution through `simulate-sdk`; no external
@@ -51,3 +54,8 @@ adapter readiness. Those gates prove hooks and framework normalization. This
 gate proves `agent-opt` can optimize a precise workflow graph target as
 first-class Agent Learning state while evaluation and simulation verify the
 selected workflow behavior locally.
+
+The current release gate uses one deterministic optimizer run and requires the
+selected trace to carry `source_frameworks=["crewai", "langgraph",
+"llamaindex"]`. A later profile matrix can run the same target path once per
+framework export shape without weakening the local-only evidence bar.

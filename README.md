@@ -1137,11 +1137,12 @@ For a deterministic workflow graph target path, see
 `examples/sdk_workflow_target_optimization.py`. It keeps the scripted agent and
 task fixed, uses generic `optimize_target` search over exactly
 `simulation.environments.0.data.trace`, and requires the selected LangGraph
-workflow trace to restore graph topology, route decisions, checkpoints, replay,
-interrupts, writes, final state, and step-level tool evidence as
-`workflow_target_optimizer_readiness`. The evidence bar is deterministic and
-local-only: no prompt patching, no external workflow provider dependency, and
-no secret leakage.
+runtime workflow trace to carry cross-framework source evidence for LangGraph,
+CrewAI, and LlamaIndex while restoring graph topology, route decisions,
+checkpoints, replay, interrupts, writes, final state, and step-level tool
+evidence as `workflow_target_optimizer_readiness`. The evidence bar is
+deterministic and local-only: no prompt patching, no external workflow provider
+dependency, and no secret leakage.
 
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper

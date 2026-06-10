@@ -11,12 +11,14 @@ from agent_learning import configure, optimize
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_WORKFLOW_TARGET_OPTIMIZATION_KEY"
 TARGET_PATH = "simulation.environments.0.data.trace"
+SOURCE_FRAMEWORKS = ["crewai", "langgraph", "llamaindex"]
 
 
 def _weak_workflow_trace() -> dict[str, Any]:
     return {
         "kind": "workflow_trace",
         "framework": "langgraph",
+        "source_frameworks": ["langgraph"],
         "workflow_id": "refund-workflow",
         "thread_id": "thread-refund-42",
         "run_id": "run-workflow-weak",
@@ -41,13 +43,100 @@ def _weak_workflow_trace() -> dict[str, Any]:
     }
 
 
+def _partial_crewai_flow_trace() -> dict[str, Any]:
+    return {
+        "kind": "workflow_trace",
+        "framework": "crewai",
+        "source_frameworks": ["crewai"],
+        "workflow_id": "refund-workflow",
+        "thread_id": "thread-refund-42",
+        "run_id": "run-workflow-crewai-partial",
+        "workflow_nodes": [
+            {"id": "intake", "name": "intake", "type": "start"},
+            {"id": "policy_check", "name": "policy_check", "type": "task"},
+            {"id": "finalize", "name": "finalize", "type": "finish"},
+        ],
+        "workflow_edges": [
+            {"source": "intake", "target": "policy_check"},
+            {"source": "policy_check", "target": "finalize"},
+        ],
+        "workflow_steps": [
+            {
+                "id": "flow-intake",
+                "node": "intake",
+                "status": "completed",
+                "tool_calls": [],
+            },
+            {
+                "id": "flow-policy",
+                "node": "policy_check",
+                "status": "completed",
+                "tool_calls": [
+                    {
+                        "id": "policy-lookup-crewai",
+                        "name": "policy_lookup",
+                        "arguments": {"case_id": "refund-42"},
+                    }
+                ],
+            },
+            {
+                "id": "flow-finalize",
+                "node": "finalize",
+                "status": "completed",
+                "tool_calls": [],
+            },
+        ],
+        "routes": [
+            {
+                "source": "policy_check",
+                "target": "finalize",
+                "selected": "finalize",
+            }
+        ],
+        "workflow_checkpoints": [
+            {
+                "checkpoint_id": "crewai-policy",
+                "state": {"policy_result": "eligible"},
+            }
+        ],
+        "workflow_state": {
+            "decision": "approved refund",
+            "policy_result": "eligible",
+        },
+        "metadata": {
+            "source_export_type": "crewai_flow_route_state",
+            "missing": ["interrupt", "replay", "human_review_checkpoint"],
+        },
+    }
+
+
 def _strong_workflow_trace() -> dict[str, Any]:
     return {
         "kind": "workflow_trace",
         "framework": "langgraph",
+        "source_frameworks": SOURCE_FRAMEWORKS,
         "workflow_id": "refund-workflow",
         "thread_id": "thread-refund-42",
-        "run_id": "run-workflow-001",
+        "run_id": "run-workflow-cross-framework-001",
+        "metadata": {
+            "source_exports": [
+                {
+                    "framework": "langgraph",
+                    "export_type": "checkpoint_graph",
+                    "signals": ["nodes", "edges", "checkpoints", "interrupts"],
+                },
+                {
+                    "framework": "crewai_flow",
+                    "export_type": "route_state",
+                    "signals": ["routes", "tasks", "state"],
+                },
+                {
+                    "framework": "llamaindex_workflow",
+                    "export_type": "event_trace",
+                    "signals": ["steps", "events", "tool_calls"],
+                },
+            ]
+        },
         "nodes": [
             {
                 "id": "intake",
@@ -115,6 +204,7 @@ def _strong_workflow_trace() -> dict[str, Any]:
                         "id": "policy-lookup-1",
                         "name": "policy_lookup",
                         "arguments": {"case_id": "refund-42"},
+                        "source_framework": "llamaindex_workflow",
                     }
                 ],
             },
@@ -248,7 +338,7 @@ def _base_config() -> dict[str, Any]:
 def _evaluation_config() -> dict[str, Any]:
     return {
         "task_description": (
-            "Optimize a deterministic LangGraph-style refund workflow graph."
+            "Optimize a deterministic cross-framework refund workflow graph."
         ),
         "expected_result": (
             "Because the policy lookup finds eligibility, the workflow graph "
@@ -286,6 +376,7 @@ def _evaluation_config() -> dict[str, Any]:
         ],
         "workflow_trace_quality": {
             "framework": "langgraph",
+            "required_frameworks": SOURCE_FRAMEWORKS,
             "min_node_count": 4,
             "min_edge_count": 3,
             "min_step_count": 4,
@@ -324,6 +415,7 @@ def _target_candidates() -> dict[str, list[dict[str, Any]]]:
     return {
         TARGET_PATH: [
             _weak_workflow_trace(),
+            _partial_crewai_flow_trace(),
             _strong_workflow_trace(),
         ]
     }

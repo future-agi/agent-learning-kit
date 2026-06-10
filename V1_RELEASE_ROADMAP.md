@@ -203,9 +203,10 @@ Current checkpoint:
   `optimize_target()`, search exactly
   `simulation.environments.0.data.trace`, keep prompt, whole-agent,
   framework-method, hook, and endpoint paths out of the patch set, preserve the
-  fixed scripted agent and task, and select the LangGraph workflow trace with
-  graph topology, route decisions, checkpoints, replay, interrupts, writes,
-  final state, and step-level tool evidence.
+  fixed scripted agent and task, and select a LangGraph runtime workflow trace
+  with cross-framework source evidence for LangGraph, CrewAI, and LlamaIndex
+  plus graph topology, route decisions, checkpoints, replay, interrupts,
+  writes, final state, and step-level tool evidence.
 - Optimizer governance readiness is now an executable release-check gate:
   `examples/sdk_optimizer_governance_optimization.py` must run local search over
   weak and governed optimizer-society traces, select the governed
@@ -602,11 +603,12 @@ Next implementation focus:
   world/framework/memory stacks, multi-agent framework handoffs, framework
   certification, and framework import repair before V1 claims prompt-agnostic
   optimization.
-- Extend the workflow graph target optimizer slice across more framework
-  exports before broad workflow-native claims: keep proving local selection over
-  graph topology, route decisions, checkpoints, replay, interrupts, and
-  recovery while `ai-evaluation` scores workflow trace coverage/graph quality
-  and `simulate-sdk` supplies deterministic workflow trace simulation.
+- Extend the workflow graph target optimizer slice from selected cross-framework
+  source evidence to a per-framework profile matrix before broad
+  workflow-native claims: keep proving local selection over graph topology,
+  route decisions, checkpoints, replay, interrupts, and recovery while
+  `ai-evaluation` scores workflow trace coverage/graph quality and
+  `simulate-sdk` supplies deterministic workflow trace simulation.
 - Keep the adapter-probe gate as the BYO-framework entry bar: unknown local
   framework objects should be discoverable, optimizable, promotable, and
   evaluable without external services before adding live framework-specific

@@ -22003,9 +22003,28 @@ def _normalize_workflow_trace_manifest(
         **_coerce_plain_dict(payload.get("metadata")),
         **copy.deepcopy(dict(metadata or {})),
     }
+    primary_framework = str(payload.get("framework") or framework)
+    source_frameworks = _workflow_trace_frameworks(
+        payload.get("source_frameworks") or payload.get("frameworks"),
+        normalized_metadata.get("source_frameworks")
+        or normalized_metadata.get("frameworks"),
+    )
+    if not source_frameworks and primary_framework:
+        source_frameworks = [_normalize_workflow_trace_name(primary_framework)]
+    observed_frameworks = sorted(
+        {
+            item
+            for item in [
+                _normalize_workflow_trace_name(primary_framework),
+                *source_frameworks,
+            ]
+            if item
+        }
+    )
     return {
         "kind": "workflow_trace",
-        "framework": str(payload.get("framework") or framework),
+        "framework": primary_framework,
+        "source_frameworks": source_frameworks,
         "workflow_id": str(payload.get("workflow_id") or workflow_id),
         "thread_id": str(payload.get("thread_id") or thread_id),
         "run_id": str(payload.get("run_id") or run_id),
@@ -22050,6 +22069,8 @@ def _normalize_workflow_trace_manifest(
             "tool_names": tool_names,
             "step_statuses": step_statuses,
             "final_state_keys": sorted(str(key) for key in normalized_final_state),
+            "frameworks": observed_frameworks,
+            "source_frameworks": source_frameworks,
             "entry_nodes": list(topology.get("entry_nodes") or []),
             "terminal_nodes": list(topology.get("terminal_nodes") or []),
         },
@@ -22063,6 +22084,25 @@ def _workflow_trace_records(values: Any) -> List[Dict[str, Any]]:
         for value in _as_iterable(values)
         if _coerce_plain_dict(value)
     ]
+
+
+def _workflow_trace_frameworks(*values: Any) -> List[str]:
+    frameworks: set[str] = set()
+    for value in values:
+        for item in _as_iterable(value):
+            if isinstance(item, Mapping):
+                candidates = (
+                    item.get("framework"),
+                    item.get("name"),
+                    item.get("id"),
+                )
+            else:
+                candidates = (item,)
+            for candidate in candidates:
+                normalized = _normalize_workflow_trace_name(candidate)
+                if normalized:
+                    frameworks.add(normalized)
+    return sorted(frameworks)
 
 
 def _workflow_trace_topology_payload(

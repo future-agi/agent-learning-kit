@@ -883,6 +883,12 @@ V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS = [
 
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK = "langgraph"
 
+V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS = [
+    "crewai",
+    "langgraph",
+    "llamaindex",
+]
+
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL = "workflow_trace_status"
 
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL = "policy_lookup"
@@ -5547,6 +5553,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_workflow_target_optimizer_framework": (
             V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+        ),
+        "required_workflow_target_optimizer_source_frameworks": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
         ),
         "required_workflow_target_optimizer_tool": (
             V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
@@ -12057,6 +12066,25 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
         data = _as_mapping(environment.get("data"))
         return _as_mapping(data.get("trace") or data.get("workflow_trace") or data)
 
+    def trace_records(trace: Mapping[str, Any], *keys: str) -> list[Any]:
+        for key in keys:
+            records = _as_list(_as_mapping(trace).get(key))
+            if records:
+                return records
+        return []
+
+    def trace_frameworks(trace: Mapping[str, Any]) -> list[str]:
+        frameworks = {
+            str(item)
+            for item in [
+                _as_mapping(trace).get("framework"),
+                *_as_list(_as_mapping(trace).get("source_frameworks")),
+                *_as_list(_as_mapping(trace).get("frameworks")),
+            ]
+            if item
+        }
+        return sorted(frameworks)
+
     def without_workflow_trace(environments: Any) -> list[dict[str, Any]]:
         copied = copy.deepcopy(_as_list(environments))
         for environment in copied:
@@ -12140,28 +12168,34 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
         candidates = _as_list(
             search_space.get(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS[0])
         )
+        count_aliases = {
+            "node_count": ("nodes", "workflow_nodes"),
+            "edge_count": ("edges", "workflow_edges"),
+            "step_count": ("steps", "workflow_steps"),
+            "checkpoint_count": ("checkpoints", "workflow_checkpoints"),
+            "route_decision_count": (
+                "route_decisions",
+                "routes",
+                "router_decisions",
+            ),
+            "interrupt_count": ("interrupts", "workflow_interrupts"),
+            "replay_count": ("replay", "workflow_replay"),
+            "write_count": ("writes", "pending_writes"),
+        }
         candidate_counts = [
             {
-                key: len(
-                    _as_list(
-                        _as_mapping(candidate).get(
-                            {
-                                "node_count": "nodes",
-                                "edge_count": "edges",
-                                "step_count": "steps",
-                                "checkpoint_count": "checkpoints",
-                                "route_decision_count": "route_decisions",
-                                "interrupt_count": "interrupts",
-                                "replay_count": "replay",
-                                "write_count": "writes",
-                            }[key]
-                        )
-                    )
-                )
+                key: len(trace_records(_as_mapping(candidate), *count_aliases[key]))
                 for key in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
             }
             for candidate in candidates
         ]
+        candidate_frameworks = sorted(
+            {
+                framework
+                for candidate in candidates
+                for framework in trace_frameworks(_as_mapping(candidate))
+            }
+        )
         simulation = _as_mapping(manifest.get("simulation"))
         environments = [
             _as_mapping(environment)
@@ -12193,14 +12227,19 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
             "forbidden_search_paths_present": forbidden_search_paths,
             "candidate_count": len(candidates),
             "candidate_counts": candidate_counts,
+            "candidate_frameworks": candidate_frameworks,
             "auto_execute_tools": simulation.get("auto_execute_tools"),
             "min_turns": simulation.get("min_turns"),
             "max_turns": simulation.get("max_turns"),
             "environment_types": env_types,
             "framework": base_trace.get("framework"),
+            "base_source_frameworks": trace_frameworks(base_trace),
             "base_node_count": len(_as_list(base_trace.get("nodes"))),
             "agent_type": agent.get("type"),
             "target_base_agent_type": target_base_agent.get("type"),
+            "required_source_frameworks": list(
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+            ),
             "required_tools": list(evaluation_config.get("required_tools") or []),
             "required_events": list(evaluation_config.get("required_events") or []),
             "required_artifact_types": list(
@@ -12210,6 +12249,11 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
                 evaluation_config.get("required_workflow_trace") or []
             ),
             "workflow_trace_quality": dict(workflow_quality),
+            "workflow_trace_quality_required_frameworks": list(
+                workflow_quality.get("required_frameworks")
+                or workflow_quality.get("required_source_frameworks")
+                or []
+            ),
             "metric_weights": {
                 metric: metric_weights.get(metric)
                 for metric in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
@@ -12257,6 +12301,10 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
                 base_trace.get("framework"),
                 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
             ),
+            "workflow_trace_quality.required_frameworks": (
+                workflow_quality.get("required_frameworks") or [],
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS,
+            ),
             "agent.type": (agent.get("type"), "scripted"),
             "optimization.target.base_config.agent.type": (
                 target_base_agent.get("type"),
@@ -12281,12 +12329,22 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
                 expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
                 observed=env_types,
             )
-        if len(candidates) != 2:
+        if len(candidates) != 3:
             append_error(
                 manifest_errors,
                 field="optimization.target.search_space.workflow_trace",
-                expected=2,
+                expected=3,
                 observed=len(candidates),
+            )
+        if missing_values(
+            candidate_frameworks,
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS,
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.workflow_trace.frameworks",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS,
+                observed=candidate_frameworks,
             )
         if not any(
             counts.get("node_count", 0)
@@ -12350,6 +12408,7 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
         metadata = _as_mapping(result_row.get("metadata"))
         environment_state = _as_mapping(metadata.get("environment_state"))
         workflow_state = _as_mapping(environment_state.get("workflow_trace"))
+        workflow_summary = _as_mapping(workflow_state.get("summary"))
         topology = _as_mapping(workflow_state.get("topology"))
         summary_metrics = _as_mapping(summary.get("metric_averages"))
         tool_calls = [
@@ -12408,6 +12467,8 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
         evidence["runtime"] = {
             "state_keys": sorted(str(key) for key in environment_state),
             "framework": workflow_state.get("framework"),
+            "source_frameworks": list(workflow_state.get("source_frameworks") or []),
+            "observed_frameworks": list(workflow_summary.get("frameworks") or []),
             "counts": {
                 key: _int_or_zero(workflow_state.get(key))
                 for key in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
@@ -12539,6 +12600,16 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
                 expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
                 observed=workflow_state.get("framework"),
             )
+        if missing_values(
+            workflow_state.get("source_frameworks"),
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS,
+        ):
+            append_error(
+                runtime_errors,
+                field="workflow_trace.source_frameworks",
+                expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS,
+                observed=workflow_state.get("source_frameworks") or [],
+            )
         for field, expected in V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS.items():
             observed = _int_or_zero(workflow_state.get(field))
             if observed < expected:
@@ -12625,6 +12696,9 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
         ),
         "required_state_keys": list(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS),
         "required_framework": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+        "required_source_frameworks": list(
+            V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+        ),
         "required_tool": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL,
         "required_workflow_tool": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL,
         "required_counts": dict(V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS),
@@ -39265,6 +39339,7 @@ __all__ = [
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS",
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS",
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE",
+    "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS",
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS",
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE",
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",

@@ -2616,6 +2616,7 @@ def test_workflow_trace_manifest_environment_preserves_native_graph_state(tmp_pa
     row = result["report"]["results"][0]
     workflow = row["metadata"]["environment_state"]["workflow_trace"]
     assert workflow["framework"] == "langgraph"
+    assert workflow["source_frameworks"] == ["crewai", "langgraph", "llamaindex"]
     assert workflow["node_count"] == 4
     assert workflow["edge_count"] == 3
     assert workflow["step_count"] == 4
@@ -4310,7 +4311,25 @@ def test_sdk_workflow_target_optimization_example_runs(monkeypatch, tmp_path):
         "workflow_trace"
     ]
     assert len(environments[0]["data"]["trace"]["nodes"]) == 1
-    strong_candidate = target["search_space"][module.TARGET_PATH][1]
+    workflow_quality = manifest["evaluation"]["agent_report"]["config"][
+        "workflow_trace_quality"
+    ]
+    assert workflow_quality["required_frameworks"] == module.SOURCE_FRAMEWORKS
+    candidate_frameworks = sorted(
+        {
+            framework
+            for candidate in target["search_space"][module.TARGET_PATH]
+            for framework in [
+                candidate.get("framework"),
+                *candidate.get("source_frameworks", []),
+            ]
+            if framework
+        }
+    )
+    assert candidate_frameworks == module.SOURCE_FRAMEWORKS
+    strong_candidate = target["search_space"][module.TARGET_PATH][2]
+    assert strong_candidate["framework"] == "langgraph"
+    assert strong_candidate["source_frameworks"] == module.SOURCE_FRAMEWORKS
     assert len(strong_candidate["nodes"]) == 4
     assert len(strong_candidate["edges"]) == 3
     assert len(strong_candidate["steps"]) == 4
@@ -4351,6 +4370,12 @@ def test_sdk_workflow_target_optimization_example_runs(monkeypatch, tmp_path):
     state = best_history["report"]["results"][0]["metadata"]["environment_state"]
     workflow = state["workflow_trace"]
     assert workflow["framework"] == "langgraph"
+    assert workflow["source_frameworks"] == module.SOURCE_FRAMEWORKS
+    assert workflow["summary"]["frameworks"] == [
+        "crewai",
+        "langgraph",
+        "llamaindex",
+    ]
     assert workflow["node_count"] == 4
     assert workflow["edge_count"] == 3
     assert workflow["step_count"] == 4
@@ -16417,6 +16442,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workflow_target_optimizer_framework"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
     )
+    assert payload["required_workflow_target_optimizer_source_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+    )
     assert payload["required_workflow_target_optimizer_tool"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
     )
@@ -18732,6 +18760,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_target["required_framework"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
     )
+    assert workflow_target["required_source_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+    )
     assert workflow_target["required_tool"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
     )
@@ -18792,8 +18823,14 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
     )
     assert workflow_target_manifest["forbidden_search_paths_present"] == []
-    assert workflow_target_manifest["candidate_count"] == 2
+    assert workflow_target_manifest["candidate_count"] == 3
     assert workflow_target_manifest["candidate_counts"][0]["node_count"] == 1
+    assert workflow_target_manifest["candidate_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+    )
+    assert workflow_target_manifest["required_source_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+    )
     assert any(
         counts["node_count"]
         >= trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS["node_count"]
@@ -18846,6 +18883,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_quality["framework"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
     )
+    assert workflow_quality["required_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+    )
+    assert workflow_target_manifest[
+        "workflow_trace_quality_required_frameworks"
+    ] == trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
     assert workflow_quality["required_tools"] == [
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
     ]
@@ -18913,6 +18956,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert workflow_target_runtime["framework"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert workflow_target_runtime["source_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
+    )
+    assert workflow_target_runtime["observed_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
     )
     assert workflow_target_runtime["counts"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
