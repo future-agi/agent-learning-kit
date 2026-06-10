@@ -6,11 +6,12 @@ Hand this document to the next engineering owner as the starting point.
 
 - Date: 2026-06-10.
 - Branch observed: `main`.
-- Baseline before the current handoff slice:
-  `76406a2 Promote lifecycle adapter trace`.
-- Current handoff slice:
-  Message-history and handoff-transcript adapter promotion.
-- Full v1 is not done.
+- Baseline before the latest proof:
+  `a21cbbb Promote transcript adapter probes`.
+- Current handoff status:
+  V1 release-candidate proof passed on the observed checkout.
+- This is ready to move into release-cut discipline, not broad product-complete
+  positioning.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
   optimization, evaluation, report/action, multi-agent, memory, workflow, and
@@ -19,6 +20,17 @@ Hand this document to the next engineering owner as the starting point.
   runtime dependencies.
 - The recurring unrelated local file is `uv.lock`. Do not stage, delete, or
   overwrite it unless the owner decides to adopt it.
+- Package versions at proof time are Python `agent-learning-kit==0.1.0`, root
+  TypeScript workspace `0.1.0`, and
+  `@future-agi/agent-learning-kit==0.2.0`. Decide whether the first public V1
+  cut keeps these package versions or bumps them before tagging.
+- Python metadata still classifies the package as
+  `Development Status :: 3 - Alpha`; decide whether that is intentional for the
+  first V1 tag or update it before publishing.
+- The repository now includes a root `LICENSE` file with Apache-2.0 text, and
+  both TypeScript package manifests declare `Apache-2.0` license metadata.
+- Release-candidate notes and publish checklist:
+  `internal-docs/v1-release-candidate-notes.md`.
 
 ## Immediate Answer
 
@@ -32,6 +44,14 @@ What is done:
   checks, red-team coverage, and regression promotion.
 - OpenEnv/Gymnasium are documented, release-checked, and wired as compatibility
   input shapes, not the primary product abstraction.
+- Full release proof passed for the observed checkout:
+  `uv run python -m agent_learning.cli release-proof --project-root . --output /tmp/agent-learning-release-proof.json --quiet`.
+  The artifact reports `status=passed`, `summary.ready=true`,
+  `full_proof=true`, 7/7 required checks selected and passed, and 0 failed,
+  pending, skipped, or unknown selected checks.
+- The proof passed `release_check`, full-repo `ruff`, full Python `pytest`,
+  Python package build, TypeScript package build, TypeScript package tests, and
+  `git diff --check`.
 - Non-custom adapter promotion now covers custom `execute_task(dict)`,
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, Pipecat
   `process(dict)`, OpenAI-compatible
@@ -49,12 +69,46 @@ What is done:
 
 What is not done:
 
-- Do not call v1 complete yet.
-- The next owner still needs more arbitrary-framework promotion surfaces, more
-  provider-shaped adapters, broader frontend/product proof surfaces, full release
-  proof hardening, and final release discipline.
+- Do not describe this as the full long-term product vision.
+- Resolve release-cut choices before publishing: package version labels,
+  `uv.lock` adoption/removal/ignore policy, release branch/tag, release notes,
+  and package registry credentials.
+- The release proof created ignored build output under `dist/` and
+  `typescript/agent-learning-kit/dist/`; these are expected generated artifacts.
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
+
+## Latest Full Release Proof
+
+The concise release-candidate summary for release owners is in
+`internal-docs/v1-release-candidate-notes.md`.
+
+Command:
+
+```bash
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --output /tmp/agent-learning-release-proof.json \
+  --quiet
+```
+
+Result:
+
+- Overall: `status=passed`, `summary.ready=true`, `full_proof=true`.
+- Selected checks: 7/7 required checks selected and passed.
+- Failures/pending/skips: 0 failed, 0 pending, 0 skipped, 0 unknown selected.
+- `release_check`: passed.
+- `ruff`: passed with `All checks passed!`.
+- `pytest`: passed with `302 passed, 10 warnings`.
+- Python build: passed, producing
+  `agent_learning_kit-0.1.0.tar.gz` and
+  `agent_learning_kit-0.1.0-py3-none-any.whl`.
+- TypeScript build: passed for `@future-agi/agent-learning-kit@0.2.0`.
+- TypeScript tests: passed with 21 passed suites, 2 skipped suites, 646 passed
+  tests, and 6 skipped tests. Jest still warns about an open async handle after
+  completion, but exits 0.
+- `git diff --check`: passed.
+- Worktree after proof: only `?? uv.lock` is untracked.
 
 ## Latest Transcript Adapter Promotion Slice
 
@@ -1133,22 +1187,21 @@ Rules:
 
 Suggested next packets:
 
-1. Additional non-protocol framework control-plane promotion.
-   - Goal: promote another local framework-shaped adapter through the BYO probe
-     path only if it adds a new runtime contract beyond the protocol, workflow,
-     orchestration, browser, provider, and realtime shapes already covered.
-   - Constraint: keep it local-only and map claims to release-check metrics.
-2. Full release proof hardening.
-   - Goal: run and preserve the full `agent-learn release-proof --project-root .`
-     artifact on the final tree, including Python build and TypeScript
-     build/test evidence.
-   - Constraint: do not call v1 complete until the artifact has
-     `summary.ready=true` and the working tree is clean except owner-approved
-     generated files.
+1. Release cut packet.
+   - Goal: choose package versions, settle `uv.lock`, create the release branch
+     or tag, write release notes, and publish the Python and TypeScript
+     artifacts from a clean checkout.
+   - Constraint: rerun full `agent-learn release-proof --project-root .` after
+     any version or lockfile change.
+2. Post-V1 expansion packet.
+   - Goal: add more arbitrary-framework, provider-shaped, and frontend/product
+     proof surfaces only after the first V1 cut is stable.
+   - Constraint: keep each claim mapped to local executable evidence, metrics,
+     and release-check status.
 
 ## Release Discipline
 
-Before handing a completed slice to another engineer:
+Before handing the release candidate to another engineer:
 
 ```bash
 git status --short
@@ -1161,19 +1214,16 @@ uv run python -m agent_learning.cli release-proof \
   --quiet
 ```
 
-Commit locally with a message that names the proof surface. For this slice:
+Commit locally with a message that names the release-candidate proof:
 
 ```bash
-git add src/agent_learning/trinity.py \
-  tests/test_config_and_facades.py \
-  README.md \
+git add LICENSE \
+  typescript/package.json \
+  typescript/agent-learning-kit/package.json \
   V1_RELEASE_ROADMAP.md \
-  internal-docs/framework-adapter-probe-readiness-research.md \
-  internal-docs/environment-10x-robustness-research.md \
-  internal-docs/a2a-protocol-adapter-research.md \
-  internal-docs/mcp-tool-session-adapter-research.md \
-  internal-docs/v1-engineering-handover.md
-git commit -m "Promote protocol adapter probes"
+  internal-docs/v1-engineering-handover.md \
+  internal-docs/v1-release-candidate-notes.md
+git commit -m "Document v1 release candidate proof"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

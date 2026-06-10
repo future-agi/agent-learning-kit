@@ -43,6 +43,16 @@ is the heavier release-cut artifact; it runs release-check, full-repo ruff,
 pytest, Python package build, TypeScript package build/test, and `git diff --check`, then stores their command
 evidence in `agent-learning.release-proof.v1`.
 
+Current release-candidate proof on 2026-06-10 passed all required checks with
+`summary.ready=true` and `full_proof=true`:
+`release_check`, full-repo `ruff`, full Python `pytest`, Python package build,
+TypeScript package build, TypeScript package tests, and `git diff --check`.
+Remaining release-cut decisions are procedural: package version labels, Python
+package classifier, `uv.lock`, release notes, release branch/tag, and
+package-registry publishing.
+The concise release-owner checklist lives in
+`internal-docs/v1-release-candidate-notes.md`.
+
 ## Release-Cut Breakdown
 
 | Milestone | Release promise | Executable gate |

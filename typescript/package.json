@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "TypeScript workspace for the unified Future AGI agent-learning-kit SDK.",
+  "license": "Apache-2.0",
   "scripts": {
     "build": "pnpm --filter @future-agi/agent-learning-kit build",
     "test": "pnpm --filter @future-agi/agent-learning-kit test",
