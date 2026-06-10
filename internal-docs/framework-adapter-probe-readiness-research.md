@@ -28,12 +28,13 @@ selected adapter into a normal `agent-learning.run.v1` manifest.
 `agent-learn release-check` runs the representative probe, discovery,
 optimization, auto-discovery, promotion, and one-call cookbooks as
 `framework_adapter_probe_readiness`. The gate requires custom
-`execute_task(dict)` coverage plus LangGraph-style `ainvoke(dict)` promotion,
-callable signatures to be inspectable, observed I/O contracts and call
-contracts to cover the selected probe cases, discovery to be used where
-expected, probe proofs to pass, promoted manifests to carry proof/discovery
-metadata, and evaluated runs to close framework runtime, adapter call-contract,
-observed-I/O, adapter-contract, framework-trace, and tool-selection metrics.
+`execute_task(dict)` coverage plus LangGraph-style `ainvoke(dict)` and
+LangChain-style `invoke(dict)` promotion, callable signatures to be inspectable,
+observed I/O contracts and call contracts to cover the selected probe cases,
+discovery to be used where expected, probe proofs to pass, promoted manifests
+to carry proof/discovery metadata, and evaluated runs to close framework
+runtime, adapter call-contract, observed-I/O, adapter-contract, framework-trace,
+and tool-selection metrics.
 
 The optimization surfaces also render a first-class `framework_adapter_probe`
 report/action card. Release-check verifies that the card is local-only,

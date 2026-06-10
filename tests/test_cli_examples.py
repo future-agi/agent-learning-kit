@@ -1832,6 +1832,64 @@ def test_sdk_framework_adapter_langgraph_ainvoke_promotion_example_runs(tmp_path
     assert manifest["evaluation"]["enabled"] is True
 
 
+def test_sdk_framework_adapter_langchain_invoke_promotion_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_langchain_invoke_promotion.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_langchain_invoke_promotion",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-langchain-invoke-promotion.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        output_path.with_suffix(".manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    assert manifest["agent"]["framework"] == "langchain"
+    assert manifest["agent"]["method"] == "invoke"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    assert manifest["agent"]["metadata"]["framework_adapter_discovery_used"] is True
+    assert (
+        manifest["agent"]["metadata"]["framework_adapter_discovery"]["status"]
+        == "passed"
+    )
+    assert manifest["agent"]["metadata"]["framework_adapter_probe_proof"][
+        "status"
+    ] == "passed"
+    assert manifest["agent"]["metadata"]["framework_adapter_probe_proof"][
+        "failed_check_ids"
+    ] == []
+    assert manifest["evaluation"]["enabled"] is True
+
+
 def test_sdk_framework_adapter_one_call_run_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_one_call_run.py"
     spec = importlib.util.spec_from_file_location(

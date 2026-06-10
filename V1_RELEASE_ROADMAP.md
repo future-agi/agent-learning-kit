@@ -462,10 +462,11 @@ Current checkpoint:
   the raw probe, discovery, probe-optimization, auto-discovery optimization,
   explicit promotion, auto-discovery promotion, one-call promotion, and one-call
   run SDK cookbooks must run locally, prove custom `execute_task(dict)` plus
-  LangGraph-style `ainvoke(dict)` promotion, pass native probe proofs, prove
-  deterministic callable signature plus observed I/O contracts, preserve
-  proof/discovery metadata in promoted manifests, and close framework runtime,
-  adapter call-contract, observed-I/O, adapter-contract, trace, and tool
+  LangGraph-style `ainvoke(dict)` and LangChain-style `invoke(dict)` promotion,
+  pass native probe proofs, prove deterministic callable signature plus
+  observed I/O contracts, preserve proof/discovery metadata in promoted
+  manifests, and close framework runtime, adapter call-contract, observed-I/O,
+  adapter-contract, trace, and tool
   metrics. The same gate now renders the
   `framework_adapter_probe` report/action card and exports the native probe
   proof, callable signature, observed I/O contract, selected probe report,
@@ -611,8 +612,9 @@ Next implementation focus:
   local reproducibility before it appears in release notes.
 - Keep backing that target with Agent Learning run/eval/optimization artifacts,
   local environment replay gates, framework adapter cookbooks, non-custom
-  LangGraph `ainvoke(dict)` promotion evidence, and release-checked agent-opt
-  bundle search. OpenEnv-specific fixtures are compatibility coverage only.
+  LangGraph `ainvoke(dict)` plus LangChain `invoke(dict)` promotion evidence,
+  and release-checked agent-opt bundle search. OpenEnv-specific fixtures are
+  compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove
   best-candidate selection across custom adapters, social-memory synthesis,
   world/framework/memory stacks, multi-agent framework handoffs, framework

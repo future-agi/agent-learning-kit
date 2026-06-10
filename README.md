@@ -113,8 +113,8 @@ optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
 workflow-hook, retrieval-hook, red-team, orchestration, and regression proof
 outputs and requires at least ten independent axes to pass, including native
 adapter promotion for custom `execute_task(dict)` and LangGraph `ainvoke(dict)`
-surfaces. OpenEnv and Gymnasium are compatibility inputs, not the product
-center. Regression artifact
+plus LangChain `invoke(dict)` surfaces. OpenEnv and Gymnasium are compatibility
+inputs, not the product center. Regression artifact
 readiness runs the local baseline, compare, report, promote-to-regression, and
 replay lifecycle so optimized or red-team evidence can become replayable CI
 artifacts. Optimizer governance readiness executes local governed
@@ -690,20 +690,22 @@ promotes the selected method/input mode, and attaches generated eval gates in
 one call before you run the manifest. It can start from a live object/factory
 or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_one_call_promotion.py` and
-`examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py` for local
-target-to-evaluated-run flows, including a LangGraph-style `ainvoke(dict)`
-promotion.
+`examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py` and
+`examples/sdk_framework_adapter_langchain_invoke_promotion.py` for local
+target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)` and
+LangChain-style `invoke(dict)` promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
 probe optimization, auto-discovery optimization, explicit promotion,
-auto-discovery promotion, one-call promotion, one-call run, and LangGraph
-`ainvoke(dict)` promotion cookbooks. It requires custom `execute_task(dict)`
-coverage plus LangGraph `ainvoke(dict)` promotion, callable-signature evidence,
-observed I/O contracts, passing probe proofs, discovery metadata where expected,
-promoted manifest proof metadata, and evaluated framework runtime, adapter
-call-contract, observed-I/O, adapter-contract, framework-trace, and tool
-metrics. Probe optimization artifacts also render a
+auto-discovery promotion, one-call promotion, one-call run, LangGraph
+`ainvoke(dict)`, and LangChain `invoke(dict)` promotion cookbooks. It requires
+custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)` and
+LangChain `invoke(dict)` promotion, callable-signature evidence, observed I/O
+contracts, passing probe proofs, discovery metadata where expected, promoted
+manifest proof metadata, and evaluated framework runtime, adapter call-contract,
+observed-I/O, adapter-contract, framework-trace, and tool metrics. Probe
+optimization artifacts also render a
 `framework_adapter_probe` report/action card with exportable proof, selected
 probe report, contract, callable signature, observed I/O contract, and
 replay-lock artifacts.

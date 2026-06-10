@@ -9,7 +9,7 @@ Snapshot:
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `e5c25d6 Add adapter call contract eval metrics`.
+  `661a1c0 Broaden environment 10x adapter promotion`.
 - Full v1 is not done.
 - Do not claim universal "better than OpenEnv" yet. The current evidence says
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -18,7 +18,7 @@ Snapshot:
   product center.
 - Current Python and TypeScript package manifests do not list OpenEnv or
   Gymnasium as package dependencies.
-- The current handoff slice adds LangGraph-style `ainvoke(dict)` adapter
+- The current handoff slice adds LangChain-style `invoke(dict)` adapter
   promotion coverage on top of that baseline.
 - The only unrelated local state observed during this handoff is `uv.lock`.
 
@@ -123,7 +123,7 @@ uv run pytest -q
 
 Result:
 
-- `291 passed, 6 warnings in 660.38s`
+- `292 passed, 6 warnings in 1057.81s`
 
 Also passed:
 
@@ -212,7 +212,37 @@ Result:
 
 - `1 passed, 5 warnings in 371.09s`
 
-## Current Completed Slice
+Additional verification for the LangChain `invoke(dict)` slice:
+
+```bash
+python3 -m py_compile \
+  examples/sdk_framework_adapter_langchain_invoke_promotion.py \
+  src/agent_learning/trinity.py \
+  tests/test_cli_examples.py \
+  tests/test_config_and_facades.py
+```
+
+```bash
+uv run pytest \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_langchain_invoke_promotion_example_runs \
+  -q
+```
+
+Result:
+
+- `1 passed, 5 warnings in 2.80s`
+
+```bash
+uv run pytest \
+  tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones \
+  -q
+```
+
+Result:
+
+- `1 passed, 5 warnings in 412.24s`
+
+## Previous LangGraph Slice
 
 This handoff slice broadens BYO framework adapter-probe/promotion beyond the
 custom `execute_task(dict)` fixture.
@@ -257,31 +287,48 @@ Promoted-run metrics verified at `1.0`:
 ## Latest Environment 10x Slice
 
 The native adapter promotion axis in `environment_10x_robustness` now counts
-both custom and non-custom promoted adapter contracts.
+custom, LangGraph, and LangChain promoted adapter contracts.
 
 Implemented behavior:
 
 - `V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES` now includes
-  `langgraph_ainvoke_promotion`.
+  `langgraph_ainvoke_promotion` and `langchain_invoke_promotion`.
 - The environment 10x aggregator no longer assumes every promotion is
   `custom_refund_orchestrator / execute_task / dict`.
 - The aggregator derives per-surface framework, method, input mode, discovery,
   and metric-floor expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
 - The native adapter axis now enforces each contract's own `min_metrics`,
   including call-contract and observed-I/O metrics.
-- Release-check tests assert the surface contract map and prove custom
-  promotions plus LangGraph `ainvoke(dict)` promotion without diluting either
-  contract.
+- Release-check tests assert the surface contract map and prove custom,
+  LangGraph `ainvoke(dict)`, and LangChain `invoke(dict)` promotions without
+  diluting any contract.
+
+## Latest LangChain Slice
+
+The adapter-probe path now proves a synchronous LangChain-style invocation
+surface in addition to the custom and LangGraph promotion surfaces.
+
+Implemented behavior:
+
+- Added `examples/sdk_framework_adapter_langchain_invoke_promotion.py`.
+- The cookbook uses weak `run(text)` and passing `invoke(dict)` candidates so
+  adapter optimization must select the synchronous LangChain-style dict path.
+- The promoted manifest selects `langchain / invoke / dict` with runtime trace
+  enabled.
+- Release-check now includes `langchain_invoke_promotion` under
+  `framework_adapter_probe_readiness` and `environment_10x_robustness`.
+- The promoted run closes framework runtime, adapter call-contract,
+  observed-I/O, adapter-contract, framework-trace, and tool metrics.
 
 ## Immediate Next Slice
 
-Add the next non-custom framework promotion path after LangGraph.
+Add the next non-custom framework promotion path after LangGraph and LangChain.
 
 Recommended candidates:
 
-1. LangChain-style `invoke(dict)` or `invoke(messages)` promotion.
-2. Provider nested method promotion such as `chat.completions.create`.
-3. LiveKit/Pipecat voice/frame adapter promotion.
+1. Provider nested method promotion such as `chat.completions.create`.
+2. LiveKit/Pipecat voice/frame adapter promotion.
+3. Browser Use / CUA adapter-probe promotion.
 
 Keep the same rule: one deterministic local fixture, one focused cookbook test,
 one release-check contract only when the evidence is stable, and docs in the
@@ -350,6 +397,7 @@ Cookbooks/docs/tests:
 - `examples/sdk_framework_adapter_one_call_promotion.py`
 - `examples/sdk_framework_adapter_one_call_run.py`
 - `examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py`
+- `examples/sdk_framework_adapter_langchain_invoke_promotion.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
