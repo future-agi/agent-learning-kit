@@ -111,8 +111,10 @@ environment robustness is
 also executable: release-check aggregates local replay, framework, eval,
 optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
 workflow-hook, retrieval-hook, red-team, orchestration, and regression proof
-outputs and requires at least ten independent axes to pass. OpenEnv and
-Gymnasium are compatibility inputs, not the product center. Regression artifact
+outputs and requires at least ten independent axes to pass, including native
+adapter promotion for custom `execute_task(dict)` and LangGraph `ainvoke(dict)`
+surfaces. OpenEnv and Gymnasium are compatibility inputs, not the product
+center. Regression artifact
 readiness runs the local baseline, compare, report, promote-to-regression, and
 replay lifecycle so optimized or red-team evidence can become replayable CI
 artifacts. Optimizer governance readiness executes local governed

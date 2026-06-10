@@ -123,7 +123,7 @@ uv run pytest -q
 
 Result:
 
-- `291 passed, 6 warnings in 720.86s`
+- `291 passed, 6 warnings in 660.38s`
 
 Also passed:
 
@@ -193,6 +193,25 @@ Result:
 
 - `1 passed, 5 warnings in 369.47s`
 
+Additional verification for the environment 10x native adapter promotion
+refactor:
+
+```bash
+python3 -m py_compile \
+  src/agent_learning/trinity.py \
+  tests/test_config_and_facades.py
+```
+
+```bash
+uv run pytest \
+  tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones \
+  -q
+```
+
+Result:
+
+- `1 passed, 5 warnings in 371.09s`
+
 ## Current Completed Slice
 
 This handoff slice broadens BYO framework adapter-probe/promotion beyond the
@@ -235,37 +254,38 @@ Promoted-run metrics verified at `1.0`:
 - `framework_trace_coverage == 1.0`
 - `tool_selection_accuracy == 1.0`
 
+## Latest Environment 10x Slice
+
+The native adapter promotion axis in `environment_10x_robustness` now counts
+both custom and non-custom promoted adapter contracts.
+
+Implemented behavior:
+
+- `V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES` now includes
+  `langgraph_ainvoke_promotion`.
+- The environment 10x aggregator no longer assumes every promotion is
+  `custom_refund_orchestrator / execute_task / dict`.
+- The aggregator derives per-surface framework, method, input mode, discovery,
+  and metric-floor expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
+- The native adapter axis now enforces each contract's own `min_metrics`,
+  including call-contract and observed-I/O metrics.
+- Release-check tests assert the surface contract map and prove custom
+  promotions plus LangGraph `ainvoke(dict)` promotion without diluting either
+  contract.
+
 ## Immediate Next Slice
 
-Refactor the `environment_10x_robustness` native adapter promotion axis so it
-can count non-custom promotion surfaces.
+Add the next non-custom framework promotion path after LangGraph.
 
-Implementation anchors:
+Recommended candidates:
 
-- `src/agent_learning/trinity.py`
-- `tests/test_config_and_facades.py`
-- `internal-docs/environment-10x-robustness-research.md`
+1. LangChain-style `invoke(dict)` or `invoke(messages)` promotion.
+2. Provider nested method promotion such as `chat.completions.create`.
+3. LiveKit/Pipecat voice/frame adapter promotion.
 
-Steps:
-
-1. Replace hard-coded expectations for native adapter promotion with
-   per-surface expected framework/method/input mode data.
-2. Keep custom `execute_task(dict)` surfaces passing.
-3. Add LangGraph `ainvoke(dict)` as an additional native adapter promotion
-   evidence source only after the per-surface model is in place.
-4. Update release-check tests so the environment 10x axis proves both custom
-   and non-custom promotion evidence without diluting either contract.
-5. Keep OpenEnv/Gymnasium as compatibility evidence inside the Agent
-   Learning-native robustness bar.
-
-Important pitfall:
-
-- The `environment_10x_robustness` native adapter promotion axis currently
-  expects promotion surfaces to be:
-  - `framework == "custom_refund_orchestrator"`
-  - `method == "execute_task"`
-  - `input_mode == "dict"`
-- Adding LangGraph there without refactoring will fail release-check.
+Keep the same rule: one deterministic local fixture, one focused cookbook test,
+one release-check contract only when the evidence is stable, and docs in the
+same commit.
 
 ## Key Files
 

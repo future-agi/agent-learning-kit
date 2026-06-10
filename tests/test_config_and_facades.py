@@ -22421,25 +22421,45 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert adapter_axis_evidence["surfaces"] == (
         trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
     )
+    native_adapter_contracts = {
+        contract["surface"]: contract
+        for contract in trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+        if contract["surface"]
+        in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
+    }
+    assert adapter_axis_evidence["surface_contracts"] == {
+        surface: native_adapter_contracts[surface]
+        for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
+    }
     assert all(adapter_axis_evidence["surface_checks"].values())
     for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES:
+        contract = native_adapter_contracts[surface]
         promotion = adapter_axis_evidence["promotions"][surface]
         assert promotion["result_kind"] == "agent-learning.run.v1"
         assert promotion["result_status"] == "passed"
         assert promotion["output_roundtrip"] is True
         assert promotion["manifest_present"] is True
         assert promotion["manifest_agent"] == {
-            "framework": "custom_refund_orchestrator",
-            "method": "execute_task",
-            "input_mode": "dict",
+            "framework": contract["expected_framework"],
+            "method": contract["expected_method"],
+            "input_mode": contract["expected_input_mode"],
             "trace_runtime": True,
         }
         assert promotion["manifest_metadata"][
             "promoted_from_framework_adapter_probe"
         ] is True
         assert promotion["manifest_metadata"]["probe_proof_status"] == "passed"
-        for metric in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS:
-            assert promotion["metric_averages"][metric] == pytest.approx(1.0)
+        if contract.get("require_discovery") is True:
+            assert (
+                promotion["manifest_metadata"]["framework_adapter_discovery_used"]
+                is True
+            )
+            assert (
+                promotion["manifest_metadata"]["framework_adapter_discovery_status"]
+                == "passed"
+            )
+        for metric, minimum in contract["min_metrics"].items():
+            assert promotion["metric_averages"][metric] >= minimum
     protocol_axis = environment_10x_axes["protocol_tool_routing"]["evidence"]
     assert protocol_axis["protocols"] == ["a2a", "mcp"]
     assert protocol_axis["mcp_summary"]["tool_count"] >= 2

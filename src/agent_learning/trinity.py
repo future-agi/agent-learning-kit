@@ -2494,10 +2494,13 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "auto_discovery_promotion",
     "one_call_promotion",
     "one_call_run",
+    "langgraph_ainvoke_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
+    "framework_adapter_call_contract_quality",
     "framework_adapter_contract_quality",
+    "framework_adapter_observed_io_quality",
     "framework_runtime_contract",
     "framework_trace_coverage",
     "tool_selection_accuracy",
@@ -30926,31 +30929,50 @@ def _release_environment_10x_robustness_status(
         for record in _as_list(framework_adapter_probe.get("probes"))
         if isinstance(record, Mapping)
     }
+    adapter_probe_promotion_contracts = {
+        str(contract["surface"]): _as_mapping(contract)
+        for contract in V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+        if contract.get("surface")
+        in V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
+    }
     adapter_probe_promotions = {
         surface: adapter_probe_records.get(surface, {})
         for surface in V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
     }
     adapter_probe_promotion_checks: dict[str, bool] = {}
     for surface, record in adapter_probe_promotions.items():
+        expected_contract = adapter_probe_promotion_contracts.get(surface, {})
         manifest_metadata = _as_mapping(record.get("manifest_metadata"))
         manifest_agent = _as_mapping(record.get("manifest_agent"))
         metric_averages = _as_mapping(record.get("metric_averages"))
+        metric_floors = _as_mapping(expected_contract.get("min_metrics"))
+        discovery_ok = True
+        if expected_contract.get("require_discovery") is True:
+            discovery_ok = (
+                manifest_metadata.get("framework_adapter_discovery_used") is True
+                and manifest_metadata.get("framework_adapter_discovery_status")
+                == "passed"
+            )
         adapter_probe_promotion_checks[surface] = (
             bool(record)
             and record.get("result_kind") == "agent-learning.run.v1"
             and record.get("result_status") == "passed"
             and record.get("output_roundtrip") is True
             and record.get("manifest_present") is True
-            and manifest_agent.get("framework") == "custom_refund_orchestrator"
-            and manifest_agent.get("method") == "execute_task"
-            and manifest_agent.get("input_mode") == "dict"
+            and manifest_agent.get("framework")
+            == expected_contract.get("expected_framework")
+            and manifest_agent.get("method") == expected_contract.get("expected_method")
+            and manifest_agent.get("input_mode") == expected_contract.get(
+                "expected_input_mode"
+            )
             and manifest_agent.get("trace_runtime") is True
             and manifest_metadata.get("promoted_from_framework_adapter_probe")
             is True
             and manifest_metadata.get("probe_proof_status") == "passed"
-            and metrics_at_floor(
-                metric_averages,
-                V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS,
+            and discovery_ok
+            and all(
+                _float_or_zero(metric_averages.get(metric)) >= float(minimum)
+                for metric, minimum in metric_floors.items()
             )
         )
     append_axis(
@@ -30971,26 +30993,33 @@ def _release_environment_10x_robustness_status(
                 adapter_probe_records,
                 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES,
             )
+            and contains_all(
+                adapter_probe_promotion_contracts,
+                V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES,
+            )
             and all(adapter_probe_promotion_checks.values())
         ),
         expected={
             "source_check": "framework_adapter_probe_readiness",
             "surfaces": V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES,
+            "contracts": copy.deepcopy(adapter_probe_promotion_contracts),
             "result_kind": "agent-learning.run.v1",
             "result_status": "passed",
             "output_roundtrip": True,
             "manifest_present": True,
-            "framework": "custom_refund_orchestrator",
-            "method": "execute_task",
-            "input_mode": "dict",
             "trace_runtime": True,
             "promoted_from_framework_adapter_probe": True,
             "probe_proof_status": "passed",
-            "metrics": V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS,
-            "metric_floor": 1.0,
+            "metric_floors": {
+                surface: copy.deepcopy(
+                    _as_mapping(contract).get("min_metrics") or {}
+                )
+                for surface, contract in adapter_probe_promotion_contracts.items()
+            },
         },
         evidence={
             "surfaces": list(adapter_probe_promotions),
+            "surface_contracts": copy.deepcopy(adapter_probe_promotion_contracts),
             "surface_checks": dict(adapter_probe_promotion_checks),
             "promotions": {
                 surface: copy.deepcopy(dict(record))

@@ -610,9 +610,9 @@ Next implementation focus:
   failure-injection coverage, adversarial state coverage, sandbox evidence, and
   local reproducibility before it appears in release notes.
 - Keep backing that target with Agent Learning run/eval/optimization artifacts,
-  local environment replay gates, framework adapter cookbooks, and
-  release-checked agent-opt bundle search. OpenEnv-specific fixtures are
-  compatibility coverage only.
+  local environment replay gates, framework adapter cookbooks, non-custom
+  LangGraph `ainvoke(dict)` promotion evidence, and release-checked agent-opt
+  bundle search. OpenEnv-specific fixtures are compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove
   best-candidate selection across custom adapters, social-memory synthesis,
   world/framework/memory stacks, multi-agent framework handoffs, framework
