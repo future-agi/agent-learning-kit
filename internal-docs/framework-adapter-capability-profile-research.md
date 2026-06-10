@@ -14,6 +14,9 @@ This increment adds:
 
 - `simulate.framework_adapter_capability_profile(...)`
 - `simulate.framework_adapter_capability_profiles(...)`
+- framework matrix run manifests that attach
+  `framework_adapter_capability_profiles` beside
+  `framework_adapter_contract_matrix`
 - `agent-learning.framework-adapter-capability-profile.v1`
 - `agent-learning.framework-adapter-capability-profiles.v1`
 - ai-evaluation extraction support for profile artifacts
@@ -55,10 +58,13 @@ The profile remains import-free. It is not a LangChain, LiveKit, or Pipecat
 adapter implementation. It is a first-party capability declaration and proof
 artifact for local simulation, evaluation, and optimization.
 
-## Follow-Up Bar
+## Current Bar
 
-The next increment should let run manifests attach
-`framework_adapter_capability_profiles` beside the matrix directly, then expose
-profile-level cards in reports and promotion manifests. The evaluator already
-accepts the profile payload as evidence, and the optimizer proof now verifies
-that selected framework matrices carry all three trinity bindings.
+Run manifests now attach `framework_adapter_capability_profiles` beside the
+matrix directly. The evaluator accepts the profile payload as evidence, the
+optimizer proof verifies that selected framework matrices carry all three
+trinity bindings, and report adapter summaries surface profile counts,
+frameworks, and libraries.
+
+The next increment should promote profile-level report cards and regression
+promotion fields outside the generic framework-readiness adapter summary.

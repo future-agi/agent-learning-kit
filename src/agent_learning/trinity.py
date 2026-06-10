@@ -1834,6 +1834,7 @@ V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS = [
     "adapter_matrix_status_closed",
     "adapter_matrix_framework_coverage_closed",
     "adapter_matrix_local_fixture_closed",
+    "adapter_matrix_profile_bindings_closed",
     "adapter_matrix_metric_evidence_closed",
     "adapter_matrix_report_evidence_closed",
 ]

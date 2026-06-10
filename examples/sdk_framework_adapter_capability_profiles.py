@@ -24,6 +24,17 @@ def build_profiles() -> dict[str, Any]:
     return simulate.framework_adapter_capability_profiles(matrix=matrix)
 
 
+def build_manifest() -> dict[str, Any]:
+    """Build a run manifest that carries the profile bundle as evidence."""
+
+    matrix = simulate.framework_adapter_contract_matrix(FRAMEWORKS)
+    return simulate.build_framework_adapter_matrix_run_manifest(
+        name="sdk-framework-adapter-capability-profiles",
+        frameworks=FRAMEWORKS,
+        matrix=matrix,
+    )
+
+
 def run(output_path: str | Path | None = None) -> dict[str, Any]:
     profiles = build_profiles()
     if output_path is not None:

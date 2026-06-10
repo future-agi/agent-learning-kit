@@ -8315,16 +8315,68 @@ def _orchestration_framework_summary(framework: Any) -> Dict[str, Any]:
     if not isinstance(framework, Mapping):
         return {}
     conformance = framework.get("adapter_conformance")
+    profile_bundle = _framework_adapter_profile_bundle(framework)
+    profile_summary = (
+        dict(profile_bundle.get("summary") or {})
+        if isinstance(profile_bundle, Mapping)
+        else {}
+    )
     return {
         "framework": framework.get("framework"),
         "span_count": len(_coerce_list(framework.get("spans"))),
         "event_count": len(_coerce_list(framework.get("events"))),
+        "profile_count": profile_summary.get("profile_count"),
+        "profile_frameworks": profile_summary.get("frameworks"),
+        "profile_libraries": profile_summary.get("libraries"),
         "adapter_conformance_passed": (
             dict(conformance).get("passed")
             if isinstance(conformance, Mapping)
             else None
         ),
     }
+
+
+def _framework_adapter_profile_bundle(framework: Mapping[str, Any]) -> Dict[str, Any]:
+    metadata = dict(framework.get("metadata") or {})
+    for candidate in (
+        framework.get("framework_adapter_capability_profiles"),
+        metadata.get("framework_adapter_capability_profiles"),
+    ):
+        if isinstance(candidate, Mapping) and str(candidate.get("kind") or "") == (
+            "agent-learning.framework-adapter-capability-profiles.v1"
+        ):
+            return dict(candidate)
+    matrix = metadata.get("framework_adapter_contract_matrix")
+    if not isinstance(matrix, Mapping):
+        matrix = framework.get("framework_adapter_contract_matrix")
+    if isinstance(matrix, Mapping) and matrix.get("profiles"):
+        profiles = [
+            dict(profile)
+            for profile in _coerce_list(matrix.get("profiles"))
+            if isinstance(profile, Mapping)
+        ]
+        summary = dict(matrix.get("profile_summary") or {})
+        if not summary:
+            libraries = sorted(
+                {
+                    str(library)
+                    for profile in profiles
+                    for library in dict(profile.get("bindings") or {})
+                }
+            )
+            summary = {
+                "frameworks": [profile.get("framework") for profile in profiles],
+                "profile_count": len(profiles),
+                "libraries": libraries,
+            }
+        return {
+            "kind": "agent-learning.framework-adapter-capability-profiles.v1",
+            "status": matrix.get("status"),
+            "frameworks": matrix.get("frameworks"),
+            "profiles": profiles,
+            "summary": summary,
+        }
+    return {}
 
 
 def _orchestration_retrieval_summary(retrieval: Any) -> Dict[str, Any]:
@@ -9688,6 +9740,16 @@ def _framework_layer_signals(layer: str, payload: Any) -> List[str]:
         return _unique_strings([
             *_coerce_list(summary.get("observed_frameworks")),
             *_coerce_list(summary.get("missing_required_sources")),
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "adapter":
+        profile_bundle = _framework_adapter_profile_bundle(payload)
+        profile_summary = dict(profile_bundle.get("summary") or {})
+        return _unique_strings([
+            payload.get("framework"),
+            *_coerce_list(summary.get("frameworks")),
+            *_coerce_list(profile_summary.get("frameworks")),
+            *_coerce_list(profile_summary.get("libraries")),
             *_coerce_list(payload.get("signals")),
         ])
     return _orchestration_layer_signals("framework", payload)

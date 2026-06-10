@@ -12926,9 +12926,22 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
     verified_matrix = candidates[1][0]["data"]["metadata"][
         "framework_adapter_contract_matrix"
     ]
+    verified_profiles = candidates[1][0]["data"]["metadata"][
+        "framework_adapter_capability_profiles"
+    ]
     assert weak_matrix["framework_count"] < verified_matrix["framework_count"]
     assert verified_matrix["summary"]["external_target_count"] == 0
     assert verified_matrix["summary"]["requires_external_service_count"] == 0
+    assert verified_profiles["kind"] == (
+        "agent-learning.framework-adapter-capability-profiles.v1"
+    )
+    assert verified_profiles["status"] == "passed"
+    assert verified_profiles["summary"]["profile_count"] == len(module.FRAMEWORKS)
+    assert verified_profiles["summary"]["libraries"] == [
+        "agent-opt",
+        "ai-evaluation",
+        "simulate-sdk",
+    ]
     config = manifest["evaluation"]["agent_report"]["config"]
     gate = config["framework_adapter_contract_quality"]
     assert gate["required_frameworks"] == module.FRAMEWORKS
@@ -12966,8 +12979,18 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
     report_matrix = state["framework_trace"]["metadata"][
         "framework_adapter_contract_matrix"
     ]
+    report_profiles = state["framework_trace"]["metadata"][
+        "framework_adapter_capability_profiles"
+    ]
     assert report_matrix["status"] == "passed"
     assert report_matrix["frameworks"] == module.FRAMEWORKS
+    assert report_profiles["status"] == "passed"
+    assert report_profiles["frameworks"] == module.FRAMEWORKS
+    assert report_profiles["summary"]["libraries"] == [
+        "agent-opt",
+        "ai-evaluation",
+        "simulate-sdk",
+    ]
 
     proof = result["framework_adapter_matrix_proof"]
     assert saved["framework_adapter_matrix_proof"] == proof
@@ -12978,6 +13001,9 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
     assert proof["status"] == "passed"
     assert proof["requires_external_service"] is False
     assert proof["frameworks"] == module.FRAMEWORKS
+    assert proof["evidence"]["profile_summary"]["profile_count"] == len(
+        module.FRAMEWORKS
+    )
     assert proof["failed_check_ids"] == []
     assert proof["warning_check_ids"] == []
     assert {
@@ -13008,6 +13034,15 @@ def test_sdk_framework_adapter_capability_profiles_example_runs(tmp_path):
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    env_metadata = manifest["simulation"]["environments"][0]["data"]["metadata"]
+    assert env_metadata["framework_adapter_capability_profiles"]["status"] == (
+        "passed"
+    )
+    assert manifest["metadata"]["framework_adapter_capability_profiles"] == (
+        env_metadata["framework_adapter_capability_profiles"]
+    )
 
     output_path = tmp_path / "framework-adapter-profiles.json"
     result = module.run(output_path)

@@ -3541,6 +3541,7 @@ def build_framework_adapter_matrix_run_manifest(
         if matrix is not None
         else framework_adapter_contract_matrix(frameworks)
     )
+    profile_bundle = framework_adapter_capability_profiles(matrix=matrix_payload)
     framework_keys = _unique_strings(matrix_payload.get("frameworks") or frameworks)
     agent_config = copy.deepcopy(
         dict(
@@ -3576,7 +3577,12 @@ def build_framework_adapter_matrix_run_manifest(
             "max_turns": max_turns_value,
             "min_turns": int(min_turns),
             "auto_execute_tools": True,
-            "environments": [_framework_adapter_matrix_environment(matrix_payload)],
+            "environments": [
+                _framework_adapter_matrix_environment(
+                    matrix_payload,
+                    profile_bundle=profile_bundle,
+                )
+            ],
         },
         "evaluation": {
             "agent_report": {
@@ -3592,6 +3598,7 @@ def build_framework_adapter_matrix_run_manifest(
             "task_kind": "framework_adapter_matrix",
             "frameworks": framework_keys,
             "framework_adapter_contract_matrix": matrix_payload,
+            "framework_adapter_capability_profiles": profile_bundle,
             **copy.deepcopy(dict(metadata or {})),
         },
     }
@@ -5728,9 +5735,21 @@ def _default_framework_adapter_matrix_scenario(
 
 def _framework_adapter_matrix_environment(
     matrix: Mapping[str, Any],
+    *,
+    profile_bundle: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     matrix_payload = copy.deepcopy(dict(matrix))
+    profiles_payload = (
+        copy.deepcopy(dict(profile_bundle))
+        if profile_bundle is not None
+        else framework_adapter_capability_profiles(matrix=matrix_payload)
+    )
     frameworks = _unique_strings(matrix_payload.get("frameworks"))
+    profile_summary = (
+        dict(profiles_payload.get("summary"))
+        if isinstance(profiles_payload.get("summary"), Mapping)
+        else {}
+    )
     return {
         "type": "framework_trace",
         "data": {
@@ -5742,17 +5761,24 @@ def _framework_adapter_matrix_environment(
                     "kind": "adapter_matrix",
                     "signals": [
                         "adapter_contract_matrix",
+                        "adapter_capability_profiles",
                         "local_fixture",
                         "metric_evidence",
+                        "simulate_sdk_binding",
+                        "ai_evaluation_binding",
+                        "agent_opt_binding",
                     ],
                     "metadata": {
                         "framework_count": len(frameworks),
                         "frameworks": frameworks,
+                        "profile_count": profile_summary.get("profile_count"),
+                        "profile_libraries": profile_summary.get("libraries"),
                     },
                 }
             ],
             "metadata": {
                 "framework_adapter_contract_matrix": matrix_payload,
+                "framework_adapter_capability_profiles": profiles_payload,
             },
         },
     }
