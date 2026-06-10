@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_learning import actions
 from agent_learning.cli import main
 
 
@@ -1516,6 +1517,74 @@ def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
     assert best_adapter["method"] == "execute_task"
     assert best_adapter["input_mode"] == "dict"
     assert result["framework_adapter_probe_proof"]["failed_check_ids"] == []
+
+    report_path = tmp_path / "sdk-framework-adapter-probe-optimization-report.json"
+    report_markdown_path = (
+        tmp_path / "sdk-framework-adapter-probe-optimization-report.md"
+    )
+    assert (
+        main(
+            [
+                "report",
+                str(output_path),
+                "--output",
+                str(report_path),
+                "--markdown",
+                str(report_markdown_path),
+            ]
+        )
+        == 0
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "framework_adapter_probe" in report["summary"]["sections"]
+    adapter_card = report["report"]["framework_adapter_probe"]
+    assert adapter_card["kind"] == "framework_adapter_probe_evidence"
+    assert adapter_card["status"] == "verified"
+    assert adapter_card["framework"] == "custom_refund_orchestrator"
+    assert adapter_card["method"] == "execute_task"
+    assert adapter_card["input_mode"] == "dict"
+    assert adapter_card["local_only"] is True
+    assert adapter_card["requires_external_service"] is False
+    assert adapter_card["proof_status"] == "passed"
+    assert adapter_card["runtime_trace_count"] == 1
+    assert adapter_card["tool_call_count"] == 1
+    assert adapter_card["artifacts"]["proof"] == result["framework_adapter_probe_proof"]
+    assert "## Framework Adapter Probe" in report_markdown
+
+    catalog = actions.action_catalog(result, source_path=output_path)
+    framework_actions = {
+        action["id"]: action
+        for action in catalog["actions"]
+        if action.get("source_card_path") == "framework_adapter_probe"
+    }
+    assert {
+        "report_framework_adapter_probe",
+        "export_framework_adapter_probe_proof",
+        "export_framework_adapter_probe_selected_probe_report",
+        "export_framework_adapter_probe_contract",
+        "export_framework_adapter_probe_replay_lock",
+    } <= set(framework_actions)
+    assert framework_actions["export_framework_adapter_probe_proof"][
+        "artifact_ref"
+    ] == "report.framework_adapter_probe.artifacts.proof"
+
+    proof_export_path = tmp_path / "framework-adapter-probe-proof.json"
+    export_run = actions.run_action(
+        result,
+        "export_framework_adapter_probe_proof",
+        source_path=output_path,
+        cwd=tmp_path,
+        artifact_output_path=proof_export_path,
+    )
+    assert export_run["kind"] == "agent-learning.action-run.v1"
+    assert export_run["status"] == "passed"
+    assert export_run["summary"]["source_card_path"] == "framework_adapter_probe"
+    assert export_run["artifact_ref"] == (
+        "report.framework_adapter_probe.artifacts.proof"
+    )
+    exported_proof = json.loads(proof_export_path.read_text(encoding="utf-8"))
+    assert exported_proof == result["framework_adapter_probe_proof"]
 
 
 def test_sdk_framework_adapter_auto_discovery_optimization_example_runs(tmp_path):

@@ -31,3 +31,10 @@ be selected, discovery to be used where expected, probe proofs to pass, promoted
 manifests to carry proof/discovery metadata, and evaluated runs to close
 framework runtime, adapter-contract, framework-trace, and tool-selection
 metrics.
+
+The optimization surfaces also render a first-class `framework_adapter_probe`
+report/action card. Release-check verifies that the card is local-only,
+contains the selected adapter method/input mode, exposes the native probe proof,
+and can export that proof through `action-run`. This keeps BYO-framework
+adapter optimization visible to Future AGI UI/report surfaces instead of
+leaving the proof buried inside optimizer history.

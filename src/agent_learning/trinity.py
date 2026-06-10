@@ -3356,6 +3356,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_input_mode": "dict",
         "expected_candidate_source": "explicit",
         "require_probe_proof": True,
+        "require_report_actions": True,
         "require_discovery": False,
         "min_optimization_score": 1.0,
         "min_evaluation_score": 1.0,
@@ -3368,6 +3369,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_input_mode": "dict",
         "expected_candidate_source": "discovery",
         "require_probe_proof": True,
+        "require_report_actions": True,
         "require_discovery": True,
         "min_optimization_score": 1.0,
         "min_evaluation_score": 1.0,
@@ -3440,6 +3442,14 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
             "tool_selection_accuracy": 1.0,
         },
     },
+]
+
+V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS = [
+    "report_framework_adapter_probe",
+    "export_framework_adapter_probe_proof",
+    "export_framework_adapter_probe_selected_probe_report",
+    "export_framework_adapter_probe_contract",
+    "export_framework_adapter_probe_replay_lock",
 ]
 
 V1_PROTOCOL_ADAPTER_FILES = [
@@ -5036,6 +5046,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not framework_adapter_probe["contract_errors"]
             and not framework_adapter_probe["metric_errors"]
             and not framework_adapter_probe["manifest_errors"]
+            and not framework_adapter_probe["action_errors"]
         ),
         milestone="M6",
         evidence=framework_adapter_probe,
@@ -6308,6 +6319,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_adapter_probe_contracts": copy.deepcopy(
             V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+        ),
+        "required_framework_adapter_probe_actions": list(
+            V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
         ),
         "required_framework_adapter_io_files": list(
             V1_FRAMEWORK_ADAPTER_IO_FILES
@@ -33014,13 +33028,21 @@ def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
     contract_errors: list[dict[str, Any]] = []
     metric_errors: list[dict[str, Any]] = []
     manifest_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
     probes: list[dict[str, Any]] = []
 
     if not missing_files:
+        from . import actions as agent_actions
+        from . import simulate as agent_simulate
+
         for contract in V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS:
             surface = str(contract["surface"])
             relative_path = str(contract["path"])
             example_path = root / relative_path
+            report: dict[str, Any] = {}
+            catalog: dict[str, Any] = {}
+            export_run: dict[str, Any] = {}
+            exported_probe_proof: dict[str, Any] = {}
             try:
                 spec = importlib.util.spec_from_file_location(
                     f"agent_learning_release_framework_adapter_probe_{surface}",
@@ -33042,6 +33064,28 @@ def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
                         if manifest_path.exists()
                         else {}
                     )
+                    if contract.get("require_report_actions"):
+                        report = agent_simulate.render_report(
+                            result,
+                            source_path=output_path,
+                        )
+                        catalog = agent_actions.action_catalog(
+                            result,
+                            source_path=output_path,
+                        )
+                        proof_export_path = (
+                            Path(tmpdir) / f"{surface}-probe-proof.json"
+                        )
+                        export_run = agent_actions.run_action(
+                            result,
+                            "export_framework_adapter_probe_proof",
+                            source_path=output_path,
+                            cwd=Path(tmpdir),
+                            artifact_output_path=proof_export_path,
+                        )
+                        exported_probe_proof = json.loads(
+                            proof_export_path.read_text(encoding="utf-8")
+                        )
             except Exception as exc:
                 execution_errors.append(
                     {"surface": surface, "path": relative_path, "error": str(exc)}
@@ -33053,6 +33097,10 @@ def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
                 saved=saved,
                 manifest=manifest,
                 contract=contract,
+                report=report,
+                catalog=catalog,
+                export_run=export_run,
+                exported_probe_proof=exported_probe_proof,
             )
             record["surface"] = surface
             record["path"] = relative_path
@@ -33061,6 +33109,7 @@ def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
                 contract_errors,
                 metric_errors,
                 manifest_errors,
+                action_errors,
                 surface=surface,
                 path=relative_path,
                 result=result,
@@ -33073,11 +33122,13 @@ def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
     return {
         "required_files": list(V1_FRAMEWORK_ADAPTER_PROBE_FILES),
         "required_contracts": copy.deepcopy(V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS),
+        "required_actions": list(V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS),
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "contract_errors": contract_errors,
         "metric_errors": metric_errors,
         "manifest_errors": manifest_errors,
+        "action_errors": action_errors,
         "probes": probes,
     }
 
@@ -33088,6 +33139,10 @@ def _framework_adapter_probe_record(
     saved: Mapping[str, Any],
     manifest: Mapping[str, Any],
     contract: Mapping[str, Any],
+    report: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+    export_run: Mapping[str, Any],
+    exported_probe_proof: Mapping[str, Any],
 ) -> dict[str, Any]:
     summary = _as_mapping(result.get("summary"))
     optimization = _as_mapping(result.get("optimization"))
@@ -33125,6 +33180,21 @@ def _framework_adapter_probe_record(
     discovery_used = summary.get("framework_adapter_discovery_used")
     if discovery_used is None:
         discovery_used = manifest_discovery_used
+    report_summary = _as_mapping(report.get("summary"))
+    report_body = _as_mapping(report.get("report"))
+    report_card = _as_mapping(report_body.get("framework_adapter_probe"))
+    catalog_summary = _as_mapping(catalog.get("summary"))
+    report_action_ids = sorted(
+        str(_as_mapping(action).get("id"))
+        for action in _as_list(report_card.get("actions"))
+        if _as_mapping(action).get("id")
+    )
+    catalog_action_ids = sorted(
+        str(_as_mapping(action).get("id"))
+        for action in _as_list(catalog.get("actions"))
+        if _as_mapping(action).get("source_card_path") == "framework_adapter_probe"
+        and _as_mapping(action).get("id")
+    )
 
     return {
         "result_kind": result.get("kind"),
@@ -33200,6 +33270,38 @@ def _framework_adapter_probe_record(
                 manifest_agent_metadata.get("framework_adapter_probe_proof")
             ).get("status"),
         },
+        "report": {
+            "kind": report.get("kind"),
+            "status": report.get("status"),
+            "sections": list(report_summary.get("sections") or []),
+            "markdown_has_heading": (
+                "## Framework Adapter Probe" in str(report_body.get("markdown") or "")
+            ),
+            "card_kind": report_card.get("kind"),
+            "card_status": report_card.get("status"),
+            "local_only": report_card.get("local_only"),
+            "requires_external_service": report_card.get(
+                "requires_external_service"
+            ),
+            "framework": report_card.get("framework"),
+            "method": report_card.get("method"),
+            "input_mode": report_card.get("input_mode"),
+            "proof_status": report_card.get("proof_status"),
+            "action_ids": report_action_ids,
+        },
+        "actions": {
+            "kind": catalog.get("kind"),
+            "status": catalog.get("status"),
+            "source_card_paths": list(catalog_summary.get("source_card_paths") or []),
+            "action_ids": catalog_action_ids,
+            "export_proof": {
+                "kind": export_run.get("kind"),
+                "status": export_run.get("status"),
+                "artifact_ref": export_run.get("artifact_ref"),
+                "proof_kind": exported_probe_proof.get("kind"),
+                "proof_status": exported_probe_proof.get("status"),
+            },
+        },
         "metric_averages": {
             str(metric): metric_averages.get(metric) for metric in expected_metrics
         },
@@ -33210,6 +33312,7 @@ def _append_framework_adapter_probe_errors(
     contract_errors: list[dict[str, Any]],
     metric_errors: list[dict[str, Any]],
     manifest_errors: list[dict[str, Any]],
+    action_errors: list[dict[str, Any]],
     *,
     surface: str,
     path: str,
@@ -33341,6 +33444,136 @@ def _append_framework_adapter_probe_errors(
                             "probe_proof_failed_check_ids"
                         ),
                     },
+                }
+            )
+
+    if contract.get("require_report_actions"):
+        report_record = _as_mapping(record.get("report"))
+        action_record = _as_mapping(record.get("actions"))
+        report_expectations = {
+            "report.kind": (report_record.get("kind"), "agent-learning.report.v1"),
+            "report.status": (report_record.get("status"), "passed"),
+            "report.sections.framework_adapter_probe": (
+                "framework_adapter_probe" in _as_list(report_record.get("sections")),
+                True,
+            ),
+            "report.markdown.framework_adapter_probe": (
+                report_record.get("markdown_has_heading"),
+                True,
+            ),
+            "report.framework_adapter_probe.kind": (
+                report_record.get("card_kind"),
+                "framework_adapter_probe_evidence",
+            ),
+            "report.framework_adapter_probe.status": (
+                report_record.get("card_status"),
+                "verified",
+            ),
+            "report.framework_adapter_probe.local_only": (
+                report_record.get("local_only"),
+                True,
+            ),
+            "report.framework_adapter_probe.requires_external_service": (
+                report_record.get("requires_external_service"),
+                False,
+            ),
+            "report.framework_adapter_probe.framework": (
+                report_record.get("framework"),
+                contract.get("expected_framework") or "custom_refund_orchestrator",
+            ),
+            "report.framework_adapter_probe.method": (
+                report_record.get("method"),
+                contract.get("expected_method"),
+            ),
+            "report.framework_adapter_probe.input_mode": (
+                report_record.get("input_mode"),
+                contract.get("expected_input_mode"),
+            ),
+            "report.framework_adapter_probe.proof_status": (
+                report_record.get("proof_status"),
+                "passed",
+            ),
+        }
+        for field, (observed, expected) in report_expectations.items():
+            if expected is None:
+                continue
+            if observed != expected:
+                action_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": field,
+                        "expected": expected,
+                        "observed": observed,
+                    }
+                )
+        missing_report_actions = sorted(
+            set(V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS)
+            - set(_as_list(report_record.get("action_ids")))
+        )
+        if missing_report_actions:
+            action_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "report.framework_adapter_probe.actions",
+                    "expected": V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS,
+                    "observed": report_record.get("action_ids") or [],
+                }
+            )
+
+        action_expectations = {
+            "actions.kind": (action_record.get("kind"), "agent-learning.actions.v1"),
+            "actions.status": (action_record.get("status"), "passed"),
+            "actions.source_card_paths.framework_adapter_probe": (
+                "framework_adapter_probe"
+                in _as_list(action_record.get("source_card_paths")),
+                True,
+            ),
+            "actions.export_framework_adapter_probe_proof.kind": (
+                _as_mapping(action_record.get("export_proof")).get("kind"),
+                "agent-learning.action-run.v1",
+            ),
+            "actions.export_framework_adapter_probe_proof.status": (
+                _as_mapping(action_record.get("export_proof")).get("status"),
+                "passed",
+            ),
+            "actions.export_framework_adapter_probe_proof.artifact_ref": (
+                _as_mapping(action_record.get("export_proof")).get("artifact_ref"),
+                "report.framework_adapter_probe.artifacts.proof",
+            ),
+            "actions.export_framework_adapter_probe_proof.proof_kind": (
+                _as_mapping(action_record.get("export_proof")).get("proof_kind"),
+                "agent-learning.optimization.framework-adapter-probe-proof.v1",
+            ),
+            "actions.export_framework_adapter_probe_proof.proof_status": (
+                _as_mapping(action_record.get("export_proof")).get("proof_status"),
+                "passed",
+            ),
+        }
+        for field, (observed, expected) in action_expectations.items():
+            if observed != expected:
+                action_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": field,
+                        "expected": expected,
+                        "observed": observed,
+                    }
+                )
+        missing_catalog_actions = sorted(
+            set(V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS)
+            - set(_as_list(action_record.get("action_ids")))
+        )
+        if missing_catalog_actions:
+            action_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "actions.catalog.framework_adapter_probe",
+                    "expected": V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS,
+                    "observed": action_record.get("action_ids") or [],
                 }
             )
 
@@ -40032,6 +40265,7 @@ __all__ = [
     "V1_BROWSER_CUA_PROBE_SELECTED_TYPE",
     "V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_PROBE_FILES",
+    "V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS",
     "V1_FRAMEWORK_ADAPTER_IO_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_IO_FILES",
     "V1_FRAMEWORK_OPENENV_ADAPTER_FILES",

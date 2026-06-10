@@ -463,7 +463,9 @@ Current checkpoint:
   explicit promotion, auto-discovery promotion, one-call promotion, and one-call
   run SDK cookbooks must run locally, select `execute_task(dict)`, pass native
   probe proofs, preserve proof/discovery metadata in promoted manifests, and
-  close framework runtime, adapter-contract, trace, and tool metrics.
+  close framework runtime, adapter-contract, trace, and tool metrics. The same
+  gate now renders the `framework_adapter_probe` report/action card and exports
+  the native probe proof through `action-run`.
 - Framework adapter IO readiness is now an executable release-check gate:
   streaming, typed-output, keyword-input, side-kwargs, nested-method,
   provider-response, message-history, and handoff-transcript cookbooks must run

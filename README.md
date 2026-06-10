@@ -690,7 +690,10 @@ probe optimization, auto-discovery optimization, explicit promotion,
 auto-discovery promotion, one-call promotion, and one-call run cookbooks. It
 requires `execute_task(dict)` selection, passing probe proofs, discovery
 metadata where expected, promoted manifest proof metadata, and evaluated
-framework runtime, adapter-contract, framework-trace, and tool metrics.
+framework runtime, adapter-contract, framework-trace, and tool metrics. Probe
+optimization artifacts also render a `framework_adapter_probe` report/action
+card with exportable proof, selected probe report, contract, and replay-lock
+artifacts.
 
 If you want the SDK to execute the promoted manifest immediately, call async
 `optimize.run_framework_adapter_from_local_adapter(...)`; it returns the normal

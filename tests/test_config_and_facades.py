@@ -17307,6 +17307,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_adapter_probe_contracts"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
     )
+    assert payload["required_framework_adapter_probe_actions"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
+    )
     assert payload["required_framework_adapter_io_files"] == (
         trinity.V1_FRAMEWORK_ADAPTER_IO_FILES
     )
@@ -22963,11 +22966,15 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert adapter_probe["required_contracts"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
     )
+    assert adapter_probe["required_actions"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
+    )
     assert adapter_probe["missing_files"] == []
     assert adapter_probe["execution_errors"] == []
     assert adapter_probe["contract_errors"] == []
     assert adapter_probe["metric_errors"] == []
     assert adapter_probe["manifest_errors"] == []
+    assert adapter_probe["action_errors"] == []
     adapter_probes = {item["surface"]: item for item in adapter_probe["probes"]}
 
     raw_probe = adapter_probes["raw_probe"]
@@ -23008,6 +23015,36 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "trace_runtime": True,
         "allow_external_target": False,
     }
+    probe_report = probe_optimization["report"]
+    assert probe_report["kind"] == "agent-learning.report.v1"
+    assert probe_report["status"] == "passed"
+    assert "framework_adapter_probe" in probe_report["sections"]
+    assert probe_report["markdown_has_heading"] is True
+    assert probe_report["card_kind"] == "framework_adapter_probe_evidence"
+    assert probe_report["card_status"] == "verified"
+    assert probe_report["local_only"] is True
+    assert probe_report["requires_external_service"] is False
+    assert probe_report["framework"] == "custom_refund_orchestrator"
+    assert probe_report["method"] == "execute_task"
+    assert probe_report["input_mode"] == "dict"
+    assert probe_report["proof_status"] == "passed"
+    assert set(probe_report["action_ids"]) >= set(
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
+    )
+    probe_actions = probe_optimization["actions"]
+    assert probe_actions["kind"] == "agent-learning.actions.v1"
+    assert probe_actions["status"] == "passed"
+    assert "framework_adapter_probe" in probe_actions["source_card_paths"]
+    assert set(probe_actions["action_ids"]) >= set(
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
+    )
+    assert probe_actions["export_proof"] == {
+        "kind": "agent-learning.action-run.v1",
+        "status": "passed",
+        "artifact_ref": "report.framework_adapter_probe.artifacts.proof",
+        "proof_kind": "agent-learning.optimization.framework-adapter-probe-proof.v1",
+        "proof_status": "passed",
+    }
 
     auto_discovery = adapter_probes["auto_discovery_optimization"]
     assert auto_discovery["adapter_candidate_source"] == "discovery"
@@ -23018,6 +23055,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert auto_discovery["probe_proof_failed_check_ids"] == []
     assert auto_discovery["best_adapter"]["method"] == "execute_task"
     assert auto_discovery["best_adapter"]["input_mode"] == "dict"
+    assert auto_discovery["report"]["card_status"] == "verified"
+    assert auto_discovery["actions"]["export_proof"]["status"] == "passed"
+    assert set(auto_discovery["actions"]["action_ids"]) >= set(
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
+    )
 
     for surface in (
         "probe_promotion",

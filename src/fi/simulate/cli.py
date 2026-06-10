@@ -2639,6 +2639,12 @@ def _report_result(
         report_payload["workflow_target_profile_matrix"] = (
             workflow_target_profile_matrix
         )
+    framework_adapter_probe = _framework_adapter_probe_card(
+        source,
+        source_path=source_path,
+    )
+    if framework_adapter_probe is not None:
+        report_payload["framework_adapter_probe"] = framework_adapter_probe
     workspace_import = _workspace_import_certification_card(
         source,
         source_path=source_path,
@@ -3569,6 +3575,344 @@ def _workflow_target_profile_matrix_actions(
         ]
         if result.get("target_path"):
             action["target_path"] = result.get("target_path")
+    return actions
+
+
+def _framework_adapter_probe_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    existing = (
+        report.get("framework_adapter_probe")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if isinstance(existing, Mapping):
+        card = copy.deepcopy(dict(existing))
+        card["source_path"] = str(source_path)
+        if "actions" not in card:
+            card["actions"] = _framework_adapter_probe_actions(
+                result=result,
+                source_path=source_path,
+                card=card,
+            )
+        return card
+
+    proof = _framework_adapter_probe_proof(result)
+    if not proof:
+        return None
+    selected_history = _framework_adapter_probe_selected_history(result)
+    selected_report = (
+        selected_history.get("report")
+        if isinstance(selected_history.get("report"), Mapping)
+        else {}
+    )
+    selected_report = copy.deepcopy(dict(selected_report))
+    selected_report_summary = (
+        selected_report.get("summary")
+        if isinstance(selected_report.get("summary"), Mapping)
+        else {}
+    )
+    selected_report_summary = copy.deepcopy(dict(selected_report_summary))
+    optimization = result.get("optimization") if isinstance(result.get("optimization"), Mapping) else {}
+    summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
+    best_config = (
+        optimization.get("best_config")
+        if isinstance(optimization.get("best_config"), Mapping)
+        else {}
+    )
+    adapter = (
+        best_config.get("adapter")
+        if isinstance(best_config.get("adapter"), Mapping)
+        else {}
+    )
+    contract = (
+        selected_report.get("contract")
+        if isinstance(selected_report.get("contract"), Mapping)
+        else {}
+    )
+    discovery = (
+        result.get("framework_adapter_discovery")
+        if isinstance(result.get("framework_adapter_discovery"), Mapping)
+        else optimization.get("framework_adapter_discovery")
+    )
+    discovery = copy.deepcopy(dict(discovery)) if isinstance(discovery, Mapping) else {}
+    selected_metrics = (
+        selected_history.get("metrics")
+        if isinstance(selected_history.get("metrics"), Mapping)
+        else summary.get("metric_averages")
+    )
+    selected_metrics = copy.deepcopy(dict(selected_metrics or {}))
+    failed_check_ids = _unique_strings(proof.get("failed_check_ids"))
+    warning_check_ids = _unique_strings(proof.get("warning_check_ids"))
+    requires_external_service = bool(
+        contract.get(
+            "requires_external_service",
+            selected_report.get("requires_external_service", False),
+        )
+    )
+    framework = (
+        proof.get("framework")
+        or summary.get("framework")
+        or selected_report.get("framework")
+        or contract.get("framework")
+    )
+    method = proof.get("method") or adapter.get("method") or selected_report.get("method")
+    input_mode = (
+        proof.get("input_mode")
+        or adapter.get("input_mode")
+        or selected_report.get("input_mode")
+    )
+    replay_lock = {
+        "source_path": str(source_path),
+        "local_only": not requires_external_service,
+        "requires_external_service": requires_external_service,
+        "framework": framework,
+        "method": method,
+        "input_mode": input_mode,
+        "selected_candidate_id": (
+            proof.get("selected_candidate_id")
+            or optimization.get("best_candidate_id")
+            or summary.get("best_candidate_id")
+        ),
+        "proof_kind": proof.get("kind"),
+        "proof_status": proof.get("status"),
+        "threshold": summary.get("threshold"),
+        "metric_thresholds": {
+            "framework_adapter_probe_score": summary.get("threshold", 0.9),
+            "framework_adapter_probe_runtime_trace_coverage": 1.0,
+            "framework_adapter_probe_local_contract_quality": 1.0,
+        },
+    }
+    artifacts: Dict[str, Any] = {
+        "proof": copy.deepcopy(dict(proof)),
+        "selected_probe_report": selected_report,
+        "contract": copy.deepcopy(dict(contract)),
+        "replay_lock": replay_lock,
+    }
+    if discovery:
+        artifacts["discovery"] = discovery
+
+    status = (
+        "verified"
+        if result.get("status") == "passed"
+        and proof.get("passed") is True
+        and not failed_check_ids
+        and selected_report.get("status") == "passed"
+        and not requires_external_service
+        else "needs_attention"
+    )
+    card: Dict[str, Any] = {
+        "kind": "framework_adapter_probe_evidence",
+        "taxonomy": "byo_framework_adapter_probe_optimization",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "local_only": not requires_external_service,
+        "requires_external_service": requires_external_service,
+        "framework": framework,
+        "method": method,
+        "input_mode": input_mode,
+        "input_key": proof.get("input_key") or adapter.get("input_key"),
+        "adapter_candidate_source": summary.get("adapter_candidate_source"),
+        "discovery_used": bool(summary.get("framework_adapter_discovery_used")),
+        "discovery_status": (
+            summary.get("framework_adapter_discovery_status")
+            or discovery.get("status")
+        ),
+        "discovery_candidate_count": (
+            summary.get("framework_adapter_discovery_candidate_count")
+            or dict(discovery.get("summary") or {}).get("adapter_candidate_count")
+        ),
+        "selected_candidate_id": replay_lock["selected_candidate_id"],
+        "optimization_score": summary.get("optimization_score"),
+        "evaluation_score": summary.get("evaluation_score"),
+        "selected_score": selected_history.get("score"),
+        "selected_patch_paths": _unique_strings(selected_history.get("search_paths")),
+        "selected_metrics": selected_metrics,
+        "runtime_trace_count": selected_report_summary.get("runtime_trace_count"),
+        "tool_call_count": selected_report_summary.get("tool_call_count"),
+        "case_count": selected_report_summary.get("case_count"),
+        "passed_case_count": selected_report_summary.get("passed_case_count"),
+        "proof_status": proof.get("status"),
+        "assurance_level": proof.get("assurance_level"),
+        "check_count": proof.get("check_count"),
+        "passed_check_count": len(
+            [
+                item
+                for item in _coerce_list(proof.get("checks"))
+                if isinstance(item, Mapping) and item.get("passed") is True
+            ]
+        ),
+        "failed_check_ids": failed_check_ids,
+        "warning_check_ids": warning_check_ids,
+        "candidate_history": _framework_adapter_probe_candidate_rows(result),
+        "artifacts": artifacts,
+    }
+    card["actions"] = _framework_adapter_probe_actions(
+        result=result,
+        source_path=source_path,
+        card=card,
+    )
+    return card
+
+
+def _framework_adapter_probe_proof(
+    result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    proof = result.get("framework_adapter_probe_proof")
+    if isinstance(proof, Mapping):
+        return copy.deepcopy(dict(proof))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        proof = optimization.get("framework_adapter_probe_proof")
+        if isinstance(proof, Mapping):
+            return copy.deepcopy(dict(proof))
+    return {}
+
+
+def _framework_adapter_probe_selected_history(
+    result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    optimization = result.get("optimization") if isinstance(result.get("optimization"), Mapping) else {}
+    summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
+    selected_id = optimization.get("best_candidate_id") or summary.get("best_candidate_id")
+    history = [
+        item
+        for item in _coerce_list(optimization.get("history"))
+        if isinstance(item, Mapping)
+    ]
+    for item in history:
+        if selected_id and item.get("candidate_id") == selected_id:
+            return copy.deepcopy(dict(item))
+    if not history:
+        return {}
+    return copy.deepcopy(
+        dict(
+            max(
+                history,
+                key=lambda item: float(item.get("score") or 0.0),
+            )
+        )
+    )
+
+
+def _framework_adapter_probe_candidate_rows(
+    result: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    optimization = result.get("optimization") if isinstance(result.get("optimization"), Mapping) else {}
+    selected_id = optimization.get("best_candidate_id")
+    rows: List[Dict[str, Any]] = []
+    for item in _coerce_list(optimization.get("history")):
+        if not isinstance(item, Mapping):
+            continue
+        candidate_config = (
+            item.get("candidate_config")
+            if isinstance(item.get("candidate_config"), Mapping)
+            else {}
+        )
+        adapter = (
+            candidate_config.get("adapter")
+            if isinstance(candidate_config.get("adapter"), Mapping)
+            else {}
+        )
+        report = item.get("report") if isinstance(item.get("report"), Mapping) else {}
+        rows.append(
+            {
+                "candidate_id": item.get("candidate_id"),
+                "selected": bool(
+                    selected_id and item.get("candidate_id") == selected_id
+                ),
+                "score": item.get("score"),
+                "method": adapter.get("method"),
+                "input_mode": adapter.get("input_mode"),
+                "report_status": report.get("status"),
+                "runtime_trace_count": dict(report.get("summary") or {}).get(
+                    "runtime_trace_count"
+                ),
+                "tool_call_count": dict(report.get("summary") or {}).get(
+                    "tool_call_count"
+                ),
+            }
+        )
+    return rows
+
+
+def _framework_adapter_probe_actions(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    card: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_framework_adapter_probe",
+            "Report Framework Adapter Probe",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/framework-adapter-probe-report.json",
+                "--markdown",
+                "artifacts/framework-adapter-probe-report.md",
+            ],
+        )
+    ]
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    for artifact_key, label, filename in (
+        (
+            "proof",
+            "Export Framework Adapter Probe Proof",
+            "framework-adapter-probe-proof.json",
+        ),
+        (
+            "selected_probe_report",
+            "Export Framework Adapter Probe Selected Report",
+            "framework-adapter-probe-selected-report.json",
+        ),
+        (
+            "contract",
+            "Export Framework Adapter Probe Contract",
+            "framework-adapter-probe-contract.json",
+        ),
+        (
+            "discovery",
+            "Export Framework Adapter Probe Discovery",
+            "framework-adapter-probe-discovery.json",
+        ),
+        (
+            "replay_lock",
+            "Export Framework Adapter Probe Replay Lock",
+            "framework-adapter-probe-replay.lock.json",
+        ),
+    ):
+        if not isinstance(artifacts.get(artifact_key), Mapping):
+            continue
+        actions.append(
+            {
+                "id": f"export_framework_adapter_probe_{artifact_key}",
+                "label": label,
+                "kind": "download",
+                "artifact_ref": (
+                    f"report.framework_adapter_probe.artifacts.{artifact_key}"
+                ),
+                "default_filename": filename,
+            }
+        )
+    for action in actions:
+        action["readiness_status"] = card.get("status")
+        action["target_layers"] = [
+            "framework",
+            "integration",
+            "harness",
+            "evaluator",
+        ]
+        action["framework"] = card.get("framework")
+        action["method"] = card.get("method")
+        action["input_mode"] = card.get("input_mode")
     return actions
 
 
@@ -6572,6 +6916,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("world_hooks")
     if _has_workflow_target_profile_matrix_card(result, source_path=source_path):
         sections.append("workflow_target_profile_matrix")
+    if _has_framework_adapter_probe_card(result, source_path=source_path):
+        sections.append("framework_adapter_probe")
     if _has_workspace_import_certification_card(result, source_path=source_path):
         sections.append("workspace_import_certification")
     if _has_attack_evolution_card(result, source_path=source_path):
@@ -6644,6 +6990,8 @@ def _result_markdown(
         lines.extend(
             _workflow_target_profile_matrix_markdown(result, source_path=source_path)
         )
+    if "framework_adapter_probe" in sections:
+        lines.extend(_framework_adapter_probe_markdown(result, source_path=source_path))
     if "workspace_import_certification" in sections:
         lines.extend(
             _workspace_import_certification_markdown(
@@ -10759,6 +11107,17 @@ def _has_workflow_target_profile_matrix_card(
     ) is not None
 
 
+def _has_framework_adapter_probe_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("framework_adapter_probe"), Mapping):
+        return True
+    return _framework_adapter_probe_card(result, source_path=source_path) is not None
+
+
 def _has_workspace_import_certification_card(
     result: Mapping[str, Any],
     *,
@@ -11186,6 +11545,149 @@ def _workflow_target_profile_matrix_markdown(
         lines.extend(
             [
                 "### Workflow Profile Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Kind", "Command or artifact"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+def _framework_adapter_probe_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = (
+        report.get("framework_adapter_probe")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if not isinstance(card, Mapping):
+        card = _framework_adapter_probe_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+
+    selected_metric_rows = [
+        [name, value]
+        for name, value in sorted(dict(card.get("selected_metrics") or {}).items())
+    ]
+    candidate_rows = [
+        [
+            item.get("candidate_id"),
+            item.get("selected"),
+            item.get("score"),
+            item.get("method"),
+            item.get("input_mode"),
+            item.get("report_status"),
+        ]
+        for item in _coerce_list(card.get("candidate_history"))
+        if isinstance(item, Mapping)
+    ]
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    proof = artifacts.get("proof") if isinstance(artifacts.get("proof"), Mapping) else {}
+    check_rows = [
+        [
+            item.get("id"),
+            item.get("passed"),
+            item.get("required"),
+            item.get("reason"),
+        ]
+        for item in _coerce_list(proof.get("checks"))
+        if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("kind"),
+            item.get("command") or item.get("artifact_ref"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## Framework Adapter Probe",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Status", card.get("status")),
+                ("Framework", card.get("framework")),
+                ("Method", card.get("method")),
+                ("Input mode", card.get("input_mode")),
+                ("Candidate source", card.get("adapter_candidate_source")),
+                ("Discovery used", card.get("discovery_used")),
+                ("Discovery status", card.get("discovery_status")),
+                ("Selected candidate", card.get("selected_candidate_id")),
+                ("Optimization score", card.get("optimization_score")),
+                ("Evaluation score", card.get("evaluation_score")),
+                ("Selected score", card.get("selected_score")),
+                ("Runtime traces", card.get("runtime_trace_count")),
+                ("Tool calls", card.get("tool_call_count")),
+                ("Cases", card.get("case_count")),
+                ("Passed cases", card.get("passed_case_count")),
+                ("Assurance", card.get("assurance_level")),
+                ("Checks", f"{card.get('passed_check_count')}/{card.get('check_count')}"),
+                ("Failed checks", _join_values(card.get("failed_check_ids"))),
+                ("Warning checks", _join_values(card.get("warning_check_ids"))),
+                ("Local only", card.get("local_only")),
+                (
+                    "Requires external service",
+                    card.get("requires_external_service"),
+                ),
+            ]
+        ),
+        "",
+    ]
+    if selected_metric_rows:
+        lines.extend(
+            [
+                "### Adapter Probe Metrics",
+                "",
+                *_markdown_table(["Metric", "Value"], selected_metric_rows),
+                "",
+            ]
+        )
+    if candidate_rows:
+        lines.extend(
+            [
+                "### Adapter Candidates",
+                "",
+                *_markdown_table(
+                    [
+                        "Candidate",
+                        "Selected",
+                        "Score",
+                        "Method",
+                        "Input mode",
+                        "Report status",
+                    ],
+                    candidate_rows,
+                ),
+                "",
+            ]
+        )
+    if check_rows:
+        lines.extend(
+            [
+                "### Adapter Probe Proof Checks",
+                "",
+                *_markdown_table(
+                    ["Check", "Passed", "Required", "Reason"],
+                    check_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Adapter Probe Actions",
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Kind", "Command or artifact"],
