@@ -2705,6 +2705,12 @@ def _report_result(
     framework_readiness = _framework_readiness_card(source, source_path=source_path)
     if framework_readiness is not None:
         report_payload["framework_readiness"] = framework_readiness
+    framework_adapter_profiles = _framework_adapter_profiles_card(
+        source,
+        source_path=source_path,
+    )
+    if framework_adapter_profiles is not None:
+        report_payload["framework_adapter_profiles"] = framework_adapter_profiles
     agent_integration_readiness = _agent_integration_readiness_card(
         source,
         source_path=source_path,
@@ -7010,6 +7016,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("orchestration_strategy")
     if _has_framework_readiness_card(result, source_path=source_path):
         sections.append("framework_readiness")
+    if _has_framework_adapter_profiles_card(result, source_path=source_path):
+        sections.append("framework_adapter_profiles")
     if _has_agent_integration_readiness_card(result, source_path=source_path):
         sections.append("agent_integration_readiness")
     if result.get("compare") is not None:
@@ -7077,6 +7085,10 @@ def _result_markdown(
         lines.extend(_orchestration_strategy_markdown(result, source_path=source_path))
     if "framework_readiness" in sections:
         lines.extend(_framework_readiness_markdown(result, source_path=source_path))
+    if "framework_adapter_profiles" in sections:
+        lines.extend(
+            _framework_adapter_profiles_markdown(result, source_path=source_path)
+        )
     if "agent_integration_readiness" in sections:
         lines.extend(
             _agent_integration_readiness_markdown(
@@ -9422,6 +9434,287 @@ def _has_framework_readiness_card(
     return _framework_readiness_card(result, source_path=source_path) is not None
 
 
+_FRAMEWORK_ADAPTER_PROFILE_REQUIRED_LIBRARIES = {
+    "agent-opt",
+    "ai-evaluation",
+    "simulate-sdk",
+}
+
+
+def _has_framework_adapter_profiles_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("framework_adapter_profiles"), Mapping):
+        return True
+    return _framework_adapter_profiles_card(result, source_path=source_path) is not None
+
+
+def _framework_adapter_profiles_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    existing = (
+        report.get("framework_adapter_profiles")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if isinstance(existing, Mapping):
+        card = copy.deepcopy(dict(existing))
+        card["source_path"] = str(source_path)
+        return card
+
+    bundle = _framework_adapter_profiles_bundle_from_result(result)
+    if not bundle:
+        return None
+    profiles = [
+        dict(profile)
+        for profile in _coerce_list(bundle.get("profiles"))
+        if isinstance(profile, Mapping)
+    ]
+    if not profiles:
+        return None
+
+    summary = dict(bundle.get("summary") or {})
+    libraries = _unique_strings(
+        [
+            *_coerce_list(summary.get("libraries")),
+            *[
+                library
+                for profile in profiles
+                for library in dict(profile.get("bindings") or {})
+            ],
+        ]
+    )
+    frameworks = _unique_strings(
+        [
+            *_coerce_list(bundle.get("frameworks")),
+            *_coerce_list(summary.get("frameworks")),
+            *[profile.get("framework") for profile in profiles],
+        ]
+    )
+    missing_libraries = sorted(
+        _FRAMEWORK_ADAPTER_PROFILE_REQUIRED_LIBRARIES - set(libraries)
+    )
+    failed_frameworks = [
+        str(profile.get("framework"))
+        for profile in profiles
+        if str(profile.get("status") or "") != "passed"
+    ]
+    status = (
+        "ready"
+        if str(bundle.get("status") or "") == "passed"
+        and not missing_libraries
+        and not failed_frameworks
+        else "needs_attention"
+    )
+    card = {
+        "kind": "framework_adapter_profile_map",
+        "taxonomy": "simulate_evaluate_optimize_adapter_profiles",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "frameworks": frameworks,
+        "profile_count": len(profiles),
+        "libraries": libraries,
+        "missing_libraries": missing_libraries,
+        "failed_frameworks": failed_frameworks,
+        "summary": copy.deepcopy(summary),
+        "profiles": [_framework_adapter_profile_card_row(profile) for profile in profiles],
+        "artifacts": {"profile_bundle": copy.deepcopy(bundle)},
+        "actions": _framework_adapter_profiles_actions(
+            source_path=source_path,
+            status=status,
+            missing_libraries=missing_libraries,
+        ),
+    }
+    return card
+
+
+def _framework_adapter_profiles_bundle_from_result(
+    result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    def from_candidate(value: Any) -> Dict[str, Any]:
+        candidate = dict(value) if isinstance(value, Mapping) else {}
+        if not candidate:
+            return {}
+        kind = str(candidate.get("kind") or "")
+        if kind == "agent-learning.framework-adapter-capability-profiles.v1":
+            return candidate
+        if kind == "agent-learning.framework-adapter-capability-profile.v1":
+            return _framework_adapter_profile_single_bundle(candidate)
+        for key in (
+            "framework_adapter_capability_profiles",
+            "framework_adapter_profiles",
+        ):
+            nested = from_candidate(candidate.get(key))
+            if nested:
+                return nested
+        metadata = candidate.get("metadata")
+        if isinstance(metadata, Mapping):
+            nested = from_candidate(metadata)
+            if nested:
+                return nested
+        matrix = candidate.get("framework_adapter_contract_matrix")
+        if isinstance(matrix, Mapping):
+            nested = _framework_adapter_profile_bundle(
+                {"metadata": {"framework_adapter_contract_matrix": dict(matrix)}}
+            )
+            if nested:
+                return nested
+        return {}
+
+    for candidate in (
+        result,
+        result.get("metadata"),
+        result.get("report") if isinstance(result.get("report"), Mapping) else {},
+    ):
+        bundle = from_candidate(candidate)
+        if bundle:
+            return bundle
+
+    state = _environment_state_from_report(result.get("report"))
+    trace = state.get("framework_trace")
+    if isinstance(trace, Mapping):
+        bundle = _framework_adapter_profile_bundle(trace)
+        if bundle:
+            return bundle
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        for candidate in (
+            optimization.get("source_manifest"),
+            dict(optimization.get("source_manifest") or {}).get("metadata")
+            if isinstance(optimization.get("source_manifest"), Mapping)
+            else {},
+        ):
+            bundle = from_candidate(candidate)
+            if bundle:
+                return bundle
+        best_history = _best_optimization_history_item(optimization)
+        if best_history is not None:
+            history_state = _environment_state_from_report(best_history.get("report"))
+            trace = history_state.get("framework_trace")
+            if isinstance(trace, Mapping):
+                bundle = _framework_adapter_profile_bundle(trace)
+                if bundle:
+                    return bundle
+        best_config = optimization.get("best_config")
+        if isinstance(best_config, Mapping):
+            config_state = _framework_state_from_environments(
+                dict(best_config.get("simulation") or {}).get("environments")
+            )
+            trace = config_state.get("framework_trace")
+            if isinstance(trace, Mapping):
+                bundle = _framework_adapter_profile_bundle(trace)
+                if bundle:
+                    return bundle
+
+    manifest = result.get("manifest") if isinstance(result.get("manifest"), Mapping) else result
+    if isinstance(manifest, Mapping):
+        for candidate in (manifest, manifest.get("metadata")):
+            bundle = from_candidate(candidate)
+            if bundle:
+                return bundle
+        manifest_state = _framework_state_from_environments(
+            dict(manifest.get("simulation") or {}).get("environments")
+        )
+        trace = manifest_state.get("framework_trace")
+        if isinstance(trace, Mapping):
+            bundle = _framework_adapter_profile_bundle(trace)
+            if bundle:
+                return bundle
+    return {}
+
+
+def _framework_adapter_profile_single_bundle(
+    profile: Mapping[str, Any],
+) -> Dict[str, Any]:
+    framework = profile.get("framework")
+    libraries = sorted(str(key) for key in dict(profile.get("bindings") or {}))
+    return {
+        "kind": "agent-learning.framework-adapter-capability-profiles.v1",
+        "status": profile.get("status"),
+        "passed": profile.get("passed"),
+        "framework_count": 1,
+        "profile_count": 1,
+        "frameworks": [framework],
+        "profiles": [copy.deepcopy(dict(profile))],
+        "summary": {
+            "frameworks": [framework],
+            "profile_count": 1,
+            "passed_profile_count": 1 if profile.get("status") == "passed" else 0,
+            "failed_profile_count": 0 if profile.get("status") == "passed" else 1,
+            "libraries": libraries,
+            "capabilities": [
+                item.get("name")
+                for item in _coerce_list(profile.get("capabilities"))
+                if isinstance(item, Mapping)
+            ],
+        },
+    }
+
+
+def _framework_adapter_profile_card_row(
+    profile: Mapping[str, Any],
+) -> Dict[str, Any]:
+    summary = dict(profile.get("summary") or {})
+    return {
+        "framework": profile.get("framework"),
+        "status": profile.get("status"),
+        "method": profile.get("method"),
+        "input_mode": profile.get("input_mode"),
+        "modality": profile.get("modality"),
+        "transport": profile.get("transport"),
+        "libraries": sorted(str(key) for key in dict(profile.get("bindings") or {})),
+        "capability_count": summary.get("capability_count"),
+        "task_surface_count": summary.get("task_surface_count"),
+        "local_executable_fixture": profile.get("local_executable_fixture"),
+        "requires_external_service": profile.get("requires_external_service"),
+    }
+
+
+def _framework_adapter_profiles_actions(
+    *,
+    source_path: Path,
+    status: str,
+    missing_libraries: Sequence[str],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_framework_adapter_profiles",
+            "Report Framework Adapter Profiles",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/framework-adapter-profiles-report.json",
+                "--markdown",
+                "artifacts/framework-adapter-profiles-report.md",
+            ],
+        ),
+        {
+            "id": "export_framework_adapter_profile_bundle",
+            "label": "Export Framework Adapter Profile Bundle",
+            "kind": "download",
+            "artifact_ref": (
+                "report.framework_adapter_profiles.artifacts.profile_bundle"
+            ),
+            "default_filename": "artifacts/framework-adapter-profile-bundle.json",
+        },
+    ]
+    for action in actions:
+        action["profile_status"] = status
+        action["missing_libraries"] = list(missing_libraries)
+        action["source_card_path"] = "framework_adapter_profiles"
+    return actions
+
+
 def _framework_readiness_card(
     result: Mapping[str, Any],
     *,
@@ -11032,6 +11325,96 @@ def _agent_integration_readiness_actions(
         action["readiness_status"] = status
         action["target_layers"] = list(weak_layers)
     return actions
+
+
+def _framework_adapter_profiles_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = (
+        report.get("framework_adapter_profiles")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if not isinstance(card, Mapping):
+        card = _framework_adapter_profiles_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+
+    profile_rows = [
+        [
+            item.get("framework"),
+            item.get("status"),
+            item.get("method"),
+            item.get("input_mode"),
+            item.get("modality"),
+            item.get("transport"),
+            _join_values(item.get("libraries")),
+        ]
+        for item in _coerce_list(card.get("profiles"))
+        if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("kind"),
+            item.get("command") or item.get("artifact_ref"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## Framework Adapter Profiles",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Status", card.get("status")),
+                ("Profiles", card.get("profile_count")),
+                ("Frameworks", _join_values(card.get("frameworks"))),
+                ("Libraries", _join_values(card.get("libraries"))),
+                ("Missing libraries", _join_values(card.get("missing_libraries"))),
+                ("Failed frameworks", _join_values(card.get("failed_frameworks"))),
+            ]
+        ),
+        "",
+    ]
+    if profile_rows:
+        lines.extend(
+            [
+                "### Adapter Profile Bindings",
+                "",
+                *_markdown_table(
+                    [
+                        "Framework",
+                        "Status",
+                        "Method",
+                        "Input mode",
+                        "Modality",
+                        "Transport",
+                        "Libraries",
+                    ],
+                    profile_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Adapter Profile Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Kind", "Command or artifact"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
 
 
 def _agent_integration_readiness_markdown(

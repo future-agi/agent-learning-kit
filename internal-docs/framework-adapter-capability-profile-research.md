@@ -21,6 +21,8 @@ This increment adds:
 - `agent-learning.framework-adapter-capability-profiles.v1`
 - ai-evaluation extraction support for profile artifacts
 - agent-opt proof coverage for profile bindings in framework matrix optimization
+- report support for `framework_adapter_profiles`, including profile counts,
+  profile framework coverage, library bindings, and export/report actions
 - `examples/sdk_framework_adapter_capability_profiles.py`
 
 ## Primary-Source Notes
@@ -63,8 +65,10 @@ artifact for local simulation, evaluation, and optimization.
 Run manifests now attach `framework_adapter_capability_profiles` beside the
 matrix directly. The evaluator accepts the profile payload as evidence, the
 optimizer proof verifies that selected framework matrices carry all three
-trinity bindings, and report adapter summaries surface profile counts,
-frameworks, and libraries.
+trinity bindings, report adapter summaries surface profile counts, frameworks,
+and libraries, and rendered reports now expose a first-class
+`framework_adapter_profiles` card.
 
-The next increment should promote profile-level report cards and regression
-promotion fields outside the generic framework-readiness adapter summary.
+The next increment should add regression promotion fields for the profile bundle
+so promoted manifests can freeze profile coverage independently of the generic
+framework-readiness adapter summary.

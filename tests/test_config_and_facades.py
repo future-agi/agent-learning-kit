@@ -12889,6 +12889,8 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    from agent_learning import simulate
+
     key = "real-local-sdk-framework-matrix-opt-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_MATRIX_OPT_KEY", key)
     example_path = PROJECT_ROOT / "examples" / (
@@ -13020,6 +13022,30 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
         "adapter_matrix_metric_evidence_closed",
         "adapter_matrix_report_evidence_closed",
     }
+
+    report_payload = simulate.render_report(
+        result,
+        source_path=output_path,
+    )
+    assert "framework_adapter_profiles" in report_payload["summary"]["sections"]
+    profile_card = report_payload["report"]["framework_adapter_profiles"]
+    assert profile_card["kind"] == "framework_adapter_profile_map"
+    assert profile_card["status"] == "ready"
+    assert profile_card["profile_count"] == len(module.FRAMEWORKS)
+    assert profile_card["libraries"] == [
+        "agent-opt",
+        "ai-evaluation",
+        "simulate-sdk",
+    ]
+    assert profile_card["missing_libraries"] == []
+    assert {
+        action["id"] for action in profile_card["actions"]
+    } >= {
+        "report_framework_adapter_profiles",
+        "export_framework_adapter_profile_bundle",
+    }
+    assert "## Framework Adapter Profiles" in report_payload["report"]["markdown"]
+    assert "### Adapter Profile Bindings" in report_payload["report"]["markdown"]
 
 
 def test_sdk_framework_adapter_capability_profiles_example_runs(tmp_path):
