@@ -298,6 +298,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_agent_integration_optimization.py": "agent_integration_readiness",
     "examples/sdk_agent_integration_simulation.py": "agent_integration_readiness",
     "examples/sdk_browser_cua_probe_optimization.py": "browser_cua_probe_readiness",
+    "examples/sdk_capability_freeze_regression.py": "capability_profile_freeze_readiness",
     "examples/sdk_evaluation_hook_optimization.py": "evaluation_hook_readiness",
     "examples/sdk_evaluation_hook_probe_optimization.py": "evaluation_hook_probe_readiness",
     "examples/sdk_external_http_agent_optimization.py": "external_agent_adapter_readiness",
@@ -344,6 +345,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_openenv_environment_optimization.py": "environment_replay_optimizer_readiness",
     "examples/sdk_optimizer_governance_optimization.py": "optimizer_governance_readiness",
     "examples/sdk_optimizer_portfolio_optimization.py": "optimizer_portfolio_readiness",
+    "examples/sdk_optimizer_profile_matrix.py": "optimizer_profile_matrix_readiness",
     "examples/sdk_orchestration_stack_probe_optimization.py": "orchestration_stack_probe_readiness",
     "examples/sdk_orchestration_target_optimization.py": "orchestration_target_optimizer_readiness",
     "examples/sdk_realtime_stack_probe_optimization.py": "realtime_stack_probe_readiness",
@@ -393,6 +395,11 @@ V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
     "agent-learning.report.v1",
     "agent-learning.doctor.v1",
     "agent-learning.release-check.v1",
+    # Phase 4 (ARCH Decision 7 note): new kinds join the docs allowed list,
+    # never the frozen V1_REQUIRED_SCHEMA_KINDS.
+    "agent-learning.frozen-capability-profile.v1",
+    "agent-learning.apply-plan.v1",
+    "agent-learning.optimizer-routing-table.v1",
 ]
 
 # Claims-lint vocabulary and license table: trigger pattern -> the only gate id
@@ -460,6 +467,182 @@ V1_LIVE_LANE_GUARDED_IMPORT_FILES = [
 
 V1_LIVE_LANE_CAPTURE_DIR = "examples/captured"
 V1_LIVE_LANE_EVIDENCE_CLASS_FIELD = "evidence_class"
+
+# ---- Phase 4A: capability-profile regression freezing ----
+V1_CAPABILITY_PROFILE_FREEZE_FILES = [
+    "examples/sdk_capability_freeze_regression.py",
+    "examples/frozen_profiles/frozen_capability_profile.json",
+    "internal-docs/capability-profile-freeze-readiness-research.md",
+]
+V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+)
+# Fixtures live here, never in the pinned examples/regression_artifacts/
+# 4-file gate surface (ARCH Decision 3).
+V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR = "examples/frozen_profiles"
+V1_FROZEN_CAPABILITY_PROFILE_KIND = "agent-learning.frozen-capability-profile.v1"  # ARCH §2a
+V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND = (
+    "agent-learning.frozen-capability-profile-replay.v1"
+)
+V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY = "frozen_capability_profile"
+V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS = [
+    # ARCH §2a row schema; row_id = sha256 of the sorted-JSON of all other fields
+    "row_id",
+    "framework",
+    "capability",
+    "metric",
+    "floor",
+    "setting",
+    "security",
+    "source",
+]
+V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS = [
+    "rows_content_addressed",            # row_id == sha256(sorted-JSON of other fields)
+    "improving_candidate_with_broken_row_vetoed",
+    "veto_recorded_in_governance",       # hetvabhasa_class == "badhita"
+    "out_of_setting_win_non_admissible",
+    "security_row_non_tradable",
+]
+
+# ---- Phase 4B (+4C/4D evidence asserted here): 3-axis optimizer profile matrix ----
+V1_OPTIMIZER_PROFILE_MATRIX_FILES = [
+    "examples/sdk_optimizer_profile_matrix.py",
+    "examples/optimizer_routing_table.json",     # committed table, byte-compared (ARCH Decision 7)
+    "internal-docs/optimizer-profile-matrix-readiness-research.md",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_OPTIMIZER_PROFILE_MATRIX_KEY"
+)
+V1_OPTIMIZER_PROFILE_MATRIX_KIND = "agent-learning.optimizer-profile-matrix.v1"
+V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS = [
+    # The six existing framework profiles; pinned equal to
+    # V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS by unit test (the constant
+    # is defined later in this module, so the list is spelled literally here).
+    "langgraph",
+    "crewai",
+    "llamaindex",
+    "langchain",
+    "pipecat",
+    "livekit",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS = [    # ARCH §2f canon, byte-exact
+    "prompt",
+    "whole_agent",
+    "memory_ops",
+    "multi_agent_roster",
+    "workflow_trace",
+    "orchestration_spans",
+    "framework_method",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS = [        # ARCH §2f canon, byte-exact
+    "gepa",
+    "tpe",
+    "evolution_elo",
+    "bandit",
+    "society",
+    "regression_replay",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_CELLS = [
+    # P4-D2: the declared launch subset — 33 coordinates (27 new + 6 inherited
+    # workflow cells), per the ARCH §6 composition table. The gate asserts
+    # EXACTLY this set (no minimum-count floor); growing coverage is an edit
+    # to this constant + the example, deliberately visible in review.
+    ("langgraph", "workflow_trace", "society"),
+    ("crewai", "workflow_trace", "society"),
+    ("llamaindex", "workflow_trace", "society"),
+    ("langchain", "workflow_trace", "society"),
+    ("pipecat", "workflow_trace", "society"),
+    ("livekit", "workflow_trace", "society"),
+    ("langgraph", "workflow_trace", "gepa"),
+    ("langgraph", "workflow_trace", "tpe"),
+    ("langgraph", "workflow_trace", "evolution_elo"),
+    ("langgraph", "workflow_trace", "bandit"),
+    ("langgraph", "workflow_trace", "regression_replay"),
+    ("llamaindex", "prompt", "gepa"),
+    ("llamaindex", "prompt", "tpe"),
+    ("llamaindex", "prompt", "evolution_elo"),
+    ("llamaindex", "prompt", "bandit"),
+    ("llamaindex", "prompt", "society"),
+    ("llamaindex", "prompt", "regression_replay"),
+    ("livekit", "whole_agent", "society"),
+    ("livekit", "whole_agent", "evolution_elo"),
+    ("livekit", "whole_agent", "tpe"),
+    ("langgraph", "whole_agent", "society"),
+    ("langgraph", "whole_agent", "evolution_elo"),
+    ("langgraph", "whole_agent", "tpe"),
+    ("langgraph", "memory_ops", "society"),
+    ("langgraph", "memory_ops", "bandit"),
+    ("crewai", "multi_agent_roster", "society"),
+    ("crewai", "multi_agent_roster", "evolution_elo"),
+    ("langgraph", "orchestration_spans", "society"),
+    ("langgraph", "orchestration_spans", "tpe"),
+    ("pipecat", "orchestration_spans", "society"),
+    ("pipecat", "orchestration_spans", "tpe"),
+    ("langchain", "framework_method", "gepa"),
+    ("langchain", "framework_method", "regression_replay"),
+]
+V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS = [
+    "framework",
+    "target_kind",
+    "backend",
+    "setting",
+    "eval_budget",
+    "native_proof_closed",
+    "trajectory_profile",
+    "winner",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS = [
+    "global_best",
+    "global_best_backend",
+    "overall_winner",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES = [
+    "retrieval_first",
+    "write_retrieval_factorial",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES = [
+    "multi_agent",
+    "orchestration",
+    "router",
+    "graph",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET = 24  # ARCH §6 per-cell budget cap
+
+# ---- 4C surfaces asserted via the matrix gate + governance flags (no 4C gate) ----
+V1_WHOLE_AGENT_CONTRACT_STAGES = [
+    "component_text",
+    "structural_config",
+    "global_repolish",
+]  # ARCH §2f canon
+V1_WHOLE_AGENT_APPLY_PLAN_KIND = "agent-learning.apply-plan.v1"
+V1_WHOLE_AGENT_APPLY_PLAN_FIELDS = [            # ARCH §2c/Decision 9 — the ONE schema
+    "provider",
+    "agent_ref",
+    "apply_fields",
+    "read_back_checks",
+    "mismatch_policy",
+    "frozen_profile_ref",
+    "nirnaya_ref",
+]
+
+# ---- 4D routing evidence asserted inside the matrix gate's routing_errors ----
+V1_OPTIMIZER_ROUTING_TABLE_KIND = "agent-learning.optimizer-routing-table.v1"  # ARCH §2d
+V1_OPTIMIZER_ROUTING_TABLE_FILE = "examples/optimizer_routing_table.json"
+V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS = [
+    "improvement_frequency",
+    "semantic_locality",
+    "dedupe_rate",
+    "regression_count",
+    "iterations",
+    "evaluations",
+]
+V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS = [
+    "routing_table_byte_identical",                       # regenerated vs committed
+    "every_recommendation_cites_profile_evidence",        # same-run cell, matching axes + winner
+    "live_lane_evidence_excluded_from_recommendations",   # P4-D6
+    "no_global_aggregate",
+    "default_picker_resolves_overrides_and_cold_starts",  # §2.4 engagement contract
+]
 
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
     "README.md",
@@ -5250,6 +5433,16 @@ V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS = [
     "has_rollback",
     "has_locality",
     "has_dependency_audit",
+    # ---- Phase 4 society/contract flags (ARCH §2e, additive 11 -> 20) ----
+    "has_guna_axes",
+    "has_two_chamber",
+    "has_nyaya_justifications",
+    "has_hetvabhasa_rejections",
+    "has_nirnaya",
+    "has_staged_conditioning",     # 4C
+    "has_layer_locality",          # 4C
+    "has_declared_budget",         # 4C
+    "has_external_ranking",        # 4C
 ]
 
 V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
@@ -5259,6 +5452,15 @@ V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
     "selected_candidate_top_ranked",
     "score_credit_nonnegative",
     "metric_evidence_present",
+    # ---- Phase 4 society checks (ARCH §2e, additive 6 -> 12; produced by
+    # build_optimizer_society_trace and audited from the society-trace
+    # governance records) ----
+    "chamber_budgets_declared",
+    "rejections_classed",
+    "nirnaya_recorded",
+    "proposals_never_averaged",
+    "specialist_authority_respected",
+    "society_ledger_pooled_across_candidates",
 ]
 
 V1_OPTIMIZER_PORTFOLIO_FILES = [
@@ -6544,6 +6746,42 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=live_lane_boundary,
     )
+    optimizer_profile_matrix = _release_optimizer_profile_matrix_status(root)
+    _append_release_check(
+        checks,
+        check_id="optimizer_profile_matrix_readiness",
+        passed=(
+            not optimizer_profile_matrix["missing_files"]
+            and not optimizer_profile_matrix["execution_errors"]
+            and not optimizer_profile_matrix["manifest_errors"]
+            and not optimizer_profile_matrix["optimization_errors"]
+            and not optimizer_profile_matrix["metric_errors"]
+            and not optimizer_profile_matrix["runtime_errors"]
+            and not optimizer_profile_matrix["report_errors"]
+            and not optimizer_profile_matrix["action_errors"]
+            and not optimizer_profile_matrix["security_errors"]
+            and not optimizer_profile_matrix["aggregation_errors"]
+            and not optimizer_profile_matrix["budget_errors"]
+            and not optimizer_profile_matrix["routing_errors"]
+        ),
+        milestone="M3",
+        evidence=optimizer_profile_matrix,
+    )
+    capability_profile_freeze = _release_capability_profile_freeze_status(root)
+    _append_release_check(
+        checks,
+        check_id="capability_profile_freeze_readiness",
+        passed=(
+            not capability_profile_freeze["missing_files"]
+            and not capability_profile_freeze["execution_errors"]
+            and not capability_profile_freeze["row_errors"]
+            and not capability_profile_freeze["veto_errors"]
+            and not capability_profile_freeze["admission_errors"]
+            and not capability_profile_freeze["security_errors"]
+        ),
+        milestone="M3",
+        evidence=capability_profile_freeze,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -6633,6 +6871,33 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "live_lane_env_flags": dict(V1_LIVE_LANE_ENV_FLAGS),
         "live_lane_extra_packages": list(V1_LIVE_LANE_EXTRA_PACKAGES),
         "live_lane_evidence_classes": list(V1_LIVE_EVIDENCE_CLASSES),
+        "required_capability_profile_freeze_row_fields": list(
+            V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+        ),
+        "required_capability_profile_freeze_checks": list(
+            V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+        ),
+        "required_optimizer_profile_matrix_target_kinds": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+        ),
+        "required_optimizer_profile_matrix_backends": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
+        ),
+        "required_optimizer_profile_matrix_cells": [
+            list(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+        ],
+        "required_whole_agent_contract_stages": list(
+            V1_WHOLE_AGENT_CONTRACT_STAGES
+        ),
+        "required_whole_agent_apply_plan_fields": list(
+            V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
+        ),
+        "required_optimizer_trajectory_profile_fields": list(
+            V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+        ),
+        "required_optimizer_routing_checks": list(
+            V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+        ),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -9204,6 +9469,1136 @@ def _release_live_lane_boundary_status(root: Path) -> dict[str, Any]:
         "evidence_class_errors": evidence_class_errors,
         "env_flag_errors": env_flag_errors,
         "redaction_errors": redaction_errors,
+    }
+
+
+def _scan_forbidden_aggregate_keys(value: Any, *, path: str = "$") -> list[str]:
+    """Recursive scan for cross-cell 'best backend' aggregate keys (R§3.1)."""
+
+    hits: list[str] = []
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key) in V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS:
+                hits.append(f"{path}.{key}")
+            hits.extend(
+                _scan_forbidden_aggregate_keys(child, path=f"{path}.{key}")
+            )
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            hits.extend(
+                _scan_forbidden_aggregate_keys(child, path=f"{path}[{index}]")
+            )
+    return hits
+
+
+def _release_optimizer_profile_matrix_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_OPTIMIZER_PROFILE_MATRIX_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    aggregation_errors: list[dict[str, Any]] = []
+    budget_errors: list[dict[str, Any]] = []
+    routing_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifests: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    declared_cell_refs = [
+        "/".join(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    ]
+    release_secret = (
+        "agent-learning-release-local-"
+        f"{V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV.lower()}"
+    )
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        cell: str | None = None,
+    ) -> None:
+        error = {"field": field, "expected": expected, "observed": observed}
+        if cell:
+            error["cell"] = cell
+        bucket.append(error)
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        example_path = root / "examples/sdk_optimizer_profile_matrix.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_optimizer_profile_matrix",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            manifests = dict(module.build_manifests())
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-optimizer-profile-matrix-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "optimizer-profile-matrix.json"
+
+                def run_example() -> dict[str, Any]:
+                    return dict(module.run(output_path))
+
+                result = _release_run_with_local_env(
+                    [V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV],
+                    run_example,
+                )
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            manifests = {}
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+
+    if manifests:
+        if sorted(manifests) != sorted(declared_cell_refs):
+            append_error(
+                manifest_errors,
+                field="manifests.cell_refs",
+                expected=sorted(declared_cell_refs),
+                observed=sorted(manifests),
+            )
+        for cell_ref, manifest in sorted(manifests.items()):
+            manifest = _as_mapping(manifest)
+            framework, _, _ = cell_ref.partition("/")
+            target_kind = cell_ref.split("/")[1] if cell_ref.count("/") == 2 else ""
+            backend = cell_ref.rsplit("/", 1)[-1]
+            cell_info = _as_mapping(
+                _as_mapping(manifest.get("metadata")).get(
+                    "optimizer_profile_matrix_cell"
+                )
+            )
+            expectations = {
+                "version": (
+                    manifest.get("version"),
+                    "agent-learning.optimization.v1",
+                ),
+                "required_env": (
+                    list(manifest.get("required_env") or []),
+                    [V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV],
+                ),
+                "metadata.optimizer_profile_matrix_cell.cell_ref": (
+                    cell_info.get("cell_ref"),
+                    cell_ref,
+                ),
+                "metadata.optimizer_profile_matrix_cell.framework": (
+                    cell_info.get("framework"),
+                    framework,
+                ),
+                "metadata.optimizer_profile_matrix_cell.target_kind": (
+                    cell_info.get("target_kind"),
+                    target_kind,
+                ),
+                "metadata.optimizer_profile_matrix_cell.backend": (
+                    cell_info.get("backend"),
+                    backend,
+                ),
+                "metadata.optimizer_profile_matrix_cell.setting.engine": (
+                    _as_mapping(cell_info.get("setting")).get("engine"),
+                    "local_text",
+                ),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                        cell=cell_ref,
+                    )
+            declared_budget = cell_info.get("eval_budget")
+            if (
+                not isinstance(declared_budget, int)
+                or declared_budget < 1
+                or declared_budget > V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+            ):
+                append_error(
+                    budget_errors,
+                    field="metadata.optimizer_profile_matrix_cell.eval_budget",
+                    expected=(
+                        f"int in [1, {V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET}]"
+                    ),
+                    observed=declared_budget,
+                    cell=cell_ref,
+                )
+            optimization = _as_mapping(manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            search_paths = [
+                str(path) for path in _as_mapping(target.get("search_space"))
+            ]
+            target_metadata = _as_mapping(target.get("metadata"))
+            if target_kind == "memory_ops":
+                if target_metadata.get("gain_density_prior") != "retrieval":
+                    append_error(
+                        manifest_errors,
+                        field="target.metadata.gain_density_prior",
+                        expected="retrieval",
+                        observed=target_metadata.get("gain_density_prior"),
+                        cell=cell_ref,
+                    )
+                if list(target_metadata.get("slices") or []) != (
+                    V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
+                ):
+                    append_error(
+                        manifest_errors,
+                        field="target.metadata.slices",
+                        expected=V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES,
+                        observed=target_metadata.get("slices"),
+                        cell=cell_ref,
+                    )
+                if not list(target_metadata.get("security_row_refs") or []):
+                    append_error(
+                        security_errors,
+                        field="target.metadata.security_row_refs",
+                        expected=">=1 security row ref",
+                        observed=target_metadata.get("security_row_refs"),
+                        cell=cell_ref,
+                    )
+                retrieval_indexes = [
+                    index
+                    for index, path in enumerate(search_paths)
+                    if "retrieval" in path
+                ]
+                write_indexes = [
+                    index
+                    for index, path in enumerate(search_paths)
+                    if ".write." in path
+                ]
+                if not retrieval_indexes or not write_indexes or (
+                    min(retrieval_indexes) >= min(write_indexes)
+                ):
+                    append_error(
+                        manifest_errors,
+                        field="target.search_space.retrieval_first",
+                        expected="retrieval-side paths before write-side paths",
+                        observed=search_paths,
+                        cell=cell_ref,
+                    )
+            if target_kind in {
+                "multi_agent_roster",
+                "orchestration_spans",
+                "workflow_trace",
+            }:
+                if not any(
+                    path.split(".", 1)[0]
+                    in V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+                    for path in search_paths
+                ):
+                    append_error(
+                        manifest_errors,
+                        field="target.search_space.topology_paths",
+                        expected=(
+                            ">=1 path under "
+                            f"{V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES}"
+                        ),
+                        observed=search_paths,
+                        cell=cell_ref,
+                    )
+            if target_kind == "whole_agent":
+                whole_agent = _as_mapping(manifest.get("whole_agent"))
+                staged = _as_mapping(
+                    _as_mapping(whole_agent.get("staged_conditioning")).get(
+                        "stages"
+                    )
+                )
+                if sorted(staged) != sorted(V1_WHOLE_AGENT_CONTRACT_STAGES):
+                    append_error(
+                        manifest_errors,
+                        field="whole_agent.staged_conditioning.stages",
+                        expected=V1_WHOLE_AGENT_CONTRACT_STAGES,
+                        observed=sorted(staged),
+                        cell=cell_ref,
+                    )
+                if whole_agent.get("ranking_source") != "evaluation_suite":
+                    append_error(
+                        manifest_errors,
+                        field="whole_agent.ranking_source",
+                        expected="evaluation_suite",
+                        observed=whole_agent.get("ranking_source"),
+                        cell=cell_ref,
+                    )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        cells = [
+            _as_mapping(cell)
+            for cell in _as_list(result.get("cells"))
+            if isinstance(cell, Mapping)
+        ]
+        cells_by_ref = {
+            str(cell.get("cell_ref")): cell for cell in cells if cell.get("cell_ref")
+        }
+        runtime_expectations = {
+            "kind": (result.get("kind"), V1_OPTIMIZER_PROFILE_MATRIX_KIND),
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "required_env": (
+                list(result.get("required_env") or []),
+                [V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV],
+            ),
+            "declared_cells": (
+                [list(cell) for cell in _as_list(result.get("declared_cells"))],
+                [list(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS],
+            ),
+            "summary.cell_count": (
+                summary.get("cell_count"),
+                len(V1_OPTIMIZER_PROFILE_MATRIX_CELLS),
+            ),
+            "summary.passed_cell_count": (
+                summary.get("passed_cell_count"),
+                len(V1_OPTIMIZER_PROFILE_MATRIX_CELLS),
+            ),
+            "summary.failed_cells": (
+                list(summary.get("failed_cells") or []),
+                [],
+            ),
+            "summary.per_axis_coverage.frameworks": (
+                list(
+                    _as_mapping(summary.get("per_axis_coverage")).get(
+                        "frameworks"
+                    )
+                    or []
+                ),
+                sorted(V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS),
+            ),
+            "summary.per_axis_coverage.target_kinds": (
+                list(
+                    _as_mapping(summary.get("per_axis_coverage")).get(
+                        "target_kinds"
+                    )
+                    or []
+                ),
+                sorted(V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS),
+            ),
+            "summary.per_axis_coverage.backends": (
+                list(
+                    _as_mapping(summary.get("per_axis_coverage")).get("backends")
+                    or []
+                ),
+                sorted(V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS),
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        # The gate asserts EXACTLY the declared cell set (no minimum-count
+        # floor; extra cells are as much a failure as missing ones).
+        if sorted(cells_by_ref) != sorted(declared_cell_refs):
+            append_error(
+                optimization_errors,
+                field="cells.cell_refs",
+                expected=sorted(declared_cell_refs),
+                observed=sorted(cells_by_ref),
+            )
+        whole_agent_cell_refs = [
+            cell_ref
+            for cell_ref in declared_cell_refs
+            if cell_ref.split("/")[1] == "whole_agent"
+        ]
+        for cell_ref in declared_cell_refs:
+            cell = _as_mapping(cells_by_ref.get(cell_ref))
+            if not cell:
+                continue
+            missing_fields = sorted(
+                set(V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS) - set(cell)
+            )
+            if missing_fields:
+                append_error(
+                    optimization_errors,
+                    field="cell.required_fields",
+                    expected=V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS,
+                    observed=sorted(cell),
+                    cell=cell_ref,
+                )
+            for field, expected in (
+                ("status", "passed"),
+                ("native_proof_closed", True),
+                ("evidence_class", "local_gate"),
+            ):
+                if cell.get(field) != expected:
+                    append_error(
+                        optimization_errors,
+                        field=f"cell.{field}",
+                        expected=expected,
+                        observed=cell.get(field),
+                        cell=cell_ref,
+                    )
+            if not cell.get("winner"):
+                append_error(
+                    optimization_errors,
+                    field="cell.winner",
+                    expected="per-cell winner candidate id",
+                    observed=cell.get("winner"),
+                    cell=cell_ref,
+                )
+            profile = _as_mapping(cell.get("trajectory_profile"))
+            missing_profile_fields = sorted(
+                set(V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS) - set(profile)
+            )
+            if missing_profile_fields:
+                append_error(
+                    metric_errors,
+                    field="cell.trajectory_profile",
+                    expected=V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS,
+                    observed=sorted(profile),
+                    cell=cell_ref,
+                )
+            declared_budget = cell.get("eval_budget")
+            evaluations_used = cell.get("evaluations_used")
+            if (
+                not isinstance(declared_budget, int)
+                or declared_budget < 1
+                or declared_budget > V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+            ):
+                append_error(
+                    budget_errors,
+                    field="cell.eval_budget",
+                    expected=(
+                        f"int in [1, {V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET}]"
+                    ),
+                    observed=declared_budget,
+                    cell=cell_ref,
+                )
+            elif (
+                evaluations_used is None
+                or cell.get("budget_exceeded")
+                or int(evaluations_used) > int(declared_budget)
+            ):
+                append_error(
+                    budget_errors,
+                    field="cell.evaluations_used",
+                    expected=f"<= {declared_budget}",
+                    observed=evaluations_used,
+                    cell=cell_ref,
+                )
+
+        # Per-cell winners only — a global-best key anywhere is a release
+        # failure (orderings invert across settings, R§3.1).
+        for hit in _scan_forbidden_aggregate_keys(result):
+            append_error(
+                aggregation_errors,
+                field=hit,
+                expected="absent",
+                observed="present",
+            )
+
+        report_card = _as_mapping(result.get("report_card"))
+        if report_card.get("section") != "optimizer_profile_matrix":
+            append_error(
+                report_errors,
+                field="report_card.section",
+                expected="optimizer_profile_matrix",
+                observed=report_card.get("section"),
+            )
+        if len(_as_list(report_card.get("rows"))) != len(declared_cell_refs):
+            append_error(
+                report_errors,
+                field="report_card.rows",
+                expected=len(declared_cell_refs),
+                observed=len(_as_list(report_card.get("rows"))),
+            )
+        for column in ("cell_ref", "backend", "eval_budget", "winner"):
+            if column not in _as_list(report_card.get("columns")):
+                append_error(
+                    report_errors,
+                    field="report_card.columns",
+                    expected=column,
+                    observed=_as_list(report_card.get("columns")),
+                )
+
+        apply_plans = {
+            str(_as_mapping(plan).get("cell_ref")): _as_mapping(plan)
+            for plan in _as_list(result.get("apply_plans"))
+            if isinstance(plan, Mapping)
+        }
+        if sorted(apply_plans) != sorted(whole_agent_cell_refs):
+            append_error(
+                action_errors,
+                field="apply_plans.cell_refs",
+                expected=sorted(whole_agent_cell_refs),
+                observed=sorted(apply_plans),
+            )
+        for cell_ref, plan in sorted(apply_plans.items()):
+            if plan.get("kind") != V1_WHOLE_AGENT_APPLY_PLAN_KIND:
+                append_error(
+                    action_errors,
+                    field="apply_plan.kind",
+                    expected=V1_WHOLE_AGENT_APPLY_PLAN_KIND,
+                    observed=plan.get("kind"),
+                    cell=cell_ref,
+                )
+            missing_plan_fields = sorted(
+                set(V1_WHOLE_AGENT_APPLY_PLAN_FIELDS) - set(plan)
+            )
+            if missing_plan_fields:
+                append_error(
+                    action_errors,
+                    field="apply_plan.fields",
+                    expected=V1_WHOLE_AGENT_APPLY_PLAN_FIELDS,
+                    observed=sorted(plan),
+                    cell=cell_ref,
+                )
+            if plan.get("mismatch_policy") != "abort":
+                append_error(
+                    action_errors,
+                    field="apply_plan.mismatch_policy",
+                    expected="abort",
+                    observed=plan.get("mismatch_policy"),
+                    cell=cell_ref,
+                )
+
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        if release_secret in serialized:
+            append_error(
+                security_errors,
+                field="serialized_payload",
+                expected="release env value never serialized",
+                observed="release secret found in payload",
+            )
+
+        # ---- 4D: routing-table evidence (asserted HERE — no separate gate) ----
+        routing_table = _as_mapping(result.get("routing_table"))
+        routing_rows = [
+            _as_mapping(row)
+            for row in _as_list(routing_table.get("rows"))
+            if isinstance(row, Mapping)
+        ]
+        committed_path = root / V1_OPTIMIZER_ROUTING_TABLE_FILE
+        committed_text = (
+            committed_path.read_text(encoding="utf-8")
+            if committed_path.is_file()
+            else ""
+        )
+        from . import optimize as agent_optimize
+
+        regenerated_text = agent_optimize.render_optimizer_routing_table_json(
+            routing_table
+        )
+        routing_checks_status = {
+            "routing_table_byte_identical": (
+                bool(committed_text) and regenerated_text == committed_text
+            ),
+            "every_recommendation_cites_profile_evidence": True,
+            "live_lane_evidence_excluded_from_recommendations": True,
+            "no_global_aggregate": not aggregation_errors,
+            "default_picker_resolves_overrides_and_cold_starts": True,
+        }
+        if routing_table.get("kind") != V1_OPTIMIZER_ROUTING_TABLE_KIND:
+            append_error(
+                routing_errors,
+                field="routing_table.kind",
+                expected=V1_OPTIMIZER_ROUTING_TABLE_KIND,
+                observed=routing_table.get("kind"),
+            )
+        if list(routing_table.get("admissible_evidence_classes") or []) != (
+            V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
+        ):
+            append_error(
+                routing_errors,
+                field="routing_table.admissible_evidence_classes",
+                expected=V1_LIVE_RELEASE_ADMISSIBLE_CLASSES,
+                observed=routing_table.get("admissible_evidence_classes"),
+            )
+        if not routing_checks_status["routing_table_byte_identical"] or (
+            result.get("routing_table_matches_committed") is not True
+        ):
+            routing_checks_status["routing_table_byte_identical"] = False
+            append_error(
+                routing_errors,
+                field="routing_table_byte_identical",
+                expected=f"regenerated table == {V1_OPTIMIZER_ROUTING_TABLE_FILE}",
+                observed={
+                    "byte_identical": regenerated_text == committed_text,
+                    "routing_table_matches_committed": result.get(
+                        "routing_table_matches_committed"
+                    ),
+                },
+            )
+        for row in routing_rows:
+            row_key = (
+                f"{row.get('framework_profile')}/{row.get('target_kind')}"
+            )
+            recommendation = row.get("recommended_backend")
+            evidence_entries = [
+                _as_mapping(entry)
+                for entry in _as_list(row.get("evidence"))
+                if isinstance(entry, Mapping)
+            ]
+            live_in_evidence = [
+                entry
+                for entry in evidence_entries
+                if str(entry.get("evidence_class"))
+                not in V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
+            ]
+            if live_in_evidence:
+                routing_checks_status[
+                    "live_lane_evidence_excluded_from_recommendations"
+                ] = False
+                append_error(
+                    routing_errors,
+                    field="routing_table.rows.evidence.evidence_class",
+                    expected=V1_LIVE_RELEASE_ADMISSIBLE_CLASSES,
+                    observed=[
+                        entry.get("evidence_class") for entry in live_in_evidence
+                    ],
+                    cell=row_key,
+                )
+            if recommendation is None:
+                continue
+            cited = [
+                entry
+                for entry in evidence_entries
+                if str(entry.get("backend")) == str(recommendation)
+                and str(entry.get("cell_ref", "")).startswith(
+                    f"{row.get('framework_profile')}/{row.get('target_kind')}/"
+                )
+            ]
+            if not cited:
+                routing_checks_status[
+                    "every_recommendation_cites_profile_evidence"
+                ] = False
+                append_error(
+                    routing_errors,
+                    field="routing_table.rows.recommended_backend",
+                    expected=(
+                        ">=1 same-run evidence entry with matching axes and "
+                        "winner == recommendation"
+                    ),
+                    observed=recommendation,
+                    cell=row_key,
+                )
+        routing_checks = _as_mapping(result.get("routing_checks"))
+        picker_expectations = {
+            "default.selected_by": (
+                _as_mapping(routing_checks.get("default")).get("selected_by"),
+                "routing_table",
+            ),
+            "override.selected_by": (
+                _as_mapping(routing_checks.get("override")).get("selected_by"),
+                "override",
+            ),
+            "cold_start.selected_by": (
+                _as_mapping(routing_checks.get("cold_start")).get("selected_by"),
+                "cold_start",
+            ),
+            "default.citations_present": (
+                bool(_as_mapping(routing_checks.get("default")).get("citations")),
+                True,
+            ),
+            "override.recommendation_visible": (
+                "routing_table_recommendation"
+                in _as_mapping(routing_checks.get("override")),
+                True,
+            ),
+            "cold_start.warning_present": (
+                bool(
+                    _as_mapping(routing_checks.get("cold_start")).get("warning")
+                ),
+                True,
+            ),
+            "cold_start.citations_empty": (
+                list(
+                    _as_mapping(routing_checks.get("cold_start")).get(
+                        "citations"
+                    )
+                    or []
+                ),
+                [],
+            ),
+        }
+        for field, (observed, expected) in picker_expectations.items():
+            if observed != expected:
+                routing_checks_status[
+                    "default_picker_resolves_overrides_and_cold_starts"
+                ] = False
+                append_error(
+                    routing_errors,
+                    field=f"routing_checks.{field}",
+                    expected=expected,
+                    observed=observed,
+                )
+        if aggregation_errors:
+            append_error(
+                routing_errors,
+                field="no_global_aggregate",
+                expected="no forbidden aggregate keys",
+                observed=[error["field"] for error in aggregation_errors],
+            )
+
+        evidence.update(
+            {
+                "cell_count": len(cells),
+                "passed_cell_count": summary.get("passed_cell_count"),
+                "cell_refs": sorted(cells_by_ref),
+                "whole_agent_cell_refs": sorted(whole_agent_cell_refs),
+                "apply_plan_cell_refs": sorted(apply_plans),
+                "routing_row_count": len(routing_rows),
+                "routing_checks_status": routing_checks_status,
+                "per_axis_coverage": dict(
+                    _as_mapping(summary.get("per_axis_coverage"))
+                ),
+                "report_card_section": report_card.get("section"),
+                "cells": [
+                    {
+                        "cell_ref": cell.get("cell_ref"),
+                        "framework": cell.get("framework"),
+                        "target_kind": cell.get("target_kind"),
+                        "backend": cell.get("backend"),
+                        "inherited": cell.get("inherited"),
+                        "status": cell.get("status"),
+                        "score": cell.get("score"),
+                        "eval_budget": cell.get("eval_budget"),
+                        "evaluations_used": cell.get("evaluations_used"),
+                        "winner": cell.get("winner"),
+                    }
+                    for cell in cells
+                ],
+            }
+        )
+
+    return {
+        "kind": "agent-learning.optimizer-profile-matrix-readiness.v1",
+        "required_files": list(V1_OPTIMIZER_PROFILE_MATRIX_FILES),
+        "required_env": V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV,
+        "required_frameworks": list(V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS),
+        "required_target_kinds": list(V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS),
+        "required_backends": list(V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS),
+        "required_cells": [list(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS],
+        "required_cell_fields": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS
+        ),
+        "forbidden_aggregate_keys": list(V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS),
+        "required_memory_slices": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
+        ),
+        "required_topology_prefixes": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+        ),
+        "required_trajectory_profile_fields": list(
+            V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+        ),
+        "required_routing_checks": list(V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS),
+        "required_apply_plan_fields": list(V1_WHOLE_AGENT_APPLY_PLAN_FIELDS),
+        "required_contract_stages": list(V1_WHOLE_AGENT_CONTRACT_STAGES),
+        "routing_table_file": V1_OPTIMIZER_ROUTING_TABLE_FILE,
+        "cell_eval_budget_max": V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "report_errors": report_errors,
+        "action_errors": action_errors,
+        "security_errors": security_errors,
+        "aggregation_errors": aggregation_errors,
+        "budget_errors": budget_errors,
+        "routing_errors": routing_errors,
+        "evidence": evidence,
+    }
+
+
+def _expected_frozen_profile_row_id(row: Mapping[str, Any]) -> str:
+    import hashlib
+
+    body = {
+        field: row.get(field)
+        for field in V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+        if field != "row_id"
+    }
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    return f"row_{digest[:16]}"
+
+
+def _release_capability_profile_freeze_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_CAPABILITY_PROFILE_FREEZE_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    row_errors: list[dict[str, Any]] = []
+    veto_errors: list[dict[str, Any]] = []
+    admission_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = (
+        "agent-learning-release-local-"
+        f"{V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV.lower()}"
+    )
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        example_path = root / "examples/sdk_capability_freeze_regression.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_capability_profile_freeze",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-capability-profile-freeze-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "capability-profile-freeze.json"
+
+                def run_example() -> dict[str, Any]:
+                    return dict(module.run(output_path))
+
+                result = _release_run_with_local_env(
+                    [V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV],
+                    run_example,
+                )
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+
+    if result:
+        frozen = _as_mapping(result.get("frozen"))
+        rows = [
+            _as_mapping(row)
+            for row in _as_list(frozen.get("rows"))
+            if isinstance(row, Mapping)
+        ]
+        fixture = _as_mapping(result.get("fixture"))
+        replays = _as_mapping(result.get("replays"))
+        compliant = _as_mapping(replays.get("compliant"))
+        improving = _as_mapping(replays.get("improving_but_breaking"))
+        out_of_setting = _as_mapping(replays.get("out_of_setting"))
+        security_trade = _as_mapping(replays.get("security_trade"))
+        tampered_row = _as_mapping(replays.get("tampered_row"))
+        checks = _as_mapping(result.get("checks"))
+        nirnaya_records = [
+            _as_mapping(record)
+            for record in _as_list(
+                _as_mapping(result.get("governance")).get("nirnaya")
+            )
+            if isinstance(record, Mapping)
+        ]
+
+        if result != saved:
+            append_error(
+                execution_errors,
+                field="output_roundtrip",
+                expected=True,
+                observed=False,
+            )
+        if result.get("status") != "passed":
+            append_error(
+                execution_errors,
+                field="status",
+                expected="passed",
+                observed=result.get("status"),
+            )
+        if sorted(checks) != sorted(V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS):
+            append_error(
+                row_errors,
+                field="checks",
+                expected=sorted(V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS),
+                observed=sorted(checks),
+            )
+
+        # ---- row_errors: content addressing + schema ----
+        if frozen.get("kind") != V1_FROZEN_CAPABILITY_PROFILE_KIND:
+            append_error(
+                row_errors,
+                field="frozen.kind",
+                expected=V1_FROZEN_CAPABILITY_PROFILE_KIND,
+                observed=frozen.get("kind"),
+            )
+        if not rows:
+            append_error(
+                row_errors,
+                field="frozen.rows",
+                expected=">=1 frozen row",
+                observed=len(rows),
+            )
+        for index, row in enumerate(rows):
+            if sorted(row) != sorted(V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS):
+                append_error(
+                    row_errors,
+                    field=f"frozen.rows[{index}].fields",
+                    expected=sorted(V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS),
+                    observed=sorted(row),
+                )
+            expected_row_id = _expected_frozen_profile_row_id(row)
+            if row.get("row_id") != expected_row_id:
+                append_error(
+                    row_errors,
+                    field=f"frozen.rows[{index}].row_id",
+                    expected=expected_row_id,
+                    observed=row.get("row_id"),
+                )
+        if fixture.get("match") is not True:
+            append_error(
+                row_errors,
+                field="fixture.match",
+                expected=True,
+                observed=fixture.get("match"),
+            )
+        if checks.get("rows_content_addressed") is not True:
+            append_error(
+                row_errors,
+                field="checks.rows_content_addressed",
+                expected=True,
+                observed=checks.get("rows_content_addressed"),
+            )
+        tampered_classes = sorted(
+            {
+                str(row.get("hetvabhasa_class"))
+                for row in _as_list(tampered_row.get("vetoed_rows"))
+                if isinstance(row, Mapping) and row.get("hetvabhasa_class")
+            }
+        )
+        if tampered_row.get("veto") is not True or "asiddha" not in tampered_classes:
+            append_error(
+                row_errors,
+                field="replays.tampered_row",
+                expected={"veto": True, "hetvabhasa_class": "asiddha"},
+                observed={
+                    "veto": tampered_row.get("veto"),
+                    "classes": tampered_classes,
+                },
+            )
+
+        # ---- veto_errors: the improve-but-break fixture must be vetoed ----
+        if compliant.get("veto") is not False or (
+            compliant.get("closed_row_count") != len(rows)
+        ):
+            append_error(
+                veto_errors,
+                field="replays.compliant",
+                expected={"veto": False, "closed_row_count": len(rows)},
+                observed={
+                    "veto": compliant.get("veto"),
+                    "closed_row_count": compliant.get("closed_row_count"),
+                },
+            )
+        if improving.get("veto") is not True or (
+            improving.get("hetvabhasa_class") != "badhita"
+        ) or not _as_list(improving.get("vetoed_rows")):
+            append_error(
+                veto_errors,
+                field="replays.improving_but_breaking",
+                expected={
+                    "veto": True,
+                    "hetvabhasa_class": "badhita",
+                    "vetoed_rows": ">=1",
+                },
+                observed={
+                    "veto": improving.get("veto"),
+                    "hetvabhasa_class": improving.get("hetvabhasa_class"),
+                    "vetoed_row_count": len(_as_list(improving.get("vetoed_rows"))),
+                },
+            )
+        if checks.get("improving_candidate_with_broken_row_vetoed") is not True:
+            append_error(
+                veto_errors,
+                field="checks.improving_candidate_with_broken_row_vetoed",
+                expected=True,
+                observed=checks.get("improving_candidate_with_broken_row_vetoed"),
+            )
+        recorded = [
+            record
+            for record in nirnaya_records
+            for alternative in _as_list(record.get("rejected_alternatives"))
+            if isinstance(alternative, Mapping)
+            and alternative.get("hetvabhasa_class") == "badhita"
+            and _as_list(alternative.get("vetoed_row_ids"))
+        ]
+        if not recorded or checks.get("veto_recorded_in_governance") is not True:
+            append_error(
+                veto_errors,
+                field="governance.nirnaya",
+                expected=(
+                    "steward nirnaya records the badhita veto with row_ids"
+                ),
+                observed={
+                    "recorded": bool(recorded),
+                    "check": checks.get("veto_recorded_in_governance"),
+                },
+            )
+
+        # ---- admission_errors: out-of-setting wins never count ----
+        non_admissible = _as_list(out_of_setting.get("non_admissible_wins"))
+        if len(non_admissible) != len(rows) or (
+            checks.get("out_of_setting_win_non_admissible") is not True
+        ):
+            append_error(
+                admission_errors,
+                field="replays.out_of_setting.non_admissible_wins",
+                expected=len(rows),
+                observed=len(non_admissible),
+            )
+        if any(
+            _as_mapping(row).get("setting_digest_match") is not False
+            for row in non_admissible
+        ):
+            append_error(
+                admission_errors,
+                field="replays.out_of_setting.setting_digest_match",
+                expected=False,
+                observed=[
+                    _as_mapping(row).get("setting_digest_match")
+                    for row in non_admissible
+                ],
+            )
+
+        # ---- security_errors: security rows are non-tradable ----
+        security_rows = [row for row in rows if row.get("security")]
+        if not security_rows:
+            append_error(
+                security_errors,
+                field="frozen.rows.security",
+                expected=">=1 security row",
+                observed=len(security_rows),
+            )
+        if (
+            security_trade.get("veto") is not True
+            or security_trade.get("security_veto") is not True
+            or security_trade.get("touches_context_memory_paths") is not True
+            or security_trade.get("security_rows_non_tradable") is not True
+            or checks.get("security_row_non_tradable") is not True
+        ):
+            append_error(
+                security_errors,
+                field="replays.security_trade",
+                expected={
+                    "veto": True,
+                    "security_veto": True,
+                    "touches_context_memory_paths": True,
+                    "security_rows_non_tradable": True,
+                },
+                observed={
+                    "veto": security_trade.get("veto"),
+                    "security_veto": security_trade.get("security_veto"),
+                    "touches_context_memory_paths": security_trade.get(
+                        "touches_context_memory_paths"
+                    ),
+                    "security_rows_non_tradable": security_trade.get(
+                        "security_rows_non_tradable"
+                    ),
+                },
+            )
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        if release_secret in serialized:
+            append_error(
+                security_errors,
+                field="serialized_payload",
+                expected="release env value never serialized",
+                observed="release secret found in payload",
+            )
+
+        evidence.update(
+            {
+                "contract_digest": frozen.get("contract_digest"),
+                "setting_digest": frozen.get("setting_digest"),
+                "row_count": len(rows),
+                "security_row_count": len(security_rows),
+                "fixture": dict(fixture),
+                "checks": {
+                    name: checks.get(name)
+                    for name in V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+                },
+                "replays": {
+                    "compliant": {
+                        "veto": compliant.get("veto"),
+                        "closed_row_count": compliant.get("closed_row_count"),
+                    },
+                    "improving_but_breaking": {
+                        "veto": improving.get("veto"),
+                        "hetvabhasa_class": improving.get("hetvabhasa_class"),
+                        "vetoed_row_count": len(
+                            _as_list(improving.get("vetoed_rows"))
+                        ),
+                    },
+                    "out_of_setting": {
+                        "non_admissible_win_count": len(non_admissible),
+                    },
+                    "security_trade": {
+                        "veto": security_trade.get("veto"),
+                        "security_veto": security_trade.get("security_veto"),
+                    },
+                    "tampered_row": {
+                        "veto": tampered_row.get("veto"),
+                        "classes": tampered_classes,
+                    },
+                },
+            }
+        )
+
+    return {
+        "kind": "agent-learning.capability-profile-freeze-readiness.v1",
+        "required_files": list(V1_CAPABILITY_PROFILE_FREEZE_FILES),
+        "required_env": V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV,
+        "required_row_fields": list(V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS),
+        "required_checks": list(V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS),
+        "frozen_profile_kind": V1_FROZEN_CAPABILITY_PROFILE_KIND,
+        "frozen_profile_replay_kind": V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND,
+        "attachment_key": V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY,
+        "fixture_dir": V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "row_errors": row_errors,
+        "veto_errors": veto_errors,
+        "admission_errors": admission_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
     }
 
 
@@ -18517,6 +19912,34 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
             governance_check_ids = [
                 str(check.get("id") or "") for check in governance_checks
             ]
+            # Phase 4: the six new required checks are produced by
+            # build_optimizer_society_trace and ride the society-trace
+            # governance records (ARCH §2e) — audit them from there.
+            society_governance = _as_mapping(society_trace_state.get("governance"))
+            society_governance_checks = [
+                item
+                for item in _as_list(society_governance.get("checks"))
+                if isinstance(item, Mapping)
+            ]
+            society_check_names = sorted(
+                {
+                    str(check.get("name") or "")
+                    for check in society_governance_checks
+                    if check.get("name")
+                }
+            )
+            failed_society_check_names = sorted(
+                {
+                    str(check.get("name") or "")
+                    for check in society_governance_checks
+                    if check.get("name") and not check.get("passed")
+                }
+            )
+            all_check_ids = sorted(
+                {check_id for check_id in governance_check_ids if check_id}
+                | set(society_check_names)
+            )
+            trajectory_profile = _as_mapping(result.get("trajectory_profile"))
             evidence.update(
                 {
                     "result_kind": result.get("kind"),
@@ -18597,7 +20020,11 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
                         ),
                         "check_count": governance.get("check_count"),
                         "check_ids": governance_check_ids,
+                        "society_check_names": society_check_names,
+                        "failed_society_check_names": failed_society_check_names,
+                        "all_check_ids": all_check_ids,
                     },
+                    "trajectory_profile": dict(trajectory_profile),
                 }
             )
 
@@ -18743,14 +20170,32 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
                 )
             missing_checks = sorted(
                 set(V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS)
-                - set(governance_check_ids)
+                - set(all_check_ids)
             )
             if missing_checks:
                 append_error(
                     governance_errors,
                     "optimization_governance.checks",
                     V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS,
-                    governance_check_ids,
+                    all_check_ids,
+                )
+            if failed_society_check_names:
+                append_error(
+                    governance_errors,
+                    "optimizer_society_trace.governance.failed_checks",
+                    [],
+                    failed_society_check_names,
+                )
+            missing_trajectory_fields = sorted(
+                set(V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS)
+                - set(trajectory_profile)
+            )
+            if missing_trajectory_fields:
+                append_error(
+                    governance_errors,
+                    "trajectory_profile",
+                    V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS,
+                    sorted(trajectory_profile),
                 )
 
     return {

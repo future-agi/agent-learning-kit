@@ -62,6 +62,21 @@ proposal, objection, synthesis, and pruning are separated into distinct
 roles, and a change survives only if its score holds across rounds — no
 single voice ratifies its own proposal.
 
+Phase 4 makes the assembly's temperament and procedure declared data. Each
+role carries an optional guna mapping — `{rajas, sattva, tamas}`, each in
+[0, 1], derived from the role's archetype when absent — with deterministic
+mechanical effects: rajas scales mutation radius and proposal-slot share,
+sattva scales synthesis breadth and reconciliation, tamas scales steward
+simplification aggressiveness. Roles also seat in one of two chambers,
+orthogonal to phases: the samiti generates widely and cheaply, the sabha
+deliberates narrowly and promotes, each chamber under its own declared
+evaluation budget. The values are psychometrically grounded design devices
+(the Triguna research lineage), used as deterministic metadata — candidate
+acceptance remains entirely metric-based. Per-round diagnosis pooling is
+also declared: the society ledger pools every evaluated candidate's
+diagnoses (not just the winner's) and hands them to every role next round,
+persisting across campaigns through the social-memory store.
+
 ## 2. Run it
 
 CLI, against the committed society manifest (scripted multi-agent room,

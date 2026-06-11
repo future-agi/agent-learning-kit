@@ -7522,7 +7522,21 @@ def test_sdk_optimizer_governance_optimization_example_runs(
         "has_dependency_audit",
     ):
         assert trace_summary[flag] is True
-    assert trace_summary["governance_check_count"] == 6
+    for flag in (
+        "has_guna_axes",
+        "has_two_chamber",
+        "has_nyaya_justifications",
+        "has_hetvabhasa_rejections",
+        "has_nirnaya",
+        "has_staged_conditioning",
+        "has_layer_locality",
+        "has_declared_budget",
+        "has_external_ranking",
+    ):
+        assert trace_summary[flag] is True
+    # Phase 4: the governed trace is engine-built — 11 computed checks plus
+    # the 6 conditional society checks (explicit example checks dedupe in).
+    assert trace_summary["governance_check_count"] == 17
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
 
     target = manifest["optimization"]["target"]
@@ -7548,7 +7562,7 @@ def test_sdk_optimizer_governance_optimization_example_runs(
     assert governance_component["score"] == pytest.approx(1.0)
     assert governance_component["details"]["missing"] == []
     assert governance_component["details"]["best_role"] == "dharma_steward"
-    assert governance_component["details"]["summary"]["governance_check_count"] == 6
+    assert governance_component["details"]["summary"]["governance_check_count"] == 17
     assert governance_component["details"]["summary"]["governance_pass_rate"] == (
         pytest.approx(1.0)
     )
@@ -7596,14 +7610,22 @@ def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path)
     assert len(trace["proposals"]) == 5
     assert len(trace["rounds"]) == 3
     assert len(trace["diagnostics"]) == 2
-    assert {check["name"] for check in trace["governance"]["checks"]} == {
+    assert {
         "role_diversity",
         "mediator_review",
         "contract_gate",
         "rollback_check",
         "search_locality",
         "dependency_audit",
-    }
+        # Phase 4 society checks (conditional on producing metadata, all
+        # present in the engine-built governed trace):
+        "chamber_budgets_declared",
+        "rejections_classed",
+        "nirnaya_recorded",
+        "proposals_never_averaged",
+        "specialist_authority_respected",
+        "society_ledger_pooled_across_candidates",
+    } <= {check["name"] for check in trace["governance"]["checks"]}
     eval_config = manifest["evaluation"]["agent_report"]["config"]
     assert eval_config["required_tools"] == [
         "optimizer_trace_status",
@@ -7676,7 +7698,7 @@ def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path)
         "has_dependency_audit",
     ):
         assert trace_state["summary"][flag] is True
-    assert trace_state["summary"]["governance_check_count"] == 6
+    assert trace_state["summary"]["governance_check_count"] == 17
     assert trace_state["summary"]["governance_pass_rate"] == pytest.approx(1.0)
     event_names = {event["name"] for event in report_case["events"]}
     assert {
@@ -16978,6 +17000,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["live_lane_evidence_classes"] == (
         trinity.V1_LIVE_EVIDENCE_CLASSES
     )
+    assert payload["required_capability_profile_freeze_row_fields"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+    )
+    assert payload["required_capability_profile_freeze_checks"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+    )
+    assert payload["required_optimizer_profile_matrix_target_kinds"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    )
+    assert payload["required_optimizer_profile_matrix_backends"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
+    )
+    assert payload["required_optimizer_profile_matrix_cells"] == [
+        list(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    ]
+    assert payload["required_whole_agent_contract_stages"] == (
+        trinity.V1_WHOLE_AGENT_CONTRACT_STAGES
+    )
+    assert payload["required_whole_agent_apply_plan_fields"] == (
+        trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
+    )
+    assert payload["required_optimizer_trajectory_profile_fields"] == (
+        trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+    )
+    assert payload["required_optimizer_routing_checks"] == (
+        trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -18353,6 +18402,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "package_distribution_hygiene",
         "docs_executability",
         "live_lane_boundary",
+        "optimizer_profile_matrix_readiness",
+        "capability_profile_freeze_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18503,6 +18554,157 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert live_lane["evidence_class_errors"] == []
     assert live_lane["env_flag_errors"] == []
     assert live_lane["redaction_errors"] == []
+    profile_matrix = checks["optimizer_profile_matrix_readiness"]["evidence"]
+    assert profile_matrix["kind"] == (
+        "agent-learning.optimizer-profile-matrix-readiness.v1"
+    )
+    assert profile_matrix["required_files"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FILES
+    )
+    assert profile_matrix["required_env"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV
+    )
+    assert profile_matrix["required_frameworks"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert profile_matrix["required_target_kinds"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    )
+    assert profile_matrix["required_backends"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
+    )
+    assert profile_matrix["required_cells"] == [
+        list(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    ]
+    assert profile_matrix["required_cell_fields"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS
+    )
+    assert profile_matrix["forbidden_aggregate_keys"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS
+    )
+    assert profile_matrix["required_memory_slices"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
+    )
+    assert profile_matrix["required_topology_prefixes"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+    )
+    assert profile_matrix["required_trajectory_profile_fields"] == (
+        trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+    )
+    assert profile_matrix["required_routing_checks"] == (
+        trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+    )
+    assert profile_matrix["required_apply_plan_fields"] == (
+        trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
+    )
+    assert profile_matrix["required_contract_stages"] == (
+        trinity.V1_WHOLE_AGENT_CONTRACT_STAGES
+    )
+    assert profile_matrix["routing_table_file"] == (
+        trinity.V1_OPTIMIZER_ROUTING_TABLE_FILE
+    )
+    assert profile_matrix["cell_eval_budget_max"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+    )
+    assert profile_matrix["missing_files"] == []
+    assert profile_matrix["execution_errors"] == []
+    assert profile_matrix["manifest_errors"] == []
+    assert profile_matrix["optimization_errors"] == []
+    assert profile_matrix["metric_errors"] == []
+    assert profile_matrix["runtime_errors"] == []
+    assert profile_matrix["report_errors"] == []
+    assert profile_matrix["action_errors"] == []
+    assert profile_matrix["security_errors"] == []
+    assert profile_matrix["aggregation_errors"] == []
+    assert profile_matrix["budget_errors"] == []
+    assert profile_matrix["routing_errors"] == []
+    profile_matrix_evidence = profile_matrix["evidence"]
+    assert profile_matrix_evidence["cell_count"] == len(
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert profile_matrix_evidence["passed_cell_count"] == len(
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert profile_matrix_evidence["cell_refs"] == sorted(
+        "/".join(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert profile_matrix_evidence["apply_plan_cell_refs"] == (
+        profile_matrix_evidence["whole_agent_cell_refs"]
+    )
+    assert len(profile_matrix_evidence["whole_agent_cell_refs"]) == 6
+    assert profile_matrix_evidence["routing_row_count"] > 0
+    assert profile_matrix_evidence["routing_checks_status"] == {
+        name: True for name in trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+    }
+    assert profile_matrix_evidence["report_card_section"] == (
+        "optimizer_profile_matrix"
+    )
+    capability_freeze = checks["capability_profile_freeze_readiness"]["evidence"]
+    assert capability_freeze["kind"] == (
+        "agent-learning.capability-profile-freeze-readiness.v1"
+    )
+    assert capability_freeze["required_files"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_FILES
+    )
+    assert capability_freeze["required_env"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV
+    )
+    assert capability_freeze["required_row_fields"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+    )
+    assert capability_freeze["required_checks"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+    )
+    assert capability_freeze["frozen_profile_kind"] == (
+        trinity.V1_FROZEN_CAPABILITY_PROFILE_KIND
+    )
+    assert capability_freeze["frozen_profile_replay_kind"] == (
+        trinity.V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND
+    )
+    assert capability_freeze["attachment_key"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY
+    )
+    assert capability_freeze["fixture_dir"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR
+    )
+    assert capability_freeze["missing_files"] == []
+    assert capability_freeze["execution_errors"] == []
+    assert capability_freeze["row_errors"] == []
+    assert capability_freeze["veto_errors"] == []
+    assert capability_freeze["admission_errors"] == []
+    assert capability_freeze["security_errors"] == []
+    capability_freeze_evidence = capability_freeze["evidence"]
+    assert capability_freeze_evidence["row_count"] > 0
+    assert capability_freeze_evidence["security_row_count"] >= 1
+    assert capability_freeze_evidence["fixture"]["match"] is True
+    assert capability_freeze_evidence["checks"] == {
+        name: True
+        for name in trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+    }
+    assert capability_freeze_evidence["replays"]["improving_but_breaking"] == {
+        "veto": True,
+        "hetvabhasa_class": "badhita",
+        "vetoed_row_count": (
+            capability_freeze_evidence["replays"]["improving_but_breaking"][
+                "vetoed_row_count"
+            ]
+        ),
+    }
+    assert (
+        capability_freeze_evidence["replays"]["improving_but_breaking"][
+            "vetoed_row_count"
+        ]
+        >= 1
+    )
+    assert capability_freeze_evidence["replays"]["compliant"]["veto"] is False
+    assert capability_freeze_evidence["replays"]["security_trade"] == {
+        "veto": True,
+        "security_veto": True,
+    }
+    assert capability_freeze_evidence["replays"]["tampered_row"]["veto"] is True
+    assert "asiddha" in (
+        capability_freeze_evidence["replays"]["tampered_row"]["classes"]
+    )
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -26710,7 +26912,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert trace_summary["duplicate_candidate_count"] == 0
     assert trace_summary["best_candidate_id"] == "c_steward"
     assert trace_summary["final_score"] == pytest.approx(0.99)
-    assert trace_summary["governance_check_count"] == 6
+    # Phase 4: the governed trace is built through the engine's
+    # build_optimizer_society_trace — 11 computed checks + the 6 conditional
+    # Phase-4 society checks (the 6 explicit example checks dedupe into the
+    # computed census).
+    assert trace_summary["governance_check_count"] == 17
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
     for flag in trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS:
         assert trace_summary[flag] is True
@@ -26722,8 +26928,20 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert governance["failed_check_ids"] == []
     assert governance["warning_check_ids"] == []
     assert set(trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS) <= set(
-        governance["check_ids"]
+        governance["all_check_ids"]
     )
+    assert governance["failed_society_check_names"] == []
+    assert {
+        "chamber_budgets_declared",
+        "rejections_classed",
+        "nirnaya_recorded",
+        "proposals_never_averaged",
+        "specialist_authority_respected",
+        "society_ledger_pooled_across_candidates",
+    } <= set(governance["society_check_names"])
+    optimizer_trajectory = optimizer_evidence["trajectory_profile"]
+    for field in trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS:
+        assert field in optimizer_trajectory
     optimizer_portfolio = checks["optimizer_portfolio_readiness"]["evidence"]
     assert optimizer_portfolio["required_files"] == (
         trinity.V1_OPTIMIZER_PORTFOLIO_FILES
@@ -29402,6 +29620,137 @@ def test_docs_allowed_artifact_kinds_cover_schema_registry():
     }
     derived.add("agent-learning.task-evidence.v1")
     assert derived <= set(trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS)
+    # Phase 4 (ARCH Decision 7 note): the three user-facing Phase-4 kinds are
+    # admitted for docs pages; V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    phase4_kinds = {
+        "agent-learning.frozen-capability-profile.v1",
+        "agent-learning.apply-plan.v1",
+        "agent-learning.optimizer-routing-table.v1",
+    }
+    assert phase4_kinds <= set(trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS)
+    assert not phase4_kinds & set(trinity.V1_REQUIRED_SCHEMA_KINDS)
+
+
+def test_optimizer_profile_matrix_constants_mirror_facade():
+    from agent_learning import optimize, trinity
+
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_BACKENDS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert len(trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS) == 33
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_AGGREGATE_KEYS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET == (
+        optimize.OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+    )
+    assert trinity.V1_OPTIMIZER_ROUTING_TABLE_FILE == (
+        optimize.OPTIMIZER_ROUTING_TABLE_FILE
+    )
+    assert trinity.V1_WHOLE_AGENT_CONTRACT_STAGES == list(
+        optimize.WHOLE_AGENT_CONTRACT_STAGES
+    )
+    assert trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS == list(
+        optimize.WHOLE_AGENT_APPLY_PLAN_FIELDS
+    )
+    assert trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS == list(
+        optimize.FROZEN_CAPABILITY_PROFILE_ROW_FIELDS
+    )
+    assert trinity.V1_LIVE_RELEASE_ADMISSIBLE_CLASSES == list(
+        optimize.OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES
+    )
+
+
+def test_scan_forbidden_aggregate_keys_flags_nested_aggregates():
+    from agent_learning import trinity
+
+    payload = {
+        "summary": {"cell_count": 3},
+        "cells": [{"winner": "candidate_a"}],
+        "routing_table": {"rows": [{"global_best": "tpe"}]},
+        "report": {"nested": {"overall_winner": "society"}},
+    }
+    hits = trinity._scan_forbidden_aggregate_keys(payload)
+    assert sorted(hits) == [
+        "$.report.nested.overall_winner",
+        "$.routing_table.rows[0].global_best",
+    ]
+    assert trinity._scan_forbidden_aggregate_keys(
+        {"summary": {"per_axis_coverage": {"backends": ["tpe"]}}}
+    ) == []
+
+
+def test_release_optimizer_profile_matrix_status_flags_missing_files(tmp_path):
+    from agent_learning import trinity
+
+    status = trinity._release_optimizer_profile_matrix_status(tmp_path)
+    assert sorted(status["missing_files"]) == sorted(
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FILES
+    )
+    for key in (
+        "execution_errors",
+        "manifest_errors",
+        "optimization_errors",
+        "metric_errors",
+        "runtime_errors",
+        "report_errors",
+        "action_errors",
+        "security_errors",
+        "aggregation_errors",
+        "budget_errors",
+        "routing_errors",
+    ):
+        assert status[key] == []
+    assert status["kind"] == "agent-learning.optimizer-profile-matrix-readiness.v1"
+    assert status["evidence"] == {}
+
+
+def test_release_capability_profile_freeze_status_flags_missing_files(tmp_path):
+    from agent_learning import trinity
+
+    status = trinity._release_capability_profile_freeze_status(tmp_path)
+    assert sorted(status["missing_files"]) == sorted(
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_FILES
+    )
+    for key in (
+        "execution_errors",
+        "row_errors",
+        "veto_errors",
+        "admission_errors",
+        "security_errors",
+    ):
+        assert status[key] == []
+    assert status["kind"] == (
+        "agent-learning.capability-profile-freeze-readiness.v1"
+    )
+    assert status["evidence"] == {}
+
+
+def test_expected_frozen_profile_row_id_matches_facade_content_addressing():
+    from agent_learning import optimize, trinity
+
+    frozen = optimize.freeze_capability_profile(
+        {"profiles": [{"framework": "langgraph", "capabilities": ["run"]}]},
+        setting={"engine": "local_text", "driver": "deterministic_scripted"},
+        metric_floors={"task_completion": 0.9},
+    )
+    for row in frozen["rows"]:
+        assert row["row_id"] == trinity._expected_frozen_profile_row_id(row)
+    tampered = dict(frozen["rows"][0])
+    tampered["floor"] = 0.0
+    assert tampered["row_id"] != trinity._expected_frozen_profile_row_id(tampered)
 
 
 def test_parse_docs_frontmatter_rejects_malformed_blocks():

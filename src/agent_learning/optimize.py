@@ -1890,18 +1890,73 @@ def with_whole_agent_apply_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _matrix_regression_replay_dataset(
+    *,
+    framework: str,
+    target_kind: str,
+) -> dict[str, Any]:
+    """Deterministic in-repo regression dataset fixture for replay cells.
+
+    The canonical copy is committed at
+    ``examples/frozen_profiles/regression_replay_dataset.json`` (the freeze
+    fixture dir, never ``examples/regression_artifacts/``); this builder emits
+    the same rows parameterized by cell axes so replay cells stay
+    credential-free and deterministic.
+    """
+
+    return {
+        "name": f"optimizer-profile-matrix-{framework}-{target_kind}-regression",
+        "source": "local_fixture",
+        "framework": framework,
+        "cases": [
+            {
+                "id": f"{framework}-{target_kind}-regression-case-1",
+                "input": {
+                    "observability": {
+                        "run_id": f"{framework}-{target_kind}-run-1",
+                        "source": "local_fixture",
+                        "framework": framework,
+                        "failures": [
+                            f"The {framework} {target_kind.replace('_', ' ')} "
+                            "target is unoptimized."
+                        ],
+                    }
+                },
+                "expected": {"response": "native proof closes"},
+                "tags": ["regression", target_kind],
+            }
+        ],
+        "metadata": {"cookbook": "sdk-optimizer-profile-matrix"},
+    }
+
+
 def _optimizer_config_for_backend(
     backend: str,
     search_space: Mapping[str, Sequence[Any]],
     *,
     eval_budget: Optional[int] = None,
     seed: int = 42,
+    framework: Optional[str] = None,
+    target_kind: Optional[str] = None,
 ) -> dict[str, Any]:
     """Map a canon backend token onto a manifest optimizer config."""
 
     budget = int(eval_budget or OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET)
     if backend == "gepa":
-        return {"algorithm": "gepa", "eval_budget": budget}
+        # Reflective text evolution under a scripted, deterministic reflection
+        # step: the release path never calls an LLM, so the gepa cell runs the
+        # family mechanics (text-path mutation + score-based selection) on the
+        # deterministic evolution engine with the stand-in declared in config.
+        return {
+            "algorithm": "evolution",
+            "backend_family": "gepa",
+            "reflection_model": "scripted_deterministic",
+            "eval_budget": budget,
+            "population_size": 4,
+            "generations": 2,
+            "elite_count": 1,
+            "seed": seed,
+        }
     if backend == "tpe":
         return {
             "algorithm": "tpe",
@@ -1935,7 +1990,15 @@ def _optimizer_config_for_backend(
             "sabha_budget": max(1, budget - max(1, (budget * 2) // 3)),
         }
     if backend == "regression_replay":
-        return {"algorithm": "regression_replay", "eval_budget": budget}
+        return {
+            "algorithm": "regression_replay",
+            "optimizer": "agent",  # deterministic delegated repair backend
+            "dataset": _matrix_regression_replay_dataset(
+                framework=str(framework or "custom"),
+                target_kind=str(target_kind or "prompt"),
+            ),
+            "eval_budget": budget,
+        }
     raise ValueError(
         f"backend must be one of {list(OPTIMIZER_PROFILE_MATRIX_BACKENDS)}, "
         f"got {backend!r}"
@@ -2346,6 +2409,8 @@ def build_optimizer_profile_matrix_manifests(
             backend,
             fixture["target_candidates"],
             eval_budget=eval_budget,
+            framework=framework,
+            target_kind=target_kind,
         )
         inherited = tuple(cell) in OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS
         declared_setting = {
@@ -24194,44 +24259,271 @@ def _seed_optimizer_governance_candidate() -> list[dict[str, Any]]:
 
 
 def _governed_optimizer_governance_candidate() -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "optimizer_trace",
-            "data": {
-                "name": "governed-society-optimizer-trace",
-                "optimizer": "SocietyAgentOptimizer",
-                "roles": [
-                    {
-                        "name": name,
-                        "proposal_kind": proposal_kind,
-                        "archetype": archetype,
-                    }
-                    for name, proposal_kind, archetype in _OPTIMIZER_GOVERNANCE_ROLES
-                ],
-                "proposals": _optimizer_governance_proposals(),
-                "rounds": [
-                    {"round": 1, "decision": "critic probes risky baseline"},
-                    {
-                        "round": 2,
-                        "decision": "mediator merges memory, policy, and tools",
-                    },
-                    {"round": 3, "decision": "steward selects governed candidate"},
-                ],
-                "diagnostics": _optimizer_governance_diagnostics(),
-                "search_paths": list(_OPTIMIZER_GOVERNANCE_SEARCH_PATHS),
-                "governance": {"checks": _optimizer_governance_checks()},
-                "best_candidate_id": "c_steward",
-                "final_score": 0.99,
-                "metadata": {
-                    "source": "agent-learning-kit",
-                    "inspiration": (
-                        "human society, psychology, and dharma role metadata; "
-                        "candidate acceptance remains metric-based"
+    """The governed candidate trace, built through the engine's
+    ``build_optimizer_society_trace`` so the Phase-4 governance superset —
+    guna axes, two-chamber budgets, panca-avayava justifications, hetvabhasa
+    rejections, nirnaya, staged conditioning, layer locality, declared
+    budgets, external ranking, society ledger — is computed by the same code
+    path real society runs use (never hand-asserted flags)."""
+
+    opt = _opt()
+    roles = _optimizer_governance_role_graph()
+    history = [
+        opt.IterationHistory(
+            prompt=f"proposal {proposal['candidate_id']}",
+            average_score=float(proposal["score"]),
+            individual_results=[],
+            candidate_id=str(proposal["candidate_id"]),
+            metadata={
+                "candidate_id": proposal["candidate_id"],
+                "proposal_role": proposal["role"],
+                "role_kind": proposal.get("role_kind"),
+                "role_archetype": proposal.get("role_archetype"),
+                "proposal_round": proposal.get("round"),
+                "proposal_reason": proposal.get("reason"),
+                "proposal_parent_ids": list(proposal.get("parent_ids") or []),
+                "patch": dict(proposal.get("patch") or {}),
+                "proposal_metadata": {
+                    "justification": _optimizer_governance_justification(
+                        proposal
                     ),
                 },
             },
-        }
+        )
+        for proposal in _optimizer_governance_proposals()
     ]
+    result = opt.OptimizationResult(
+        best_generator=None,
+        best_candidate=None,
+        history=history,
+        final_score=0.99,
+        total_iterations=len(history),
+        total_evaluations=len(history),
+        metadata={
+            "optimizer": "SocietyAgentOptimizer",
+            "target_name": "governed-society-optimizer-trace",
+            "strategy": "society_role_graph",
+            "role_graph": roles,
+            "search_paths": list(_OPTIMIZER_GOVERNANCE_SEARCH_PATHS),
+            "rounds": [
+                {"round": 1, "decision": "critic probes risky baseline"},
+                {
+                    "round": 2,
+                    "decision": "mediator merges memory, policy, and tools",
+                },
+                {"round": 3, "decision": "steward selects governed candidate"},
+            ],
+            "diagnostics": _optimizer_governance_diagnostics(),
+            "governance": {"checks": _optimizer_governance_checks()},
+            "best_candidate_id": "c_steward",
+            "backend_lineage": ["SocietyAgentOptimizer"],
+            "guna_mix": {"rajas": 0.34, "sattva": 0.66, "tamas": 0.5},
+            "chambers": {
+                "samiti": {
+                    "roles": ["vidura", "smriti"],
+                    "declared_budget": 4,
+                    "evaluations_used": 2,
+                },
+                "sabha": {
+                    "roles": ["sangha", "krishna", "dharma_steward"],
+                    "declared_budget": 4,
+                    "evaluations_used": 3,
+                },
+            },
+            "staged_conditioning": _optimizer_governance_staged_conditioning(),
+            "layer_locality": {
+                "execution": [
+                    "multi_agent.handoff.contract",
+                    "multi_agent.review.enabled",
+                ],
+                "governance": ["security.adversarial_review"],
+            },
+            "eval_budget": 8,
+            "selection": "tournament",
+            "ranking_source": "evaluation_suite",
+            "rejections": _optimizer_governance_rejections(),
+            "nirnaya": [_optimizer_governance_nirnaya()],
+            "ledger_rounds": [
+                {
+                    "round": 1,
+                    "diagnoses_pooled": 2,
+                    "pooled_from_candidates": 2,
+                    "persisted_via": "AgentSocialMemoryOptimizer",
+                },
+                {
+                    "round": 2,
+                    "diagnoses_pooled": 3,
+                    "pooled_from_candidates": 3,
+                    "persisted_via": "AgentSocialMemoryOptimizer",
+                },
+            ],
+            "source": "agent-learning-kit",
+            "inspiration": (
+                "human society, psychology, and dharma role metadata; "
+                "candidate acceptance remains metric-based"
+            ),
+        },
+    )
+    trace = opt.build_optimizer_society_trace(
+        result,
+        name="governed-society-optimizer-trace",
+    )
+    return [{"type": "optimizer_trace", "data": trace}]
+
+
+_OPTIMIZER_GOVERNANCE_GUNA: dict[str, dict[str, float]] = {
+    # ARCH §2e archetype-default table values for each seated role.
+    "sangha": {"rajas": 0.2, "sattva": 0.9, "tamas": 0.3},
+    "vidura": {"rajas": 0.7, "sattva": 0.5, "tamas": 0.4},
+    "krishna": {"rajas": 0.3, "sattva": 0.8, "tamas": 0.4},
+    "dharma_steward": {"rajas": 0.1, "sattva": 0.5, "tamas": 0.9},
+    "smriti": {"rajas": 0.4, "sattva": 0.6, "tamas": 0.5},
+}
+_OPTIMIZER_GOVERNANCE_CHAMBERS: dict[str, str] = {
+    # Generative seats deliberate in samiti; deliberative seats in sabha —
+    # chambers are orthogonal to phases/stages (ARCH Decision 8).
+    "sangha": "sabha",
+    "vidura": "samiti",
+    "krishna": "sabha",
+    "dharma_steward": "sabha",
+    "smriti": "samiti",
+}
+_OPTIMIZER_GOVERNANCE_PATH_PREFIXES: dict[str, list[str]] = {
+    "sangha": ["multi_agent"],
+    "vidura": ["security"],
+    "krishna": ["multi_agent", "policy", "tools"],
+    "dharma_steward": [],
+    "smriti": ["memory"],
+}
+
+
+def _optimizer_governance_role_graph() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": name,
+            "proposal_kind": proposal_kind,
+            "archetype": archetype,
+            "guna": dict(_OPTIMIZER_GOVERNANCE_GUNA[name]),
+            "chamber": _OPTIMIZER_GOVERNANCE_CHAMBERS[name],
+            "path_prefixes": list(_OPTIMIZER_GOVERNANCE_PATH_PREFIXES[name]),
+        }
+        for name, proposal_kind, archetype in _OPTIMIZER_GOVERNANCE_ROLES
+    ]
+
+
+def _optimizer_governance_staged_conditioning() -> dict[str, Any]:
+    return {
+        "stages": {
+            "component_text": {"phase": 1, "paths": []},
+            "structural_config": {
+                "phase": 2,
+                "paths": [
+                    "multi_agent.handoff.contract",
+                    "multi_agent.review.enabled",
+                    "memory.shared_case_summary",
+                    "policy.reconciliation.mode",
+                    "tools.evidence_capture",
+                ],
+            },
+            "global_repolish": {
+                "phase": 3,
+                "paths": list(_OPTIMIZER_GOVERNANCE_SEARCH_PATHS),
+            },
+        },
+        "orthogonal_chambers": True,
+    }
+
+
+def _optimizer_governance_justification(
+    proposal: Mapping[str, Any],
+) -> dict[str, str]:
+    """Deterministic panca-avayava record built from data the proposal
+    already carries (scholarly design device per the Pramana
+    operationalization precedent — never a doctrinal claim)."""
+
+    patch_paths = sorted(str(path) for path in (proposal.get("patch") or {}))
+    parents = list(proposal.get("parent_ids") or [])
+    return {
+        "pratijna": (
+            f"Patching {', '.join(patch_paths) or 'no path'} improves the "
+            "governed optimizer trace."
+        ),
+        "hetu": str(proposal.get("reason") or "diagnosed failure evidence"),
+        "udaharana": (
+            "Prior candidate "
+            f"{parents[0] if parents else 'c_seed'} closed its metrics after "
+            "an in-scope patch on the same diagnosed paths."
+        ),
+        "upanaya": (
+            f"Candidate {proposal.get('candidate_id')} applies the same rule "
+            f"inside the {proposal.get('role')} role's declared path scope."
+        ),
+        "nigamana": (
+            "Expected admissible evidence delta: optimizer_trace_quality "
+            "closes at its floor with the patch applied."
+        ),
+    }
+
+
+def _optimizer_governance_rejections() -> list[dict[str, Any]]:
+    return [
+        {
+            "candidate_id": "c_duplicate_probe",
+            "round": 2,
+            "hetvabhasa_class": "savyabhichara",
+            "detail": (
+                "duplicate patch on multi_agent.review.enabled does not "
+                "discriminate candidates"
+            ),
+        },
+        {
+            "candidate_id": "c_frozen_row_break",
+            "round": 3,
+            "hetvabhasa_class": "badhita",
+            "detail": (
+                "frozen-row replay failure: row task_completion regressed "
+                "below its frozen floor (tarka)"
+            ),
+        },
+    ]
+
+
+def _optimizer_governance_nirnaya() -> dict[str, Any]:
+    return {
+        "round": 3,
+        "decision": "promote_candidate",
+        "selected_candidate_id": "c_steward",
+        "justification": {
+            "pratijna": (
+                "c_steward is the minimal governed candidate that closes "
+                "every required metric."
+            ),
+            "hetu": (
+                "All six explicit governance checks pass and no frozen row "
+                "regresses under the declared setting."
+            ),
+            "udaharana": (
+                "c_krishna closed the same metrics but carries an extra "
+                "unproven change rejected by the steward."
+            ),
+            "upanaya": (
+                "c_steward applies the same reconciliation with the unproven "
+                "change removed."
+            ),
+            "nigamana": (
+                "Promote c_steward: admissible evidence covers every "
+                "searched path at score 0.99."
+            ),
+        },
+        "rejected_alternatives": [
+            {
+                "candidate_id": "c_krishna",
+                "hetvabhasa_class": "satpratipaksha",
+            }
+        ],
+        "replay_verdict": "all_rows_closed",
+        "frozen_rows_closed": 5,
+    }
 
 
 def _optimizer_governance_proposals() -> list[dict[str, Any]]:
@@ -24309,6 +24601,7 @@ def _optimizer_governance_diagnostics() -> list[dict[str, Any]]:
         {
             "component": "multi_agent",
             "failure_mode": "coordination_failure",
+            "harness_layer": "execution",  # 4C: layer-scoped locality (§1.1)
             "evidence": (
                 "Loose handoff contract and missing review reduced "
                 "multi-agent coordination quality."
@@ -24325,6 +24618,7 @@ def _optimizer_governance_diagnostics() -> list[dict[str, Any]]:
         {
             "component": "security",
             "failure_mode": "adversarial_resilience",
+            "harness_layer": "governance",  # 4C: layer-scoped locality (§1.1)
             "evidence": "Missing red-team review reduced promotion confidence.",
             "suggested_paths": ["security.adversarial_review"],
             "suggested_metrics": ["adversarial_resilience"],

@@ -50,6 +50,21 @@ on. The committed manifest optimizes an `optimizer_trace` environment across
 layers — the candidates are governance configurations, scored on whether the
 trace they produce is complete and admissible.
 
+Phase 4 extends the audited record from "who proposed and who selected" to
+"why, in checkable form". Every proposal carries a structured five-member
+justification in its metadata — claim, reason, rule-with-example,
+application, conclusion (the panca-avayava schema, a Nyaya-Sutra syllogism
+structure used as an auditable record format; a scholarly design device,
+not a doctrinal claim). Every rejection carries one of five closed defect
+classes (`savyabhichara`, `viruddha`, `satpratipaksha`, `asiddha`,
+`badhita`), and the steward's decision is a recorded nirnaya object — one
+selected candidate per round with its justification and classed
+rejections, never an average. The trace also declares the run's contract
+properties: guna axes and two-chamber budgets, staged conditioning, layer
+locality on diagnoses, the declared evaluation budget, evaluation-suite-only
+ranking, and the pooled society ledger — twenty trace flags and twelve
+governance checks in total, all asserted by the release gate.
+
 ## 2. Run it
 
 CLI:

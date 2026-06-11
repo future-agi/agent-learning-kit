@@ -14876,6 +14876,18 @@ def _optimizer_trace_summary(
         "has_rollback",
         "has_locality",
         "has_dependency_audit",
+        # Phase 4 society/contract flags (additive — copied only when the
+        # source governance summary carries them, so legacy traces are
+        # byte-identical).
+        "has_guna_axes",
+        "has_two_chamber",
+        "has_nyaya_justifications",
+        "has_hetvabhasa_rejections",
+        "has_nirnaya",
+        "has_staged_conditioning",
+        "has_layer_locality",
+        "has_declared_budget",
+        "has_external_ranking",
     ):
         if key in governance_summary:
             summary[key] = governance_summary[key]

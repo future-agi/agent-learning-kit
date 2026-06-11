@@ -166,7 +166,9 @@ class SimulateManifestOptimizationProblem:
         optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
-        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        return _as_optimization_result(
+            self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        )
 
 
 ManifestOptimizationProblem = SimulateManifestOptimizationProblem
@@ -284,7 +286,9 @@ class SimulateEvalSuiteOptimizationProblem:
         optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
-        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        return _as_optimization_result(
+            self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        )
 
 
 EvalSuiteOptimizationProblem = SimulateEvalSuiteOptimizationProblem
@@ -414,7 +418,9 @@ class SimulateSuiteOptimizationProblem:
         optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
-        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        return _as_optimization_result(
+            self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        )
 
 
 SuiteOptimizationProblem = SimulateSuiteOptimizationProblem
@@ -882,8 +888,19 @@ def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         "society_ledger",
         "search_strategy",
         "n_trials",
+        # Phase 4 (extend-only): regression-replay backend inputs — a local
+        # AgentRegressionDataset (mapping coerced below) plus the delegated
+        # repair backend selector consumed by FutureAGIRegressionReplayOptimizer.
+        "dataset",
+        "optimizer",
     }
-    return {key: copy.deepcopy(config[key]) for key in allowed if key in config}
+    kwargs = {key: copy.deepcopy(config[key]) for key in allowed if key in config}
+    dataset = kwargs.get("dataset")
+    if isinstance(dataset, Mapping) and "cases" in dataset:
+        from ..observability import AgentRegressionDataset
+
+        kwargs["dataset"] = AgentRegressionDataset.model_validate(dict(dataset))
+    return kwargs
 
 
 def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
@@ -949,9 +966,19 @@ def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
         from ..optimizers.agent_bandit import AgentBanditOptimizer
 
         return AgentBanditOptimizer
+    if normalized in {
+        "regression_replay",
+        "futureagi_regression_replay",
+        "futureagi_replay",
+        "regression_replay_optimizer",
+    }:
+        from ..optimizers.futureagi_replay import FutureAGIRegressionReplayOptimizer
+
+        return FutureAGIRegressionReplayOptimizer
     raise ValueError(
         "optimization.optimizer.algorithm must be one of: agent, evolution, "
-        "social_memory, council, society_role_graph, tpe, bandit"
+        "social_memory, council, society_role_graph, tpe, bandit, "
+        "regression_replay"
     )
 
 
@@ -969,7 +996,38 @@ def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
         return "tpe"
     if name == "AgentBanditOptimizer":
         return "bandit"
+    if name == "FutureAGIRegressionReplayOptimizer":
+        return "regression_replay"
     return "agent"
+
+
+def _as_optimization_result(result: Any) -> OptimizationResult:
+    """Coerce backend audit records onto the OptimizationResult contract.
+
+    Phase 4 (extend-only): ``FutureAGIRegressionReplayOptimizer`` returns an
+    ``AgentFeedbackOptimizationResult`` audit record wrapping the inner
+    ``reoptimization_result``; the manifest pipeline consumes the inner
+    result with the replay audit carried in its metadata. Every existing
+    backend already returns ``OptimizationResult`` and passes through.
+    """
+
+    inner = getattr(result, "reoptimization_result", None)
+    if inner is None:
+        return result
+    metadata = dict(getattr(inner, "metadata", {}) or {})
+    metadata.setdefault(
+        "regression_replay",
+        {
+            "optimizer": getattr(result, "optimizer", None),
+            "feedback_source": getattr(result, "feedback_source", None),
+            "baseline_score": getattr(result, "baseline_score", None),
+            "final_score": getattr(result, "final_score", None),
+            "improved": getattr(result, "improved", None),
+            "feedback_case_count": len(getattr(result, "feedback_cases", []) or []),
+        },
+    )
+    inner.metadata = metadata
+    return inner
 
 
 def _evidence_scorer_config(

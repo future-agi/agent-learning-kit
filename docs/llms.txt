@@ -31,7 +31,9 @@
 
 ## Optimize
 - [Agent Control Plane: optimizing trust boundaries and autonomy](docs/optimize/agent-control-plane.md): twin=examples/sdk_agent_control_plane_optimization.py kind=agent-learning.optimization.v1
+- [Backend Routing: evidence-cited defaults, never a cage](docs/optimize/backend-routing.md): twin=examples/sdk_optimizer_profile_matrix.py kind=agent-learning.optimizer-routing-table.v1
 - [Behavior and Collaboration: optimizing how agents act together](docs/optimize/behavior-and-collaboration.md): twin=examples/sdk_multi_agent_room_probe_optimization.py kind=agent-learning.optimization.v1
+- [Capability-Profile Freezing: the frozen rows a winner must not break](docs/optimize/capability-profile-freezing.md): twin=examples/sdk_capability_freeze_regression.py kind=agent-learning.optimization.v1
 - [Eval-Suite Optimization](docs/optimize/eval-suite-optimization.md): twin=examples/sdk_evaluation_hook_probe_optimization.py kind=agent-learning.eval-optimization.v1
 - [Optimizer Governance: the steward's veto](docs/optimize/governance.md): twin=examples/sdk_optimizer_governance_optimization.py kind=agent-learning.optimization.v1
 - [Memory Targets: optimizing what the agent retains](docs/optimize/memory-targets.md): twin=examples/sdk_memory_target_optimization.py kind=agent-learning.optimization.v1
@@ -39,6 +41,7 @@
 - [The Optimization Lifecycle](docs/optimize/optimization-lifecycle.md): twin=examples/sdk_task_world_optimization.py kind=agent-learning.optimization.v1
 - [Optimize Any Agent](docs/optimize/optimize-any-agent.md): twin=examples/sdk_target_optimization.py kind=agent-learning.optimization.v1
 - [Optimizer Portfolio: choosing the optimizer with evidence](docs/optimize/optimizer-portfolio.md): twin=examples/sdk_optimizer_portfolio_optimization.py kind=agent-learning.optimization.v1
+- [Optimizer Profile Matrix: 33 declared cells, per-cell winners only](docs/optimize/optimizer-profile-matrix.md): twin=examples/sdk_optimizer_profile_matrix.py kind=agent-learning.optimization.v1
 - [Society of Agents: optimization as a sabha](docs/optimize/society-of-agents.md): twin=examples/sdk_redteam_society_optimization.py kind=agent-learning.optimization.v1
 - [Workflow Profile Matrix: one workflow target, six frameworks](docs/optimize/workflow-profile-matrix.md): twin=examples/sdk_workflow_target_profile_matrix.py kind=agent-learning.optimization.v1
 - [World-Model Optimization](docs/optimize/world-model.md): twin=examples/sdk_world_hooks_optimization.py kind=agent-learning.optimization.v1
