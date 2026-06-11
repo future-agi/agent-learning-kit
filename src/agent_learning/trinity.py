@@ -3,12 +3,15 @@ from __future__ import annotations
 import ast
 import asyncio
 import copy
+import fnmatch
 import importlib
 import importlib.util
 import json
 import os
 import re
+import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
@@ -194,6 +197,56 @@ V1_RELEASE_PROOF_REQUIRED_CHECKS = [
     "typescript_build",
     "typescript_test",
     "git_diff_check",
+]
+
+V1_SDIST_ONLY_INCLUDE = [
+    "src",
+    "tests",
+    "examples",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+]
+
+V1_SDIST_REQUIRED_PATHS = [
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "src/agent_learning/",
+    "src/fi/",
+    "tests/",
+    "examples/",
+    "docs/",
+]
+
+V1_SDIST_FORBIDDEN_PATHS = [
+    "internal-docs/",
+    "uv.lock",
+    "V1_RELEASE_ROADMAP.md",
+    "DEVELOPMENT.md",
+    "LIBRARIES.md",
+    "typescript/",
+    ".github/",
+    "dist/",
+    "artifacts/",
+    "examples/artifacts/",
+    "__pycache__",
+]
+
+V1_WHEEL_ALLOWED_TOP_LEVEL = [
+    "agent_learning",
+    "fi",
+    "*.dist-info",
 ]
 
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
@@ -6241,6 +6294,19 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "console_scripts": pyproject.get("scripts", {}),
         },
     )
+    package_distribution_hygiene = _release_package_distribution_hygiene_status(root)
+    _append_release_check(
+        checks,
+        check_id="package_distribution_hygiene",
+        passed=(
+            not package_distribution_hygiene["build_errors"]
+            and not package_distribution_hygiene["sdist_errors"]
+            and not package_distribution_hygiene["wheel_errors"]
+            and not package_distribution_hygiene["config_errors"]
+        ),
+        milestone="M7",
+        evidence=package_distribution_hygiene,
+    )
     release_handover_packaging = _release_handover_packaging_status(root)
     _append_release_check(
         checks,
@@ -6313,6 +6379,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_active_ai_evaluation_min_typescript_file_count": (
             V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
         ),
+        "required_sdist_paths": list(V1_SDIST_REQUIRED_PATHS),
+        "forbidden_sdist_paths": list(V1_SDIST_FORBIDDEN_PATHS),
+        "allowed_wheel_top_level": list(V1_WHEEL_ALLOWED_TOP_LEVEL),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -8091,6 +8160,172 @@ def _release_active_ai_evaluation_source_status(root: Path) -> dict[str, Any]:
         "import_errors": import_errors,
         "doc_phrase_hits": doc_phrase_hits,
         "doc_errors": doc_errors,
+    }
+
+
+def _sdist_member_relative_paths(sdist_path: Path) -> list[str]:
+    """File members of an sdist tarball with the `<name>-<version>/` prefix stripped."""
+    members: list[str] = []
+    with tarfile.open(sdist_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/", 1)
+            if len(parts) == 2 and parts[1]:
+                members.append(parts[1])
+    return sorted(members)
+
+
+def _wheel_member_paths(wheel_path: Path) -> list[str]:
+    with zipfile.ZipFile(wheel_path) as archive:
+        return sorted(name for name in archive.namelist() if not name.endswith("/"))
+
+
+def _distribution_member_findings(
+    sdist_members: Sequence[str],
+    wheel_members: Sequence[str],
+) -> dict[str, list[str]]:
+    def _is_forbidden(member: str) -> bool:
+        for forbidden in V1_SDIST_FORBIDDEN_PATHS:
+            if forbidden.endswith("/") and member.startswith(forbidden):
+                return True
+            if forbidden == "__pycache__" and "__pycache__" in member.split("/"):
+                return True
+            if member == forbidden:
+                return True
+        return False
+
+    def _is_satisfied(required: str) -> bool:
+        if required.endswith("/"):
+            return any(member.startswith(required) for member in sdist_members)
+        return required in sdist_members
+
+    return {
+        "sdist_forbidden_members": sorted(
+            member for member in sdist_members if _is_forbidden(member)
+        ),
+        "sdist_missing_required": sorted(
+            required
+            for required in V1_SDIST_REQUIRED_PATHS
+            if not _is_satisfied(required)
+        ),
+        "wheel_unexpected_members": sorted(
+            member
+            for member in wheel_members
+            if not any(
+                fnmatch.fnmatch(member.split("/", 1)[0], allowed)
+                for allowed in V1_WHEEL_ALLOWED_TOP_LEVEL
+            )
+        ),
+    }
+
+
+def _release_package_distribution_hygiene_status(root: Path) -> dict[str, Any]:
+    build_errors: list[dict[str, Any]] = []
+    sdist_errors: list[dict[str, Any]] = []
+    wheel_errors: list[dict[str, Any]] = []
+    config_errors: list[dict[str, Any]] = []
+
+    # Static config check — runs in every mode; pins pyproject to the constant.
+    pyproject = _read_full_pyproject(root)
+    tool = _as_mapping(pyproject.get("tool"))
+    hatch = _as_mapping(tool.get("hatch"))
+    build_cfg = _as_mapping(hatch.get("build"))
+    targets = _as_mapping(build_cfg.get("targets"))
+    sdist_cfg = _as_mapping(targets.get("sdist"))
+    only_include = [str(item) for item in _as_list(sdist_cfg.get("only-include"))]
+    if not sdist_cfg:
+        config_errors.append(
+            {
+                "field": "tool.hatch.build.targets.sdist",
+                "expected": "configured sdist allowlist",
+                "observed": None,
+            }
+        )
+    elif sorted(only_include) != sorted(V1_SDIST_ONLY_INCLUDE):
+        config_errors.append(
+            {
+                "field": "tool.hatch.build.targets.sdist.only-include",
+                "expected": sorted(V1_SDIST_ONLY_INCLUDE),
+                "observed": sorted(only_include),
+            }
+        )
+
+    build_available = importlib.util.find_spec("build") is not None
+    backend_available = importlib.util.find_spec("hatchling") is not None
+    verification_mode = "config_only"
+    notes: list[str] = []
+    sdist_filename: str | None = None
+    wheel_filename: str | None = None
+    sdist_members: list[str] = []
+    wheel_members: list[str] = []
+
+    if build_available and backend_available:
+        verification_mode = "built_distributions"
+        try:
+            import build as build_module
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                builder = build_module.ProjectBuilder(str(root))
+                sdist_path = Path(builder.build("sdist", tmp_dir))
+                wheel_path = Path(builder.build("wheel", tmp_dir))
+                sdist_filename = sdist_path.name
+                wheel_filename = wheel_path.name
+                sdist_members = _sdist_member_relative_paths(sdist_path)
+                wheel_members = _wheel_member_paths(wheel_path)
+        except Exception as exc:
+            build_errors.append({"step": "built_distributions", "error": str(exc)})
+    else:
+        # config_only — the build module is unavailable, so no build is attempted.
+        # Honest degradation, not a failure: the note is evidence, never an error
+        # entry, and member findings are never fabricated — a config_only run must
+        # NOT be treated as a leak.
+        notes.append("build_unavailable")
+
+    findings = {
+        "sdist_forbidden_members": [],
+        "sdist_missing_required": [],
+        "wheel_unexpected_members": [],
+    }
+    if verification_mode == "built_distributions" and not build_errors:
+        findings = _distribution_member_findings(sdist_members, wheel_members)
+        for member in findings["sdist_forbidden_members"]:
+            sdist_errors.append(
+                {"path": member, "expected": "absent from sdist", "observed": "present"}
+            )
+        for required in findings["sdist_missing_required"]:
+            sdist_errors.append(
+                {"path": required, "expected": "present in sdist", "observed": "missing"}
+            )
+        for member in findings["wheel_unexpected_members"]:
+            wheel_errors.append(
+                {
+                    "path": member,
+                    "expected": f"top-level in {V1_WHEEL_ALLOWED_TOP_LEVEL}",
+                    "observed": "unexpected member",
+                }
+            )
+
+    return {
+        "kind": "agent-learning.package-distribution-hygiene.v1",
+        "verification_mode": verification_mode,
+        "build_tool_available": build_available and backend_available,
+        "notes": notes,
+        "required_sdist_paths": list(V1_SDIST_REQUIRED_PATHS),
+        "forbidden_sdist_paths": list(V1_SDIST_FORBIDDEN_PATHS),
+        "allowed_wheel_top_level": list(V1_WHEEL_ALLOWED_TOP_LEVEL),
+        "sdist_only_include": only_include,
+        "sdist_filename": sdist_filename,
+        "wheel_filename": wheel_filename,
+        "sdist_member_count": len(sdist_members),
+        "wheel_member_count": len(wheel_members),
+        "sdist_forbidden_members": findings["sdist_forbidden_members"],
+        "sdist_missing_required": findings["sdist_missing_required"],
+        "wheel_unexpected_members": findings["wheel_unexpected_members"],
+        "build_errors": build_errors,
+        "sdist_errors": sdist_errors,
+        "wheel_errors": wheel_errors,
+        "config_errors": config_errors,
     }
 
 

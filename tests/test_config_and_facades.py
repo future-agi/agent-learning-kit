@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
+import io
 import json
 import os
 import sys
+import tarfile
 import tomllib
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -16958,6 +16961,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_active_ai_evaluation_min_typescript_file_count"] == (
         trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
     )
+    assert payload["required_sdist_paths"] == trinity.V1_SDIST_REQUIRED_PATHS
+    assert payload["forbidden_sdist_paths"] == trinity.V1_SDIST_FORBIDDEN_PATHS
+    assert payload["allowed_wheel_top_level"] == trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -18330,6 +18336,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "trinity_stack_probe_readiness",
         "environment_10x_robustness",
         "package_metadata",
+        "package_distribution_hygiene",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18395,6 +18402,34 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES.items()
     ):
         assert active_ai_evaluation["doc_phrase_hits"][relative_path] == phrases
+    distribution_hygiene = checks["package_distribution_hygiene"]["evidence"]
+    assert distribution_hygiene["kind"] == (
+        "agent-learning.package-distribution-hygiene.v1"
+    )
+    assert distribution_hygiene["verification_mode"] == "built_distributions"
+    assert distribution_hygiene["build_tool_available"] is True
+    assert distribution_hygiene["notes"] == []
+    assert distribution_hygiene["required_sdist_paths"] == (
+        trinity.V1_SDIST_REQUIRED_PATHS
+    )
+    assert distribution_hygiene["forbidden_sdist_paths"] == (
+        trinity.V1_SDIST_FORBIDDEN_PATHS
+    )
+    assert distribution_hygiene["allowed_wheel_top_level"] == (
+        trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
+    )
+    assert distribution_hygiene["sdist_only_include"] == (
+        trinity.V1_SDIST_ONLY_INCLUDE
+    )
+    assert distribution_hygiene["sdist_member_count"] > 0
+    assert distribution_hygiene["wheel_member_count"] > 0
+    assert distribution_hygiene["sdist_forbidden_members"] == []
+    assert distribution_hygiene["sdist_missing_required"] == []
+    assert distribution_hygiene["wheel_unexpected_members"] == []
+    assert distribution_hygiene["build_errors"] == []
+    assert distribution_hygiene["sdist_errors"] == []
+    assert distribution_hygiene["wheel_errors"] == []
+    assert distribution_hygiene["config_errors"] == []
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -29065,3 +29100,99 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
             min_level="note",
             max_findings=1,
         )
+
+
+def test_distribution_member_findings_flags_leaks_and_missing(tmp_path):
+    from agent_learning import trinity
+
+    sdist_path = tmp_path / "hygiene_fixture-0.0.1.tar.gz"
+    clean_members = [
+        "pyproject.toml",
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "src/agent_learning/__init__.py",
+        "src/fi/__init__.py",
+        "tests/test_x.py",
+        "examples/run.json",
+        # NOTE: no docs/ member -> must be reported missing
+    ]
+    leaked_members = ["internal-docs/research-leak.md", "uv.lock"]
+    with tarfile.open(sdist_path, "w:gz") as archive:
+        for relative in [*clean_members, *leaked_members]:
+            info = tarfile.TarInfo(f"hygiene_fixture-0.0.1/{relative}")
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+
+    wheel_path = tmp_path / "hygiene_fixture-0.0.1-py3-none-any.whl"
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("agent_learning/__init__.py", "")
+        archive.writestr("fi/__init__.py", "")
+        archive.writestr("hygiene_fixture-0.0.1.dist-info/METADATA", "")
+        archive.writestr("typescript/leak.ts", "")  # must be flagged
+
+    findings = trinity._distribution_member_findings(
+        trinity._sdist_member_relative_paths(sdist_path),
+        trinity._wheel_member_paths(wheel_path),
+    )
+    assert findings["sdist_forbidden_members"] == [
+        "internal-docs/research-leak.md",
+        "uv.lock",
+    ]
+    assert findings["sdist_missing_required"] == ["docs/"]
+    assert findings["wheel_unexpected_members"] == ["typescript/leak.ts"]
+
+
+def test_release_package_distribution_hygiene_status_detects_fixture_leak(tmp_path):
+    from agent_learning import trinity
+
+    only_include = [*trinity.V1_SDIST_ONLY_INCLUDE, "internal-docs"]  # the leak
+    include_toml = ",\n  ".join(f'"{item}"' for item in only_include)
+    (tmp_path / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["hatchling"]\n'
+        'build-backend = "hatchling.build"\n\n'
+        "[project]\n"
+        'name = "hygiene-fixture"\n'
+        'version = "0.0.1"\n\n'
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["src/agent_learning", "src/fi"]\n\n'
+        "[tool.hatch.build.targets.sdist]\n"
+        f"only-include = [\n  {include_toml},\n]\n",
+        encoding="utf-8",
+    )
+    for relative in [
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "src/agent_learning/__init__.py",
+        "src/fi/__init__.py",
+        "tests/test_x.py",
+        "examples/run.json",
+        "docs/index.md",
+        "internal-docs/research-leak.md",
+    ]:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x\n", encoding="utf-8")
+
+    status = trinity._release_package_distribution_hygiene_status(tmp_path)
+
+    assert status["verification_mode"] == "built_distributions"
+    assert status["build_errors"] == []
+    assert status["sdist_forbidden_members"] == ["internal-docs/research-leak.md"]
+    assert status["sdist_missing_required"] == []
+    assert status["wheel_unexpected_members"] == []
+    assert len(status["config_errors"]) == 1
+    assert status["config_errors"][0]["field"] == (
+        "tool.hatch.build.targets.sdist.only-include"
+    )
+    assert len(status["sdist_errors"]) == 1

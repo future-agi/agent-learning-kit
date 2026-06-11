@@ -21,7 +21,7 @@ keywords = [
   "future-agi",
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
@@ -88,6 +88,32 @@ Changelog = "https://github.com/future-agi/agent-learning-kit/blob/main/CHANGELO
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_learning", "src/fi"]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+  "src",
+  "tests",
+  "examples",
+  "docs",
+  "README.md",
+  "LICENSE",
+  "NOTICE",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
+  "CODE_OF_CONDUCT.md",
+]
+exclude = [
+  "examples/artifacts",
+  "**/__pycache__",
+  "**/*.pyc",
+]
+
+[dependency-groups]
+dev = [
+  "build>=1.5",
+  "hatchling>=1.25",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
