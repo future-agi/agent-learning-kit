@@ -16964,6 +16964,13 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_sdist_paths"] == trinity.V1_SDIST_REQUIRED_PATHS
     assert payload["forbidden_sdist_paths"] == trinity.V1_SDIST_FORBIDDEN_PATHS
     assert payload["allowed_wheel_top_level"] == trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
+    assert payload["required_docs_pages"] == trinity.V1_DOCS_REQUIRED_PAGES
+    assert payload["docs_allowed_artifact_kinds"] == (
+        trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS
+    )
+    assert payload["docs_claim_phrase_gates"] == (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -18337,6 +18344,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "environment_10x_robustness",
         "package_metadata",
         "package_distribution_hygiene",
+        "docs_executability",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18430,6 +18438,39 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert distribution_hygiene["sdist_errors"] == []
     assert distribution_hygiene["wheel_errors"] == []
     assert distribution_hygiene["config_errors"] == []
+    docs_exec = checks["docs_executability"]["evidence"]
+    assert docs_exec["kind"] == "agent-learning.docs-executability.v1"
+    assert docs_exec["machine_index_file"] == trinity.V1_DOCS_MACHINE_INDEX_FILE
+    assert docs_exec["required_docs_pages"] == trinity.V1_DOCS_REQUIRED_PAGES
+    assert docs_exec["docs_allowed_artifact_kinds"] == (
+        trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS
+    )
+    assert docs_exec["docs_claim_phrase_gates"] == (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES
+    )
+    assert docs_exec["page_count"] >= trinity.V1_DOCS_MIN_PAGE_COUNT
+    assert docs_exec["index_regenerated_match"] is True
+    assert docs_exec["backing_covered_by_gate"] >= 1
+    assert docs_exec["admission_source_counts"] == {
+        "covered_by_gate": docs_exec["backing_covered_by_gate"],
+        "executed_fresh": docs_exec["backing_executed_fresh"],
+    }
+    for docs_page in docs_exec["pages"]:
+        if docs_page["backing"]:
+            assert set(docs_page["admission_sources"]) <= {
+                "covered_by_gate",
+                "executed_fresh",
+            }
+    assert docs_exec["metadata_errors"] == []
+    assert docs_exec["index_errors"] == []
+    assert docs_exec["coverage_errors"] == []
+    assert docs_exec["backing_errors"] == []
+    assert docs_exec["claims_errors"] == []
+    assert docs_exec["required_page_errors"] == []
+    assert set(trinity.V1_DOCS_BACKING_COVERAGE.values()) <= set(checks)
+    assert {
+        gate for gate in trinity.V1_DOCS_CLAIM_PHRASE_GATES.values() if gate
+    } <= set(checks)
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -29196,3 +29237,147 @@ def test_release_package_distribution_hygiene_status_detects_fixture_leak(tmp_pa
         "tool.hatch.build.targets.sdist.only-include"
     )
     assert len(status["sdist_errors"]) == 1
+
+
+def _write_docs_page(path, *, track, backing, artifact_kinds, prose, claims=()):
+    frontmatter_lines = [
+        "---",
+        "kind: agent-learning.docs-page.v1",
+        f"track: {track}",
+        "objective: safety",
+        "stage: simulate",
+        "backing:" if backing else "backing: []",
+        *[f"  - {item}" for item in backing],
+        "artifact_kinds:" if artifact_kinds else "artifact_kinds: []",
+        *[f"  - {kind}" for kind in artifact_kinds],
+        "commands: []",
+        "postcondition: python -c \"print('ok')\"",
+        "claims:" if claims else "claims: []",
+        *[f"  - {{phrase: {p}, gate_id: {g}}}" for p, g in claims],
+        "doctor_checks: []",
+        "opt_in_lane: false",
+        "---",
+        "",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(frontmatter_lines) + "\n# Page\n\n" + prose + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_release_docs_executability_status_admission_and_claims(
+    tmp_path, monkeypatch
+):
+    from agent_learning import trinity
+
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "covered_module.py").write_text(
+        "def run(path):\n    return None\n", encoding="utf-8"
+    )
+    (tmp_path / "examples" / "fresh_module.py").write_text(
+        "import json, pathlib\n"
+        "def run(path):\n"
+        "    pathlib.Path(path).write_text(json.dumps({'status': 'passed'}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        trinity,
+        "V1_DOCS_BACKING_COVERAGE",
+        {
+            "examples/covered_module.py": "fake_green_gate",
+            "examples/red_module.py": "fake_red_gate",
+        },
+    )
+    fixture_checks = [
+        {"id": "fake_green_gate", "passed": True},
+        {"id": "fake_red_gate", "passed": False},
+        {"id": "environment_10x_robustness", "passed": True},
+    ]
+
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "covered.md",
+        track="redteam",
+        backing=["examples/covered_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="A plain, claim-free walkthrough.",
+    )
+    (tmp_path / "examples" / "red_module.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "gate-failed.md",
+        track="redteam",
+        backing=["examples/red_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="Covered by a gate that is red in this run.",
+    )
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "fresh.md",
+        track="redteam",
+        backing=["examples/fresh_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="Uncovered backing - executed by the fresh lane.",
+    )
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "overclaim.md",
+        track="redteam",
+        backing=["examples/covered_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="This delivers 10x robustness and is world-best.",
+    )
+
+    status = trinity._release_docs_executability_status(tmp_path, fixture_checks)
+
+    assert status["page_count"] == 4
+    by_path = {page["path"]: page for page in status["pages"]}
+    assert by_path["docs/redteam/covered.md"]["admission_sources"] == (
+        ["covered_by_gate"]
+    )
+    assert by_path["docs/redteam/fresh.md"]["admission_sources"] == (
+        ["executed_fresh"]
+    )
+    assert status["backing_executed_fresh"] == 1
+    gate_failed = [
+        entry
+        for entry in status["backing_errors"]
+        if entry["page"] == "docs/redteam/gate-failed.md"
+    ]
+    assert gate_failed and gate_failed[0]["layer"] == "engine"
+    assert "stderr_tail" not in gate_failed[0]
+    claim_phrases = {entry["phrase"].lower() for entry in status["claims_errors"]}
+    assert "10x" in claim_phrases and "world-best" in claim_phrases
+    assert len(status["required_page_errors"]) == len(
+        trinity.V1_DOCS_REQUIRED_PAGES
+    )
+    assert status["index_regenerated_match"] is False
+    assert status["metadata_errors"] == []
+
+
+NON_ARTIFACT_REGISTRY_VALUES = {
+    "agent-learning.cli.v1",
+}
+
+
+def test_docs_allowed_artifact_kinds_cover_schema_registry():
+    from agent_learning import _schema, trinity
+
+    derived = set(trinity.V1_REQUIRED_SCHEMA_KINDS)
+    derived |= {
+        value
+        for value in _schema._PUBLIC_VALUE_REPLACEMENTS.values()
+        if ".v" in value and value not in NON_ARTIFACT_REGISTRY_VALUES
+    }
+    derived.add("agent-learning.task-evidence.v1")
+    assert derived <= set(trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS)
+
+
+def test_parse_docs_frontmatter_rejects_malformed_blocks():
+    from agent_learning import trinity
+
+    assert trinity._parse_docs_frontmatter("# no frontmatter\n") is None
+    assert trinity._parse_docs_frontmatter("---\n: not yaml [\n---\n") is None
+    parsed = trinity._parse_docs_frontmatter(
+        "---\nkind: agent-learning.docs-page.v1\ntrack: redteam\n---\n# X\n"
+    )
+    assert parsed is not None and parsed["track"] == "redteam"

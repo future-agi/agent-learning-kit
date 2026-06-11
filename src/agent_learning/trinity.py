@@ -249,6 +249,163 @@ V1_WHEEL_ALLOWED_TOP_LEVEL = [
     "*.dist-info",
 ]
 
+V1_DOCS_PAGE_METADATA_KIND = "agent-learning.docs-page.v1"
+V1_DOCS_MACHINE_INDEX_FILE = "docs/llms.txt"
+V1_DOCS_MIN_PAGE_COUNT = 60
+
+V1_DOCS_TRACKS = [
+    "quickstart",
+    "eval",
+    "simulate",
+    "optimize",
+    "redteam",
+    "frameworks",
+    "prove",
+    "reference",
+]
+V1_DOCS_OBJECTIVE_AXIS = ["behavior", "capability", "reliability", "safety"]
+V1_DOCS_STAGE_AXIS = ["simulate", "evaluate", "optimize", "promote", "prove"]
+
+V1_DOCS_REQUIRED_PAGES = [
+    "docs/index.md",
+    "docs/cookbooks/index.md",
+    "docs/quickstart/golden-path-ci.md",
+    "docs/quickstart/golden-path-run.md",
+    "docs/quickstart/golden-path-redteam.md",
+    "docs/quickstart/golden-path-optimize.md",
+    "docs/eval/evaluate-any-task.md",
+    "docs/simulate/simulate-any-framework.md",
+    "docs/optimize/optimize-any-agent.md",
+    "docs/redteam/red-team-anything.md",
+    "docs/eval/judge-reliability.md",
+    "docs/redteam/stored-prompt-injection.md",
+    "docs/frameworks/openenv.md",
+    "docs/reference/artifacts.md",
+    "docs/reference/cli.md",
+    "docs/reference/configure.md",
+]
+
+# Backing object -> the executing gate whose same-run verdict admits it.
+# Populated from the spec_from_file_location sites in this module; the
+# milestone test pins every value into the closed check-id set.
+V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
+    "examples/custom_framework_optimization.json": "framework_optimizer_readiness",
+    "examples/framework_certification_optimization.json": "framework_optimizer_readiness",
+    "examples/framework_import_repair_optimization.json": "framework_optimizer_readiness",
+    "examples/multi_agent_framework_handoff_optimization.json": "framework_optimizer_readiness",
+    "examples/sdk_agent_control_plane_optimization.py": "agent_control_plane_readiness",
+    "examples/sdk_agent_control_plane_simulation.py": "agent_control_plane_readiness",
+    "examples/sdk_agent_integration_optimization.py": "agent_integration_readiness",
+    "examples/sdk_agent_integration_simulation.py": "agent_integration_readiness",
+    "examples/sdk_browser_cua_probe_optimization.py": "browser_cua_probe_readiness",
+    "examples/sdk_evaluation_hook_optimization.py": "evaluation_hook_readiness",
+    "examples/sdk_evaluation_hook_probe_optimization.py": "evaluation_hook_probe_readiness",
+    "examples/sdk_external_http_agent_optimization.py": "external_agent_adapter_readiness",
+    "examples/sdk_framework_adapter_a2a_protocol_trace.py": "protocol_adapter_readiness",
+    "examples/sdk_framework_adapter_agent_control_plane.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_auto_discovery_optimization.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_auto_discovery_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_browser_cua_trace.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_discovery.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_handoff_transcript.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_http_transport.py": "framework_http_transport_readiness",
+    "examples/sdk_framework_adapter_keyword_inputs.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_langchain_invoke_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_lifecycle_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_framework_adapter_livekit_run_session_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_matrix_optimization.py": "framework_adapter_matrix_optimization_readiness",
+    "examples/sdk_framework_adapter_mcp_tool_session.py": "protocol_adapter_readiness",
+    "examples/sdk_framework_adapter_memory_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_framework_adapter_message_history.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_nested_method.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_nested_method_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_one_call_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_one_call_run.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_openenv_trace.py": "framework_environment_replay_adapter_readiness",
+    "examples/sdk_framework_adapter_orchestration_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_framework_adapter_pipecat_process_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_probe.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_probe_optimization.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_probe_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_provider_response.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_side_kwargs.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_streaming.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_target_optimization.py": "framework_adapter_target_optimizer_readiness",
+    "examples/sdk_framework_adapter_trace_export.py": "framework_trace_export_readiness",
+    "examples/sdk_framework_adapter_typed_output.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_websocket_transport.py": "framework_websocket_transport_readiness",
+    "examples/sdk_framework_adapter_workflow_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_memory_layer_probe_optimization.py": "memory_layer_probe_readiness",
+    "examples/sdk_memory_target_optimization.py": "memory_target_optimizer_readiness",
+    "examples/sdk_multi_agent_room_probe_optimization.py": "multi_agent_room_probe_readiness",
+    "examples/sdk_multi_agent_target_optimization.py": "multi_agent_target_optimizer_readiness",
+    "examples/sdk_multi_framework_simulation.py": "multi_framework_runtime_readiness",
+    "examples/sdk_openenv_environment_optimization.py": "environment_replay_optimizer_readiness",
+    "examples/sdk_optimizer_governance_optimization.py": "optimizer_governance_readiness",
+    "examples/sdk_optimizer_portfolio_optimization.py": "optimizer_portfolio_readiness",
+    "examples/sdk_orchestration_stack_probe_optimization.py": "orchestration_stack_probe_readiness",
+    "examples/sdk_orchestration_target_optimization.py": "orchestration_target_optimizer_readiness",
+    "examples/sdk_realtime_stack_probe_optimization.py": "realtime_stack_probe_readiness",
+    "examples/sdk_redteam_adaptive_loop_optimization.py": "redteam_attack_evolution_readiness",
+    "examples/sdk_redteam_attack_evolution_optimization.py": "redteam_attack_evolution_readiness",
+    "examples/sdk_redteam_causal_attribution_optimization.py": "redteam_society_causal_readiness",
+    "examples/sdk_redteam_readiness_certification_optimization.py": "redteam_readiness_certification",
+    "examples/sdk_redteam_society_optimization.py": "redteam_society_causal_readiness",
+    "examples/sdk_regression_artifact_suite.py": "regression_artifact_readiness",
+    "examples/sdk_retrieval_hook_optimization.py": "retrieval_hook_readiness",
+    "examples/sdk_target_optimization.py": "generic_target_optimizer_readiness",
+    "examples/sdk_task_evaluation.py": "task_artifact_evaluation_readiness",
+    "examples/sdk_task_evaluation_synthesis.py": "task_evaluation_synthesis_readiness",
+    "examples/sdk_task_world_optimization.py": "task_world_optimizer_readiness",
+    "examples/sdk_trinity_stack_probe_optimization.py": "trinity_stack_probe_readiness",
+    "examples/sdk_workflow_hook_optimization.py": "workflow_hook_readiness",
+    "examples/sdk_workflow_target_optimization.py": "workflow_target_optimizer_readiness",
+    "examples/sdk_workflow_target_profile_matrix.py": "workflow_target_profile_matrix_readiness",
+    "examples/sdk_workspace_import_certification_optimization.py": "workspace_import_certification_readiness",
+    "examples/sdk_world_hooks_optimization.py": "world_hooks_readiness",
+    "examples/social_memory_framework_optimization.json": "framework_optimizer_readiness",
+    "examples/world_framework_memory_optimization.json": "framework_optimizer_readiness",
+}
+
+# Closed kind universe a docs page may claim to emit. Derivation rule asserted
+# by tests: V1_REQUIRED_SCHEMA_KINDS plus the ".v"-suffixed public registry
+# values minus named non-artifact labels, plus the eval-task evidence kind.
+V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
+    "agent-learning.run.v1",
+    "agent-learning.eval.v1",
+    "agent-learning.artifact-evaluation.v1",
+    "agent-learning.task-evidence.v1",
+    "agent-learning.redteam.v1",
+    "agent-learning.optimization.v1",
+    "agent-learning.eval-optimization.v1",
+    "agent-learning.suite.v1",
+    "agent-learning.suite-optimization.v1",
+    "agent-learning.actions.v1",
+    "agent-learning.action-run.v1",
+    "agent-learning.release-proof.v1",
+    "agent-learning.baseline.v1",
+    "agent-learning.compare.v1",
+    "agent-learning.init.v1",
+    "agent-learning.regression-promotion.v1",
+    "agent-learning.attack-evolution-shrink.v1",
+    "agent-learning.replay.v1",
+    "agent-learning.report.v1",
+    "agent-learning.doctor.v1",
+    "agent-learning.release-check.v1",
+]
+
+# Claims-lint vocabulary and license table: trigger pattern -> the only gate id
+# that may license it; None = unlicensable (any prose hit fails).
+V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
+    r"\b10x\b": "environment_10x_robustness",
+    r"\bguarantee[sd]?\b": "docs_executability",
+    r"\bworld[- ]best\b": None,
+    r"\bbest[- ]in[- ]class\b": None,
+    r"\b\d+(?:\.\d+)?x\s+(?:faster|better|more\s+robust)\b": None,
+    r"\bonly\s+(?:tool|kit|sdk|framework)\b": None,
+}
+
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
     "README.md",
     "V1_RELEASE_ROADMAP.md",
@@ -6319,6 +6476,26 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M7",
         evidence=release_handover_packaging,
     )
+    # Registered last by design: the docs gate admits backing objects against
+    # the accumulated same-run check verdicts above.
+    docs_executability = _release_docs_executability_status(root, checks)
+    _append_release_check(
+        checks,
+        check_id="docs_executability",
+        passed=not any(
+            docs_executability[key]
+            for key in (
+                "metadata_errors",
+                "index_errors",
+                "coverage_errors",
+                "backing_errors",
+                "claims_errors",
+                "required_page_errors",
+            )
+        ),
+        milestone="M7",
+        evidence=docs_executability,
+    )
 
     milestones = _release_milestones(checks)
     findings = [
@@ -6382,6 +6559,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_sdist_paths": list(V1_SDIST_REQUIRED_PATHS),
         "forbidden_sdist_paths": list(V1_SDIST_FORBIDDEN_PATHS),
         "allowed_wheel_top_level": list(V1_WHEEL_ALLOWED_TOP_LEVEL),
+        "required_docs_pages": list(V1_DOCS_REQUIRED_PAGES),
+        "docs_allowed_artifact_kinds": list(V1_DOCS_ALLOWED_ARTIFACT_KINDS),
+        "docs_claim_phrase_gates": dict(V1_DOCS_CLAIM_PHRASE_GATES),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -8326,6 +8506,393 @@ def _release_package_distribution_hygiene_status(root: Path) -> dict[str, Any]:
         "sdist_errors": sdist_errors,
         "wheel_errors": wheel_errors,
         "config_errors": config_errors,
+    }
+
+
+def _docs_page_paths(root: Path) -> list[Path]:
+    docs_root = root / "docs"
+    if not docs_root.is_dir():
+        return []
+    return sorted(
+        path
+        for path in docs_root.rglob("*.md")
+        if "assets" not in path.relative_to(docs_root).parts
+    )
+
+
+def _parse_docs_frontmatter(text: str) -> dict[str, Any] | None:
+    """Parse the leading YAML frontmatter block; None on any malformation."""
+
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return None
+    import yaml
+
+    try:
+        payload = yaml.safe_load(text[4:end])
+    except yaml.YAMLError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _docs_page_title(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return "(untitled)"
+
+
+def _render_docs_machine_index(pages: Sequence[Mapping[str, Any]]) -> str:
+    """Deterministic llms.txt content from parsed page records.
+
+    Grammar per page line:
+    `- [<title>](<repo-relative path>): twin=<first backing | none> kind=<first kind | none>`
+    Sorted by V1_DOCS_TRACKS order then path; no timestamps. Shared by the
+    docs gate (byte-compare) and scripts/generate_docs_index.py (file write).
+    """
+
+    lines = [
+        "# Agent Learning Kit — docs index",
+        "",
+        "> Every page below is backed by an executable twin in `examples/` and admitted",
+        "> by the `docs_executability` release gate. Page metadata is the YAML",
+        "> frontmatter at the top of each file — the frontmatter IS the manifest twin.",
+    ]
+    track_order = {track: index for index, track in enumerate(V1_DOCS_TRACKS)}
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for page in pages:
+        grouped.setdefault(str(page.get("track")), []).append(page)
+    for track in sorted(grouped, key=lambda item: track_order.get(item, len(track_order))):
+        lines.append("")
+        lines.append(f"## {track.capitalize()}")
+        for page in sorted(grouped[track], key=lambda item: str(item.get("path"))):
+            backing = [str(item) for item in page.get("backing", [])]
+            kinds = [str(item) for item in page.get("artifact_kinds", [])]
+            twin = backing[0] if backing else "none"
+            kind = kinds[0] if kinds else "none"
+            title = str(page.get("title") or "(untitled)")
+            lines.append(
+                f"- [{title}]({page.get('path')}): twin={twin} kind={kind}"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _execute_docs_backing_fresh(
+    root: Path, page: str, backing_path: str
+) -> dict[str, Any] | None:
+    """Fresh lane: exec-load an uncovered examples/*.py and run it in a tempdir.
+
+    Identical mechanism to the executing-gate sites in this module
+    (spec_from_file_location + exec_module + module.run, env save/restore,
+    no subprocess). Returns None on success, else a backing_errors entry
+    {page, step, layer, error, stderr_tail}.
+    """
+
+    import contextlib
+    import io as io_module
+
+    previous_environ = dict(os.environ)
+    stderr_buffer = io_module.StringIO()
+    try:
+        example_path = root / backing_path
+        spec = importlib.util.spec_from_file_location(
+            "agent_learning_docs_fresh_" + re.sub(r"\W", "_", backing_path),
+            example_path,
+        )
+        if spec is None or spec.loader is None:
+            return {
+                "page": page,
+                "step": backing_path,
+                "layer": "env",
+                "error": f"unable to load {backing_path}",
+                "stderr_tail": "",
+            }
+        module = importlib.util.module_from_spec(spec)
+        with contextlib.redirect_stderr(stderr_buffer):
+            spec.loader.exec_module(module)
+            runner = getattr(module, "run", None)
+            if not callable(runner):
+                return {
+                    "page": page,
+                    "step": backing_path,
+                    "layer": "manifest",
+                    "error": f"{backing_path} has no callable run(path)",
+                    "stderr_tail": stderr_buffer.getvalue()[-2000:],
+                }
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-docs-fresh-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "docs-fresh-output.json"
+                runner(output_path)
+                if not output_path.is_file():
+                    return {
+                        "page": page,
+                        "step": backing_path,
+                        "layer": "engine",
+                        "error": "run(path) wrote no artifact",
+                        "stderr_tail": stderr_buffer.getvalue()[-2000:],
+                    }
+    except Exception as exc:
+        missing_key = isinstance(exc, KeyError) or "API_KEY" in str(exc).upper()
+        return {
+            "page": page,
+            "step": backing_path,
+            "layer": "keys" if missing_key else "engine",
+            "error": f"{type(exc).__name__}: {exc}",
+            "stderr_tail": stderr_buffer.getvalue()[-2000:],
+        }
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_environ)
+    return None
+
+
+def _release_docs_executability_status(
+    root: Path, checks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    metadata_errors: list[dict[str, Any]] = []
+    index_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    backing_errors: list[dict[str, Any]] = []
+    claims_errors: list[dict[str, Any]] = []
+    required_page_errors: list[dict[str, Any]] = []
+
+    check_passed = {check["id"]: bool(check.get("passed")) for check in checks}
+    pages: list[dict[str, Any]] = []
+    page_paths = _docs_page_paths(root)
+    discovered = {
+        str(path.relative_to(root)).replace(os.sep, "/") for path in page_paths
+    }
+    covered_count = 0
+    fresh_count = 0
+
+    for required in V1_DOCS_REQUIRED_PAGES:
+        if required not in discovered:
+            required_page_errors.append(
+                {"path": required, "expected": "present", "observed": "missing"}
+            )
+
+    backing_optional = set(V1_DOCS_REQUIRED_PAGES[:2]) | {
+        page
+        for page in V1_DOCS_REQUIRED_PAGES
+        if page.startswith(("docs/reference/", "docs/quickstart/"))
+    }
+
+    for path in page_paths:
+        relative = str(path.relative_to(root)).replace(os.sep, "/")
+        text = path.read_text(encoding="utf-8")
+        metadata = _parse_docs_frontmatter(text)
+        if metadata is None or metadata.get("kind") != V1_DOCS_PAGE_METADATA_KIND:
+            metadata_errors.append(
+                {
+                    "path": relative,
+                    "expected": V1_DOCS_PAGE_METADATA_KIND,
+                    "observed": "missing or invalid frontmatter",
+                }
+            )
+            continue
+        track = metadata.get("track")
+        if track not in V1_DOCS_TRACKS:
+            metadata_errors.append(
+                {
+                    "path": relative,
+                    "field": "track",
+                    "expected": V1_DOCS_TRACKS,
+                    "observed": track,
+                }
+            )
+        backing = [str(item) for item in _as_list(metadata.get("backing"))]
+        executable = bool(backing)
+        if executable:
+            if metadata.get("objective") not in V1_DOCS_OBJECTIVE_AXIS:
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "objective",
+                        "expected": V1_DOCS_OBJECTIVE_AXIS,
+                        "observed": metadata.get("objective"),
+                    }
+                )
+            if metadata.get("stage") not in V1_DOCS_STAGE_AXIS:
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "stage",
+                        "expected": V1_DOCS_STAGE_AXIS,
+                        "observed": metadata.get("stage"),
+                    }
+                )
+        elif relative not in backing_optional:
+            metadata_errors.append(
+                {
+                    "path": relative,
+                    "expected": "at least one backing object",
+                    "observed": [],
+                }
+            )
+
+        artifact_kinds = [str(k) for k in _as_list(metadata.get("artifact_kinds"))]
+        for kind in artifact_kinds:
+            if kind not in V1_DOCS_ALLOWED_ARTIFACT_KINDS:
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "artifact_kinds",
+                        "expected": "member of allowed artifact kinds",
+                        "observed": kind,
+                    }
+                )
+
+        admission_sources: list[str] = []
+        for backing_path in backing:
+            if not (root / backing_path).is_file():
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "backing",
+                        "expected": "exists",
+                        "observed": backing_path,
+                    }
+                )
+                continue
+            covering_gate = V1_DOCS_BACKING_COVERAGE.get(backing_path)
+            if covering_gate is not None:
+                if covering_gate not in check_passed:
+                    coverage_errors.append(
+                        {
+                            "path": relative,
+                            "backing": backing_path,
+                            "expected": (
+                                f"covering gate {covering_gate} in same-run checks"
+                            ),
+                            "observed": "absent",
+                        }
+                    )
+                elif not check_passed[covering_gate]:
+                    backing_errors.append(
+                        {
+                            "page": relative,
+                            "step": backing_path,
+                            "layer": "engine",
+                            "error": (
+                                f"covering gate {covering_gate} failed in this run"
+                            ),
+                        }
+                    )
+                else:
+                    covered_count += 1
+                    admission_sources.append("covered_by_gate")
+            elif backing_path.endswith(".py"):
+                failure = _execute_docs_backing_fresh(root, relative, backing_path)
+                if failure is not None:
+                    backing_errors.append(failure)
+                else:
+                    fresh_count += 1
+                    admission_sources.append("executed_fresh")
+            else:
+                coverage_errors.append(
+                    {
+                        "path": relative,
+                        "backing": backing_path,
+                        "expected": (
+                            "V1_DOCS_BACKING_COVERAGE entry (fresh lane is .py-only)"
+                        ),
+                        "observed": "uncovered non-Python backing",
+                    }
+                )
+
+        prose = text[text.find("\n---\n", 4) + len("\n---\n"):]
+        declared = {
+            (str(claim.get("phrase")), str(claim.get("gate_id")))
+            for claim in _as_list(metadata.get("claims"))
+            if isinstance(claim, Mapping)
+        }
+        for pattern, licensed_gate in V1_DOCS_CLAIM_PHRASE_GATES.items():
+            for match in re.finditer(pattern, prose, re.IGNORECASE):
+                phrase = match.group(0)
+                green = (
+                    licensed_gate is not None
+                    and (phrase, licensed_gate) in declared
+                    and check_passed.get(licensed_gate) is True
+                )
+                if not green:
+                    claims_errors.append(
+                        {
+                            "path": relative,
+                            "phrase": phrase,
+                            "pattern": pattern,
+                            "expected": (
+                                "declared claim licensed by green gate "
+                                f"{licensed_gate or '(unlicensable)'}"
+                            ),
+                            "observed": sorted(
+                                f"{p}->{g}" for p, g in declared
+                            ),
+                        }
+                    )
+        pages.append(
+            {
+                "path": relative,
+                "title": _docs_page_title(text),
+                "track": track,
+                "backing": backing,
+                "artifact_kinds": artifact_kinds,
+                "admission_sources": admission_sources,
+            }
+        )
+
+    rendered = _render_docs_machine_index(pages)
+    index_path = root / V1_DOCS_MACHINE_INDEX_FILE
+    committed = (
+        index_path.read_text(encoding="utf-8") if index_path.is_file() else None
+    )
+    index_regenerated_match = committed == rendered
+    if not index_regenerated_match:
+        index_errors.append(
+            {
+                "path": V1_DOCS_MACHINE_INDEX_FILE,
+                "expected": "byte-identical to in-memory regeneration",
+                "observed": (
+                    "missing"
+                    if committed is None
+                    else "stale — rerun scripts/generate_docs_index.py"
+                ),
+            }
+        )
+
+    if len(pages) < V1_DOCS_MIN_PAGE_COUNT:
+        coverage_errors.append(
+            {
+                "path": "docs/",
+                "expected": f">= {V1_DOCS_MIN_PAGE_COUNT} pages",
+                "observed": len(pages),
+            }
+        )
+
+    return {
+        "kind": "agent-learning.docs-executability.v1",
+        "machine_index_file": V1_DOCS_MACHINE_INDEX_FILE,
+        "required_docs_pages": list(V1_DOCS_REQUIRED_PAGES),
+        "docs_allowed_artifact_kinds": list(V1_DOCS_ALLOWED_ARTIFACT_KINDS),
+        "docs_claim_phrase_gates": dict(V1_DOCS_CLAIM_PHRASE_GATES),
+        "page_count": len(pages),
+        "backing_covered_by_gate": covered_count,
+        "backing_executed_fresh": fresh_count,
+        "admission_source_counts": {
+            "covered_by_gate": covered_count,
+            "executed_fresh": fresh_count,
+        },
+        "index_regenerated_match": index_regenerated_match,
+        "pages": pages,
+        "metadata_errors": metadata_errors,
+        "index_errors": index_errors,
+        "coverage_errors": coverage_errors,
+        "backing_errors": backing_errors,
+        "claims_errors": claims_errors,
+        "required_page_errors": required_page_errors,
     }
 
 
