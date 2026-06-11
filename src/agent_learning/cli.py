@@ -182,9 +182,9 @@ def _init(args: Sequence[str]) -> int:
         return _vendored_import_failed("agent-learn init", exc)
 
     target_dir = Path(parsed.directory).expanduser().resolve()
-    required_env = [str(value) for value in _as_list(parsed.required_env)] or [
-        "AGENT_LEARNING_API_KEY"
-    ]
+    # Golden paths run offline by default: no env requirement unless the user
+    # opts in via --required-env (keys are CI metadata, not a local gate).
+    required_env = [str(value) for value in _as_list(parsed.required_env)]
     started = time.time()
     try:
         payload = cli._init_scaffold_result(
@@ -2558,6 +2558,53 @@ def _agent_learning_init_next_commands(
     required_env: Sequence[str] = (),
 ) -> List[str]:
     preset = str(preset or "").lower().replace("_", "-")
+    if preset == "run":
+        return [
+            _agent_learning_shell_command(
+                "agent-learn",
+                "run",
+                target_dir / "manifests" / "run.json",
+                "--output",
+                target_dir / "artifacts" / "run.json",
+            )
+        ]
+    if preset == "redteam":
+        return [
+            _agent_learning_shell_command(
+                "agent-learn",
+                "redteam",
+                target_dir / "manifests" / "redteam.json",
+                "--output",
+                target_dir / "artifacts" / "redteam.json",
+            )
+        ]
+    if preset == "ci":
+        # Spine order: run and red-team first, replay last — replaying freshly
+        # scaffolded manifests before any baseline exists teaches the wrong
+        # order (the vendored default lists replay alone).
+        return [
+            _agent_learning_shell_command(
+                "agent-learn",
+                "run",
+                target_dir / "manifests" / "run.json",
+                "--output",
+                target_dir / "artifacts" / "run.json",
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "redteam",
+                target_dir / "manifests" / "redteam.json",
+                "--output",
+                target_dir / "artifacts" / "redteam.json",
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "replay",
+                target_dir / "manifests",
+                "--output",
+                target_dir / "artifacts" / "replay.json",
+            ),
+        ]
     if preset == "all":
         suite_path = target_dir / "manifests" / "suite.json"
         output_path = target_dir / "artifacts" / "suite.json"
@@ -2951,18 +2998,59 @@ def _rewrite_init_readme_for_agent_learning(
             if str(preset or "").lower().replace("_", "-") == "optimize"
             else "Agent Learning Entrypoint"
         )
-        command_lines = "\n".join(f"- `{command}`" for command in commands)
+        command_lines = []
+        for command in commands:
+            command_lines.append(f"- `{command}`")
+            postcondition = _agent_learning_command_postcondition(command)
+            if postcondition:
+                command_lines.append(f"  - Check: `{postcondition}`")
         content = (
             content.rstrip()
             + "\n\n"
             + f"## {section_title}\n\n"
-            + command_lines
+            + "\n".join(command_lines)
             + "\n\n"
             + "The lifecycle produces JSON, JUnit, SARIF, Markdown, promotion, "
             + "and replay artifacts so CLI users, SDK tests, CI, and Future AGI "
             + "UI cards can inspect the same evidence.\n"
+            + "\n"
+            + "## When It Fails\n\n"
+            + "| Symptom | Doctor check |\n"
+            + "| --- | --- |\n"
+            + "| vendored import failed | `agent-learn doctor` -> "
+            + "`summary.missing_engine_modules` |\n"
+            + "| key-related errors | `agent-learn doctor` -> "
+            + "`summary.api_key_configured` |\n"
         )
     readme.write_text(content, encoding="utf-8")
+
+
+_AGENT_LEARNING_COMMAND_ARTIFACT_KINDS = {
+    "run": "agent-learning.run.v1",
+    "redteam": "agent-learning.redteam.v1",
+    "replay": "agent-learning.replay.v1",
+    "optimize": "agent-learning.optimization.v1",
+    "suite": "agent-learning.suite.v1",
+    "report": "agent-learning.report.v1",
+    "promote-to-regression": "agent-learning.regression-promotion.v1",
+}
+
+
+def _agent_learning_command_postcondition(command: str) -> str | None:
+    """Machine-checkable postcondition for a scaffolded next-command."""
+
+    parts = command.split()
+    if len(parts) < 2 or parts[0] != "agent-learn":
+        return None
+    kind = _AGENT_LEARNING_COMMAND_ARTIFACT_KINDS.get(parts[1])
+    if kind is None or "--output" not in parts:
+        return None
+    output_path = parts[parts.index("--output") + 1]
+    return (
+        "python -c \"import json; "
+        f"payload=json.load(open('{output_path}')); "
+        f"assert payload['kind']=='{kind}', payload['kind']; print('ok')\""
+    )
 
 
 def _agent_learning_command(command: str) -> str:
