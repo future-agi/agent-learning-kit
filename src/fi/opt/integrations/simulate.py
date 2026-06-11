@@ -872,6 +872,16 @@ def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         "layer_path_bias",
         "mutation_library",
         "max_library_candidates",
+        # Phase 4 (extend-only): declared budgets, Elo selection knobs,
+        # two-chamber budgets, society ledger, strategy declaration, TPE trials.
+        "eval_budget",
+        "elo_k_factor",
+        "elo_initial_rating",
+        "samiti_budget",
+        "sabha_budget",
+        "society_ledger",
+        "search_strategy",
+        "n_trials",
     }
     return {key: copy.deepcopy(config[key]) for key in allowed if key in config}
 
@@ -916,9 +926,32 @@ def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
         "multi_interaction_social_memory",
     }:
         return AgentSocialMemoryOptimizer
+    # Phase 4 (extend-only): additional target-contract backends for the
+    # optimizer profile matrix; legacy tokens above are untouched.
+    if normalized in {"council", "council_agent", "council_agent_optimizer"}:
+        from ..optimizers.council import CouncilAgentOptimizer
+
+        return CouncilAgentOptimizer
+    if normalized in {
+        "society_agent",
+        "society_agent_optimizer",
+        "role_graph_society",
+        "society_role_graph",
+    }:
+        from ..optimizers.council import SocietyAgentOptimizer
+
+        return SocietyAgentOptimizer
+    if normalized in {"tpe", "agent_tpe", "agent_tpe_optimizer"}:
+        from ..optimizers.agent_tpe import AgentTPEOptimizer
+
+        return AgentTPEOptimizer
+    if normalized in {"bandit", "agent_bandit", "agent_bandit_optimizer", "ucb"}:
+        from ..optimizers.agent_bandit import AgentBanditOptimizer
+
+        return AgentBanditOptimizer
     raise ValueError(
         "optimization.optimizer.algorithm must be one of: agent, evolution, "
-        "social_memory"
+        "social_memory, council, society_role_graph, tpe, bandit"
     )
 
 
@@ -927,6 +960,15 @@ def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
         return "evolution"
     if optimizer_cls is AgentSocialMemoryOptimizer:
         return "social_memory"
+    name = getattr(optimizer_cls, "__name__", "")
+    if name == "CouncilAgentOptimizer":
+        return "council"
+    if name == "SocietyAgentOptimizer":
+        return "society_role_graph"
+    if name == "AgentTPEOptimizer":
+        return "tpe"
+    if name == "AgentBanditOptimizer":
+        return "bandit"
     return "agent"
 
 

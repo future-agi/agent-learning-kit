@@ -73,6 +73,10 @@ class AgentEvolutionOptimizer(BaseOptimizer):
         crossover_rate: float = 0.75,
         max_mutations_per_candidate: int = 2,
         tournament_size: int = 3,
+        selection: str = "tournament",        # "tournament" (legacy) | "elo" — explicit opt-in
+        eval_budget: Optional[int] = None,    # declared budget; None = unbounded (legacy)
+        elo_k_factor: float = 32.0,
+        elo_initial_rating: float = 1500.0,   # ARCH Decision 6
         seed: int = 42,
         include_seed: bool = True,
         auto_diagnose: bool = True,
@@ -93,6 +97,12 @@ class AgentEvolutionOptimizer(BaseOptimizer):
             max_mutations_per_candidate=max_mutations_per_candidate,
             tournament_size=tournament_size,
         )
+        _validate_selection_params(
+            selection=selection,
+            eval_budget=eval_budget,
+            elo_k_factor=elo_k_factor,
+            elo_initial_rating=elo_initial_rating,
+        )
         self.target = target
         self.evaluate_candidate = evaluate_candidate
         self.simulation_evaluator = simulation_evaluator
@@ -104,6 +114,10 @@ class AgentEvolutionOptimizer(BaseOptimizer):
         self.crossover_rate = crossover_rate
         self.max_mutations_per_candidate = max_mutations_per_candidate
         self.tournament_size = tournament_size
+        self.selection = selection
+        self.eval_budget = eval_budget
+        self.elo_k_factor = elo_k_factor
+        self.elo_initial_rating = elo_initial_rating
         self.seed = seed
         self.include_seed = include_seed
         self.auto_diagnose = auto_diagnose
@@ -134,6 +148,10 @@ class AgentEvolutionOptimizer(BaseOptimizer):
         crossover_rate: Optional[float] = None,
         max_mutations_per_candidate: Optional[int] = None,
         tournament_size: Optional[int] = None,
+        selection: Optional[str] = None,
+        eval_budget: Optional[int] = None,
+        elo_k_factor: Optional[float] = None,
+        elo_initial_rating: Optional[float] = None,
         seed: Optional[int] = None,
         include_seed: Optional[bool] = None,
         auto_diagnose: Optional[bool] = None,
@@ -178,6 +196,16 @@ class AgentEvolutionOptimizer(BaseOptimizer):
         active_tournament_size = (
             self.tournament_size if tournament_size is None else tournament_size
         )
+        active_selection = self.selection if selection is None else selection
+        active_eval_budget = self.eval_budget if eval_budget is None else eval_budget
+        active_elo_k_factor = (
+            self.elo_k_factor if elo_k_factor is None else elo_k_factor
+        )
+        active_elo_initial_rating = (
+            self.elo_initial_rating
+            if elo_initial_rating is None
+            else elo_initial_rating
+        )
         active_seed = self.seed if seed is None else seed
         use_include_seed = self.include_seed if include_seed is None else include_seed
         use_auto_diagnose = self.auto_diagnose if auto_diagnose is None else auto_diagnose
@@ -208,6 +236,12 @@ class AgentEvolutionOptimizer(BaseOptimizer):
             crossover_rate=active_crossover_rate,
             max_mutations_per_candidate=active_max_mutations,
             tournament_size=active_tournament_size,
+        )
+        _validate_selection_params(
+            selection=active_selection,
+            eval_budget=active_eval_budget,
+            elo_k_factor=active_elo_k_factor,
+            elo_initial_rating=active_elo_initial_rating,
         )
         if active_max_library_candidates < 0:
             raise ValueError("max_library_candidates must be non-negative.")
@@ -278,9 +312,17 @@ class AgentEvolutionOptimizer(BaseOptimizer):
         )
 
         best: Optional[CandidateEvaluation] = None
+        budget_exhausted = False
         for generation in range(active_generations + 1):
             generation_evaluations: List[CandidateEvaluation] = []
             for candidate in population:
+                if (
+                    active_eval_budget is not None
+                    and candidate.id not in evaluated
+                    and len(evaluated) >= active_eval_budget
+                ):
+                    budget_exhausted = True
+                    break
                 evaluation = self._evaluate(
                     candidate,
                     active_evaluator,
@@ -293,27 +335,46 @@ class AgentEvolutionOptimizer(BaseOptimizer):
                 if best is None or evaluation.score > best.score:
                     best = evaluation
 
-            generation_evaluations = sorted(
-                generation_evaluations,
-                key=lambda item: (
-                    item.score,
-                    -len(item.candidate.patch),
-                    item.candidate.id,
-                ),
-                reverse=True,
-            )
-            generation_summaries.append(
-                {
-                    "generation": generation,
-                    "population": len(population),
-                    "best_score": generation_evaluations[0].score,
-                    "best_candidate_id": generation_evaluations[0].candidate.id,
-                }
-            )
-            if active_target_score is not None and best.score >= active_target_score:
+            if generation_evaluations:
+                generation_evaluations = sorted(
+                    generation_evaluations,
+                    key=lambda item: (
+                        item.score,
+                        -len(item.candidate.patch),
+                        item.candidate.id,
+                    ),
+                    reverse=True,
+                )
+                generation_summaries.append(
+                    {
+                        "generation": generation,
+                        "population": len(population),
+                        "best_score": generation_evaluations[0].score,
+                        "best_candidate_id": generation_evaluations[0].candidate.id,
+                    }
+                )
+            if budget_exhausted:
+                break
+            if (
+                active_target_score is not None
+                and best is not None
+                and best.score >= active_target_score
+            ):
                 break
             if generation >= active_generations:
                 break
+
+            elo_rankings: Optional[List[tuple[CandidateEvaluation, float]]] = None
+            if active_selection == "elo":
+                # Deterministic round-robin Elo over already-evaluated candidates
+                # (RoboPhD discipline): selection pressure changes under a fixed
+                # budget; no extra rollouts, no LLM ranking.
+                elo_rankings = _elo_tournament_ranking(
+                    generation_evaluations,
+                    k_factor=active_elo_k_factor,
+                    initial_rating=active_elo_initial_rating,
+                    rng=random.Random(active_seed * 1000003 + generation + 1),
+                )
 
             elites = [item.candidate for item in generation_evaluations[:active_elite_count]]
             population = _next_population(
@@ -330,10 +391,24 @@ class AgentEvolutionOptimizer(BaseOptimizer):
                 rng=rng,
                 path_weights=path_weights,
                 generation=generation + 1,
+                selection=active_selection,
+                elo_rankings=elo_rankings,
             )
 
         if best is None:
             raise RuntimeError("AgentEvolutionOptimizer did not evaluate any candidates.")
+
+        final_elo_rankings: Optional[List[tuple[CandidateEvaluation, float]]] = None
+        if active_selection == "elo" and evaluated:
+            final_elo_rankings = _elo_tournament_ranking(
+                list(evaluated.values()),
+                k_factor=active_elo_k_factor,
+                initial_rating=active_elo_initial_rating,
+                rng=random.Random(active_seed * 1000003),
+            )
+            # Final-winner selection uses the Elo order instead of raw
+            # best-score order (explicit opt-in mode only).
+            best = final_elo_rankings[0][0]
 
         metadata = {
             "optimizer": "AgentEvolutionOptimizer",
@@ -348,6 +423,9 @@ class AgentEvolutionOptimizer(BaseOptimizer):
             "crossover_rate": active_crossover_rate,
             "max_mutations_per_candidate": active_max_mutations,
             "tournament_size": active_tournament_size,
+            "selection": active_selection,
+            "eval_budget": active_eval_budget,
+            "evaluations_used": len(evaluated),
             "seed": active_seed,
             "mutation_path_weights": path_weights,
             "path_weights": path_weights,
@@ -360,6 +438,13 @@ class AgentEvolutionOptimizer(BaseOptimizer):
             "generation_summaries": generation_summaries,
             "evaluated_candidates": len(evaluated),
         }
+        if final_elo_rankings is not None:
+            metadata["elo_ratings"] = {
+                evaluation.candidate.id: rating
+                for evaluation, rating in final_elo_rankings
+            }
+            metadata["elo_k_factor"] = active_elo_k_factor
+            metadata["elo_initial_rating"] = active_elo_initial_rating
         if active_diagnoses:
             metadata["diagnostics"] = [_dump_model(item) for item in active_diagnoses]
             metadata["auto_diagnosed"] = use_auto_diagnose
@@ -372,6 +457,8 @@ class AgentEvolutionOptimizer(BaseOptimizer):
             total_iterations=len(history),
             total_evaluations=len(history),
             metadata=metadata,
+            early_stopped=budget_exhausted,
+            stop_reason="eval_budget_exhausted" if budget_exhausted else None,
         )
 
     def _evaluate(
@@ -559,21 +646,31 @@ def _next_population(
     rng: random.Random,
     path_weights: Mapping[str, float],
     generation: int,
+    selection: str = "tournament",
+    elo_rankings: Optional[Sequence[tuple[CandidateEvaluation, float]]] = None,
 ) -> List[AgentCandidate]:
     population: List[AgentCandidate] = []
     seen: set[str] = set()
     for elite in elites:
         _append_candidate(population, seen, elite)
 
+    use_elo = selection == "elo" and bool(elo_rankings)
+
     attempts = 0
     while len(population) < population_size and attempts < population_size * 30:
         attempts += 1
-        parent = _tournament_select(current_evaluations, tournament_size, rng)
+        if use_elo:
+            parent = _elo_weighted_select(elo_rankings, rng)
+        else:
+            parent = _tournament_select(current_evaluations, tournament_size, rng)
         patch = dict(parent.candidate.patch)
         role = "mutant"
         parent_ids = [parent.candidate.id]
         if rng.random() < crossover_rate and len(current_evaluations) > 1:
-            other = _tournament_select(current_evaluations, tournament_size, rng)
+            if use_elo:
+                other = _elo_weighted_select(elo_rankings, rng)
+            else:
+                other = _tournament_select(current_evaluations, tournament_size, rng)
             patch = _crossover_patch(
                 patch,
                 dict(other.candidate.patch),
@@ -647,6 +744,87 @@ def _tournament_select(
             item.candidate.id,
         ),
     )
+
+
+def _validate_selection_params(
+    *,
+    selection: str,
+    eval_budget: Optional[int],
+    elo_k_factor: float,
+    elo_initial_rating: float,
+) -> None:
+    if selection not in {"tournament", "elo"}:
+        raise ValueError("selection must be 'tournament' or 'elo'.")
+    if eval_budget is not None and eval_budget < 1:
+        raise ValueError("eval_budget must be at least 1 when declared.")
+    if elo_k_factor <= 0:
+        raise ValueError("elo_k_factor must be positive.")
+    if elo_initial_rating <= 0:
+        raise ValueError("elo_initial_rating must be positive.")
+
+
+def _elo_tournament_ranking(
+    evaluations: Sequence[CandidateEvaluation],
+    *,
+    k_factor: float,
+    initial_rating: float,
+    rng: random.Random,
+) -> List[tuple[CandidateEvaluation, float]]:
+    """Deterministic round-robin Elo over already-evaluated candidates.
+
+    Pairings are seeded-shuffled once; each pair plays one 'match' decided by
+    the existing scalar scores (win/draw/loss); ratings update with fixed K.
+    Returns (evaluation, rating) sorted by rating desc, candidate.id asc.
+    The ranking consumes scores the eval suite already produced — it changes
+    selection pressure under a fixed budget, it never adds rollouts and never
+    asks any LLM to rank (external-verification rule).
+    """
+
+    unique: dict[str, CandidateEvaluation] = {}
+    for evaluation in evaluations:
+        unique.setdefault(evaluation.candidate.id, evaluation)
+    entries = sorted(unique.values(), key=lambda item: item.candidate.id)
+    ratings = {entry.candidate.id: float(initial_rating) for entry in entries}
+    pairs = [
+        (left_index, right_index)
+        for left_index in range(len(entries))
+        for right_index in range(left_index + 1, len(entries))
+    ]
+    rng.shuffle(pairs)
+    for left_index, right_index in pairs:
+        left = entries[left_index]
+        right = entries[right_index]
+        left_rating = ratings[left.candidate.id]
+        right_rating = ratings[right.candidate.id]
+        expected_left = 1.0 / (1.0 + 10 ** ((right_rating - left_rating) / 400.0))
+        if left.score > right.score:
+            actual_left = 1.0
+        elif left.score < right.score:
+            actual_left = 0.0
+        else:
+            actual_left = 0.5
+        delta = k_factor * (actual_left - expected_left)
+        ratings[left.candidate.id] = left_rating + delta
+        ratings[right.candidate.id] = right_rating - delta
+    ranked = sorted(
+        entries,
+        key=lambda item: (-ratings[item.candidate.id], item.candidate.id),
+    )
+    return [(entry, round(ratings[entry.candidate.id], 4)) for entry in ranked]
+
+
+def _elo_weighted_select(
+    rankings: Sequence[tuple[CandidateEvaluation, float]],
+    rng: random.Random,
+) -> CandidateEvaluation:
+    total = sum(max(1.0, rating) for _, rating in rankings)
+    threshold = rng.random() * total if total > 0 else 0.0
+    running = 0.0
+    for evaluation, rating in rankings:
+        running += max(1.0, rating)
+        if running >= threshold:
+            return evaluation
+    return rankings[-1][0]
 
 
 def _crossover_patch(

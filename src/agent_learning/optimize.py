@@ -126,6 +126,8 @@ _FI_OPT_EXPORT_NAMES = (
     "DEFAULT_SIMULATION_EVIDENCE_WEIGHTS",
     "FailureMode",
     "FAILURE_ROUTES",
+    "HARNESS_LAYER_PATH_PREFIXES",
+    "HARNESS_LAYERS",
     "EvalSuiteOptimizationProblem",
     "FrameworkMutationRule",
     "FutureAGIExperimentHistoryOptimizer",
@@ -145,6 +147,7 @@ _FI_OPT_EXPORT_NAMES = (
     "build_deep_read_queue",
     "build_futureagi_registry_replay_pack_manifest",
     "build_optimizer_society_trace",
+    "optimizer_trajectory_profile",
     "load_agent_report_replay_cases",
     "ManifestOptimizationProblem",
     "SuiteOptimizationProblem",
@@ -419,6 +422,8 @@ def optimize_manifest_file(
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
+    payload = with_optimizer_trajectory_profile(payload)
+    payload = with_whole_agent_apply_plan(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -458,6 +463,8 @@ def optimize_manifest(
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
+    payload = with_optimizer_trajectory_profile(payload)
+    payload = with_whole_agent_apply_plan(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -908,6 +915,1744 @@ def with_orchestration_stack_proof(payload: Mapping[str, Any]) -> dict[str, Any]
     return result
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: frozen capability profiles, trajectory profiles, whole-agent
+# contract, optimizer profile matrix, and trajectory-profiled routing.
+# ---------------------------------------------------------------------------
+
+AGENT_LEARNING_FROZEN_CAPABILITY_PROFILE_KIND = (
+    "agent-learning.frozen-capability-profile.v1"
+)
+AGENT_LEARNING_FROZEN_PROFILE_REPLAY_KIND = (
+    "agent-learning.frozen-capability-profile-replay.v1"
+)
+AGENT_LEARNING_APPLY_PLAN_KIND = "agent-learning.apply-plan.v1"
+AGENT_LEARNING_OPTIMIZER_ROUTING_TABLE_KIND = (
+    "agent-learning.optimizer-routing-table.v1"
+)
+AGENT_LEARNING_OPTIMIZER_PROFILE_MATRIX_KIND = (
+    "agent-learning.optimizer-profile-matrix.v1"
+)
+
+FROZEN_CAPABILITY_PROFILE_ATTACHMENT_KEY = "frozen_capability_profile"
+FROZEN_CAPABILITY_PROFILE_ROW_FIELDS = (
+    # ARCH §2a row schema; row_id = sha256 of the sorted-JSON of all other fields
+    "row_id",
+    "framework",
+    "capability",
+    "metric",
+    "floor",
+    "setting",
+    "security",
+    "source",
+)
+
+WHOLE_AGENT_CONTRACT_STAGES = (
+    "component_text",
+    "structural_config",
+    "global_repolish",
+)
+WHOLE_AGENT_APPLY_PLAN_FIELDS = (
+    # ARCH §2c/Decision 9 — the ONE schema all docs share.
+    "provider",
+    "agent_ref",
+    "apply_fields",
+    "read_back_checks",
+    "mismatch_policy",
+    "frozen_profile_ref",
+    "nirnaya_ref",
+)
+_WHOLE_AGENT_TEXT_PATH_TOKENS = (
+    "instruction",
+    "first_message",
+    "prompt",
+    "message",
+    "system",
+    "persona",
+    "greeting",
+    "script",
+    "content",
+    "text",
+)
+
+OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS = (
+    "langgraph",
+    "crewai",
+    "llamaindex",
+    "langchain",
+    "pipecat",
+    "livekit",
+)
+OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS = (
+    # Closed Vocabularies canon (ARCH §2f), byte-exact.
+    "prompt",
+    "whole_agent",
+    "memory_ops",
+    "multi_agent_roster",
+    "workflow_trace",
+    "orchestration_spans",
+    "framework_method",
+)
+OPTIMIZER_PROFILE_MATRIX_BACKENDS = (
+    # Closed Vocabularies canon (ARCH §2f), byte-exact.
+    "gepa",
+    "tpe",
+    "evolution_elo",
+    "bandit",
+    "society",
+    "regression_replay",
+)
+OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES = (
+    "multi_agent",
+    "orchestration",
+    "router",
+    "graph",
+)
+OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_AGGREGATE_KEYS = (
+    "global_best",
+    "global_best_backend",
+    "overall_winner",
+)
+OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES = (
+    "retrieval_first",
+    "write_retrieval_factorial",
+)
+OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET = 24  # ARCH §6: per-cell budget cap
+
+# P4-D2: the declared launch subset — 33 coordinates (27 new + 6 inherited
+# workflow cells), per the ARCH §6 composition table. NOT a cartesian product
+# and NOT a floor; growing coverage is a visible edit to this constant.
+OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS = tuple(
+    (framework, "workflow_trace", "society")
+    for framework in OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
+)
+OPTIMIZER_PROFILE_MATRIX_CELLS = (
+    # workflow_trace: 6 inherited (existing workflow matrix gate covers the six
+    # profiles with the society default) + langgraph x the 5 remaining backends
+    *OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS,
+    ("langgraph", "workflow_trace", "gepa"),
+    ("langgraph", "workflow_trace", "tpe"),
+    ("langgraph", "workflow_trace", "evolution_elo"),
+    ("langgraph", "workflow_trace", "bandit"),
+    ("langgraph", "workflow_trace", "regression_replay"),
+    # prompt: one profile x all six backends (cheapest cells; the backend-axis
+    # sweep lives here)
+    ("llamaindex", "prompt", "gepa"),
+    ("llamaindex", "prompt", "tpe"),
+    ("llamaindex", "prompt", "evolution_elo"),
+    ("llamaindex", "prompt", "bandit"),
+    ("llamaindex", "prompt", "society"),
+    ("llamaindex", "prompt", "regression_replay"),
+    # whole_agent: {livekit (voice config), langgraph} x {society,
+    # evolution_elo, tpe}; both export apply-plans
+    ("livekit", "whole_agent", "society"),
+    ("livekit", "whole_agent", "evolution_elo"),
+    ("livekit", "whole_agent", "tpe"),
+    ("langgraph", "whole_agent", "society"),
+    ("langgraph", "whole_agent", "evolution_elo"),
+    ("langgraph", "whole_agent", "tpe"),
+    # memory_ops: langgraph x {society, bandit}; write x retrieval factorial
+    # with retrieval-prior weighting + 1 security row
+    ("langgraph", "memory_ops", "society"),
+    ("langgraph", "memory_ops", "bandit"),
+    # multi_agent_roster: one profile x {society, evolution_elo}
+    ("crewai", "multi_agent_roster", "society"),
+    ("crewai", "multi_agent_roster", "evolution_elo"),
+    # orchestration_spans (mandatory column): {langgraph, pipecat} x {society, tpe}
+    ("langgraph", "orchestration_spans", "society"),
+    ("langgraph", "orchestration_spans", "tpe"),
+    ("pipecat", "orchestration_spans", "society"),
+    ("pipecat", "orchestration_spans", "tpe"),
+    # framework_method: one profile x {gepa, regression_replay}
+    ("langchain", "framework_method", "gepa"),
+    ("langchain", "framework_method", "regression_replay"),
+)
+
+OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES = ("local_gate", "captured_fixture")
+OPTIMIZER_ROUTING_TABLE_FILE = "examples/optimizer_routing_table.json"
+
+
+def _sorted_json_digest(payload: Any) -> str:
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def frozen_profile_setting_digest(setting: Mapping[str, Any]) -> str:
+    """Digest of a declared evaluation setting (engine/driver/budget class)."""
+
+    return _sorted_json_digest(dict(setting))
+
+
+def _frozen_profile_row(
+    *,
+    framework: str,
+    capability: str,
+    metric: str,
+    floor: float,
+    setting: Mapping[str, Any],
+    security: bool,
+    source: str,
+) -> dict[str, Any]:
+    body = {
+        "framework": str(framework),
+        "capability": str(capability),
+        "metric": str(metric),
+        "floor": float(floor),
+        "setting": copy.deepcopy(dict(setting)),
+        "security": bool(security),
+        "source": str(source),
+    }
+    # Content addressing: the AgentCandidate.from_config idiom (ARCH Decision 3)
+    # — sha256 of the sorted-JSON of all other row fields.
+    row_id = f"row_{_sorted_json_digest(body)[:16]}"
+    return {"row_id": row_id, **body}
+
+
+def _expected_frozen_row_id(row: Mapping[str, Any]) -> str:
+    body = {key: row.get(key) for key in FROZEN_CAPABILITY_PROFILE_ROW_FIELDS if key != "row_id"}
+    return f"row_{_sorted_json_digest(body)[:16]}"
+
+
+def freeze_capability_profile(
+    profiles: Mapping[str, Any],
+    *,
+    setting: Mapping[str, Any],
+    metric_floors: Mapping[str, float],
+    security_rows: Sequence[Mapping[str, Any]] = (),
+    source_manifest_ref: Optional[str] = None,
+    frozen_at: Optional[str] = None,
+) -> dict[str, Any]:
+    """Freeze a capability-profile bundle into a content-addressed evidence
+    contract (kind ``agent-learning.frozen-capability-profile.v1``, ARCH §2a).
+
+    Rows carry {framework, capability, metric, floor, setting, security,
+    source}; ``row_id`` is the sha256 of the sorted-JSON of the other fields
+    and ``contract_digest`` is the sha256 over the sorted row_ids. Rows with
+    ``security=True`` are non-tradable and carry a red-team check source.
+    """
+
+    if not isinstance(setting, Mapping) or not setting:
+        raise ValueError("setting must be a non-empty mapping")
+    if not metric_floors:
+        raise ValueError("metric_floors must declare at least one metric floor")
+
+    profile_entries: list[Mapping[str, Any]] = []
+    raw_profiles = profiles.get("profiles") if isinstance(profiles, Mapping) else None
+    if isinstance(raw_profiles, Sequence):
+        profile_entries = [item for item in raw_profiles if isinstance(item, Mapping)]
+    elif isinstance(raw_profiles, Mapping):
+        profile_entries = [
+            {"framework": framework, **dict(profile)}
+            for framework, profile in sorted(raw_profiles.items())
+            if isinstance(profile, Mapping)
+        ]
+    elif isinstance(profiles, Mapping):
+        profile_entries = [
+            {"framework": framework, **dict(profile)}
+            for framework, profile in sorted(profiles.items())
+            if isinstance(profile, Mapping) and isinstance(profile.get("capabilities"), Sequence)
+        ]
+    if not profile_entries:
+        raise ValueError(
+            "profiles must be a framework_adapter_capability_profiles() bundle "
+            "or a framework -> profile mapping"
+        )
+
+    rows: list[dict[str, Any]] = []
+    for profile in profile_entries:
+        framework = str(profile.get("framework") or "custom")
+        capability_names = []
+        for capability in profile.get("capabilities", []) or []:
+            if isinstance(capability, Mapping):
+                name = str(
+                    capability.get("name")
+                    or capability.get("capability")
+                    or ""
+                )
+            else:
+                name = str(capability)
+            if name:
+                capability_names.append(name)
+        for metric, floor in sorted(dict(metric_floors).items()):
+            capability = metric if metric in capability_names else (
+                capability_names[0] if capability_names else "adapter_contract"
+            )
+            rows.append(
+                _frozen_profile_row(
+                    framework=framework,
+                    capability=capability,
+                    metric=str(metric),
+                    floor=float(floor),
+                    setting=setting,
+                    security=False,
+                    source=str(
+                        profile.get("kind")
+                        or "agent-learning.framework-adapter-capability-profile.v1"
+                    ),
+                )
+            )
+    for security_row in security_rows:
+        if not isinstance(security_row, Mapping):
+            raise ValueError("security_rows entries must be mappings")
+        rows.append(
+            _frozen_profile_row(
+                framework=str(security_row.get("framework") or "all"),
+                capability=str(
+                    security_row.get("capability") or "stored_injection_resilience"
+                ),
+                metric=str(security_row.get("metric") or "redteam_pass_rate"),
+                floor=float(security_row.get("floor", 1.0)),
+                setting=security_row.get("setting") or setting,
+                security=True,
+                source=str(
+                    security_row.get("source") or "redteam.stored_injection_readiness"
+                ),
+            )
+        )
+
+    row_ids = sorted(row["row_id"] for row in rows)
+    contract = {
+        "kind": AGENT_LEARNING_FROZEN_CAPABILITY_PROFILE_KIND,
+        "rows": rows,
+        "contract_digest": _sorted_json_digest(row_ids),
+        "setting_digest": frozen_profile_setting_digest(setting),
+        "frozen_at": frozen_at,
+        "source_manifest_ref": source_manifest_ref,
+    }
+    return contract
+
+
+def attach_frozen_profile(
+    manifest: Mapping[str, Any],
+    frozen: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a promotion-artifact copy with the frozen profile attached
+    under the ``frozen_capability_profile`` key (ARCH §2a attachment)."""
+
+    if frozen.get("kind") != AGENT_LEARNING_FROZEN_CAPABILITY_PROFILE_KIND:
+        raise ValueError(
+            "frozen must be an agent-learning.frozen-capability-profile.v1 payload"
+        )
+    result = copy.deepcopy(dict(manifest))
+    result[FROZEN_CAPABILITY_PROFILE_ATTACHMENT_KEY] = copy.deepcopy(dict(frozen))
+    summary = result.get("summary")
+    if isinstance(summary, dict):
+        summary["frozen_capability_profile_digest"] = frozen.get("contract_digest")
+        summary["frozen_capability_profile_row_count"] = len(
+            list(frozen.get("rows") or [])
+        )
+    return result
+
+
+def replay_frozen_profile(
+    candidate_result: Mapping[str, Any],
+    frozen: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Tarka: re-close every frozen row against the candidate's evidence.
+
+    Verdict rules (PRD §4.1, all executable):
+    - any frozen row not re-closed -> ``{"veto": True, "vetoed_rows": [...],
+      "hetvabhasa_class": "badhita"}`` (recorded in governance);
+    - candidate evidence measured under a DIFFERENT setting digest than the
+      frozen contract -> rows marked ``non_admissible`` and the win does not
+      count (orderings invert across settings);
+    - candidate patch touching memory/persistence path prefixes
+      (HARNESS_LAYER_PATH_PREFIXES["context_memory"]) with any security row
+      not re-passed at floor -> veto regardless of score (non-tradable).
+    """
+
+    rows = [
+        dict(row)
+        for row in (frozen.get("rows") or [])
+        if isinstance(row, Mapping)
+    ]
+    if not rows:
+        raise ValueError("frozen contract carries no rows to replay")
+
+    optimization = _plain_mapping(candidate_result.get("optimization"))
+    summary = _plain_mapping(candidate_result.get("summary"))
+    metric_averages = {
+        str(key): value
+        for key, value in _plain_mapping(summary.get("metric_averages")).items()
+    }
+    row_evidence = _plain_mapping(candidate_result.get("frozen_row_evidence"))
+
+    candidate_setting = _plain_mapping(candidate_result.get("setting"))
+    if not candidate_setting:
+        candidate_setting = _plain_mapping(
+            _plain_mapping(optimization.get("source_manifest")).get("setting")
+        )
+    candidate_setting_digest = (
+        frozen_profile_setting_digest(candidate_setting)
+        if candidate_setting
+        else None
+    )
+
+    patch_paths: set[str] = set()
+    raw_patch = candidate_result.get("patch")
+    if isinstance(raw_patch, Mapping):
+        patch_paths.update(str(path) for path in raw_patch)
+    for item in optimization.get("history", []) or []:
+        if isinstance(item, Mapping) and isinstance(item.get("patch"), Mapping):
+            patch_paths.update(str(path) for path in item["patch"])
+
+    context_memory_prefixes = tuple(
+        _opt().HARNESS_LAYER_PATH_PREFIXES.get("context_memory", ())
+    )
+    touches_memory = any(
+        path == prefix or path.startswith(f"{prefix}.")
+        for path in patch_paths
+        for prefix in context_memory_prefixes
+    )
+
+    row_results: list[dict[str, Any]] = []
+    vetoed_rows: list[dict[str, Any]] = []
+    non_admissible_rows: list[dict[str, Any]] = []
+    security_veto = False
+    for row in rows:
+        row_id = str(row.get("row_id") or "")
+        expected_row_id = _expected_frozen_row_id(row)
+        integrity_ok = row_id == expected_row_id
+        evidence = _plain_mapping(row_evidence.get(row_id))
+        observed = evidence.get("observed")
+        if observed is None:
+            observed = metric_averages.get(str(row.get("metric")))
+        floor = float(row.get("floor", 0.0))
+        closed = observed is not None and float(observed) >= floor
+        row_setting_digest = frozen_profile_setting_digest(
+            _plain_mapping(row.get("setting"))
+        )
+        evidence_setting = _plain_mapping(evidence.get("setting"))
+        evidence_setting_digest = (
+            frozen_profile_setting_digest(evidence_setting)
+            if evidence_setting
+            else candidate_setting_digest
+        )
+        setting_digest_match = (
+            evidence_setting_digest is not None
+            and evidence_setting_digest == row_setting_digest
+        )
+        row_result = {
+            "row_id": row_id,
+            "metric": row.get("metric"),
+            "floor": floor,
+            "observed": observed,
+            "closed": bool(closed),
+            "security": bool(row.get("security")),
+            "integrity_ok": integrity_ok,
+            "setting_digest_match": bool(setting_digest_match),
+        }
+        if not integrity_ok:
+            row_result["hetvabhasa_class"] = "asiddha"
+            row_result["detail"] = (
+                "row_id does not match the content address of the row fields"
+            )
+            vetoed_rows.append(row_result)
+        elif not setting_digest_match:
+            # Out-of-setting evidence: visible, never promotable.
+            row_result["non_admissible"] = True
+            non_admissible_rows.append(row_result)
+            if not closed:
+                vetoed_rows.append(row_result)
+        elif not closed:
+            row_result["hetvabhasa_class"] = "badhita"
+            vetoed_rows.append(row_result)
+        if row.get("security") and not closed and touches_memory:
+            security_veto = True
+        row_results.append(row_result)
+
+    veto = bool(vetoed_rows) or security_veto
+    return {
+        "kind": AGENT_LEARNING_FROZEN_PROFILE_REPLAY_KIND,
+        "contract_digest": frozen.get("contract_digest"),
+        "veto": veto,
+        "hetvabhasa_class": "badhita" if veto else None,
+        "vetoed_rows": vetoed_rows,
+        "non_admissible_wins": non_admissible_rows,
+        "security_veto": security_veto,
+        "security_rows_non_tradable": True,
+        "touches_context_memory_paths": touches_memory,
+        "rows": row_results,
+        "row_count": len(rows),
+        "closed_row_count": sum(1 for row in row_results if row["closed"]),
+    }
+
+
+def _trajectory_profile_from_history(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    total_evaluations: Optional[int] = None,
+    early_stopped: bool = False,
+    selection: Optional[str] = None,
+    eval_budget: Optional[int] = None,
+) -> dict[str, Any]:
+    running_best: Optional[float] = None
+    improvements = 0
+    locality_terms: list[float] = []
+    regression_count = 0
+    previous_score: Optional[float] = None
+    scores_by_candidate: dict[str, float] = {}
+    candidate_keys: list[str] = []
+    for index, item in enumerate(history):
+        row = _plain_mapping(item)
+        score = float(row.get("score") or 0.0)
+        candidate_id = str(row.get("candidate_id") or f"iteration-{index}")
+        candidate_keys.append(candidate_id)
+        improved = running_best is None or score > running_best
+        if improved and index > 0:
+            improvements += 1
+        if improved:
+            running_best = score
+            patch = row.get("patch") or row.get("candidate_patch")
+            paths_touched = len(patch) if isinstance(patch, Mapping) else 1
+            locality_terms.append(1.0 / max(1, paths_touched))
+        parents = [
+            str(parent)
+            for parent in (
+                _plain_mapping(row.get("proposal_metadata")).get(
+                    "proposal_parent_ids"
+                )
+                or row.get("proposal_parent_ids")
+                or []
+            )
+            if str(parent)
+        ]
+        parent_scores = [
+            scores_by_candidate[parent]
+            for parent in parents
+            if parent in scores_by_candidate
+        ]
+        if parent_scores:
+            if score < max(parent_scores):
+                regression_count += 1
+        elif previous_score is not None and score < previous_score:
+            regression_count += 1
+        scores_by_candidate.setdefault(candidate_id, score)
+        previous_score = score
+    iteration_count = len(history)
+    comparable = max(1, iteration_count - 1)
+    return {
+        "kind": "agent-learning.optimizer-trajectory-profile.v1",
+        "improvement_frequency": round(improvements / comparable, 4)
+        if iteration_count > 1
+        else (1.0 if iteration_count == 1 else 0.0),
+        "semantic_locality": round(sum(locality_terms) / len(locality_terms), 4)
+        if locality_terms
+        else 0.0,
+        "dedupe_rate": round(1.0 - (len(set(candidate_keys)) / iteration_count), 4)
+        if iteration_count
+        else 0.0,
+        "regression_count": regression_count,
+        "iterations": iteration_count,
+        "evaluations": int(total_evaluations or iteration_count),
+        "early_stopped": bool(early_stopped),
+        "selection": selection,
+        "eval_budget": eval_budget,
+    }
+
+
+def with_optimizer_trajectory_profile(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach the trajectory fitness profile to an optimization artifact.
+
+    Every ``agent-learning.optimization.v1`` payload carries
+    ``result["trajectory_profile"]`` + ``summary.trajectory_*`` mirrors
+    (trajectory shape, not endpoint score, as backend-routing evidence).
+    """
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    history = [
+        _plain_mapping(item)
+        for item in optimization.get("history", []) or []
+        if isinstance(item, Mapping)
+    ]
+    if not optimization or not history:
+        return result
+
+    summary = _plain_mapping(result.get("summary"))
+    manifest_optimization = _plain_mapping(
+        _plain_mapping(optimization.get("source_manifest")).get("optimization")
+    )
+    optimizer_config = _plain_mapping(manifest_optimization.get("optimizer"))
+    profile = _trajectory_profile_from_history(
+        history,
+        total_evaluations=summary.get("total_evaluations"),
+        early_stopped=bool(summary.get("early_stopped")),
+        selection=optimizer_config.get("selection"),
+        eval_budget=manifest_optimization.get("eval_budget")
+        or optimizer_config.get("eval_budget"),
+    )
+    # P4-D6: live-lane profiles carry the run's evidence class forward; the
+    # routing builder filters on it.
+    evidence_class = result.get("evidence_class") or optimization.get(
+        "evidence_class"
+    )
+    if evidence_class:
+        profile["evidence_class"] = evidence_class
+
+    result["trajectory_profile"] = profile
+    optimization["trajectory_profile"] = copy.deepcopy(profile)
+    result["optimization"] = optimization
+    summary["trajectory_improvement_frequency"] = profile["improvement_frequency"]
+    summary["trajectory_semantic_locality"] = profile["semantic_locality"]
+    summary["trajectory_dedupe_rate"] = profile["dedupe_rate"]
+    summary["trajectory_regression_count"] = profile["regression_count"]
+    result["summary"] = summary
+    return result
+
+
+def _whole_agent_stage_for_path(path: str) -> str:
+    lowered = str(path).lower()
+    last_segment = lowered.rsplit(".", 1)[-1]
+    if any(
+        token in last_segment or token in lowered
+        for token in _WHOLE_AGENT_TEXT_PATH_TOKENS
+    ):
+        return "component_text"
+    return "structural_config"
+
+
+def _staged_whole_agent_conditioning(
+    search_paths: Sequence[str],
+) -> dict[str, Any]:
+    text_paths = [
+        path for path in search_paths if _whole_agent_stage_for_path(path) == "component_text"
+    ]
+    structural_paths = [
+        path for path in search_paths if path not in set(text_paths)
+    ]
+    return {
+        "stages": {
+            "component_text": {"phase": 1, "paths": list(text_paths)},
+            "structural_config": {"phase": 2, "paths": list(structural_paths)},
+            "global_repolish": {"phase": 3, "paths": list(search_paths)},
+        },
+        "orthogonal_chambers": True,
+    }
+
+
+def _staged_whole_agent_role_graph(
+    staged_conditioning: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Stage->phase one-to-one role graph: each phase seats samiti generation
+    and sabha deliberation over that stage's path class (chambers orthogonal
+    to stages, ARCH Decisions 4/8)."""
+
+    stages = _plain_mapping(staged_conditioning.get("stages"))
+    rows: list[dict[str, Any]] = []
+    previous_explorers: list[str] = []
+    for stage in WHOLE_AGENT_CONTRACT_STAGES:
+        stage_config = _plain_mapping(stages.get(stage))
+        phase = int(stage_config.get("phase") or 1)
+        paths = [str(path) for path in stage_config.get("paths", [])]
+        explorer_name = f"{stage}_samiti_explorer"
+        rows.append(
+            {
+                "name": explorer_name,
+                "proposal_kind": "explorer",
+                "phase": phase,
+                "depends_on": list(previous_explorers),
+                "path_prefixes": paths,
+                "archetype": "focused_action",
+                "description": f"Samiti generation over the {stage} path class.",
+            }
+        )
+        if stage == "global_repolish":
+            rows.append(
+                {
+                    "name": f"{stage}_sabha_synthesis",
+                    "proposal_kind": "coverage_synthesis",
+                    "phase": phase,
+                    "depends_on": [*previous_explorers, explorer_name],
+                    "path_prefixes": paths,
+                    "archetype": "collective_synthesis",
+                    "description": (
+                        f"Sabha deliberation: merge per-path winners across the "
+                        f"{stage} stage."
+                    ),
+                }
+            )
+            rows.append(
+                {
+                    "name": f"{stage}_sabha_steward",
+                    "proposal_kind": "steward",
+                    "phase": phase,
+                    "depends_on": [f"{stage}_sabha_synthesis", explorer_name],
+                    "path_prefixes": [],
+                    "archetype": "minimal_process_guardian",
+                    "description": (
+                        "Sabha promotion: remove unproven changes before the "
+                        "stage winner seeds the apply plan."
+                    ),
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "name": f"{stage}_sabha_critic",
+                    "proposal_kind": "critic",
+                    "phase": phase,
+                    "depends_on": [explorer_name, *previous_explorers],
+                    "path_prefixes": paths,
+                    "archetype": "charioteer_counsel",
+                    "description": (
+                        f"Sabha deliberation over the {stage} stage's survivors."
+                    ),
+                }
+            )
+        previous_explorers.append(explorer_name)
+    return rows
+
+
+def build_whole_agent_optimization_manifest(
+    *,
+    name: str,
+    base_agent: Mapping[str, Any],
+    search_space: Mapping[str, Sequence[Any]],
+    evaluation_config: Mapping[str, Any],
+    eval_budget: int,
+    stages: Sequence[str] = WHOLE_AGENT_CONTRACT_STAGES,
+    selection: str = "tournament",
+    scenario: Optional[Mapping[str, Any]] = None,
+    environments: Optional[Sequence[Mapping[str, Any]]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    provider: Optional[str] = None,
+    agent_ref: Optional[str] = None,
+    frozen_profile_ref: Optional[str] = None,
+    open_text_paths: Sequence[str] = (),
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    routing_table: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Whole-agent contract on top of ``build_task_optimization_manifest``.
+
+    The facade DECLARES the contract; the staging EXECUTES inside
+    ``SocietyRoleGraphSearchStrategy`` (ARCH Decision 4) — this builder does
+    NOT partition the search into sequential sub-runs. Stages map one-to-one
+    onto role-graph phases 1/2/3; chambers are ORTHOGONAL to stages: within
+    every phase samiti roles generate widely over that stage's path class and
+    sabha roles deliberate/promote the stage winner.
+
+    Gate-pinned properties: staged conditioning (``staged_conditioning``),
+    diagnosis-scoped layer locality (``layer_locality``), declared budget
+    (``eval_budget`` REQUIRED), external-verification-only ranking
+    (``ranking_source: "evaluation_suite"``), finite per-path value lists
+    (open-text lanes under ``non_convergence_lanes``, excluded from any
+    convergence wording).
+    """
+
+    if not isinstance(eval_budget, int) or isinstance(eval_budget, bool):
+        raise ValueError("eval_budget is required and must be an integer")
+    if eval_budget < 1:
+        raise ValueError("eval_budget must be at least 1")
+    if tuple(stages) != WHOLE_AGENT_CONTRACT_STAGES:
+        raise ValueError(
+            f"stages must be the canon tokens {list(WHOLE_AGENT_CONTRACT_STAGES)}"
+        )
+    if selection not in {"tournament", "elo"}:
+        raise ValueError("selection must be 'tournament' or 'elo'")
+    if not isinstance(base_agent, Mapping) or not base_agent:
+        raise ValueError("base_agent must be a non-empty mapping")
+    if not search_space:
+        raise ValueError("search_space must declare at least one path")
+
+    normalized_space: dict[str, list[Any]] = {}
+    for path, values in search_space.items():
+        if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+            raise ValueError(
+                f"search_space[{path!r}] must be a FINITE list of values "
+                "(open-text mutation lanes go in open_text_paths)"
+            )
+        values_list = list(values)
+        if not values_list:
+            raise ValueError(f"search_space[{path!r}] must not be empty")
+        normalized_path = (
+            path
+            if str(path).split(".", 1)[0] in {"agent", "simulation", "evaluation"}
+            else f"agent.{path}"
+        )
+        normalized_space[normalized_path] = values_list
+
+    search_paths = list(normalized_space)
+    staged_conditioning = _staged_whole_agent_conditioning(search_paths)
+    layer_prefix_map = _opt().HARNESS_LAYER_PATH_PREFIXES
+    layer_locality = {
+        layer: [
+            path
+            for path in search_paths
+            if any(
+                path == prefix or path.startswith(f"{prefix}.")
+                for prefix in prefixes
+            )
+        ]
+        for layer, prefixes in layer_prefix_map.items()
+    }
+    non_convergence_lanes = [str(path) for path in open_text_paths]
+
+    if optimizer is not None:
+        resolved_optimizer: dict[str, Any] = copy.deepcopy(dict(optimizer))
+        selected_by = "override"
+    elif selection == "elo":
+        resolved_optimizer = {
+            "algorithm": "evolution",
+            "selection": "elo",
+            "eval_budget": int(eval_budget),
+            "population_size": max(2, min(6, eval_budget)),
+            "generations": 2,
+            "elite_count": 1,
+            "seed": 42,
+        }
+        selected_by = "declared_selection"
+    else:
+        samiti_budget = max(1, (eval_budget * 2) // 3)
+        sabha_budget = max(1, eval_budget - samiti_budget)
+        resolved_optimizer = {
+            "algorithm": "council",
+            "search_strategy": {
+                "strategy": "role_graph",
+                "role_graph": _staged_whole_agent_role_graph(staged_conditioning),
+                "staged_conditioning": staged_conditioning,
+                "max_paths_per_proposal": 1,
+            },
+            "max_rounds": 3,
+            "samiti_budget": samiti_budget,
+            "sabha_budget": sabha_budget,
+            "society_ledger": True,
+        }
+        selected_by = "whole_agent_default"
+
+    whole_agent_contract = {
+        "provider": str(provider or base_agent.get("provider") or "custom"),
+        "agent_ref": str(
+            agent_ref
+            or base_agent.get("agent_ref")
+            or base_agent.get("agent_id")
+            or "AGENT_LEARNING_WHOLE_AGENT_REF"
+        ),
+        "base_agent": copy.deepcopy(dict(base_agent)),
+        "search_paths": search_paths,
+        "staged_conditioning": staged_conditioning,
+        "eval_budget": int(eval_budget),
+        "selection": selection,
+        "ranking_source": "evaluation_suite",
+        "frozen_profile_ref": frozen_profile_ref,
+        "non_convergence_lanes": non_convergence_lanes,
+        "layer_locality": layer_locality,
+    }
+
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=[dict(base_agent)],
+        evaluation_config=evaluation_config,
+        scenario=scenario,
+        environments=environments,
+        required_env=required_env,
+        optimizer=resolved_optimizer,
+        threshold=threshold,
+        layers=["planner", "tools", "memory", "world", "evaluator"],
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        base_agent=base_agent,
+        search_space=normalized_space,
+        target_metadata={
+            "task_kind": "whole_agent",
+            "staged_conditioning": staged_conditioning,
+            "layer_locality": layer_locality,
+            "non_convergence_lanes": non_convergence_lanes,
+            "ranking_source": "evaluation_suite",
+            "eval_budget": int(eval_budget),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+        routing_table=routing_table,
+    )
+    manifest["whole_agent"] = whole_agent_contract
+    optimization = manifest["optimization"]
+    optimization["eval_budget"] = int(eval_budget)
+    optimization["ranking_source"] = "evaluation_suite"
+    optimization["selection"] = selection
+    routing_evidence = optimization.get("optimizer_routing_evidence")
+    if isinstance(routing_evidence, dict):
+        routing_evidence["selected_by"] = (
+            routing_evidence.get("selected_by")
+            if optimizer is None and selected_by == "whole_agent_default"
+            else selected_by
+        ) or selected_by
+    return manifest
+
+
+def build_apply_plan(optimization: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the ``agent-learning.apply-plan.v1`` artifact (ARCH §2c/Decision 9).
+
+    The kit NEVER applies; the platform bridge executes ``apply_fields`` and
+    evaluates every ``read_back_checks`` entry post-apply (P4-D5).
+    ``agent_ref`` is an opaque provider-side agent reference — an id or an
+    env-var NAME, never a credential value.
+    """
+
+    payload = dict(optimization)
+    inner = _plain_mapping(payload.get("optimization")) or payload
+    source_manifest = _plain_mapping(inner.get("source_manifest"))
+    whole_agent = _plain_mapping(
+        source_manifest.get("whole_agent") or payload.get("whole_agent")
+    )
+    if not whole_agent:
+        raise ValueError(
+            "build_apply_plan requires a whole-agent optimization payload "
+            "(missing the whole_agent contract block)"
+        )
+    base_agent = _plain_mapping(whole_agent.get("base_agent"))
+    best_config = _plain_mapping(inner.get("best_config"))
+    winner_agent = _plain_mapping(best_config.get("agent")) or base_agent
+
+    staged = _plain_mapping(whole_agent.get("staged_conditioning"))
+    stage_order: list[str] = []
+    for stage in WHOLE_AGENT_CONTRACT_STAGES[:2]:
+        stage_paths = _plain_mapping(_plain_mapping(staged.get("stages")).get(stage)).get(
+            "paths", []
+        )
+        for path in stage_paths:
+            if path not in stage_order:
+                stage_order.append(str(path))
+    for path in whole_agent.get("search_paths", []) or []:
+        if str(path) not in stage_order:
+            stage_order.append(str(path))
+
+    def _value_at(config: Mapping[str, Any], dotted: str) -> Any:
+        current: Any = config
+        for part in dotted.split("."):
+            if isinstance(current, Mapping) and part in current:
+                current = current[part]
+            elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+                current = current[int(part)]
+            else:
+                return None
+        return current
+
+    apply_fields: list[dict[str, Any]] = []
+    read_back_checks: list[dict[str, Any]] = []
+    for path in stage_order:
+        provider_path = path[len("agent.") :] if path.startswith("agent.") else path
+        base_value = _value_at(base_agent, provider_path)
+        winner_value = _value_at(winner_agent, provider_path)
+        if winner_value is None or winner_value == base_value:
+            continue
+        apply_fields.append(
+            {"path": provider_path, "from": base_value, "to": winner_value}
+        )
+        read_back_checks.append({"path": provider_path, "expected": winner_value})
+
+    nirnaya_ref = None
+    optimizer_trace = _plain_mapping(inner.get("optimizer_trace"))
+    governance = _plain_mapping(optimizer_trace.get("governance"))
+    nirnaya_records = governance.get("nirnaya") or []
+    if nirnaya_records and isinstance(nirnaya_records[0], Mapping):
+        nirnaya_ref = nirnaya_records[0].get("selected_candidate_id")
+    if not nirnaya_ref:
+        nirnaya_ref = inner.get("best_candidate_id")
+
+    return {
+        "kind": AGENT_LEARNING_APPLY_PLAN_KIND,
+        "provider": whole_agent.get("provider"),
+        "agent_ref": whole_agent.get("agent_ref"),
+        "apply_fields": apply_fields,
+        "read_back_checks": read_back_checks,
+        "mismatch_policy": "abort",
+        "frozen_profile_ref": whole_agent.get("frozen_profile_ref"),
+        "nirnaya_ref": nirnaya_ref,
+    }
+
+
+def with_whole_agent_apply_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach the apply-plan artifact to whole-agent optimization payloads."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    if not _plain_mapping(source_manifest.get("whole_agent")):
+        return result
+    plan = build_apply_plan(result)
+    result["apply_plan"] = plan
+    optimization["apply_plan"] = copy.deepcopy(plan)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["apply_plan_field_count"] = len(plan["apply_fields"])
+    summary["apply_plan_read_back_check_count"] = len(plan["read_back_checks"])
+    summary["apply_plan_mismatch_policy"] = plan["mismatch_policy"]
+    result["summary"] = summary
+    return result
+
+
+def _optimizer_config_for_backend(
+    backend: str,
+    search_space: Mapping[str, Sequence[Any]],
+    *,
+    eval_budget: Optional[int] = None,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Map a canon backend token onto a manifest optimizer config."""
+
+    budget = int(eval_budget or OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET)
+    if backend == "gepa":
+        return {"algorithm": "gepa", "eval_budget": budget}
+    if backend == "tpe":
+        return {
+            "algorithm": "tpe",
+            "n_trials": min(budget, 12),
+            "seed": seed,
+            "eval_budget": budget,
+        }
+    if backend == "evolution_elo":
+        return {
+            "algorithm": "evolution",
+            "selection": "elo",  # explicit opt-in — never auto-engaged
+            "eval_budget": budget,
+            "population_size": 4,
+            "generations": 2,
+            "elite_count": 1,
+            "seed": seed,
+        }
+    if backend == "bandit":
+        return {
+            "algorithm": "bandit",
+            "total_budget": budget,
+            "eval_budget": budget,
+        }
+    if backend == "society":
+        return {
+            "algorithm": "council",
+            "search_strategy": "society_role_graph",
+            "max_rounds": 2,
+            "eval_budget": budget,
+            "samiti_budget": max(1, (budget * 2) // 3),
+            "sabha_budget": max(1, budget - max(1, (budget * 2) // 3)),
+        }
+    if backend == "regression_replay":
+        return {"algorithm": "regression_replay", "eval_budget": budget}
+    raise ValueError(
+        f"backend must be one of {list(OPTIMIZER_PROFILE_MATRIX_BACKENDS)}, "
+        f"got {backend!r}"
+    )
+
+
+def _load_committed_routing_table(
+    path: Optional[str | Path] = None,
+) -> Optional[dict[str, Any]]:
+    candidate = (
+        Path(path)
+        if path is not None
+        else Path(__file__).resolve().parents[2] / OPTIMIZER_ROUTING_TABLE_FILE
+    )
+    if not candidate.is_file():
+        return None
+    try:
+        loaded = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (
+        isinstance(loaded, Mapping)
+        and loaded.get("kind") == AGENT_LEARNING_OPTIMIZER_ROUTING_TABLE_KIND
+    ):
+        return dict(loaded)
+    return None
+
+
+def _routing_row_for(
+    routing_table: Optional[Mapping[str, Any]],
+    *,
+    target_kind: Optional[str],
+    framework_profile: Optional[str],
+) -> Optional[dict[str, Any]]:
+    if not routing_table or not target_kind:
+        return None
+    for row in routing_table.get("rows", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("target_kind")) != str(target_kind):
+            continue
+        if framework_profile and str(row.get("framework_profile")) != str(
+            framework_profile
+        ):
+            continue
+        return dict(row)
+    return None
+
+
+def _resolve_default_optimizer(
+    search_space: Mapping[str, Sequence[Any]],
+    *,
+    optimizer: Optional[Mapping[str, Any]],
+    target_metadata: Mapping[str, Any],
+    routing_table: Optional[Mapping[str, Any]] = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Routing-aware default picker (ARCH §2d/Decision 7).
+
+    Explicit ``optimizer`` always overrides (``selected_by: "override"``);
+    omitted optimizer consults the routing table by default; cold start (no
+    row for the key) falls back to the static default with
+    ``selected_by: "cold_start"``, empty citations, and a warning finding —
+    exit 0, never a ``ValueError``.
+    """
+
+    target_kind = target_metadata.get("task_kind")
+    framework_profile = (
+        target_metadata.get("framework_profile")
+        or target_metadata.get("profile_framework")
+        or target_metadata.get("framework")
+    )
+    table = routing_table if routing_table is not None else _load_committed_routing_table()
+    row = _routing_row_for(
+        table,
+        target_kind=target_kind,
+        framework_profile=framework_profile,
+    )
+    recommendation = row.get("recommended_backend") if row else None
+
+    if optimizer is not None:
+        return copy.deepcopy(dict(optimizer)), {
+            "selected_by": "override",
+            "target_kind": target_kind,
+            "framework_profile": framework_profile,
+            "routing_table_recommendation": recommendation,
+            "citations": [],
+        }
+    if row and recommendation:
+        evidence_entries = [
+            entry
+            for entry in row.get("evidence", []) or []
+            if isinstance(entry, Mapping)
+        ]
+        return (
+            _optimizer_config_for_backend(str(recommendation), search_space),
+            {
+                "selected_by": "routing_table",
+                "target_kind": target_kind,
+                "framework_profile": framework_profile,
+                "recommended_backend": recommendation,
+                "citations": [
+                    str(entry.get("cell_ref")) for entry in evidence_entries
+                ],
+            },
+        )
+    return dict(_default_task_optimizer(search_space)), {
+        "selected_by": "cold_start",
+        "target_kind": target_kind,
+        "framework_profile": framework_profile,
+        "routing_table_recommendation": recommendation,
+        "citations": [],
+        "warning": (
+            "no routing-table row for this (target_kind, framework_profile); "
+            "falling back to the static default optimizer"
+        ),
+    }
+
+
+def build_optimizer_routing_table(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build ``agent-learning.optimizer-routing-table.v1`` from optimization
+    artifacts carrying trajectory profiles (ARCH §2d/Decision 7).
+
+    Rules: every recommendation cites >= 1 profile-evidence entry whose axes
+    match and whose winner equals the recommendation; evidence with
+    ``evidence_class`` outside {"local_gate", "captured_fixture"} is recorded
+    but flagged ``live_lane`` and excluded from the recommendation
+    computation (P4-D6); no global aggregate — a missing row means
+    "no evidence", never "use the overall best".
+    """
+
+    grouped: dict[tuple[str, str], dict[str, list[dict[str, Any]]]] = {}
+    for artifact in artifacts:
+        entry = _plain_mapping(artifact)
+        target_kind = str(entry.get("target_kind") or "")
+        framework_profile = str(
+            entry.get("framework_profile") or entry.get("framework") or ""
+        )
+        backend = str(entry.get("backend") or "")
+        if not target_kind or not framework_profile or not backend:
+            continue
+        evidence_class = str(entry.get("evidence_class") or "local_gate")
+        record = {
+            "cell_ref": str(
+                entry.get("cell_ref")
+                or f"{framework_profile}/{target_kind}/{backend}"
+            ),
+            "backend": backend,
+            "score": entry.get("score"),
+            "trajectory_profile": copy.deepcopy(
+                _plain_mapping(entry.get("trajectory_profile"))
+            ),
+            "evidence_class": evidence_class,
+        }
+        bucket = grouped.setdefault(
+            (target_kind, framework_profile),
+            {"admissible": [], "live_lane": []},
+        )
+        if evidence_class in OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES:
+            bucket["admissible"].append(record)
+        else:
+            record["live_lane"] = True
+            bucket["live_lane"].append(record)
+
+    rows: list[dict[str, Any]] = []
+    for (target_kind, framework_profile), bucket in sorted(grouped.items()):
+        admissible = bucket["admissible"]
+        if admissible:
+            def _rank(record: dict[str, Any]) -> tuple[float, float, str]:
+                profile = record.get("trajectory_profile") or {}
+                return (
+                    -float(record.get("score") or 0.0),
+                    -float(profile.get("improvement_frequency") or 0.0),
+                    record["backend"],
+                )
+
+            winner = sorted(admissible, key=_rank)[0]
+            rows.append(
+                {
+                    "target_kind": target_kind,
+                    "framework_profile": framework_profile,
+                    "recommended_backend": winner["backend"],
+                    "evidence": sorted(
+                        admissible, key=lambda item: item["cell_ref"]
+                    ),
+                    "live_lane_evidence": sorted(
+                        bucket["live_lane"], key=lambda item: item["cell_ref"]
+                    ),
+                }
+            )
+        elif bucket["live_lane"]:
+            # Live-lane-only keys are recorded WITHOUT a recommendation — a
+            # release-admissible row may never cite live-classed evidence.
+            rows.append(
+                {
+                    "target_kind": target_kind,
+                    "framework_profile": framework_profile,
+                    "recommended_backend": None,
+                    "evidence": [],
+                    "live_lane_evidence": sorted(
+                        bucket["live_lane"], key=lambda item: item["cell_ref"]
+                    ),
+                }
+            )
+    return {
+        "kind": AGENT_LEARNING_OPTIMIZER_ROUTING_TABLE_KIND,
+        "admissible_evidence_classes": list(
+            OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES
+        ),
+        "rows": rows,
+        "row_count": len(rows),
+        "generated_by": "agent_learning.optimize.build_optimizer_routing_table",
+    }
+
+
+def render_optimizer_routing_table_json(table: Mapping[str, Any]) -> str:
+    """Byte-stable rendering for the committed routing table (gate
+    byte-compares the regenerated table against the committed file)."""
+
+    return json.dumps(dict(table), indent=2, sort_keys=True, default=str) + "\n"
+
+
+def routing_table_matches_committed(
+    table: Mapping[str, Any],
+    path: Optional[str | Path] = None,
+) -> bool:
+    """Byte-compare a regenerated routing table against the committed file."""
+
+    candidate = (
+        Path(path)
+        if path is not None
+        else Path(__file__).resolve().parents[2] / OPTIMIZER_ROUTING_TABLE_FILE
+    )
+    if not candidate.is_file():
+        return False
+    return candidate.read_text(encoding="utf-8") == render_optimizer_routing_table_json(
+        table
+    )
+
+
+def _matrix_cell_strong_response(framework: str, target_kind: str) -> str:
+    return (
+        f"The {framework} {target_kind.replace('_', ' ')} target closes its "
+        "native proof: the optimized configuration routes, retrieves, and "
+        "finalizes the deterministic fixture task."
+    )
+
+
+def _matrix_cell_weak_response(framework: str, target_kind: str) -> str:
+    return f"The {framework} {target_kind.replace('_', ' ')} target is unoptimized."
+
+
+def _matrix_cell_fixture(framework: str, target_kind: str) -> dict[str, Any]:
+    """Deterministic per-cell fixture: base_config, target candidates, layers,
+    and cell metadata encoding the PRD-mandated cell-design rules as data."""
+
+    strong = _matrix_cell_strong_response(framework, target_kind)
+    weak = _matrix_cell_weak_response(framework, target_kind)
+    base_config: dict[str, Any] = {
+        "agent": {"type": "scripted", "responses": [{"content": weak}]},
+        "simulation": {
+            "engine": "local_text",
+            "min_turns": 1,
+            "max_turns": 1,
+            "auto_execute_tools": True,
+            "environments": [],
+        },
+    }
+    target_candidates: dict[str, list[Any]] = {
+        "agent.responses.0.content": [weak, strong],
+    }
+    layers: list[str] = ["evaluator"]
+    cell_metadata: dict[str, Any] = {}
+
+    if target_kind == "prompt":
+        layers = ["prompt", "evaluator"]
+    elif target_kind == "whole_agent":
+        layers = ["planner", "tools", "memory", "world", "evaluator"]
+    elif target_kind == "memory_ops":
+        # Retrieval-dominance prior (MemMachine): retrieval-side paths BEFORE
+        # write-side paths, plus one write x retrieval factorial slice.
+        target_candidates = {
+            "memory.retrieval.depth": [1, 2],
+            "memory.retrieval.query_strategy": ["semantic", "hybrid"],
+            "memory.write.policy": ["append", "dedupe"],
+            "agent.responses.0.content": [weak, strong],
+        }
+        layers = ["memory", "retrieval", "policy", "evaluator"]
+        cell_metadata = {
+            "gain_density_prior": "retrieval",
+            "slices": list(OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES),
+            "security_row_refs": ["redteam.stored_injection_readiness"],
+        }
+    elif target_kind == "multi_agent_roster":
+        target_candidates = {
+            "multi_agent.roster": [
+                ["planner", "executor"],
+                ["planner", "executor", "reviewer"],
+            ],
+            "orchestration.handoff_policy": ["direct", "reviewed"],
+            "agent.responses.0.content": [weak, strong],
+        }
+        layers = ["multi_agent", "orchestration", "evaluator"]
+    elif target_kind == "workflow_trace":
+        target_candidates = {
+            "graph.entry_node": ["intake", "policy_check"],
+            "agent.responses.0.content": [weak, strong],
+        }
+        layers = ["graph", "router", "orchestration", "harness", "evaluator"]
+    elif target_kind == "orchestration_spans":
+        target_candidates = {
+            "orchestration.scheduler": ["round_robin", "priority"],
+            "agent.responses.0.content": [weak, strong],
+        }
+        layers = ["orchestration", "router", "harness", "evaluator"]
+    elif target_kind == "framework_method":
+        target_candidates = {
+            "framework.runtime.method": ["invoke", "stream"],
+            "agent.responses.0.content": [weak, strong],
+        }
+        layers = ["framework", "harness", "evaluator"]
+
+    # Topology columns mandatory (AdaptOrch): every multi_agent_roster /
+    # orchestration_spans / workflow_trace cell's search space includes at
+    # least one sutradhara-prefix path.
+    if target_kind in {"multi_agent_roster", "orchestration_spans", "workflow_trace"}:
+        if not any(
+            str(path).split(".", 1)[0] in OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+            for path in target_candidates
+        ):
+            raise ValueError(
+                f"{target_kind} cell must search at least one topology path "
+                f"from {list(OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES)}"
+            )
+
+    evaluation_config = {
+        "task_description": (
+            f"Optimize a deterministic {framework} {target_kind} target cell."
+        ),
+        "expected_result": strong,
+    }
+    scenario = {
+        "name": f"optimizer-profile-matrix-{framework}-{target_kind}",
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "agent engineer"},
+                "situation": (
+                    f"A deterministic {framework} {target_kind} fixture must "
+                    "close its native proof under a declared budget."
+                ),
+                "outcome": strong,
+            }
+        ],
+    }
+    return {
+        "base_config": base_config,
+        "target_candidates": target_candidates,
+        "layers": layers,
+        "evaluation_config": evaluation_config,
+        "scenario": scenario,
+        "cell_metadata": cell_metadata,
+        "strong_response": strong,
+    }
+
+
+def matrix_cell_ref(framework: str, target_kind: str, backend: str) -> str:
+    return f"{framework}/{target_kind}/{backend}"
+
+
+def build_optimizer_profile_matrix_manifests(
+    *,
+    frameworks: Sequence[str] = OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS,
+    target_kinds: Sequence[str] = OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS,
+    backends: Sequence[str] = OPTIMIZER_PROFILE_MATRIX_BACKENDS,
+    cells: Optional[Sequence[Sequence[str]]] = None,
+    eval_budget: int = OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET,
+) -> dict[str, dict[str, Any]]:
+    """One runnable optimization manifest per declared (framework,
+    target_kind, backend) cell (P4-D2: the declared 33-coordinate subset, not
+    a cartesian product). Whole-agent cells ride
+    ``build_whole_agent_optimization_manifest``; the rest ride
+    ``build_target_optimization_manifest``."""
+
+    declared = [tuple(str(token) for token in cell) for cell in (cells or OPTIMIZER_PROFILE_MATRIX_CELLS)]
+    if eval_budget < 1 or eval_budget > OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET:
+        raise ValueError(
+            "eval_budget must be in [1, "
+            f"{OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET}] (ARCH §6 cell cap)"
+        )
+    framework_set = {str(item) for item in frameworks}
+    target_kind_set = {str(item) for item in target_kinds}
+    backend_set = {str(item) for item in backends}
+    manifests: dict[str, dict[str, Any]] = {}
+    for cell in declared:
+        if len(cell) != 3:
+            raise ValueError(f"cells entries must be 3-token coordinates, got {cell!r}")
+        framework, target_kind, backend = cell
+        if framework not in framework_set:
+            raise ValueError(f"unknown framework profile {framework!r}")
+        if target_kind not in target_kind_set:
+            raise ValueError(f"unknown target kind {target_kind!r}")
+        if backend not in backend_set:
+            raise ValueError(f"unknown backend token {backend!r}")
+        cell_ref = matrix_cell_ref(framework, target_kind, backend)
+        fixture = _matrix_cell_fixture(framework, target_kind)
+        optimizer_config = _optimizer_config_for_backend(
+            backend,
+            fixture["target_candidates"],
+            eval_budget=eval_budget,
+        )
+        inherited = tuple(cell) in OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS
+        declared_setting = {
+            "engine": "local_text",
+            "driver": "deterministic_scripted",
+            "eval_budget": int(eval_budget),
+            "target_kind": target_kind,
+        }
+        common_metadata = {
+            "cookbook": "sdk-optimizer-profile-matrix",
+            "cell_ref": cell_ref,
+            "framework_profile": framework,
+            "target_kind": target_kind,
+            "backend": backend,
+            "inherited": inherited,
+            "setting": declared_setting,
+            "eval_budget": int(eval_budget),
+            **fixture["cell_metadata"],
+        }
+        if target_kind == "whole_agent":
+            manifest = build_whole_agent_optimization_manifest(
+                name=f"optimizer-profile-matrix-{framework}-{target_kind}-{backend}",
+                base_agent={
+                    "type": "scripted",
+                    "provider": framework,
+                    "agent_ref": "AGENT_LEARNING_MATRIX_FIXTURE_AGENT",
+                    "model": "fixture-base-model",
+                    "voice": "fixture-base-voice",
+                    "first_message": "Hello, how can I help?",
+                    "instructions": "Answer the fixture task briefly.",
+                    "responses": [
+                        {"content": _matrix_cell_weak_response(framework, target_kind)}
+                    ],
+                },
+                search_space={
+                    "model": ["fixture-base-model", "fixture-tuned-model"],
+                    "voice": ["fixture-base-voice", "fixture-warm-voice"],
+                    "first_message": [
+                        "Hello, how can I help?",
+                        "Hi! Tell me what you need and I will handle it.",
+                    ],
+                    "instructions": [
+                        "Answer the fixture task briefly.",
+                        "Answer the fixture task with a confirmed resolution.",
+                    ],
+                    "responses.0.content": [
+                        _matrix_cell_weak_response(framework, target_kind),
+                        fixture["strong_response"],
+                    ],
+                },
+                evaluation_config=fixture["evaluation_config"],
+                eval_budget=int(eval_budget),
+                selection="elo" if backend == "evolution_elo" else "tournament",
+                scenario=fixture["scenario"],
+                optimizer=(
+                    optimizer_config if backend not in {"society", "evolution_elo"} else None
+                ),
+                threshold=0.7,
+                provider=framework,
+                agent_ref="AGENT_LEARNING_MATRIX_FIXTURE_AGENT",
+                target_metadata=common_metadata,
+            )
+        else:
+            manifest = build_target_optimization_manifest(
+                name=f"optimizer-profile-matrix-{framework}-{target_kind}-{backend}",
+                base_config=fixture["base_config"],
+                target_candidates=fixture["target_candidates"],
+                evaluation_config=fixture["evaluation_config"],
+                scenario=fixture["scenario"],
+                optimizer=optimizer_config,
+                threshold=0.7,
+                layers=fixture["layers"],
+                min_turns=1,
+                max_turns=1,
+                target_metadata=common_metadata,
+            )
+            manifest["optimization"]["eval_budget"] = int(eval_budget)
+        manifest.setdefault("metadata", {})["optimizer_profile_matrix_cell"] = {
+            "cell_ref": cell_ref,
+            "framework": framework,
+            "target_kind": target_kind,
+            "backend": backend,
+            "inherited": inherited,
+            "setting": declared_setting,
+            "eval_budget": int(eval_budget),
+        }
+        manifests[cell_ref] = manifest
+    return manifests
+
+
+def run_optimizer_profile_matrix(
+    manifests: Mapping[str, Mapping[str, Any]],
+    *,
+    output_path: Optional[str | Path] = None,
+    evidence_class: str = "local_gate",
+) -> dict[str, Any]:
+    """Execute every declared cell via ``optimize_manifest`` and emit one
+    matrix evidence payload (kind ``agent-learning.optimizer-profile-matrix.v1``).
+
+    The payload carries per-cell winners ONLY — no cross-cell 'best backend'
+    aggregate ever appears (orderings invert across settings, R§3.1) — plus
+    the routing table regenerated from the same-run cells (byte-comparable
+    against the committed ``examples/optimizer_routing_table.json``) and
+    apply-plan artifacts for every whole_agent cell.
+    """
+
+    cells: list[dict[str, Any]] = []
+    apply_plans: list[dict[str, Any]] = []
+    for cell_ref in sorted(manifests):
+        manifest = dict(manifests[cell_ref])
+        cell_info = _plain_mapping(
+            _plain_mapping(manifest.get("metadata")).get(
+                "optimizer_profile_matrix_cell"
+            )
+        )
+        framework = str(cell_info.get("framework") or "")
+        target_kind = str(cell_info.get("target_kind") or "")
+        backend = str(cell_info.get("backend") or "")
+        record: dict[str, Any] = {
+            "cell_ref": cell_ref,
+            "framework": framework,
+            "target_kind": target_kind,
+            "backend": backend,
+            "inherited": bool(cell_info.get("inherited")),
+            "setting": copy.deepcopy(_plain_mapping(cell_info.get("setting"))),
+            "eval_budget": cell_info.get("eval_budget"),
+            "evidence_class": evidence_class,
+        }
+        try:
+            result = optimize_manifest(manifest)
+        except Exception as exc:  # noqa: BLE001 — per-cell totality by design
+            record["status"] = "error"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            record["native_proof_closed"] = False
+            record["winner"] = None
+            record["trajectory_profile"] = None
+            cells.append(record)
+            continue
+        summary = _plain_mapping(result.get("summary"))
+        optimization = _plain_mapping(result.get("optimization"))
+        record["status"] = result.get("status")
+        record["score"] = summary.get("optimization_score")
+        record["evaluations_used"] = summary.get("total_evaluations")
+        record["native_proof_closed"] = result.get("status") == "passed"
+        record["winner"] = optimization.get("best_candidate_id")
+        record["selected_patch_paths"] = sorted(
+            {
+                str(path)
+                for item in optimization.get("history", []) or []
+                if isinstance(item, Mapping)
+                for path in _plain_mapping(item.get("patch"))
+            }
+        )
+        record["trajectory_profile"] = copy.deepcopy(
+            _plain_mapping(result.get("trajectory_profile"))
+        ) or None
+        budget = record.get("eval_budget")
+        if (
+            budget is not None
+            and record.get("evaluations_used") is not None
+            and int(record["evaluations_used"]) > int(budget)
+        ):
+            record["budget_exceeded"] = True
+        if target_kind == "whole_agent" and result.get("apply_plan"):
+            plan = copy.deepcopy(_plain_mapping(result.get("apply_plan")))
+            plan["cell_ref"] = cell_ref
+            apply_plans.append(plan)
+            record["apply_plan_field_count"] = len(plan.get("apply_fields") or [])
+        cells.append(record)
+
+    failed_cells = [
+        cell["cell_ref"]
+        for cell in cells
+        if not cell.get("native_proof_closed")
+    ]
+    routing_table = build_optimizer_routing_table(
+        [cell for cell in cells if cell.get("native_proof_closed")]
+    )
+    per_axis_coverage = {
+        "frameworks": sorted({cell["framework"] for cell in cells if cell["framework"]}),
+        "target_kinds": sorted(
+            {cell["target_kind"] for cell in cells if cell["target_kind"]}
+        ),
+        "backends": sorted({cell["backend"] for cell in cells if cell["backend"]}),
+    }
+    report_card = {
+        "section": "optimizer_profile_matrix",
+        "columns": [
+            "cell_ref",
+            "framework",
+            "target_kind",
+            "backend",
+            "status",
+            "score",
+            "eval_budget",
+            "evaluations_used",
+            "winner",
+        ],
+        "rows": [
+            [
+                cell.get("cell_ref"),
+                cell.get("framework"),
+                cell.get("target_kind"),
+                cell.get("backend"),
+                cell.get("status"),
+                cell.get("score"),
+                cell.get("eval_budget"),
+                cell.get("evaluations_used"),
+                cell.get("winner"),
+            ]
+            for cell in cells
+        ],
+    }
+    payload = {
+        "kind": AGENT_LEARNING_OPTIMIZER_PROFILE_MATRIX_KIND,
+        "schema_version": "agent-learning.cli.v1",
+        "status": "passed" if not failed_cells else "failed",
+        "cells": cells,
+        "summary": {
+            # Per-cell winners only: the schema deliberately has NO global
+            # best-backend key (gate-checked via the forbidden-keys list).
+            "cell_count": len(cells),
+            "passed_cell_count": len(cells) - len(failed_cells),
+            "failed_cells": failed_cells,
+            "per_axis_coverage": per_axis_coverage,
+        },
+        "routing_table": routing_table,
+        "apply_plans": apply_plans,
+        "report_card": report_card,
+    }
+    for key in OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_AGGREGATE_KEYS:
+        if key in payload or key in payload["summary"]:
+            raise ValueError(
+                f"matrix payload must not carry the global aggregate key {key!r}"
+            )
+    if output_path is not None:
+        path = Path(output_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+    return payload
+
+
+def optimize_manifest_with_backend_override(
+    manifest: Mapping[str, Any],
+    *,
+    backend: str,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Run a manifest optimization with an explicit ``--backend`` override.
+
+    Maps onto the SAME explicit-optimizer override path as the SDK's
+    ``optimizer=`` mapping (no second resolution mechanism): the artifact
+    records ``selected_by: "override"``, ``override_flag``, and the spurned
+    ``routing_table_recommendation`` stays visible.
+    """
+
+    runtime_manifest = copy.deepcopy(dict(manifest))
+    optimization = runtime_manifest.setdefault("optimization", {})
+    if not isinstance(optimization, dict):
+        raise ValueError("manifest.optimization must be a mapping")
+    target = _plain_mapping(optimization.get("target"))
+    search_space = _plain_mapping(target.get("search_space"))
+    target_metadata = _plain_mapping(target.get("metadata"))
+    recommendation_row = _routing_row_for(
+        _load_committed_routing_table(),
+        target_kind=target_metadata.get("task_kind"),
+        framework_profile=target_metadata.get("framework_profile")
+        or target_metadata.get("profile_framework"),
+    )
+    optimization["optimizer"] = _optimizer_config_for_backend(
+        str(backend),
+        search_space,
+        eval_budget=optimization.get("eval_budget"),
+    )
+    routing_evidence = {
+        "selected_by": "override",
+        "override_flag": f"--backend {backend}",
+        "backend": str(backend),
+        "routing_table_recommendation": (
+            recommendation_row.get("recommended_backend")
+            if recommendation_row
+            else None
+        ),
+        "citations": [],
+    }
+    optimization["optimizer_routing_evidence"] = routing_evidence
+    payload = optimize_manifest(
+        runtime_manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=name,
+        threshold=threshold,
+        max_candidates=max_candidates,
+        dry_run=dry_run,
+    )
+    payload["optimizer_routing"] = dict(routing_evidence)
+    return payload
+
+
 def build_task_optimization_manifest(
     *,
     name: str,
@@ -928,6 +2673,7 @@ def build_task_optimization_manifest(
     search_space: Optional[Mapping[str, Sequence[Any]]] = None,
     target_base_config: Optional[Mapping[str, Any]] = None,
     target_metadata: Optional[Mapping[str, Any]] = None,
+    routing_table: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build a runnable optimization manifest for any task/world agent.
 
@@ -979,6 +2725,12 @@ def build_task_optimization_manifest(
         "task_kind": "task",
         **copy.deepcopy(dict(target_metadata or {})),
     }
+    resolved_optimizer, optimizer_routing_evidence = _resolve_default_optimizer(
+        optimization_search_space,
+        optimizer=optimizer,
+        target_metadata=metadata,
+        routing_table=routing_table,
+    )
 
     return {
         "version": "agent-learning.optimization.v1",
@@ -1008,9 +2760,8 @@ def build_task_optimization_manifest(
                 "search_space": optimization_search_space,
                 "metadata": metadata,
             },
-            "optimizer": copy.deepcopy(
-                dict(optimizer or _default_task_optimizer(optimization_search_space))
-            ),
+            "optimizer": resolved_optimizer,
+            "optimizer_routing_evidence": optimizer_routing_evidence,
         },
     }
 
@@ -1051,6 +2802,7 @@ def build_target_optimization_manifest(
     max_turns: Optional[int] = None,
     auto_execute_tools: bool = True,
     target_metadata: Optional[Mapping[str, Any]] = None,
+    routing_table: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build a manifest optimization over explicit arbitrary target paths.
 
@@ -1109,6 +2861,12 @@ def build_target_optimization_manifest(
         "task_kind": "generic_target",
         **copy.deepcopy(dict(target_metadata or {})),
     }
+    resolved_optimizer, optimizer_routing_evidence = _resolve_default_optimizer(
+        optimization_search_space,
+        optimizer=optimizer,
+        target_metadata=metadata,
+        routing_table=routing_table,
+    )
     manifest["optimization"] = {
         "threshold": float(threshold),
         "target": {
@@ -1118,9 +2876,8 @@ def build_target_optimization_manifest(
             "search_space": optimization_search_space,
             "metadata": metadata,
         },
-        "optimizer": copy.deepcopy(
-            dict(optimizer or _default_task_optimizer(optimization_search_space))
-        ),
+        "optimizer": resolved_optimizer,
+        "optimizer_routing_evidence": optimizer_routing_evidence,
     }
     return manifest
 
@@ -33804,4 +35561,40 @@ __all__ = [
     "with_workflow_hook_proof",
     "with_workspace_import_certification_proof",
     "with_world_hook_proof",
+    # ---- Phase 4: optimizer expansion ----
+    "AGENT_LEARNING_APPLY_PLAN_KIND",
+    "AGENT_LEARNING_FROZEN_CAPABILITY_PROFILE_KIND",
+    "AGENT_LEARNING_FROZEN_PROFILE_REPLAY_KIND",
+    "AGENT_LEARNING_OPTIMIZER_PROFILE_MATRIX_KIND",
+    "AGENT_LEARNING_OPTIMIZER_ROUTING_TABLE_KIND",
+    "FROZEN_CAPABILITY_PROFILE_ATTACHMENT_KEY",
+    "FROZEN_CAPABILITY_PROFILE_ROW_FIELDS",
+    "OPTIMIZER_PROFILE_MATRIX_BACKENDS",
+    "OPTIMIZER_PROFILE_MATRIX_CELLS",
+    "OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET",
+    "OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_AGGREGATE_KEYS",
+    "OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS",
+    "OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS",
+    "OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES",
+    "OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS",
+    "OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES",
+    "OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES",
+    "OPTIMIZER_ROUTING_TABLE_FILE",
+    "WHOLE_AGENT_APPLY_PLAN_FIELDS",
+    "WHOLE_AGENT_CONTRACT_STAGES",
+    "attach_frozen_profile",
+    "build_apply_plan",
+    "build_optimizer_profile_matrix_manifests",
+    "build_optimizer_routing_table",
+    "build_whole_agent_optimization_manifest",
+    "freeze_capability_profile",
+    "frozen_profile_setting_digest",
+    "matrix_cell_ref",
+    "optimize_manifest_with_backend_override",
+    "render_optimizer_routing_table_json",
+    "replay_frozen_profile",
+    "routing_table_matches_committed",
+    "run_optimizer_profile_matrix",
+    "with_optimizer_trajectory_profile",
+    "with_whole_agent_apply_plan",
 ]

@@ -1858,6 +1858,18 @@ def _optimize(args: Sequence[str]) -> int:
         description="Optimize a simulation manifest with Agent Learning Kit.",
     )
     _add_manifest_optimization_args(parser)
+    parser.add_argument(
+        "--backend",
+        default=None,
+        help=(
+            "Explicit optimizer backend override (canon tokens: gepa, tpe, "
+            "evolution_elo, bandit, society, regression_replay). Maps onto the "
+            "same explicit-optimizer override path as the SDK's optimizer= "
+            "mapping; the artifact records selected_by: override and keeps the "
+            "spurned routing_table_recommendation visible. Omitted: the "
+            "routing-table default picker engages."
+        ),
+    )
     parsed = parser.parse_args(list(args))
 
     try:
@@ -1868,13 +1880,24 @@ def _optimize(args: Sequence[str]) -> int:
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
         manifest = simulate.load_manifest_file(manifest_path)
-        payload = optimize.optimize_manifest_file(
-            manifest_path,
-            name=parsed.name,
-            threshold=parsed.threshold,
-            max_candidates=parsed.max_candidates,
-            dry_run=bool(parsed.dry_run),
-        )
+        if parsed.backend:
+            payload = optimize.optimize_manifest_with_backend_override(
+                manifest,
+                backend=str(parsed.backend),
+                manifest_path=manifest_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                max_candidates=parsed.max_candidates,
+                dry_run=bool(parsed.dry_run),
+            )
+        else:
+            payload = optimize.optimize_manifest_file(
+                manifest_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                max_candidates=parsed.max_candidates,
+                dry_run=bool(parsed.dry_run),
+            )
     except Exception as exc:
         print(f"agent-learn optimize: {exc}", file=sys.stderr)
         return 1
