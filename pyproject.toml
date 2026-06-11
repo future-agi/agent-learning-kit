@@ -131,6 +131,8 @@ exclude = [
 dev = [
   "build>=1.5",
   "hatchling>=1.25",
+  "pytest>=8.3",
+  "ruff>=0.9",
 ]
 
 [tool.pytest.ini_options]
