@@ -85,7 +85,13 @@ async def _run(boot: dict[str, Any]) -> None:
             "framework": "livekit-agents",
             "framework_version": version,
             "capability_hash": _capability_hash("livekit-agents", version),
-            "package_paths": [os.path.dirname(livekit.__file__)],
+            # livekit is a NAMESPACE package: __file__ is None, roots are on
+            # __path__ (same fix as langgraph_worker._package_paths).
+            "package_paths": (
+                [os.path.dirname(livekit.__file__)]
+                if getattr(livekit, "__file__", None)
+                else [str(path) for path in getattr(livekit, "__path__", None) or []]
+            ),
         },
     )
     rung = int(boot.get("rung") or 1)

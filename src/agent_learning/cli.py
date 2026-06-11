@@ -28,6 +28,7 @@ AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 
 SIMULATE_COMMANDS = {
     "baseline",
+    "capture-fixture",
     "compare",
     "init",
     "promote-to-regression",
@@ -119,6 +120,11 @@ def _eval_cli_app() -> Any:
 
 
 def _simulate(args: Sequence[str]) -> int:
+    args = list(args)
+    if args and args[0] == "capture-fixture":
+        # Live→fixture demotion (Phase 3 §6.2) — handled here, not by the
+        # vendored simulate CLI, so the surface works framework-free.
+        return _capture_fixture(args[1:])
     try:
         cli = _simulate_cli_module()
     except Exception as exc:
@@ -739,6 +745,35 @@ def _run(args: Sequence[str]) -> int:
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
         manifest = simulate.load_manifest_file(manifest_path)
+    except Exception as exc:
+        print(f"agent-learn run: {exc}", file=sys.stderr)
+        return 1
+
+    if isinstance(manifest.get("live_lane"), Mapping):
+        # Opt-in live lane front door (Phase 3 §6.1): flag preflight runs
+        # BEFORE any lane-module import resolves a framework. Manifests
+        # without the stanza are untouched.
+        return _run_live_lane_manifest(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=simulate.render_junit,
+            render_sarif=simulate.render_sarif,
+            render_markdown=simulate.render_markdown,
+            prog="agent-learn run",
+        )
+    if parsed.repeats is not None:
+        return _repeats_requires_live_lane(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=simulate.render_junit,
+            render_sarif=simulate.render_sarif,
+            render_markdown=simulate.render_markdown,
+            kind=AGENT_LEARNING_RUN_KIND,
+        )
+
+    try:
         payload = _run_async(
             simulate.run_manifest_file(
                 manifest_path,
@@ -766,6 +801,722 @@ def _run(args: Sequence[str]) -> int:
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
+
+
+# --- live-lane front door (Phase 3 §6 — opt-in lanes; PRD §4.1 CLI bullet) ---
+
+_LIVE_LANE_SCHEMA_VERSION = "agent-learning.cli.v1"
+
+# Rung at which a lane becomes credentialed (UI-UX §4.1; P3-D5/P3-D6).
+_LIVE_LANE_CREDENTIALED_RUNG_FLOOR = {
+    "livekit": 3,
+    "pipecat": 3,
+    "langchain": 2,
+    "mcp": 2,
+    "a2a": 2,
+}
+
+# Lane -> top-level import root probed (never imported) for the UI-UX §6.1
+# missing-extra message contract.
+_LIVE_LANE_IMPORT_ROOTS = {
+    "livekit": "livekit",
+    "pipecat": "pipecat",
+    "langchain": "langgraph",
+    "mcp": "mcp",
+    "a2a": "a2a",
+}
+
+
+def _live_lane_extra_available(lane: str) -> bool:
+    """find_spec only LOCATES the lane extra; it never imports it — both the
+    flag refusal and the missing-extra refusal stay framework-import-free."""
+
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(_LIVE_LANE_IMPORT_ROOTS[lane]) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _live_lane_extra_missing(prog: str, lane: str, extra: str) -> int:
+    # UI-UX §6.1 message contract: lane, extra, both install commands, the
+    # boundary — exit 2, the established import-failure exit.
+    print(f"live lane '{lane}' requires the '{extra}' extra:", file=sys.stderr)
+    print(
+        f'  pip install "agent-learning-kit[{extra}]"   '
+        f"(or: uv sync --extra {extra})",
+        file=sys.stderr,
+    )
+    print(
+        "The release surface never needs lane extras (gate: live_lane_boundary).",
+        file=sys.stderr,
+    )
+    print(
+        f"{prog}: import failed: missing lane extra '{extra}'",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _emit_live_lane_payload(
+    payload: Dict[str, Any],
+    manifest: Mapping[str, Any],
+    parsed: argparse.Namespace,
+    manifest_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+) -> int:
+    written = _write_result_outputs(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _repeats_requires_live_lane(
+    manifest: Mapping[str, Any],
+    parsed: argparse.Namespace,
+    manifest_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+    kind: str,
+) -> int:
+    payload: Dict[str, Any] = {
+        "kind": kind,
+        "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+        "name": str(parsed.name or manifest.get("name") or "live-lane-repeats"),
+        "status": "failed",
+        "exit_code": 1,
+        "findings": [
+            {
+                "type": "live_lane_repeats_requires_lane",
+                "level": "error",
+                "reason": (
+                    "--repeats is only legal when the manifest declares a "
+                    "live_lane stanza (Phase 3 guide §6.1)"
+                ),
+                "remediation": (
+                    "add a live_lane stanza to the manifest, or drop --repeats"
+                ),
+            }
+        ],
+        "summary": {"lane_executed": False},
+    }
+    return _emit_live_lane_payload(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+
+
+def _dispatch_live_lane_scenario(
+    live: Any,
+    lane: str,
+    scenario: Mapping[str, Any],
+    stanza: Mapping[str, Any],
+    common_kwargs: Mapping[str, Any],
+    rung: Optional[int],
+) -> Any:
+    kwargs: Dict[str, Any] = dict(common_kwargs)
+    if lane in {"livekit", "pipecat"}:
+        if rung is not None:
+            kwargs["rung"] = rung
+        for key in ("stressed", "seed"):
+            if stanza.get(key) is not None:
+                kwargs[key] = stanza[key]
+        if stanza.get("perturbations") is not None:
+            kwargs["perturbations"] = list(stanza["perturbations"])
+        if lane == "livekit":
+            return live.run_lane("livekit", scenario, **kwargs)
+        return live.run_lane(
+            "pipecat", stanza.get("pipeline_factory"), scenario, **kwargs
+        )
+    if lane == "langchain":
+        factory = stanza.get("factory") or stanza.get("graph_or_factory")
+        if not isinstance(factory, str) or not factory:
+            raise ValueError(
+                "live_lane.factory must be a 'module:make_graph' string for "
+                "the langchain lane via the CLI (live graph objects cannot "
+                "ride a manifest; pass them through the Python facade)"
+            )
+        if rung is not None:
+            kwargs["rung"] = rung
+        if stanza.get("checkpointer") is not None:
+            kwargs["checkpointer"] = str(stanza["checkpointer"])
+        if stanza.get("cross_session_probe") is not None:
+            kwargs["cross_session_probe"] = bool(stanza["cross_session_probe"])
+        return live.run_lane("langchain", factory, scenario, **kwargs)
+    if lane == "mcp":
+        return live.run_lane("mcp", scenario, server=stanza.get("server"), **kwargs)
+    if lane == "a2a":
+        return live.run_lane("a2a", scenario, peer=stanza.get("peer"), **kwargs)
+    raise ValueError(f"unknown live lane: {lane!r}")
+
+
+def _run_live_lane_manifest(
+    manifest: Mapping[str, Any],
+    parsed: argparse.Namespace,
+    manifest_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+    prog: str,
+) -> int:
+    """`run`/`redteam` front door for manifests with a `live_lane` stanza
+    (Phase 3 guide §6.1). Flag preflight comes FIRST — before any lane-module
+    import resolves a framework — so the refusal works in an env without the
+    extra installed. Exit policy (MF6/PRD §4.1): any scenario fail => 1;
+    void rate > 0.5 => 1; unstable-only => 0 with the quarantine finding."""
+
+    try:
+        from agent_learning import live  # facade: imports NOTHING framework-side
+    except Exception as exc:
+        return _vendored_import_failed(prog, exc)
+
+    stanza_raw = manifest.get("live_lane")
+    stanza: Dict[str, Any] = (
+        dict(stanza_raw) if isinstance(stanza_raw, Mapping) else {}
+    )
+    lane = str(stanza.get("lane") or "")
+    if lane not in live.LANE_RUNNERS:
+        known = ", ".join(sorted(live.LANE_RUNNERS))
+        print(
+            f"{prog}: unknown live lane {lane!r}; expected one of: {known}",
+            file=sys.stderr,
+        )
+        return 1
+    flag = live.LANE_ENV_FLAGS[lane]
+    extra = live.LANE_EXTRAS[lane]
+    name = str(
+        parsed.name
+        or stanza.get("name")
+        or manifest.get("name")
+        or f"live-{lane}-lane"
+    )
+
+    def _refuse(findings: List[Dict[str, Any]]) -> int:
+        payload: Dict[str, Any] = {
+            "kind": AGENT_LEARNING_RUN_KIND,
+            "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+            "name": name,
+            "status": "failed",
+            "exit_code": 1,
+            "findings": findings,
+            "summary": {"lane": lane, "lane_executed": False},
+        }
+        return _emit_live_lane_payload(
+            payload,
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=render_junit,
+            render_sarif=render_sarif,
+            render_markdown=render_markdown,
+        )
+
+    # ---- preflight 1: the lane env flag (zero framework imports attempted) --
+    if os.environ.get(flag) != "1":
+        return _refuse(
+            [
+                {
+                    "type": "live_lane_flag_required",
+                    "level": "error",
+                    "lane": lane,
+                    "flag": flag,
+                    "reason": (
+                        f"manifest declares live_lane.lane={lane} but {flag} "
+                        "is not set"
+                    ),
+                    "remediation": (
+                        f"export {flag}=1   # opt-in; never set in "
+                        "release-check/CI defaults"
+                    ),
+                }
+            ]
+        )
+
+    rung = stanza.get("rung", 1)
+    rung_int = rung if isinstance(rung, int) and not isinstance(rung, bool) else None
+    floor = _LIVE_LANE_CREDENTIALED_RUNG_FLOOR.get(lane, 99)
+    credentialed = (
+        bool(stanza.get("credentialed"))
+        or str(rung) == "credentialed"
+        or (rung_int is not None and rung_int >= floor)
+    )
+    required_env = [
+        str(item) for item in (stanza.get("required_env") or []) if str(item)
+    ]
+
+    # ---- preflight 2: credentialed rungs need the flag AND the names --------
+    credential_preflight: Optional[Dict[str, Any]] = None
+    if credentialed:
+        cred_flag = live.LANE_ENV_FLAGS["credentialed"]
+        if os.environ.get(cred_flag) != "1":
+            return _refuse(
+                [
+                    {
+                        "type": "live_lane_flag_required",
+                        "level": "error",
+                        "lane": lane,
+                        "flag": cred_flag,
+                        "reason": (
+                            f"live_lane.rung={rung!r} is a credentialed rung "
+                            f"but {cred_flag} is not set"
+                        ),
+                        "remediation": (
+                            f"export {cred_flag}=1   # owner-triggered; "
+                            "CI never dials (PRD §6)"
+                        ),
+                    }
+                ]
+            )
+        preflight_rows: List[Dict[str, Any]] = []
+        for env_name in required_env:
+            row: Dict[str, Any] = {
+                "name": env_name,
+                "present": bool(os.environ.get(env_name)),
+            }
+            if row["present"]:
+                row["redacted"] = True  # names + presence, never values
+            preflight_rows.append(row)
+        missing = [row["name"] for row in preflight_rows if not row["present"]]
+        credential_preflight = {
+            "convention": "TH-5642 live E2E credential map",
+            "required_env": preflight_rows,
+            "passed": not missing,
+        }
+        if missing:
+            return _refuse(
+                [
+                    {
+                        "type": "live_credential_missing",
+                        "level": "error",
+                        "lane": lane,
+                        "missing": missing,
+                        "reason": (
+                            "credentialed rung requested; "
+                            f"{len(missing)} of {len(required_env)} required "
+                            "env names absent"
+                        ),
+                        "remediation": (
+                            "export the named variables (TH-5642 credential "
+                            "map); values are never logged"
+                        ),
+                    }
+                ]
+            )
+
+    # ---- flag set but extra missing -> UI-UX §6.1 contract, exit 2 ----------
+    if not _live_lane_extra_available(lane):
+        return _live_lane_extra_missing(prog, lane, extra)
+
+    repeats_raw = (
+        parsed.repeats if parsed.repeats is not None else stanza.get("repeats")
+    )
+    if repeats_raw is None:
+        repeats = int(live.DEFAULT_REPEATS)
+    else:
+        try:
+            repeats = int(repeats_raw)
+        except (TypeError, ValueError):
+            print(
+                f"{prog}: live_lane.repeats must be an integer, "
+                f"got {repeats_raw!r}",
+                file=sys.stderr,
+            )
+            return 1
+    if repeats < 1:
+        print(f"{prog}: repeats must be >= 1", file=sys.stderr)
+        return 1
+
+    scenarios_raw = stanza.get("scenarios")
+    if isinstance(scenarios_raw, list) and scenarios_raw:
+        scenario_items: List[Any] = list(scenarios_raw)
+    else:
+        single = stanza.get("scenario")
+        scenario_items = [single if isinstance(single, Mapping) else {}]
+    scenario_list: List[Any] = []
+    for index, item in enumerate(scenario_items, start=1):
+        scenario = dict(item) if isinstance(item, Mapping) else {}
+        scenario_id = str(
+            scenario.get("id")
+            or scenario.get("scenario_id")
+            or scenario.get("name")
+            or f"scenario-{index}"
+        )
+        scenario.setdefault("name", scenario_id)
+        scenario_list.append((scenario_id, scenario))
+
+    common_kwargs: Dict[str, Any] = {"repeats": repeats}
+    if required_env:
+        common_kwargs["required_env"] = required_env
+    for key in ("version_requirement", "budget_s", "artifacts_dir"):
+        if stanza.get(key) is not None:
+            common_kwargs[key] = stanza[key]
+
+    lane_runs: List[Dict[str, Any]] = []
+    scenario_rows: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    verdict_counts: Dict[str, int] = {
+        "pass": 0,
+        "fail": 0,
+        "unstable": 0,
+        "void": 0,
+    }
+    icc_values: List[float] = []
+    evidence_class = "live_lane"
+    rung_label: Any = rung
+
+    for scenario_id, scenario in scenario_list:
+        try:
+            lane_payload = _dispatch_live_lane_scenario(
+                live, lane, scenario, stanza, common_kwargs, rung_int
+            )
+        except live.LaneDisabledError as exc:
+            # belt-and-braces: the substrate's own dynamic refusal
+            return _refuse(
+                [
+                    {
+                        "type": "live_lane_flag_required",
+                        "level": "error",
+                        "lane": lane,
+                        "flag": flag,
+                        "reason": str(exc),
+                        "remediation": (
+                            f"export {flag}=1   # opt-in; never set in "
+                            "release-check/CI defaults"
+                        ),
+                    }
+                ]
+            )
+        except (ImportError, ModuleNotFoundError):
+            return _live_lane_extra_missing(prog, lane, extra)
+        except Exception as exc:
+            print(f"{prog}: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(lane_payload, Mapping):
+            print(
+                f"{prog}: lane runner returned a non-mapping payload",
+                file=sys.stderr,
+            )
+            return 1
+        lane_payload = dict(lane_payload)
+        lane_payload["scenario_id"] = scenario_id
+        block_raw = lane_payload.get("live_lane")
+        block = dict(block_raw) if isinstance(block_raw, Mapping) else {}
+        verdict = str(block.get("verdict") or "void")
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        evidence_class = str(block.get("evidence_class") or evidence_class)
+        rung_label = block.get("rung", rung_label)
+        if isinstance(block.get("icc"), (int, float)):
+            icc_values.append(float(block["icc"]))
+        determinism_raw = block.get("determinism")
+        determinism = (
+            dict(determinism_raw) if isinstance(determinism_raw, Mapping) else {}
+        )
+        row = {
+            "scenario_id": scenario_id,
+            "verdict": verdict,
+            "verdict_reason": block.get("verdict_reason"),
+            "evidence_class": block.get("evidence_class"),
+            "scored": verdict in ("pass", "fail"),
+            "quarantined": verdict in ("unstable", "void"),
+            "repeats": block.get("repeats"),
+            "repeats_completed": block.get("repeats_completed"),
+            "quarantined_repeats": block.get("quarantined_repeats"),
+            "variance": {
+                "icc": block.get("icc"),
+                "within_query_variance": block.get("within_variance"),
+                "divergence_step": block.get("divergence_step"),
+                "distinct_action_sequences": determinism.get(
+                    "distinct_trajectory_count"
+                ),
+            },
+        }
+        if verdict == "void":
+            row["failure_layer"] = "lane_infra"
+        scenario_rows.append(row)
+        for finding in lane_payload.get("findings") or []:
+            if isinstance(finding, Mapping):
+                annotated = dict(finding)
+                annotated.setdefault("scenario_id", scenario_id)
+                findings.append(annotated)
+        lane_runs.append(lane_payload)
+
+    # ---- exit policy (MF6): fail => 1; void rate > 0.5 => 1; else 0 ---------
+    total = len(scenario_rows)
+    fails = verdict_counts.get("fail", 0)
+    voids = verdict_counts.get("void", 0)
+    void_rate = (voids / total) if total else 0.0
+    exit_code = 1 if (fails > 0 or void_rate > 0.5) else 0
+    status = "failed" if exit_code else "passed"
+
+    import statistics
+
+    variance_summary = {
+        "icc_median": (
+            round(statistics.median(icc_values), 6) if icc_values else None
+        ),
+        "icc_min": round(min(icc_values), 6) if icc_values else None,
+    }
+
+    live_block: Dict[str, Any] = {
+        "lane": lane,
+        "env_flag": flag,
+        "rung": rung_label,
+        "evidence_class": evidence_class,
+        "repeats": repeats,
+    }
+    if credential_preflight is not None:
+        live_block["credential_preflight"] = credential_preflight
+
+    payload: Dict[str, Any] = {
+        "kind": AGENT_LEARNING_RUN_KIND,
+        "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+        "name": name,
+        "status": status,
+        "exit_code": exit_code,
+        "live_lane": live_block,
+        "scenarios": scenario_rows,
+        "live_lane_runs": lane_runs,
+        "findings": findings,
+        "summary": {
+            "lane": lane,
+            "rung": rung_label,
+            "evidence_class": evidence_class,
+            "release_admissible": False,  # ALWAYS false for live classes
+            "lane_executed": True,
+            "scenario_count": total,
+            "repeats_per_scenario": repeats,
+            "verdicts": verdict_counts,
+            "void_rate": round(void_rate, 6),
+            "variance": variance_summary,
+        },
+    }
+    return _emit_live_lane_payload(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+
+
+def _live_run_scenario_id(run: Mapping[str, Any]) -> str:
+    if run.get("scenario_id"):
+        return str(run["scenario_id"])
+    scenario = run.get("scenario")
+    if isinstance(scenario, Mapping) and scenario.get("name"):
+        return str(scenario["name"])
+    return str(run.get("name") or "scenario-1")
+
+
+def _select_live_lane_run(
+    document: Any, scenario_id: Optional[str]
+) -> Dict[str, Any]:
+    if not isinstance(document, Mapping):
+        raise ValueError("artifact root must be a JSON object")
+    runs = document.get("live_lane_runs")
+    candidates: List[Dict[str, Any]] = []
+    if isinstance(runs, list):
+        candidates = [dict(run) for run in runs if isinstance(run, Mapping)]
+    else:
+        block = document.get("live_lane")
+        if isinstance(block, Mapping) and block.get("per_repeat") is not None:
+            candidates = [dict(document)]
+    if not candidates:
+        raise ValueError(
+            "artifact has no live lane runs (expected live_lane_runs[] or a "
+            "live_lane block with per_repeat rows)"
+        )
+    if scenario_id is None:
+        if len(candidates) == 1:
+            return candidates[0]
+        known = ", ".join(
+            sorted(_live_run_scenario_id(run) for run in candidates)
+        )
+        raise ValueError(
+            f"artifact holds {len(candidates)} lane scenarios; pass "
+            f"--scenario (one of: {known})"
+        )
+    for run in candidates:
+        if _live_run_scenario_id(run) == str(scenario_id):
+            return run
+    known = ", ".join(sorted(_live_run_scenario_id(run) for run in candidates))
+    raise ValueError(
+        f"scenario {scenario_id!r} not found in the artifact "
+        f"(one of: {known})"
+    )
+
+
+def _capture_fixture(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn simulate capture-fixture",
+        description=(
+            "Demote a live-run artifact into a credential-free fixture: a "
+            "CANDIDATE without --reviewed-by (run-artifacts dir only), a "
+            "reviewed captured_fixture with it (Phase 3 §6.2)."
+        ),
+    )
+    parser.add_argument(
+        "artifact",
+        help=(
+            "Path to a live-run artifact (agent-learning.run.v1 with a "
+            "live_lane block, e.g. an `agent-learn run` lane output)."
+        ),
+    )
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Scenario id to capture when the artifact holds several.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help=(
+            "Fixture destination. Candidates must stay under the run's "
+            "artifacts dir; examples/captured/<lane>/ accepts only "
+            "--reviewed-by fixtures (live_lane_boundary gate)."
+        ),
+    )
+    parser.add_argument(
+        "--reviewed-by",
+        default=None,
+        help=(
+            "Reviewer name: re-runs the credential-free replay and stamps "
+            "evidence_class=captured_fixture, reviewed=true."
+        ),
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=None,
+        help="Capture this repeat index instead of the first passing repeat.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print the JSON summary on success.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import live  # facade: imports NOTHING framework-side
+    except Exception as exc:
+        return _vendored_import_failed(
+            "agent-learn simulate capture-fixture", exc
+        )
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    try:
+        document = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"agent-learn simulate capture-fixture: {exc}", file=sys.stderr)
+        return 1
+    try:
+        lane_payload = _select_live_lane_run(document, parsed.scenario)
+    except ValueError as exc:
+        print(f"agent-learn simulate capture-fixture: {exc}", file=sys.stderr)
+        return 1
+
+    import dataclasses as _dataclasses
+
+    block_raw = lane_payload.get("live_lane")
+    block = dict(block_raw) if isinstance(block_raw, Mapping) else {}
+    field_names = {
+        field.name for field in _dataclasses.fields(live.LaneRunResult)
+    }
+    try:
+        result = live.LaneRunResult(
+            **{key: value for key, value in block.items() if key in field_names}
+        )
+    except TypeError as exc:
+        print(
+            "agent-learn simulate capture-fixture: artifact live_lane block "
+            f"is not a lane run result: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    scenario_raw = lane_payload.get("scenario")
+    scenario = dict(scenario_raw) if isinstance(scenario_raw, Mapping) else None
+    summary: Dict[str, Any] = {
+        "kind": "agent-learning.fixture-capture.v1",
+        "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+        "name": "capture-{}-{}".format(
+            result.lane, result.run_id[:8] if result.run_id else "fixture"
+        ),
+        "capture": {
+            "source_artifact": str(artifact_path),
+            "scenario_id": parsed.scenario or _live_run_scenario_id(lane_payload),
+            "output": str(parsed.output),
+            "reviewed_by": parsed.reviewed_by,
+        },
+    }
+    try:
+        fixture_path = live.capture_fixture(
+            result,
+            output=Path(parsed.output),
+            reviewed_by=parsed.reviewed_by,
+            scenario=scenario,
+            repeat_index=parsed.repeat,
+        )
+    except live.CaptureRefusedError as exc:
+        summary["status"] = "failed"
+        summary["exit_code"] = 1
+        summary["findings"] = [dict(exc.finding)]
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+        return 1
+    except Exception as exc:
+        print(f"agent-learn simulate capture-fixture: {exc}", file=sys.stderr)
+        return 1
+
+    fixture_payload = json.loads(
+        Path(fixture_path).read_text(encoding="utf-8")
+    )
+    capture_block_raw = fixture_payload.get("capture")
+    capture_block = (
+        dict(capture_block_raw) if isinstance(capture_block_raw, Mapping) else {}
+    )
+    summary["status"] = "passed"
+    summary["exit_code"] = 0
+    summary["findings"] = []
+    summary["fixture"] = {
+        "path": str(fixture_path),
+        "evidence_class": fixture_payload.get("evidence_class"),
+        "reviewed": capture_block.get("reviewed"),
+        "reviewer": capture_block.get("reviewer"),
+        "captured_from_lane": capture_block.get("captured_from_lane"),
+        "transcript_sha256": capture_block.get("transcript_sha256"),
+    }
+    if parsed.reviewed_by is not None:
+        # capture_to_fixture already refused on a non-green replay; surface
+        # the replay verdict as evidence in the summary.
+        summary["replay"] = live.replay_fixture(fixture_path)
+    if not parsed.quiet:
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+    return 0
 
 
 def _eval(args: Sequence[str]) -> int:
@@ -938,6 +1689,34 @@ def _redteam(args: Sequence[str]) -> int:
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
         manifest = redteam.load_manifest_file(manifest_path)
+    except Exception as exc:
+        print(f"agent-learn redteam: {exc}", file=sys.stderr)
+        return 1
+
+    if isinstance(manifest.get("live_lane"), Mapping):
+        # Live red-team targets ride the same lane front door (Phase 3 §6.1);
+        # the same flag preflight refuses before any framework import.
+        return _run_live_lane_manifest(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=redteam.render_junit,
+            render_sarif=redteam.render_sarif,
+            render_markdown=redteam.render_markdown,
+            prog="agent-learn redteam",
+        )
+    if parsed.repeats is not None:
+        return _repeats_requires_live_lane(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=redteam.render_junit,
+            render_sarif=redteam.render_sarif,
+            render_markdown=redteam.render_markdown,
+            kind=AGENT_LEARNING_REDTEAM_KIND,
+        )
+
+    try:
         payload = _run_async(
             redteam.redteam_manifest_file(
                 manifest_path,
@@ -1450,6 +2229,15 @@ def _add_manifest_run_args(parser: argparse.ArgumentParser) -> None:
         help="Validate manifest/env without executing.",
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help=(
+            "Override live_lane.repeats for a manifest with a live_lane "
+            "stanza (legal only then; P3-D2 budget caps still apply)."
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Do not print JSON summary when no output path is configured.",
@@ -1502,6 +2290,15 @@ def _add_redteam_args(parser: argparse.ArgumentParser) -> None:
         "--dry-run",
         action="store_true",
         help="Validate red-team manifest/env without executing.",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help=(
+            "Override live_lane.repeats for a manifest with a live_lane "
+            "stanza (legal only then; P3-D2 budget caps still apply)."
+        ),
     )
     parser.add_argument(
         "--quiet",

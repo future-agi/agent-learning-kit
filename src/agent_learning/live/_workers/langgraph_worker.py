@@ -47,6 +47,19 @@ def _capability_hash(framework: str, version: str) -> str:
     return hashlib.sha256(f"{framework}:{version}".encode("utf-8")).hexdigest()
 
 
+def _package_paths(module: Any) -> list[str]:
+    """Filesystem roots of a framework package for traceback attribution.
+
+    langgraph (like livekit) ships as a NAMESPACE package: ``__file__`` is
+    None and the roots live on ``__path__`` instead.
+    """
+
+    file = getattr(module, "__file__", None)
+    if file:
+        return [os.path.dirname(file)]
+    return [str(path) for path in getattr(module, "__path__", None) or []]
+
+
 def _turn_input(turn: dict[str, Any]) -> Any:
     if "input" in turn:
         return turn["input"]
@@ -73,11 +86,11 @@ def _run(boot: dict[str, Any]) -> None:
     import langgraph
 
     version = importlib.metadata.version("langgraph")
-    package_paths = [os.path.dirname(langgraph.__file__)]
+    package_paths = _package_paths(langgraph)
     try:
         import langchain_core
 
-        package_paths.append(os.path.dirname(langchain_core.__file__))
+        package_paths.extend(_package_paths(langchain_core))
     except ImportError:
         pass
     _emit(
