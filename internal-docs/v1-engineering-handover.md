@@ -5,11 +5,18 @@
 Hand this document to the next engineering owner as the starting point.
 
 - Date: 2026-06-10.
-- Branch observed: `main`.
-- Baseline before the latest proof:
-  `a21cbbb Promote transcript adapter probes`.
+- Branch observed: `release/v1-agent-learning-kit`.
+- Cut commit: the commit tagged `v1.0.0-rc.1` (the tag is created only after
+  the full release proof passes on that exact commit, so the tagged commit is
+  the proved commit).
 - Current handoff status:
-  V1 release-candidate proof passed on the observed checkout.
+  V1 release-candidate cut and proved; the full release proof passed on the
+  cut commit.
+- Release gate count: 66 executable `agent-learn release-check` gates (65 at
+  the Phase-1 audit, +1 for the new `package_distribution_hygiene` gate); the
+  gate set is closed-set asserted in tests.
+- Forward plan: `internal-docs/agent-trinity/v1-program/` (in the core
+  internal-docs repo) — phased PRD-driven program; Phase 1 = this release cut.
 - This is ready to move into release-cut discipline, not broad product-complete
   positioning.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
@@ -18,15 +25,14 @@ Hand this document to the next engineering owner as the starting point.
   robustness axes. OpenEnv/Gymnasium remain compatibility input shapes only.
 - The current package manifests do not list OpenEnv, legacy Gym, or Gymnasium as
   runtime dependencies.
-- The recurring unrelated local file is `uv.lock`. Do not stage, delete, or
-  overwrite it unless the owner decides to adopt it.
+- `uv.lock` is tracked in git and excluded from the sdist (decision D4 in the
+  Phase-1 PRD); it is no longer an unrelated local file.
 - Package versions at proof time are Python `agent-learning-kit==0.1.0`, root
   TypeScript workspace `0.1.0`, and
-  `@future-agi/agent-learning-kit==0.2.0`. Decide whether the first public V1
-  cut keeps these package versions or bumps them before tagging.
-- Python metadata still classifies the package as
-  `Development Status :: 3 - Alpha`; decide whether that is intentional for the
-  first V1 tag or update it before publishing.
+  `@future-agi/agent-learning-kit==0.2.0`. Decisions D1/D2 keep these labels
+  for the v1 cut; the tag, not the semver, names the product milestone.
+- Python metadata now classifies the package as
+  `Development Status :: 4 - Beta` (decision D3).
 - The repository now includes a root `LICENSE` file with Apache-2.0 text, and
   both TypeScript package manifests declare `Apache-2.0` license metadata.
 - Release-candidate notes and publish checklist:
@@ -36,11 +42,11 @@ Hand this document to the next engineering owner as the starting point.
 - Release-proof timeout handling now terminates timed-out process groups and
   uses a 2400-second default per command so the expanded v1 suite is not cut off
   at the old 1200-second ceiling.
-- Post-proof active-goal increment: framework adapter capability profiles now
-  provide a portable simulate-sdk / ai-evaluation / agent-opt handshake derived
-  from native adapter contracts. Before cutting a release from a commit that
-  includes this increment, rerun full `agent-learn release-proof` on that exact
-  commit.
+- The framework adapter capability-profile increment (a portable simulate-sdk
+  / ai-evaluation / agent-opt handshake derived from native adapter contracts)
+  is included in this cut, and the full `agent-learn release-proof` was rerun
+  on the cut commit — the commit tagged `v1.0.0-rc.1` — so the proof below
+  covers it.
 
 ## Immediate Answer
 
@@ -93,9 +99,9 @@ What is not done:
 The concise release-candidate summary for release owners is in
 `internal-docs/v1-release-candidate-notes.md`.
 
-Note: this proof predates the framework adapter capability-profile increment.
-Focused tests for that increment are separate; rerun full proof before tagging
-or publishing from the updated tree.
+Proof executed on the commit tagged `v1.0.0-rc.1` (the Phase-1 release-cut
+commit). The tag is created only after this proof passes, so the tagged commit
+is the proved commit.
 
 Command:
 
@@ -111,18 +117,24 @@ Result:
 - Overall: `status=passed`, `summary.ready=true`, `full_proof=true`.
 - Selected checks: 7/7 required checks selected and passed.
 - Failures/pending/skips: 0 failed, 0 pending, 0 skipped, 0 unknown selected.
-- `release_check`: passed.
-- `ruff`: passed with `All checks passed!`.
-- `pytest`: passed with `302 passed, 10 warnings`.
+- The seven passed checks: `release_check`, `ruff`, `pytest`, `build`,
+  `typescript_build`, `typescript_test`, and `git_diff_check`.
+- `release_check` inside this proof includes the two post-stale-proof gates,
+  `active_ai_evaluation_source_embedded` and `package_distribution_hygiene`
+  (66 gates total, closed-set asserted in tests).
+- Sdist hygiene: `sdist_member_count=564` with `sdist_forbidden_members=[]` —
+  previously the sdist leaked all 45 `internal-docs/` files, `uv.lock`, the
+  roadmap, internal guides, and 104 `typescript/` files.
+- `pytest`: passed with `307 passed` (305 at the Phase-1 audit + 2 new
+  distribution-hygiene tests).
 - Python build: passed, producing
   `agent_learning_kit-0.1.0.tar.gz` and
   `agent_learning_kit-0.1.0-py3-none-any.whl`.
 - TypeScript build: passed for `@future-agi/agent-learning-kit@0.2.0`.
-- TypeScript tests: passed with 21 passed suites, 2 skipped suites, 646 passed
-  tests, and 6 skipped tests. Jest still warns about an open async handle after
-  completion, but exits 0.
+- TypeScript tests: passed with 646 passed tests and 6 skipped tests.
 - `git diff --check`: passed.
-- Worktree after proof: only `?? uv.lock` is untracked.
+- Proof artifact: `/tmp/agent-learning-release-proof.json`, kind
+  `agent-learning.release-proof.v1`.
 
 ## Latest Transcript Adapter Promotion Slice
 
@@ -1068,6 +1080,35 @@ Result:
   `status=passed`, selected checks `release_check` and `git_diff_check` passed,
   wrote the then-current Browser/CUA selected proof artifact
 
+2026-06-10 Phase-1D release-cut proof (proof of record for this cut):
+
+```bash
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --output /tmp/agent-learning-release-proof.json \
+  --quiet
+```
+
+Result:
+
+- Executed on the commit tagged `v1.0.0-rc.1` (the Phase-1 cut commit; the
+  tag is created only after this proof passes).
+- `status=passed`, `summary.ready=true`, `full_proof=true`; 7/7 required
+  checks passed (`release_check`, `ruff`, `pytest`, `build`,
+  `typescript_build`, `typescript_test`, `git_diff_check`).
+- `release_check` covered all 66 gates, including the two post-stale-proof
+  gates `active_ai_evaluation_source_embedded` and
+  `package_distribution_hygiene`; hygiene evidence: `sdist_member_count=564`,
+  `sdist_forbidden_members=[]`.
+- Embedded pytest: `307 passed` (305 at the Phase-1 audit + 2 new
+  distribution-hygiene tests).
+- Python build artifacts: `agent_learning_kit-0.1.0.tar.gz` and
+  `agent_learning_kit-0.1.0-py3-none-any.whl`.
+- TypeScript build: `@future-agi/agent-learning-kit@0.2.0`; TypeScript tests:
+  646 passed, 6 skipped.
+- All earlier entries in this ledger remain historical records of prior
+  slices; this entry is the current proof for the `v1.0.0-rc.1` cut.
+
 ## Key Files
 
 Runtime and simulation:
@@ -1215,6 +1256,19 @@ Suggested next packets:
 
 ## Release Discipline
 
+Release prerequisites:
+
+- The `package_distribution_hygiene` gate must pass inside
+  `agent-learn release-check`: the sdist allowlist holds and the gate evidence
+  shows `sdist_forbidden_members=[]`. It is one of the 66 gates proved on the
+  cut commit and a prerequisite for any release cut.
+- Release-cut decisions D1–D7 (Python/TS version labels, Beta classifier,
+  `uv.lock` tracked + sdist-excluded, security contact as owner item,
+  `v1.0.0-rc.1` tag scheme, build/hatchling dev dependency group) are recorded
+  in the Phase-1 PRD:
+  `internal-docs/agent-trinity/v1-program/phase1-v1-release-cut/PRD.md` §5
+  (in the core internal-docs repo).
+
 Before handing the release candidate to another engineer:
 
 ```bash
@@ -1255,7 +1309,8 @@ git add LICENSE \
 git commit -m "Prepare v1 release readiness"
 ```
 
-Do not stage unrelated `uv.lock` unless the owner decides to adopt it.
+`uv.lock` is tracked in git per decision D4 (and excluded from the sdist);
+stage lockfile changes like any other file.
 
 ## Full V1 Completion Criteria
 

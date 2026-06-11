@@ -2,32 +2,33 @@
 
 Date: 2026-06-10
 
-Observed branch: `main`
+Observed branch: `release/v1-agent-learning-kit`
 
-Baseline candidate commit before release-candidate handoff metadata:
-`a21cbbb Promote transcript adapter probes`
+Cut commit: the commit tagged `v1.0.0-rc.1` (the tag is created only after
+the full release proof passes on that exact commit).
 
 ## Decision
 
-The v1 release-candidate gate is green. The codebase is ready to enter release
-cut operations once the owner decides package version labels and lockfile
-policy.
+The v1 release-candidate gate is green and the Phase-1 release-cut decisions
+are recorded and applied. Decisions D1–D7 — Python version label kept at
+`0.1.0` (D1), TypeScript `@future-agi/agent-learning-kit` kept at `0.2.0`
+with the root workspace private (D2), classifier moved to
+`Development Status :: 4 - Beta` (D3), `uv.lock` tracked in git and excluded
+from the sdist (D4), security contact kept as the owner's item (D5), annotated
+local tag `v1.0.0-rc.1` on the proved commit (D6), and the `build`/`hatchling`
+dev dependency group (D7) — are recorded in the Phase-1 PRD:
+`internal-docs/agent-trinity/v1-program/phase1-v1-release-cut/PRD.md` §5
+(in the core internal-docs repo).
 
 This is not a claim that the full long-term Agent Learning product vision is
 complete. It is a claim that the current v1 release contract has executable
-evidence and packaging proof.
-
-Update after this proof: the active-goal framework adapter capability-profile
-increment changed code and tests after the proof artifact below. Treat the
-artifact as evidence for the earlier release-readiness commit; rerun full
-`agent-learn release-proof` before publishing from a commit that includes the
-profile increment.
+evidence and packaging proof, rerun in full on the cut commit.
 
 ## Proof Artifact
 
-> Caveat: this proof predates the current HEAD — the capability-profile
-> increment and the `active_ai_evaluation_source_embedded` gate landed after it.
-> Phase 1D reruns the full proof on the cut commit and removes this caveat.
+Proof executed on the commit tagged `v1.0.0-rc.1` (the Phase-1 release-cut
+commit). The tag is created only after this proof passes, so the tagged commit
+is the proved commit.
 
 Command:
 
@@ -60,23 +61,32 @@ Checks that passed:
 - `typescript_test`
 - `git_diff_check`
 
+`release_check` inside this proof includes the two post-stale-proof gates,
+`active_ai_evaluation_source_embedded` and `package_distribution_hygiene`
+(66 gates total, closed-set asserted in tests).
+
+Sdist hygiene: `sdist_member_count=564` with `sdist_forbidden_members=[]` —
+previously the sdist leaked all 45 `internal-docs/` files, `uv.lock`, the
+roadmap, internal guides, and 104 `typescript/` files.
+
 Notable command evidence:
 
-- Python tests: `302 passed, 10 warnings`
+- Python tests: `307 passed` (305 at the Phase-1 audit + 2 new
+  distribution-hygiene tests)
 - Python build:
   `agent_learning_kit-0.1.0.tar.gz` and
   `agent_learning_kit-0.1.0-py3-none-any.whl`
 - TypeScript build:
   `@future-agi/agent-learning-kit@0.2.0`
-- TypeScript tests:
-  21 passed suites, 2 skipped suites, 646 passed tests, 6 skipped tests
-- TypeScript test note:
-  Jest exits 0 but still reports an open async handle warning after completion.
+- TypeScript tests: 646 passed tests, 6 skipped tests
+
+Proof artifact: `/tmp/agent-learning-release-proof.json`, kind
+`agent-learning.release-proof.v1`.
 
 ## Current Package Labels
 
 - Python distribution: `agent-learning-kit==0.1.0`
-- Python package classifier: `Development Status :: 3 - Alpha`
+- Python package classifier: `Development Status :: 4 - Beta`
 - Root TypeScript workspace: `0.1.0`
 - Public TypeScript package: `@future-agi/agent-learning-kit==0.2.0`
 - Repository license artifact: `LICENSE` with Apache-2.0 text
@@ -87,30 +97,23 @@ Notable command evidence:
   publish file list excludes tests, source maps, and TypeScript build-info
   files.
 
-Release owner decision:
-
-- Keep these package versions and call the release "v1" at the release/tag
-  level, or
-- Bump package versions before publishing and rerun full release-proof on the
-  exact publishing commit.
-- Keep the Python alpha classifier for a conservative first public release, or
-  change it before publishing and rerun full release-proof.
+These labels are settled by decisions D1–D3: the versions stay as listed, the
+classifier is Beta, and the `v1.0.0-rc.1` tag (not the semver) names the
+product milestone.
 
 ## Current Worktree Notes
 
 After the proof run:
 
-- `uv.lock` is untracked.
+- `uv.lock` is tracked in git and excluded from the sdist (decision D4).
 - Python build output exists under ignored `dist/`.
 - TypeScript build output exists under ignored
   `typescript/agent-learning-kit/dist/`.
-- The release-candidate documentation and license metadata updates are intended
-  to be committed before handoff.
+- The release-candidate documentation and license metadata updates are
+  committed on the cut commit.
 
 Release owner decision:
 
-- Decide whether `uv.lock` should be adopted, ignored, or removed from the
-  release worktree.
 - Do not publish from a dirty worktree unless the dirtiness is explicitly
   approved and documented.
 
@@ -134,23 +137,46 @@ Avoid these claims:
 
 ## Release-Cut Checklist
 
-Before publishing:
+Completed by Phase 1 (the `v1.0.0-rc.1` cut):
 
-1. Decide package version labels.
-2. Decide whether the Python `Development Status :: 3 - Alpha` classifier is
-   intentional for v1.
-3. Decide `uv.lock` policy.
-4. Choose publish targets and owner: PyPI or TestPyPI first, npm
-   `@future-agi/agent-learning-kit`, credentials, and 2FA process.
-5. Commit the release-candidate documentation and metadata files:
-   `LICENSE`, `NOTICE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`,
-   `CODE_OF_CONDUCT.md`, `.github/`, `docs/assets/`, `typescript/package.json`,
-   `typescript/agent-learning-kit/package.json`,
+1. Done (D1/D2) — package version labels decided: Python `0.1.0`, TypeScript
+   `@future-agi/agent-learning-kit` `0.2.0`; the tag names the milestone.
+2. Done (D3) — Python classifier moved to `Development Status :: 4 - Beta`.
+3. Done (D4) — `uv.lock` policy decided: tracked in git, excluded from the
+   sdist.
+4. Done — sdist hygiene enforced by the new `package_distribution_hygiene`
+   gate (`sdist_member_count=564`, `sdist_forbidden_members=[]`).
+5. Done — README claims reconciled with executable proof (edits R1–R8).
+6. Done — release-candidate documentation and metadata files committed on the
+   cut commit: `LICENSE`, `NOTICE`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+   `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.github/`, `docs/assets/`,
+   `typescript/package.json`, `typescript/agent-learning-kit/package.json`,
    `typescript/agent-learning-kit/LICENSE`,
-   `typescript/agent-learning-kit/NOTICE`,
-   `V1_RELEASE_ROADMAP.md`,
+   `typescript/agent-learning-kit/NOTICE`, `V1_RELEASE_ROADMAP.md`,
    `internal-docs/v1-engineering-handover.md`, and this file.
-6. If any package metadata or lockfile changes are made, rerun:
+7. Done — full release-proof rerun on the cut commit (the commit tagged
+   `v1.0.0-rc.1`); see Proof Artifact above.
+8. Done (D6) — CHANGELOG updated, release-notes draft written
+   (`internal-docs/v1-release-notes-draft.md`), and the annotated local tag
+   `v1.0.0-rc.1` created on the exact proved commit.
+
+Remaining owner items (push/publish stay owner actions):
+
+1. Set the security-contact address in `SECURITY.md` (D5) — the single
+   remaining owner edit before publishing.
+2. Choose publish targets and owner: PyPI or TestPyPI first, npm
+   `@future-agi/agent-learning-kit`, credentials, and 2FA process; `git push
+   --tags`, PyPI, and npm publishing remain explicit owner actions.
+3. Build/publish the Python and TypeScript artifacts with the same package
+   versions used in the proof.
+4. Verify the TypeScript package contents after build because npm publishes
+   ignored `dist/` output through `files=["dist"]`.
+5. Attach the release-proof JSON artifact or copy its summary into the release
+   record.
+6. Keep post-v1 framework/provider/frontend expansion out of the release-cut
+   unless it is separately implemented, documented, and proved.
+7. If any package metadata or lockfile changes are made before publishing,
+   rerun on the exact publishing commit:
 
    ```bash
    uv run python -m agent_learning.cli release-proof \
@@ -159,22 +185,12 @@ Before publishing:
      --quiet
    ```
 
-7. Create the release branch or tag from the exact proved commit.
-8. Build/publish Python artifacts with the same package version used in the
-   proof.
-9. Build/publish the TypeScript package with the same package version used in
-   the proof.
-10. Verify the TypeScript package contents after build because npm publishes
-   ignored `dist/` output through `files=["dist"]`.
-11. Attach the release-proof JSON artifact or copy its summary into the release
-   record.
-12. Keep post-v1 framework/provider/frontend expansion out of the release-cut
-   unless it is separately implemented, documented, and proved.
-
 ## Post-V1 Queue
 
 These are not blockers for this v1 release candidate:
 
+- `trinity.py` refactor: split the 42.7k-line gate registry into a
+  `trinity/gates/` package (known debt recorded in the Phase-1 PRD §6).
 - More arbitrary-framework adapter promotions.
 - More provider-shaped adapters.
 - Broader frontend/product proof surfaces.
