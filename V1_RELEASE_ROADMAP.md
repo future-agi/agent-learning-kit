@@ -47,6 +47,14 @@ Current release-candidate proof on 2026-06-10 passed all required checks with
 `summary.ready=true` and `full_proof=true`:
 `release_check`, full-repo `ruff`, full Python `pytest`, Python package build,
 TypeScript package build, TypeScript package tests, and `git diff --check`.
+Milestone statuses below marked "mostly complete" or "in progress" are
+extend-only relative to that proof: the v1 contract their gates assert is frozen
+and proved; the named extensions land post-v1 without weakening any gate.
+
+> Caveat: this proof predates the current HEAD — the capability-profile
+> increment and the `active_ai_evaluation_source_embedded` gate landed after it.
+> Phase 1D reruns the full proof on the cut commit and removes this caveat.
+
 Remaining release-cut decisions are procedural: package version labels, Python
 package classifier, `uv.lock`, release notes, release branch/tag, and
 package-registry publishing.

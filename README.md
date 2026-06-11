@@ -25,7 +25,9 @@
 Agent Learning Kit is the local-first SDK and CLI for testing, simulating,
 red-teaming, and optimizing AI agents.
 
-It brings the three core Future AGI engines into one public developer surface:
+It brings the three core Future AGI engines into one public developer surface —
+three engines, four workflows: red-teaming rides on the `simulate` and `evals`
+engines rather than being a fourth engine:
 
 - `simulate`: run local worlds, tasks, framework-shaped adapters, replays, and
   regression artifacts.
@@ -42,12 +44,24 @@ Use it when you want one reproducible loop:
 4. Promote the result into a replayable artifact.
 5. Prove release readiness with local gates.
 
-OpenEnv/Gymnasium remain compatibility input shapes, not product ownership.
-They are compatibility inputs, not the product center. Agent Learning Kit is the
-primary runtime and release contract.
+OpenEnv/Gymnasium shapes are compatibility inputs, not the product center.
+Agent Learning Kit is the primary runtime and release contract, and the bar is
+the executable `environment_10x_robustness` release gate.
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 ## Install
+
+PyPI and npm publishing land at the v1 launch. Today, install from source:
+
+```bash
+git clone https://github.com/future-agi/agent-learning-kit
+cd agent-learning-kit
+pip install -e .
+```
+
+(or `uv sync` for contributors)
+
+At launch:
 
 ```bash
 pip install agent-learning-kit
@@ -61,7 +75,8 @@ pip install "agent-learning-kit[nli]"
 pip install "agent-learning-kit[all]"
 ```
 
-TypeScript evaluation package:
+TypeScript evaluation package (npm at launch; today build from
+[`typescript/agent-learning-kit`](typescript/agent-learning-kit)):
 
 ```bash
 pnpm add @future-agi/agent-learning-kit
@@ -69,13 +84,18 @@ pnpm add @future-agi/agent-learning-kit
 
 ## Quickstart
 
-Configure once:
+Configure once — one key. Set `AGENT_LEARNING_API_KEY` (it takes precedence
+over the `FUTURE_AGI_API_KEY` and `FI_API_KEY` aliases):
+
+```bash
+export AGENT_LEARNING_API_KEY="..."
+```
 
 ```python
 from agent_learning import configure
 from agent_learning import evals, optimize, redteam, simulate, suite
 
-configure(api_key="...")
+configure(api_key="...")  # optional override of AGENT_LEARNING_API_KEY
 ```
 
 Run the local doctor:
@@ -134,9 +154,11 @@ import { LocalEvaluator } from "@future-agi/agent-learning-kit/evals/local";
 
 - Prompt and response evaluations.
 - Local task and world simulations.
-- Framework adapter probes for LangChain, LangGraph, OpenAI Agents, AutoGen,
-  CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, MCP, A2A, and custom
-  orchestration objects.
+- Framework adapter probes (probe-promoted coverage) for LangChain, LangGraph,
+  LlamaIndex, AutoGen, CrewAI, LiveKit, Pipecat, Browser Use, MCP, A2A, and
+  custom orchestration objects.
+- Runtime-simulated coverage for PydanticAI (multi-framework runtime
+  simulation) and OpenAI Agents (handoff-transcript promotion).
 - Runtime-contract and trace-quality checks.
 - Multi-agent coordination and handoff tests.
 - Retrieval and memory quality checks.
@@ -219,9 +241,10 @@ kinds, packaging metadata, red-team corpus/campaign coverage, Future AGI
 UI/action/report artifacts, framework/provider compatibility, environment
 robustness, regression replay, and release proof.
 
-Current package labels may intentionally differ from the v1 release tag. See
-[`internal-docs/v1-release-candidate-notes.md`](internal-docs/v1-release-candidate-notes.md)
-before publishing.
+All v1 gates are green on the proved release commit (see the release-proof
+artifact). Roadmap milestones marked "mostly complete" or "in progress" are
+extend-only: the v1 contract those gates assert is frozen and proved; the named
+extensions land post-v1 without weakening any gate.
 
 ## Community
 

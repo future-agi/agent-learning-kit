@@ -25,6 +25,10 @@ profile increment.
 
 ## Proof Artifact
 
+> Caveat: this proof predates the current HEAD — the capability-profile
+> increment and the `active_ai_evaluation_source_embedded` gate landed after it.
+> Phase 1D reruns the full proof on the cut commit and removes this caveat.
+
 Command:
 
 ```bash
