@@ -11,9 +11,9 @@ artifact_kinds:
   - agent-learning.action-run.v1
 commands:
   - AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY=local-offline agent-learn optimize examples/agent_integration_optimization.json --output artifacts/agent-integration.json
-  - agent-learn actions examples/artifacts/agent-integration.json --output actions.json --markdown actions.md
-  - agent-learn action-run examples/artifacts/agent-integration.json --id report_agent_integration_readiness --dry-run --output action-run.json
-postcondition: python -c "import json; p=json.load(open('examples/artifacts/actions.json')); assert p['kind']=='agent-learning.actions.v1', p['kind']; assert 'report_agent_integration_readiness' in p['summary']['action_ids'], p['summary']['action_ids']; print('ok')"
+  - agent-learn actions artifacts/agent-integration.json --output actions.json --markdown actions.md
+  - agent-learn action-run artifacts/agent-integration.json --id report_agent_integration_readiness --dry-run --output action-run.json
+postcondition: python -c "import json; p=json.load(open('actions.json')); assert p['kind']=='agent-learning.actions.v1', p['kind']; assert 'report_agent_integration_readiness' in p['summary']['action_ids'], p['summary']['action_ids']; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -60,16 +60,17 @@ AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY=local-offline \
 agent-learn optimize examples/agent_integration_optimization.json \
   --output artifacts/agent-integration.json
 
-agent-learn actions examples/artifacts/agent-integration.json \
+agent-learn actions artifacts/agent-integration.json \
   --output actions.json --markdown actions.md
 
-agent-learn action-run examples/artifacts/agent-integration.json \
+agent-learn action-run artifacts/agent-integration.json \
   --id report_agent_integration_readiness --dry-run \
   --output action-run.json
 ```
 
-Relative outputs resolve against the input file's directory, so everything
-lands in `examples/artifacts/`. Drop `--dry-run` to execute; add
+Relative outputs resolve against your current working directory, so
+`actions.json`, `actions.md`, and `action-run.json` land where you run the
+commands. Drop `--dry-run` to execute; add
 `--input name=value` for actions whose `requires_input` is true.
 
 The same operations from the SDK:
@@ -77,12 +78,12 @@ The same operations from the SDK:
 ```python
 from agent_learning import actions
 
-artifact = actions.load_artifact_file("examples/artifacts/agent-integration.json")
-catalog = actions.action_catalog(artifact, source_path="examples/artifacts/agent-integration.json")
+artifact = actions.load_artifact_file("artifacts/agent-integration.json")
+catalog = actions.action_catalog(artifact, source_path="artifacts/agent-integration.json")
 result = actions.run_action(
     artifact,
     "report_agent_integration_readiness",
-    source_path="examples/artifacts/agent-integration.json",
+    source_path="artifacts/agent-integration.json",
     dry_run=True,
 )
 ```
@@ -92,7 +93,7 @@ result = actions.run_action(
 Postcondition (machine-checkable — same shape the docs gate enforces):
 
 ```bash
-python -c "import json; p=json.load(open('examples/artifacts/actions.json')); assert p['kind']=='agent-learning.actions.v1', p['kind']; assert 'report_agent_integration_readiness' in p['summary']['action_ids'], p['summary']['action_ids']; print('ok')"
+python -c "import json; p=json.load(open('actions.json')); assert p['kind']=='agent-learning.actions.v1', p['kind']; assert 'report_agent_integration_readiness' in p['summary']['action_ids'], p['summary']['action_ids']; print('ok')"
 ```
 
 `actions.json` carries each action's id, label, kind (`cli` or download),

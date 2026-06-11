@@ -75,9 +75,8 @@ agent-learn release-check --project-root . \
 ```
 
 JUnit files plug into any CI test reporter; SARIF files plug into
-code-scanning surfaces. Relative `--output` paths on run/redteam resolve
-against the manifest's directory; `release-check --output` resolves against
-your shell.
+code-scanning surfaces. Relative `--output` paths resolve against your
+current working directory, so everything above lands under `artifacts/`.
 
 The same release check from the SDK:
 
@@ -109,7 +108,7 @@ gitignored output, `regressions/` is where promoted baselines live.
 | --- | --- | --- |
 | `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
 | `summary.ready: false` | a named gate regressed | read the failing entry in `checks[]` — `reason` names the gate, `evidence` shows why |
-| run/redteam artifacts not where expected | path resolution | relative `--output` resolves against the manifest directory, not your shell |
+| run/redteam artifacts not where expected | path resolution | a relative `--output` lands in your current working directory — use absolute paths if your CI step changes directories |
 | scaffold files already exist | re-init without `--force` | rerun with `--force`, or init into a fresh directory |
 
 ## 5. Prove it / keep it

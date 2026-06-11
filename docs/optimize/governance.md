@@ -50,7 +50,7 @@ on. The committed manifest optimizes an `optimizer_trace` environment across
 layers — the candidates are governance configurations, scored on whether the
 trace they produce is complete and admissible.
 
-Phase 4 extends the audited record from "who proposed and who selected" to
+The audited record extends from "who proposed and who selected" to
 "why, in checkable form". Every proposal carries a structured five-member
 justification in its metadata — claim, reason, rule-with-example,
 application, conclusion (the panca-avayava schema, a Nyaya-Sutra syllogism

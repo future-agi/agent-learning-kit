@@ -11,9 +11,9 @@ artifact_kinds:
   - agent-learning.run.v1
 commands:
   - AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY=local-offline agent-learn optimize examples/workspace_observability_optimization.json --output artifacts/workspace-observability.json
-  - agent-learn report examples/artifacts/workspace-observability.json --output workspace-observability.report.json
+  - agent-learn report artifacts/workspace-observability.json --output workspace-observability.report.json
   - python examples/sdk_framework_adapter_trace_export.py artifacts/trace-export.json
-postcondition: python -c "import json; p=json.load(open('examples/artifacts/workspace-observability.json')); r=json.load(open('examples/artifacts/workspace-observability.report.json')); assert p['kind']=='agent-learning.optimization.v1', p['kind']; assert r['kind']=='agent-learning.report.v1', r['kind']; print('ok')"
+postcondition: python -c "import json; p=json.load(open('artifacts/workspace-observability.json')); r=json.load(open('artifacts/workspace-observability.report.json')); assert p['kind']=='agent-learning.optimization.v1', p['kind']; assert r['kind']=='agent-learning.report.v1', r['kind']; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -59,15 +59,15 @@ AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY=local-offline \
 agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability.json
 
-agent-learn report examples/artifacts/workspace-observability.json \
+agent-learn report artifacts/workspace-observability.json \
   --output workspace-observability.report.json
 
 python examples/sdk_framework_adapter_trace_export.py artifacts/trace-export.json
 ```
 
-Relative outputs resolve against the input file's directory, so the first two
-artifacts land in `examples/artifacts/`; the trace export lands under your
-shell's directory.
+The optimize `--output` resolves against your current working directory, and
+`report` writes its relative `--output` next to the input artifact, so all
+three artifacts land under `artifacts/`.
 
 The same operations from the SDK:
 
@@ -89,7 +89,7 @@ result = optimize.optimize_manifest_file(
 Postcondition (machine-checkable — same shape the docs gate enforces):
 
 ```bash
-python -c "import json; p=json.load(open('examples/artifacts/workspace-observability.json')); r=json.load(open('examples/artifacts/workspace-observability.report.json')); assert p['kind']=='agent-learning.optimization.v1', p['kind']; assert r['kind']=='agent-learning.report.v1', r['kind']; print('ok')"
+python -c "import json; p=json.load(open('artifacts/workspace-observability.json')); r=json.load(open('artifacts/workspace-observability.report.json')); assert p['kind']=='agent-learning.optimization.v1', p['kind']; assert r['kind']=='agent-learning.report.v1', r['kind']; print('ok')"
 ```
 
 The optimization artifact records the workspace run's evidence surfaces and

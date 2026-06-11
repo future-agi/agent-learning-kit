@@ -10,7 +10,7 @@ artifact_kinds:
 commands:
   - for key in $(python -c "import json; print(' '.join(json.load(open('examples/agent_learning_suite.json'))['required_env']))"); do export "$key=local-offline"; done
   - agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json --junit artifacts/suite.junit.xml --markdown artifacts/suite.md
-postcondition: python -c "import json; p=json.load(open('examples/artifacts/suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; assert p['trust_certificate']['verdict']=='approved', p['trust_certificate']['verdict']; print('ok')"
+postcondition: python -c "import json; p=json.load(open('artifacts/suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; assert p['trust_certificate']['verdict']=='approved', p['trust_certificate']['verdict']; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -60,8 +60,8 @@ agent-learn suite examples/agent_learning_suite.json \
   --markdown artifacts/suite.md
 ```
 
-Relative `--output` paths resolve against the manifest's directory, so the
-artifacts land in `examples/artifacts/`.
+Relative `--output` paths resolve against your current working directory,
+so the artifacts land in `artifacts/`.
 
 The same operation from the SDK:
 
@@ -77,10 +77,10 @@ print(result["trust_certificate"]["verdict"])
 Postcondition (machine-checkable — same shape the docs gate enforces):
 
 ```bash
-python -c "import json; p=json.load(open('examples/artifacts/suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; assert p['trust_certificate']['verdict']=='approved', p['trust_certificate']['verdict']; print('ok')"
+python -c "import json; p=json.load(open('artifacts/suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; assert p['trust_certificate']['verdict']=='approved', p['trust_certificate']['verdict']; print('ok')"
 ```
 
-`examples/artifacts/suite.json` contains every child result keyed by job id,
+`artifacts/suite.json` contains every child result keyed by job id,
 a `summary` with `executed_count`, `failed_count`, `capability_gate_passed`,
 `evidence_gate_passed`, and `framework_coverage`, and the `trust_certificate`
 block. The JUnit file gives your CI one test case per job; the Markdown file

@@ -67,3 +67,35 @@ def test_init_preset_golden_path_offline(
 
     _run_scaffold_commands(project)
     _assert_artifact(project / artifact, kind)
+
+
+def test_init_run_relative_output_resolves_against_cwd(
+    tmp_path, monkeypatch, capsys
+):
+    """Relative --output is the human path: it must land relative to the CWD
+    (the project dir the user runs from), not the manifest's directory."""
+    for env_name in (
+        "AGENT_LEARNING_API_KEY",
+        "FUTURE_AGI_API_KEY",
+        "FI_API_KEY",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    project = tmp_path / "run-relative-project"
+    assert main(["init", str(project), "--preset", "run", "--quiet"]) == 0
+
+    monkeypatch.chdir(project)
+    assert (
+        main(
+            ["run", "manifests/run.json", "--output", "artifacts/run-relative.json"]
+        )
+        == 0
+    )
+
+    artifact = project / "artifacts" / "run-relative.json"
+    assert artifact.is_file(), "relative --output must resolve against the CWD"
+    assert not (project / "manifests" / "artifacts").exists(), (
+        "relative --output must not resolve against the manifest directory"
+    )
+    _assert_artifact(artifact, "agent-learning.run.v1")
+    assert f"wrote {artifact.resolve()}" in capsys.readouterr().out

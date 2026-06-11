@@ -11,11 +11,13 @@
 <p align="center">
   <a href="LICENSE">Apache-2.0</a>
   ·
+  <a href="docs/index.md">Docs</a>
+  ·
   <a href="CONTRIBUTING.md">Contributing</a>
   ·
   <a href="SECURITY.md">Security</a>
   ·
-  <a href="V1_RELEASE_ROADMAP.md">V1 roadmap</a>
+  <a href="ROADMAP.md">V1 roadmap</a>
   ·
   <a href="LIBRARIES.md">Library inventory</a>
 </p>
@@ -84,25 +86,17 @@ pnpm add @future-agi/agent-learning-kit
 
 ## Quickstart
 
-Configure once — one key. Set `AGENT_LEARNING_API_KEY` (it takes precedence
-over the `FUTURE_AGI_API_KEY` and `FI_API_KEY` aliases):
-
-```bash
-export AGENT_LEARNING_API_KEY="..."
-```
-
-```python
-from agent_learning import configure
-from agent_learning import evals, optimize, redteam, simulate, suite
-
-configure(api_key="...")  # optional override of AGENT_LEARNING_API_KEY
-```
-
-Run the local doctor:
+Everything below runs fully offline — no API key, no network. Start with the
+local doctor:
 
 ```bash
 agent-learn doctor
 ```
+
+Then run the golden path against the bundled example manifests. The
+`AGENT_LEARNING_*_EXAMPLE_KEY` prefixes satisfy each manifest's
+`required_env` list — that list is CI wiring metadata, not a provider
+credential, so any placeholder value works.
 
 Evaluate a suite:
 
@@ -114,7 +108,8 @@ agent-learn eval examples/eval_suite.json \
 Simulate a run manifest:
 
 ```bash
-agent-learn run examples/run_manifest.json \
+AGENT_LEARNING_RUN_EXAMPLE_KEY=offline-demo-key \
+  agent-learn run examples/run_manifest.json \
   --no-eval \
   --output artifacts/run.json
 ```
@@ -122,16 +117,27 @@ agent-learn run examples/run_manifest.json \
 Optimize an agent workflow:
 
 ```bash
-agent-learn optimize examples/optimization_manifest.json \
+AGENT_LEARNING_OPTIMIZE_EXAMPLE_KEY=offline-demo-key \
+  agent-learn optimize examples/optimization_manifest.json \
   --output artifacts/optimization.json
 ```
 
 Run a red-team campaign:
 
 ```bash
-agent-learn redteam examples/redteam_manifest.json \
+AGENT_LEARNING_REDTEAM_EXAMPLE_KEY=offline-demo-key \
+  agent-learn redteam examples/redteam_manifest.json \
   --output artifacts/redteam.json
 ```
+
+Each command prints a `wrote <path>` line; relative `--output` paths resolve
+against your current working directory.
+
+Optional platform mode: to use Future AGI platform-backed evaluation, set
+`AGENT_LEARNING_API_KEY` (it takes precedence over the `FUTURE_AGI_API_KEY`
+and `FI_API_KEY` aliases), or call `configure(api_key="...")` from
+`agent_learning`. See
+[docs/reference/configure.md](docs/reference/configure.md).
 
 Cut local release proof:
 
@@ -193,6 +199,8 @@ The ai-evaluation source inventory used by `agent-learn release-check` lives at
 - [`src/fi/opt`](src/fi/opt): migrated `agent-opt` engine code.
 - [`typescript/agent-learning-kit`](typescript/agent-learning-kit): public
   TypeScript package, including the active evaluation SDK source.
+- [`docs/index.md`](docs/index.md): full documentation index.
+- [`ROADMAP.md`](ROADMAP.md): public v1 roadmap and post-v1 extensions.
 - [`LIBRARIES.md`](LIBRARIES.md): source map for the consolidated engines.
 - [`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md): executable v1 gate map.
 - [`internal-docs/`](internal-docs): handover, research, and release notes.
@@ -255,7 +263,5 @@ extensions land post-v1 without weakening any gate.
 
 ## Deep Dive
 
-The detailed CLI and SDK cookbook material lives in
-[internal-docs/agent-learning-kit-readme-deep-dive.md](internal-docs/agent-learning-kit-readme-deep-dive.md).
-Keep this README focused on public onboarding, install, quickstart, release
-proof, and contribution paths.
+The full documentation set — quickstarts, per-track guides, framework pages,
+and reference material — starts at [docs/index.md](docs/index.md).

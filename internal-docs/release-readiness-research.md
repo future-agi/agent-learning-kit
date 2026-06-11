@@ -34,8 +34,7 @@ Agent Learning Kit v1 release candidate.
 - Add `Issues` and `Changelog` project URLs in `pyproject.toml`.
 - Add explicit Python `license-files` metadata for `LICENSE` and `NOTICE`.
 - Add `CHANGELOG.md` so PyPI and GitHub have a release-history target.
-- Use Future AGI mark and reliability blueprint assets from
-  `/Users/nikhilpareek/Downloads/reliability-platform.zip` under `docs/assets/`
+- Use Future AGI mark and reliability blueprint assets under `docs/assets/`
   for README branding.
 - Move the long README cookbook/deep-dive material into
   `internal-docs/agent-learning-kit-readme-deep-dive.md` so the public README

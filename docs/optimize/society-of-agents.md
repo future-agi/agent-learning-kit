@@ -62,7 +62,7 @@ proposal, objection, synthesis, and pruning are separated into distinct
 roles, and a change survives only if its score holds across rounds — no
 single voice ratifies its own proposal.
 
-Phase 4 makes the assembly's temperament and procedure declared data. Each
+The assembly's temperament and procedure are declared data. Each
 role carries an optional guna mapping — `{rajas, sattva, tamas}`, each in
 [0, 1], derived from the role's archetype when absent — with deterministic
 mechanical effects: rajas scales mutation radius and proposal-slot share,

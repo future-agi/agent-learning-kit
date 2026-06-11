@@ -60,7 +60,7 @@ def test_rung1_virtual_clock_session_repeats_and_attributes():
 def test_rung3_livekit_cloud_session():
     import os
 
-    required = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")  # P3-D5 / TH-5642 names
+    required = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")  # P3-D5 names
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         pytest.skip(f"credentialed rung needs: {', '.join(missing)}")

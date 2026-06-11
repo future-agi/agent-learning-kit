@@ -25,10 +25,11 @@ opt_in_lane: true
 > · emits `agent-learning.run.v1` · offline, no credentials.
 > A coding agent can complete this page from the frontmatter alone.
 
-This is an opt-in lane: live LiveKit/Pipecat lanes are a roadmap phase; this
-page runs the local deterministic realtime fixture. When the live lanes
-land (Phase 3), the same manifests and trace contracts apply — only the
-transport changes.
+This is an opt-in lane. The first live-lane rung is implemented for LiveKit
+and Pipecat behind their opt-in extras; loopback-audio and telephony
+transports are planned (see [ROADMAP.md](../../ROADMAP.md)). This page runs
+the local deterministic realtime fixture — the same manifests and trace
+contracts apply on the live transports, only the transport changes.
 
 ## 1. What you are testing
 
@@ -71,8 +72,8 @@ AGENT_LEARNING_VOICE_STREAMING_EXAMPLE_KEY=offline-demo-key \
   --output artifacts/voice-realtime.json
 ```
 
-Note: `agent-learn` resolves a relative `--output` against the manifest's
-directory, so the second artifact lands at `examples/artifacts/voice-realtime.json`.
+Note: `agent-learn` resolves a relative `--output` against your current
+working directory, so the second artifact lands at `artifacts/voice-realtime.json`.
 
 SDK (the operation the twin performs):
 
@@ -120,4 +121,4 @@ Baseline a passing artifact and follow
 [`regression-lifecycle.md`](regression-lifecycle.md) so a timing regression
 shows up as a compare finding. For the framework-specific adapters behind
 the live lanes, see the LiveKit and Pipecat pages in `docs/frameworks/`
-(both flagged opt-in with the same Phase 3 pointer).
+(both flagged opt-in with the same roadmap pointer).

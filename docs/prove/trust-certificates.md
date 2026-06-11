@@ -13,9 +13,9 @@ artifact_kinds:
 commands:
   - for key in $(python -c "import json; print(' '.join(json.load(open('examples/agent_learning_suite.json'))['required_env']))"); do export "$key=local-offline"; done
   - agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
-  - agent-learn trust examples/artifacts/suite.json --output trust-verification.json --quiet
+  - agent-learn trust artifacts/suite.json --output trust-verification.json --quiet
   - AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY=local-offline agent-learn optimize examples/framework_certification_optimization.json --output artifacts/framework-certification.json
-postcondition: python -c "import json; p=json.load(open('examples/artifacts/trust-verification.json')); assert p['kind']=='agent-learning.suite.trust-verification.v1', p['kind']; assert p['status']=='passed', p['status']; print('ok')"
+postcondition: python -c "import json; p=json.load(open('trust-verification.json')); assert p['kind']=='agent-learning.suite.trust-verification.v1', p['kind']; assert p['status']=='passed', p['status']; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -61,7 +61,7 @@ for key in $(python -c "import json; print(' '.join(json.load(open('examples/age
 
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 
-agent-learn trust examples/artifacts/suite.json \
+agent-learn trust artifacts/suite.json \
   --output trust-verification.json --quiet
 
 AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY=local-offline \
@@ -69,8 +69,9 @@ agent-learn optimize examples/framework_certification_optimization.json \
   --output artifacts/framework-certification.json
 ```
 
-Relative outputs resolve against the input file's directory, so everything
-lands in `examples/artifacts/`. By default `trust` requires verdict
+Relative outputs resolve against your current working directory, so
+`artifacts/suite.json` and `trust-verification.json` land where you run the
+commands. By default `trust` requires verdict
 `approved` and `promotion_ready: true`; relax with `--allow-conditional` or
 `--no-require-promotion-ready` where your policy permits.
 
@@ -79,7 +80,7 @@ The same verification from the SDK:
 ```python
 from agent_learning import suite
 
-verdict = suite.verify_trust_certificate_file("examples/artifacts/suite.json")
+verdict = suite.verify_trust_certificate_file("artifacts/suite.json")
 assert verdict["status"] == "passed", verdict["findings"]
 ```
 
@@ -88,7 +89,7 @@ assert verdict["status"] == "passed", verdict["findings"]
 Postcondition (machine-checkable — same shape the docs gate enforces):
 
 ```bash
-python -c "import json; p=json.load(open('examples/artifacts/trust-verification.json')); assert p['kind']=='agent-learning.suite.trust-verification.v1', p['kind']; assert p['status']=='passed', p['status']; print('ok')"
+python -c "import json; p=json.load(open('trust-verification.json')); assert p['kind']=='agent-learning.suite.trust-verification.v1', p['kind']; assert p['status']=='passed', p['status']; print('ok')"
 ```
 
 The verification artifact records `observed_verdict`, `promotion_ready`,

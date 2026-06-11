@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import importlib
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
 from typing import Any
 
 from .config import AgentLearningConfig, configure, current_config, get_api_key
+
+try:
+    __version__ = _package_version("agent-learning-kit")
+except PackageNotFoundError:  # pragma: no cover - source tree without install
+    __version__ = "0.0.0+unknown"
 
 _SUBMODULES = {
     "actions",
@@ -31,6 +38,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "AgentLearningConfig",
+    "__version__",
     "actions",
     "capabilities",
     "configure",

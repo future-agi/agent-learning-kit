@@ -42,6 +42,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args:
         return _help()
     command = args[0]
+    if command in {"-h", "--help", "help"}:
+        return _help()
     if command == "doctor":
         return _doctor(args[1:])
     if command in {"release-check", "v1-check", "release"}:
@@ -240,7 +242,7 @@ def _init(args: Sequence[str]) -> int:
     payload["outputs_written"] = _write_json_outputs(
         payload,
         _as_list(parsed.output),
-        base_dir=target_dir,
+        base_dir=Path.cwd(),
     )
     if not payload["outputs_written"] and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
@@ -1099,7 +1101,7 @@ def _run_live_lane_manifest(
             preflight_rows.append(row)
         missing = [row["name"] for row in preflight_rows if not row["present"]]
         credential_preflight = {
-            "convention": "TH-5642 live E2E credential map",
+            "convention": "live E2E credential names",
             "required_env": preflight_rows,
             "passed": not missing,
         }
@@ -1117,8 +1119,8 @@ def _run_live_lane_manifest(
                             "env names absent"
                         ),
                         "remediation": (
-                            "export the named variables (TH-5642 credential "
-                            "map); values are never logged"
+                            "export the named credential variables; "
+                            "values are never logged"
                         ),
                     }
                 ]
@@ -2077,7 +2079,7 @@ def _trust(args: Sequence[str]) -> int:
         return 1
 
     output_paths = [
-        _resolve_output_path(str(path), artifact_path.parent)
+        _resolve_output_path(str(path), Path.cwd())
         for path in parsed.output
     ]
     payload["outputs_written"] = [str(path) for path in output_paths]
@@ -2761,6 +2763,9 @@ def _write_result_outputs(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render_markdown(payload, source_path=suite_path), encoding="utf-8")
         written.append(str(path))
+    if written and not getattr(args, "quiet", False):
+        for path_text in written:
+            print(f"wrote {Path(path_text).resolve()}")
     return written
 
 
@@ -3891,35 +3896,42 @@ def _result_output_paths(
         "markdown": [],
     }
     suite_outputs = dict(suite.get("outputs") or {})
+    # Manifest-declared outputs resolve against the manifest directory;
+    # user-supplied CLI paths resolve against the current working directory.
+    cli_base_dir = Path.cwd()
     raw_json = [
-        *_as_list(suite_outputs.get("json")),
-        *_as_list(getattr(args, "output", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("json"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "output", []))),
     ]
     raw_junit = [
-        *_as_list(suite_outputs.get("junit")),
-        *_as_list(getattr(args, "junit", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("junit"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "junit", []))),
     ]
     raw_sarif = [
-        *_as_list(suite_outputs.get("sarif")),
-        *_as_list(getattr(args, "sarif", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("sarif"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "sarif", []))),
     ]
     raw_markdown = [
-        *_as_list(suite_outputs.get("markdown")),
-        *_as_list(suite_outputs.get("md")),
-        *_as_list(getattr(args, "markdown", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("markdown"))),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("md"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "markdown", []))),
     ]
-    for value in raw_json:
-        path = _resolve_output_path(str(value), base_dir)
+    for value, value_base in raw_json:
+        path = _resolve_output_path(str(value), value_base)
         if path.name.endswith((".junit.xml", ".xml")):
             outputs["junit"].append(path)
         elif path.name.endswith((".sarif", ".sarif.json")):
             outputs["sarif"].append(path)
         else:
             outputs["json"].append(path)
-    outputs["junit"].extend(_resolve_output_path(str(value), base_dir) for value in raw_junit)
-    outputs["sarif"].extend(_resolve_output_path(str(value), base_dir) for value in raw_sarif)
+    outputs["junit"].extend(
+        _resolve_output_path(str(value), value_base) for value, value_base in raw_junit
+    )
+    outputs["sarif"].extend(
+        _resolve_output_path(str(value), value_base) for value, value_base in raw_sarif
+    )
     outputs["markdown"].extend(
-        _resolve_output_path(str(value), base_dir) for value in raw_markdown
+        _resolve_output_path(str(value), value_base) for value, value_base in raw_markdown
     )
     return outputs
 
@@ -4033,6 +4045,16 @@ def _doctor(args: Sequence[str] = ()) -> int:
         )
     if not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True))
+    summary = payload.get("summary") or {}
+    status = str(payload.get("status", "unknown"))
+    missing_public = len(summary.get("missing_public_modules") or [])
+    missing_engine = len(summary.get("missing_engine_modules") or [])
+    print(
+        f"doctor: {status} — "
+        f"missing public modules: {missing_public}, "
+        f"missing engine modules: {missing_engine}",
+        file=sys.stderr,
+    )
     return 0
 
 

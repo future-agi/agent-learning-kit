@@ -120,6 +120,7 @@ only-include = [
   "CONTRIBUTING.md",
   "SECURITY.md",
   "CODE_OF_CONDUCT.md",
+  "ROADMAP.md",
 ]
 exclude = [
   "examples/artifacts",

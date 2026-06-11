@@ -211,6 +211,7 @@ V1_SDIST_ONLY_INCLUDE = [
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
+    "ROADMAP.md",
 ]
 
 V1_SDIST_REQUIRED_PATHS = [
@@ -222,6 +223,7 @@ V1_SDIST_REQUIRED_PATHS = [
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
+    "ROADMAP.md",
     "src/agent_learning/",
     "src/fi/",
     "tests/",

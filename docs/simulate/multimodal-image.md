@@ -65,9 +65,9 @@ AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY=offline-demo-key \
   --output artifacts/multimodal-image-optimization.json
 ```
 
-Note: `agent-learn` resolves a relative `--output` against the manifest's
-directory, so the second artifact lands at
-`examples/artifacts/multimodal-image-optimization.json`.
+Note: `agent-learn` resolves a relative `--output` against your current
+working directory, so the second artifact lands at
+`artifacts/multimodal-image-optimization.json`.
 
 SDK (same operation as the first command):
 

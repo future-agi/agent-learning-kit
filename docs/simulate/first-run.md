@@ -9,7 +9,7 @@ artifact_kinds:
   - agent-learning.run.v1
 commands:
   - AGENT_LEARNING_RUN_EXAMPLE_KEY=offline-demo-key agent-learn run examples/run_manifest.json --output artifacts/first-run.json
-postcondition: python -c "import json; p=json.load(open('examples/artifacts/first-run.json')); assert p['kind']=='agent-learning.run.v1', p['kind']; print('ok')"
+postcondition: python -c "import json; p=json.load(open('artifacts/first-run.json')); assert p['kind']=='agent-learning.run.v1', p['kind']; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -57,8 +57,8 @@ AGENT_LEARNING_RUN_EXAMPLE_KEY=offline-demo-key \
   --output artifacts/first-run.json
 ```
 
-Note: `agent-learn` resolves a relative `--output` against the manifest's
-directory, so the artifact lands at `examples/artifacts/first-run.json`.
+Note: `agent-learn` resolves a relative `--output` against your current
+working directory, so the artifact lands at `artifacts/first-run.json`.
 
 SDK (same operation):
 
@@ -83,7 +83,7 @@ by the `agent_integration_readiness` gate.
 Postcondition (machine-checkable — same check the docs gate enforces):
 
 ```bash
-python -c "import json; p=json.load(open('examples/artifacts/first-run.json')); assert p['kind']=='agent-learning.run.v1', p['kind']; print('ok')"
+python -c "import json; p=json.load(open('artifacts/first-run.json')); assert p['kind']=='agent-learning.run.v1', p['kind']; print('ok')"
 ```
 
 Inside the artifact: `status` and `exit_code` for CI, a `summary` block with
@@ -97,7 +97,7 @@ produced. The `kind` field is the contract every downstream command
 | --- | --- | --- |
 | `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
 | manifest rejected / `required_env` missing | config fault | `summary.public_boundary_passed` + the manifest error line |
-| artifact missing after exit 0 | output path resolution | remember `--output` is manifest-relative (see §2 note) |
+| artifact missing after exit 0 | output path resolution | a relative `--output` lands in your current working directory (see §2 note) |
 
 ## 5. Prove it / keep it
 
@@ -106,7 +106,7 @@ or a framework object — see [`simulate-any-framework.md`](simulate-any-framewo
 turn `evaluation.enabled` on, and re-run. Then freeze the passing artifact:
 
 ```bash
-agent-learn simulate baseline examples/artifacts/first-run.json --output first-run-baseline.json
+agent-learn simulate baseline artifacts/first-run.json --output first-run-baseline.json
 ```
 
 That baseline is the entry point to the full

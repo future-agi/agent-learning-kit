@@ -40,7 +40,7 @@ class AgentDefinition(BaseModel):
 
     class Config:
         """Pydantic configuration."""
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "name": "openai-support-agent",
                 "url": "wss://your-livekit-server.com",
@@ -86,7 +86,7 @@ class SimulatorAgentDefinition(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "name": "simulator-customer",
                 "instructions": "You are a concise customer. Ask clarifying questions and confirm resolution.",

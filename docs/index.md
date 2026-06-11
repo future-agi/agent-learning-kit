@@ -42,7 +42,8 @@ sit in the simulate and evaluate rows of the index below.
 ## Pick a cookbook (stage × objective)
 
 Rows are the spine; columns are what you care about. This is the compact
-mirror — the full 67-page index is [cookbooks/index.md](cookbooks/index.md).
+mirror — the full 70-page index (every Markdown page under `docs/`, the
+same set `docs/llms.txt` lists) is [cookbooks/index.md](cookbooks/index.md).
 
 | | Behavior | Capability | Reliability | Safety |
 | --- | --- | --- | --- | --- |

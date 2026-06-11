@@ -4,7 +4,20 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
-- Nothing yet.
+Post-rc.1 increments on the release branch. Each one adds gates on top of the
+66 proved at rc.1; the rc.1 entry below is historical and unchanged.
+
+- Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework
+  pages, reference material, and the `docs/llms.txt` machine index) with
+  machine-checkable page metadata, enforced by the new `docs_executability`
+  release gate (67 gates).
+- Live lanes: opt-in live execution lanes (LiveKit, Pipecat, LangGraph, MCP,
+  A2A) behind per-framework extras, with the engine/public boundary enforced
+  by the new `live_lane_boundary` release gate (68 gates).
+- Optimizer expansion: optimizer portfolio routing, frozen capability
+  profiles, and apply plans, enforced by the two new Phase-4 gates
+  `optimizer_profile_matrix_readiness` and `capability_profile_freeze_readiness`
+  (70 gates).
 
 ## v1.0.0-rc.1 — 2026-06-10
 

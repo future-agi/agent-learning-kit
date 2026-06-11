@@ -98,6 +98,6 @@ every `agent-learn release-check` re-executes this exact frame-pipeline promotio
 path — the page stays true or the release fails. To keep your own pipeline honest,
 promote the run artifact into a regression baseline with the `baseline` /
 `promote-to-regression` / `compare` command family, then wire the manifest into CI.
-Live Pipecat transports (real audio in and out) are a Phase 3C opt-in lane — this
-page stays on the offline golden path. The reader's job here is maintenance of a
+Live Pipecat transports (real audio in and out) are an opt-in lane (see
+ROADMAP.md: voice lane rungs) — this page stays on the offline golden path. The reader's job here is maintenance of a
 living proof, not a one-off demo.

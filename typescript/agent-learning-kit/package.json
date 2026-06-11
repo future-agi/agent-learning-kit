@@ -71,7 +71,7 @@
     "esm",
     "esnext"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI <hello@futureagi.io>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/future-agi/agent-learning-kit.git"

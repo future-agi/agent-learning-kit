@@ -9,9 +9,9 @@ artifact_kinds:
   - agent-learning.run.v1
 commands:
   - AGENT_LEARNING_RUN_EXAMPLE_KEY=local-offline agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
-  - agent-learn capabilities examples/artifacts/run.json --require commands=run,redteam,suite --require result_kinds=agent-learning.run.v1 --output capabilities.json --quiet
+  - agent-learn capabilities artifacts/run.json --require commands=run,redteam,suite --require result_kinds=agent-learning.run.v1 --output capabilities.json --quiet
   - python examples/sdk_framework_adapter_capability_profiles.py artifacts/capability-profiles.json
-postcondition: python -c "import json; c=json.load(open('examples/artifacts/capabilities.json')); p=json.load(open('artifacts/capability-profiles.json')); assert c['summary']['capability_gate_passed'] is True, c['summary']; assert p['passed'] is True and p['framework_count']==5, p; print('ok')"
+postcondition: python -c "import json; c=json.load(open('capabilities.json')); p=json.load(open('artifacts/capability-profiles.json')); assert c['summary']['capability_gate_passed'] is True, c['summary']; assert p['passed'] is True and p['framework_count']==5, p; print('ok')"
 claims: []
 doctor_checks:
   - missing_public_modules
@@ -55,7 +55,7 @@ per-framework profiles:
 AGENT_LEARNING_RUN_EXAMPLE_KEY=local-offline \
 agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
 
-agent-learn capabilities examples/artifacts/run.json \
+agent-learn capabilities artifacts/run.json \
   --require commands=run,redteam,suite \
   --require result_kinds=agent-learning.run.v1 \
   --output capabilities.json --quiet
@@ -64,16 +64,16 @@ python examples/sdk_framework_adapter_capability_profiles.py \
   artifacts/capability-profiles.json
 ```
 
-Relative outputs resolve against the input file's directory: the catalog
-lands in `examples/artifacts/capabilities.json`, the profiles bundle in
-`artifacts/capability-profiles.json` under your shell's directory.
+Relative outputs resolve against your current working directory: the catalog
+lands in `capabilities.json`, the profiles bundle in
+`artifacts/capability-profiles.json`.
 
 The same operations from the SDK:
 
 ```python
 from agent_learning import actions, capabilities, simulate
 
-artifact = actions.load_artifact_file("examples/artifacts/run.json")
+artifact = actions.load_artifact_file("artifacts/run.json")
 catalog = capabilities.capability_catalog(
     [artifact],
     required_capabilities={"commands": ["run", "redteam", "suite"]},
@@ -87,7 +87,7 @@ profiles = simulate.framework_adapter_capability_profiles(matrix=matrix)
 Postcondition (machine-checkable — same shape the docs gate enforces):
 
 ```bash
-python -c "import json; c=json.load(open('examples/artifacts/capabilities.json')); p=json.load(open('artifacts/capability-profiles.json')); assert c['summary']['capability_gate_passed'] is True, c['summary']; assert p['passed'] is True and p['framework_count']==5, p; print('ok')"
+python -c "import json; c=json.load(open('capabilities.json')); p=json.load(open('artifacts/capability-profiles.json')); assert c['summary']['capability_gate_passed'] is True, c['summary']; assert p['passed'] is True and p['framework_count']==5, p; print('ok')"
 ```
 
 The catalog separates `static_capabilities` (what the installed kit supports)

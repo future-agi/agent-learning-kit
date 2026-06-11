@@ -10,7 +10,7 @@ artifact_kinds:
   - agent-learning.run.v1
 commands:
   - AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY=offline-demo-key agent-learn suite examples/multi_framework_simulation_suite.json --output artifacts/multi-framework-suite.json
-postcondition: python -c "import json; p=json.load(open('examples/artifacts/multi-framework-suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; print('ok')"
+postcondition: python -c "import json; p=json.load(open('artifacts/multi-framework-suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -57,8 +57,8 @@ AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY=offline-demo-key \
   --output artifacts/multi-framework-suite.json
 ```
 
-Note: `agent-learn` resolves a relative `--output` against the manifest's
-directory, so the artifact lands at `examples/artifacts/multi-framework-suite.json`.
+Note: `agent-learn` resolves a relative `--output` against your current
+working directory, so the artifact lands at `artifacts/multi-framework-suite.json`.
 
 SDK (same operation):
 
@@ -79,7 +79,7 @@ same suite programmatically from local framework shims
 Postcondition (machine-checkable — same check the docs gate enforces):
 
 ```bash
-python -c "import json; p=json.load(open('examples/artifacts/multi-framework-suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; print('ok')"
+python -c "import json; p=json.load(open('artifacts/multi-framework-suite.json')); assert p['kind']=='agent-learning.suite.v1', p['kind']; print('ok')"
 ```
 
 The suite artifact contains one child result per framework job, each an

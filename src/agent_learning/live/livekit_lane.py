@@ -7,7 +7,7 @@ env and the live_lane_boundary gate scans it like any release module.
 
 Rungs (P3-D3): 1 virtual-clock text driver (default, implemented) →
 2 loopback real-transport audio → 3 LiveKit Cloud/SIP (``live_credentialed``,
-TH-5642 names). Rung 1 is honest about its tier: timing-only voice metrics,
+standard LiveKit credential names). Rung 1 is honest about its tier: timing-only voice metrics,
 no ``channels`` block, no audio claims (guide §3.5).
 """
 
@@ -28,7 +28,7 @@ _RUNG_LABELS = {1: "virtual_clock", 2: "loopback_transport", 3: "cloud_sip"}
 
 # Rung-3 credential names: exactly the names the vendored engine reads
 # (engines/livekit.py reads LIVEKIT_API_KEY/LIVEKIT_API_SECRET; the server
-# URL arrives via LIVEKIT_URL per the TH-5642 credential map, P3-D5).
+# URL arrives via LIVEKIT_URL, P3-D5).
 RUNG3_REQUIRED_ENV = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
 
 _DEFAULT_TURNS = (

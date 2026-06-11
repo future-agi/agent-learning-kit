@@ -11,5 +11,7 @@ build/
 coverage/
 *.tsbuildinfo
 .DS_Store
+.env
+.env.*
 artifacts/
 examples/artifacts/
