@@ -15,8 +15,15 @@ Hand this document to the next engineering owner as the starting point.
 - Release gate count: 66 executable `agent-learn release-check` gates (65 at
   the Phase-1 audit, +1 for the new `package_distribution_hygiene` gate); the
   gate set is closed-set asserted in tests.
+- Post-tag Phase-2 increment (2026-06-11, after `v1.0.0-rc.1`): the
+  `docs_executability` gate landed (67 gates now), with the 67-page
+  born-executable `docs/` corpus, generated `docs/llms.txt`, offline init
+  golden paths, and the cookbooks mirror script. `release-check` passes 67/67
+  on the increment commits. Rerun the full `release-proof` before tagging or
+  publishing from a commit that includes this increment.
 - Forward plan: `internal-docs/agent-trinity/v1-program/` (in the core
-  internal-docs repo) — phased PRD-driven program; Phase 1 = this release cut.
+  internal-docs repo) — phased PRD-driven program; Phase 1 = this release cut
+  (done); Phase 2 (DX & cookbooks) implemented on top.
 - This is ready to move into release-cut discipline, not broad product-complete
   positioning.
 - Current evidence does not justify a broad "better than OpenEnv" claim.

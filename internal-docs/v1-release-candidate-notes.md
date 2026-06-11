@@ -65,6 +65,11 @@ Checks that passed:
 `active_ai_evaluation_source_embedded` and `package_distribution_hygiene`
 (66 gates total, closed-set asserted in tests).
 
+> Post-tag Phase-2 increment (2026-06-11): the `docs_executability` gate and
+> the 67-page docs corpus landed after this proof (67 gates now; 67/67 green
+> on `release-check`). Rerun the full release-proof before publishing from a
+> commit that includes the increment.
+
 Sdist hygiene: `sdist_member_count=564` with `sdist_forbidden_members=[]` —
 previously the sdist leaked all 45 `internal-docs/` files, `uv.lock`, the
 roadmap, internal guides, and 104 `typescript/` files.
