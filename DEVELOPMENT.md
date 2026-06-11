@@ -19,11 +19,23 @@ All new public SDK work should land here first:
   public config for compatibility only; new public code should not introduce a
   separate key model.
 
-The older repositories (`simulate-sdk`, `agent-opt`, and `ai-evaluation`) are
-legacy source/history during the migration. New runtime code should be moved
-into `agent-learning-kit`, not merely wrapped here. If a fix must first land in
-an old repo to stabilize an engine, copy the verified implementation into this
-repo before treating the public SDK work as done.
+`ai-evaluation` is an active engine for this release, not legacy history. Its
+Python runtime must be present under `src/fi/evals`, and its TypeScript SDK
+source must be present under `typescript/agent-learning-kit/src`.
+
+The older `simulate-sdk` and `agent-opt` repositories are source/history during
+the migration. New runtime code should be moved into `agent-learning-kit`, not
+merely wrapped here. If a fix must first land in an old repo to stabilize an
+engine, copy the verified implementation into this repo before treating the
+public SDK work as done.
+
+For the current source map, see [LIBRARIES.md](LIBRARIES.md). In short:
+
+- `ai-evaluation` lives under `src/fi/evals`.
+- `ai-evaluation` TypeScript source lives under `typescript/agent-learning-kit/src`.
+- `simulate-sdk` lives under `src/fi/simulate`.
+- `agent-opt` lives under `src/fi/opt`.
+- Public Python APIs live under `src/agent_learning`.
 
 When moving an existing surface:
 

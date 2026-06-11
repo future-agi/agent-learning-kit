@@ -16,6 +16,8 @@
   <a href="SECURITY.md">Security</a>
   ·
   <a href="V1_RELEASE_ROADMAP.md">V1 roadmap</a>
+  ·
+  <a href="LIBRARIES.md">Library inventory</a>
 </p>
 
 ![Agent Learning lifecycle blueprint](docs/assets/hero-agent-blueprint.jpg)
@@ -153,13 +155,21 @@ The public SDK is `agent-learning-kit`, the Python namespace is
 `agent_learning`, the CLI is `agent-learn`, and the TypeScript package is
 `@future-agi/agent-learning-kit`.
 
+The active `ai-evaluation` code is included here under `src/fi/evals`, with its
+TypeScript SDK source under `typescript/agent-learning-kit/src`. The
+`simulate-sdk` and `agent-opt` engine code is included under `src/fi/simulate`
+and `src/fi/opt`. See [LIBRARIES.md](LIBRARIES.md) for the complete source map.
+
 ## Repository Map
 
 - [`examples/`](examples): runnable cookbooks and manifests.
 - [`src/agent_learning`](src/agent_learning): public Python SDK facade and CLI.
-- [`src/fi`](src/fi): vendored simulation and evaluation engines.
+- [`src/fi/evals`](src/fi/evals): active `ai-evaluation` engine code.
+- [`src/fi/simulate`](src/fi/simulate): migrated `simulate-sdk` engine code.
+- [`src/fi/opt`](src/fi/opt): migrated `agent-opt` engine code.
 - [`typescript/agent-learning-kit`](typescript/agent-learning-kit): public
-  TypeScript package.
+  TypeScript package, including the active evaluation SDK source.
+- [`LIBRARIES.md`](LIBRARIES.md): source map for the consolidated engines.
 - [`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md): executable v1 gate map.
 - [`internal-docs/`](internal-docs): handover, research, and release notes.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): local development and PR workflow.
