@@ -406,6 +406,61 @@ V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
     r"\bonly\s+(?:tool|kit|sdk|framework)\b": None,
 }
 
+# Top-level import roots of the lane extras. "mcp" and "a2a" are the import
+# names of the mcp / a2a-sdk distributions.
+V1_LIVE_LANE_EXTRA_PACKAGES = [
+    "livekit",
+    "pipecat",
+    "langchain",
+    "langchain_core",
+    "langgraph",
+    "mcp",
+    "a2a",
+]
+
+V1_LIVE_LANE_MODULES = [
+    "src/agent_learning/live/livekit_lane.py",
+    "src/agent_learning/live/pipecat_lane.py",
+    "src/agent_learning/live/langgraph_lane.py",
+    "src/agent_learning/live/mcp_lane.py",
+    "src/agent_learning/live/a2a_lane.py",
+]
+
+V1_LIVE_LANE_ENV_FLAGS = {
+    "livekit": "AGENT_LEARNING_LIVE_LIVEKIT",
+    "pipecat": "AGENT_LEARNING_LIVE_PIPECAT",
+    "langchain": "AGENT_LEARNING_LIVE_LANGCHAIN",
+    "mcp": "AGENT_LEARNING_LIVE_MCP",
+    "a2a": "AGENT_LEARNING_LIVE_A2A",
+    "credentialed": "AGENT_LEARNING_LIVE_CREDENTIALED",
+}
+
+V1_LIVE_EVIDENCE_CLASSES = [
+    "local_gate",
+    "live_lane",
+    "live_stressed",
+    "captured_fixture",
+]
+V1_LIVE_RELEASE_ADMISSIBLE_CLASSES = ["local_gate", "captured_fixture"]
+V1_LIVE_FAILURE_LAYERS = [
+    "lane_infra",
+    "framework_runtime",
+    "provider",
+    "agent_behavior",
+]
+
+# Pre-existing vendored optional-import sites — each wraps the import in
+# try/except today; the gate re-verifies the guard, not just the path.
+V1_LIVE_LANE_GUARDED_IMPORT_FILES = [
+    "src/fi/simulate/simulation/engines/livekit.py",
+    "src/fi/simulate/simulation/generator.py",
+    "src/fi/simulate/recording/room_recorder.py",
+    "src/fi/simulate/agent/wrappers/langchain.py",
+]
+
+V1_LIVE_LANE_CAPTURE_DIR = "examples/captured"
+V1_LIVE_LANE_EVIDENCE_CLASS_FIELD = "evidence_class"
+
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
     "README.md",
     "V1_RELEASE_ROADMAP.md",
@@ -6476,6 +6531,19 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M7",
         evidence=release_handover_packaging,
     )
+    live_lane_boundary = _release_live_lane_boundary_status(root)
+    _append_release_check(
+        checks,
+        check_id="live_lane_boundary",
+        passed=(
+            not live_lane_boundary["import_errors"]
+            and not live_lane_boundary["evidence_class_errors"]
+            and not live_lane_boundary["env_flag_errors"]
+            and not live_lane_boundary["redaction_errors"]
+        ),
+        milestone="M6",
+        evidence=live_lane_boundary,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -6562,6 +6630,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_docs_pages": list(V1_DOCS_REQUIRED_PAGES),
         "docs_allowed_artifact_kinds": list(V1_DOCS_ALLOWED_ARTIFACT_KINDS),
         "docs_claim_phrase_gates": dict(V1_DOCS_CLAIM_PHRASE_GATES),
+        "live_lane_env_flags": dict(V1_LIVE_LANE_ENV_FLAGS),
+        "live_lane_extra_packages": list(V1_LIVE_LANE_EXTRA_PACKAGES),
+        "live_lane_evidence_classes": list(V1_LIVE_EVIDENCE_CLASSES),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -8893,6 +8964,246 @@ def _release_docs_executability_status(
         "backing_errors": backing_errors,
         "claims_errors": claims_errors,
         "required_page_errors": required_page_errors,
+    }
+
+
+# Private helper (not one of the nine V1_LIVE_* constants — no payload mirror):
+_LIVE_LANE_CAPTURE_PROVENANCE_FIELDS = (
+    "captured_from_lane",
+    "captured_run_id",
+    "rung",
+    "framework",
+    "framework_version",
+    "capture_date",
+    "transcript_sha256",
+    "redaction",
+    "reviewed",
+    "reviewer",
+)
+
+
+def _release_live_lane_boundary_status(root: Path) -> dict[str, Any]:
+    import_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    env_flag_errors: list[dict[str, Any]] = []
+    redaction_errors: list[dict[str, Any]] = []
+    scanned_module_count = 0
+    scanned_artifact_count = 0
+    live_prefix = "src/agent_learning/live/"
+    workers_prefix = live_prefix + "_workers/"
+
+    # Check 1: static import-graph scan — framework imports may live only in
+    # workers (top-level), lane modules (lazy in-function), or listed guarded
+    # vendored sites; release modules may never import the live package.
+    for base in ("src/agent_learning", "src/fi"):
+        base_dir = root / base
+        if not base_dir.is_dir():
+            continue
+        for path in sorted(base_dir.rglob("*.py")):
+            relative = str(path.relative_to(root)).replace(os.sep, "/")
+            scanned_module_count += 1
+            in_live = relative.startswith(live_prefix)
+            in_workers = relative.startswith(workers_prefix)
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError as exc:
+                import_errors.append(
+                    {"path": relative, "error": f"unparseable: {exc}"}
+                )
+                continue
+            guarded_node_ids = {
+                id(node)
+                for try_node in ast.walk(tree)
+                if isinstance(try_node, ast.Try) and try_node.handlers
+                for node in ast.walk(try_node)
+            }
+            lazy_node_ids = {
+                id(node)
+                for fn in ast.walk(tree)
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                for node in ast.walk(fn)
+            }
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots = [alias.name.split(".")[0] for alias in node.names]
+                    dotted = [alias.name for alias in node.names]
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.level == 0
+                ):
+                    roots = [node.module.split(".")[0]]
+                    dotted = [node.module]
+                else:
+                    continue
+                for root_name, full_name in zip(roots, dotted):
+                    if root_name in V1_LIVE_LANE_EXTRA_PACKAGES:
+                        if in_workers:
+                            continue
+                        if in_live and id(node) in lazy_node_ids:
+                            continue
+                        if (
+                            relative in V1_LIVE_LANE_GUARDED_IMPORT_FILES
+                            and id(node) in guarded_node_ids
+                        ):
+                            continue
+                        import_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": (
+                                    "live/_workers module, lazy lane import, "
+                                    "or listed guarded site"
+                                ),
+                                "observed": (
+                                    "framework import outside the sanctioned homes"
+                                ),
+                            }
+                        )
+                    if not in_live and full_name.startswith("agent_learning.live"):
+                        import_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": "no release-module dependency on live/",
+                                "observed": "live import outside the live package",
+                            }
+                        )
+
+    # Check 2: artifact evidence-class audit — live classes may not leak onto
+    # the release surface; captured fixtures carry the full reviewed provenance.
+    capture_dir_prefix = V1_LIVE_LANE_CAPTURE_DIR + "/"
+    examples_dir = root / "examples"
+    if examples_dir.is_dir():
+        for json_path in sorted(examples_dir.rglob("*.json")):
+            relative = str(json_path.relative_to(root)).replace(os.sep, "/")
+            payload = _read_json_file(json_path)
+            if not payload:
+                continue
+            scanned_artifact_count += 1
+            in_capture_dir = relative.startswith(capture_dir_prefix)
+            evidence_class = payload.get(V1_LIVE_LANE_EVIDENCE_CLASS_FIELD)
+            if evidence_class is None and not in_capture_dir:
+                continue
+            if evidence_class not in V1_LIVE_EVIDENCE_CLASSES:
+                evidence_class_errors.append(
+                    {
+                        "path": relative,
+                        "expected": V1_LIVE_EVIDENCE_CLASSES,
+                        "observed": evidence_class,
+                    }
+                )
+                continue
+            if evidence_class not in V1_LIVE_RELEASE_ADMISSIBLE_CLASSES:
+                evidence_class_errors.append(
+                    {
+                        "path": relative,
+                        "expected": (
+                            "one of "
+                            f"{V1_LIVE_RELEASE_ADMISSIBLE_CLASSES} "
+                            "on release surface"
+                        ),
+                        "observed": evidence_class,
+                    }
+                )
+            if in_capture_dir and evidence_class != "captured_fixture":
+                evidence_class_errors.append(
+                    {
+                        "path": relative,
+                        "expected": "captured_fixture under capture dir",
+                        "observed": evidence_class,
+                    }
+                )
+            if evidence_class == "captured_fixture":
+                capture = _as_mapping(payload.get("capture"))
+                for field in _LIVE_LANE_CAPTURE_PROVENANCE_FIELDS:
+                    if field not in capture:
+                        evidence_class_errors.append(
+                            {
+                                "path": relative,
+                                "field": f"capture.{field}",
+                                "expected": "present",
+                                "observed": "missing",
+                            }
+                        )
+                if capture.get("reviewed") is not True:
+                    evidence_class_errors.append(
+                        {
+                            "path": relative,
+                            "field": "capture.reviewed",
+                            "expected": True,
+                            "observed": capture.get("reviewed"),
+                        }
+                    )
+                if not _as_mapping(capture.get("redaction")):
+                    evidence_class_errors.append(
+                        {
+                            "path": relative,
+                            "field": "capture.redaction",
+                            "expected": "non-empty mapping",
+                            "observed": "missing/empty",
+                        }
+                    )
+                redaction_errors.extend(
+                    _release_secret_marker_findings(
+                        relative, {"captured_fixture": payload}
+                    )
+                )
+
+    # Check 3: env-flag discipline — static half (every lane entry routes
+    # through require_lane_enabled) + runtime half (no lane flag set in the
+    # release-check process itself).
+    for module_path in V1_LIVE_LANE_MODULES:
+        path = root / module_path
+        if not path.is_file():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = {
+            node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else getattr(node.func, "id", "")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+        }
+        if "require_lane_enabled" not in calls:
+            env_flag_errors.append(
+                {
+                    "path": module_path,
+                    "expected": "require_lane_enabled(...) call",
+                    "observed": "absent",
+                }
+            )
+
+    lane_flags_set_in_release_env = sorted(
+        flag
+        for flag in V1_LIVE_LANE_ENV_FLAGS.values()
+        if os.environ.get(flag) == "1"
+    )
+    for flag in lane_flags_set_in_release_env:
+        env_flag_errors.append(
+            {"flag": flag, "expected": "unset in release env", "observed": "set"}
+        )
+
+    return {
+        "kind": "agent-learning.live-lane-boundary.v1",
+        "lane_extra_packages": list(V1_LIVE_LANE_EXTRA_PACKAGES),
+        "lane_modules": list(V1_LIVE_LANE_MODULES),
+        "lane_env_flags": dict(V1_LIVE_LANE_ENV_FLAGS),
+        "evidence_classes": list(V1_LIVE_EVIDENCE_CLASSES),
+        "release_admissible_classes": list(V1_LIVE_RELEASE_ADMISSIBLE_CLASSES),
+        "failure_layers": list(V1_LIVE_FAILURE_LAYERS),
+        "guarded_import_files": list(V1_LIVE_LANE_GUARDED_IMPORT_FILES),
+        "capture_dir": V1_LIVE_LANE_CAPTURE_DIR,
+        "evidence_class_field": V1_LIVE_LANE_EVIDENCE_CLASS_FIELD,
+        "scanned_module_count": scanned_module_count,
+        "scanned_artifact_count": scanned_artifact_count,
+        "lane_flags_set_in_release_env": lane_flags_set_in_release_env,
+        "import_errors": import_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "env_flag_errors": env_flag_errors,
+        "redaction_errors": redaction_errors,
     }
 
 

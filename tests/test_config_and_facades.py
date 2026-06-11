@@ -16971,6 +16971,13 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["docs_claim_phrase_gates"] == (
         trinity.V1_DOCS_CLAIM_PHRASE_GATES
     )
+    assert payload["live_lane_env_flags"] == trinity.V1_LIVE_LANE_ENV_FLAGS
+    assert payload["live_lane_extra_packages"] == (
+        trinity.V1_LIVE_LANE_EXTRA_PACKAGES
+    )
+    assert payload["live_lane_evidence_classes"] == (
+        trinity.V1_LIVE_EVIDENCE_CLASSES
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -18345,6 +18352,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "package_metadata",
         "package_distribution_hygiene",
         "docs_executability",
+        "live_lane_boundary",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18471,6 +18479,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert {
         gate for gate in trinity.V1_DOCS_CLAIM_PHRASE_GATES.values() if gate
     } <= set(checks)
+    live_lane = checks["live_lane_boundary"]["evidence"]
+    assert live_lane["kind"] == "agent-learning.live-lane-boundary.v1"
+    assert live_lane["lane_extra_packages"] == trinity.V1_LIVE_LANE_EXTRA_PACKAGES
+    assert live_lane["lane_modules"] == trinity.V1_LIVE_LANE_MODULES
+    assert live_lane["lane_env_flags"] == trinity.V1_LIVE_LANE_ENV_FLAGS
+    assert live_lane["evidence_classes"] == trinity.V1_LIVE_EVIDENCE_CLASSES
+    assert live_lane["release_admissible_classes"] == (
+        trinity.V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
+    )
+    assert live_lane["failure_layers"] == trinity.V1_LIVE_FAILURE_LAYERS
+    assert live_lane["guarded_import_files"] == (
+        trinity.V1_LIVE_LANE_GUARDED_IMPORT_FILES
+    )
+    assert live_lane["capture_dir"] == trinity.V1_LIVE_LANE_CAPTURE_DIR
+    assert live_lane["evidence_class_field"] == (
+        trinity.V1_LIVE_LANE_EVIDENCE_CLASS_FIELD
+    )
+    assert live_lane["scanned_module_count"] > 0
+    assert live_lane["scanned_artifact_count"] > 0
+    assert live_lane["lane_flags_set_in_release_env"] == []
+    assert live_lane["import_errors"] == []
+    assert live_lane["evidence_class_errors"] == []
+    assert live_lane["env_flag_errors"] == []
+    assert live_lane["redaction_errors"] == []
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -29381,3 +29413,135 @@ def test_parse_docs_frontmatter_rejects_malformed_blocks():
         "---\nkind: agent-learning.docs-page.v1\ntrack: redteam\n---\n# X\n"
     )
     assert parsed is not None and parsed["track"] == "redteam"
+
+
+def test_release_live_lane_boundary_status_flags_unguarded_imports(tmp_path):
+    from agent_learning import trinity
+
+    live = tmp_path / "src" / "agent_learning" / "live"
+    workers = live / "_workers"
+    workers.mkdir(parents=True)
+    (workers / "livekit_worker.py").write_text(
+        "import livekit.agents\n", encoding="utf-8"
+    )
+    (live / "livekit_lane.py").write_text(
+        "def run_livekit_lane():\n"
+        "    from agent_learning.live._contract import require_lane_enabled\n"
+        "    require_lane_enabled('livekit')\n"
+        "    import livekit.agents\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "agent_learning" / "evals.py").write_text(
+        "import pipecat\n", encoding="utf-8"
+    )
+    fi_dir = tmp_path / "src" / "fi" / "simulate"
+    fi_dir.mkdir(parents=True)
+    (fi_dir / "rogue.py").write_text(
+        "try:\n"
+        "    from langgraph.graph import StateGraph\n"
+        "except Exception:\n"
+        "    StateGraph = None\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "agent_learning" / "simulate.py").write_text(
+        "from agent_learning.live import livekit_lane\n", encoding="utf-8"
+    )
+
+    status = trinity._release_live_lane_boundary_status(tmp_path)
+
+    flagged_paths = sorted(error["path"] for error in status["import_errors"])
+    assert flagged_paths == [
+        "src/agent_learning/evals.py",
+        "src/agent_learning/simulate.py",
+        "src/fi/simulate/rogue.py",
+    ]
+    assert status["env_flag_errors"] == []
+    assert status["lane_flags_set_in_release_env"] == []
+    assert status["scanned_module_count"] == 5
+
+
+def test_release_live_lane_boundary_status_audits_evidence_and_redaction(
+    tmp_path,
+):
+    from agent_learning import trinity
+
+    def capture_block(run_id, *, reviewed=True, reviewer="nikhil"):
+        return {
+            "captured_from_lane": "livekit",
+            "captured_run_id": run_id,
+            "rung": "loopback_transport",
+            "framework": "livekit-agents",
+            "framework_version": "1.2.7",
+            "capture_date": "2026-06-11",
+            "transcript_sha256": "9f2c" + "0" * 60,
+            "redaction": {"required_env_names": [], "values_found": 0},
+            "reviewed": reviewed,
+            "reviewer": reviewer,
+        }
+
+    captures = tmp_path / "examples" / "captured" / "livekit"
+    captures.mkdir(parents=True)
+    (tmp_path / "examples" / "leaked_live_run.json").write_text(
+        json.dumps(
+            {"kind": "agent-learning.run.v1", "evidence_class": "live_lane"}
+        ),
+        encoding="utf-8",
+    )
+    (captures / "clean_capture.json").write_text(
+        json.dumps(
+            {
+                "kind": "agent-learning.run.v1",
+                "evidence_class": "captured_fixture",
+                "capture": capture_block("r1"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (captures / "dirty_capture.json").write_text(
+        json.dumps(
+            {
+                "kind": "agent-learning.run.v1",
+                "evidence_class": "captured_fixture",
+                "capture": capture_block("r2"),
+                "transport": {"authorization": "Bearer sk-live-123"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (captures / "unreviewed_capture.json").write_text(
+        json.dumps(
+            {
+                "kind": "agent-learning.run.v1",
+                "evidence_class": "captured_fixture",
+                "capture": capture_block("r3", reviewed=False, reviewer=None),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = trinity._release_live_lane_boundary_status(tmp_path)
+
+    leak_errors = [
+        error
+        for error in status["evidence_class_errors"]
+        if error["path"] == "examples/leaked_live_run.json"
+    ]
+    assert leak_errors and "release surface" in leak_errors[0]["expected"]
+    unreviewed_errors = [
+        error
+        for error in status["evidence_class_errors"]
+        if error["path"].endswith("unreviewed_capture.json")
+        and error.get("field") == "capture.reviewed"
+    ]
+    assert unreviewed_errors and unreviewed_errors[0]["observed"] is False
+    assert any(
+        finding["path"].endswith("dirty_capture.json")
+        for finding in status["redaction_errors"]
+    )
+    clean_errors = [
+        error
+        for error in status["evidence_class_errors"]
+        if error["path"].endswith("clean_capture.json")
+    ]
+    assert clean_errors == []
+    assert status["scanned_artifact_count"] == 4
