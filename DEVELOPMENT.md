@@ -22,6 +22,9 @@ All new public SDK work should land here first:
 `ai-evaluation` is an active engine for this release, not legacy history. Its
 Python runtime must be present under `src/fi/evals`, and its TypeScript SDK
 source must be present under `typescript/agent-learning-kit/src`.
+`agent-learn release-check` compares those source trees with
+`internal-docs/ai-evaluation-source-inventory.json` so missing ai-evaluation
+files fail the v1 release gate.
 
 The older `simulate-sdk` and `agent-opt` repositories are source/history during
 the migration. New runtime code should be moved into `agent-learning-kit`, not

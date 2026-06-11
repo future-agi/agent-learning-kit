@@ -62,6 +62,68 @@ V1_TYPESCRIPT_SDK_REQUIRED_FILES = [
     "typescript/agent-learning-kit/examples/02-local-heuristic-metrics.ts",
 ]
 
+V1_ACTIVE_AI_EVALUATION_PYTHON_FILES = [
+    "src/fi/evals/__init__.py",
+    "src/fi/evals/core/evaluate.py",
+    "src/fi/evals/core/registry.py",
+    "src/fi/evals/evaluator.py",
+    "src/fi/evals/execution.py",
+    "src/fi/evals/framework/evaluator.py",
+    "src/fi/evals/framework/evals/agentic.py",
+    "src/fi/evals/guardrails/gateway.py",
+    "src/fi/evals/local/evaluator.py",
+    "src/fi/evals/metrics/agents/report.py",
+    "src/fi/evals/metrics/code_security/metrics.py",
+    "src/fi/evals/metrics/function_calling/metrics.py",
+    "src/fi/evals/metrics/hallucination/metrics.py",
+    "src/fi/evals/metrics/rag/rag_score.py",
+    "src/fi/evals/metrics/structured/structured_output_score.py",
+    "src/fi/evals/otel/processors/evaluation.py",
+    "src/fi/evals/protect.py",
+    "src/fi/evals/streaming/evaluator.py",
+]
+
+V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES = [
+    "typescript/agent-learning-kit/src/index.ts",
+    "typescript/agent-learning-kit/src/evaluator.ts",
+    "typescript/agent-learning-kit/src/execution.ts",
+    "typescript/agent-learning-kit/src/manager.ts",
+    "typescript/agent-learning-kit/src/protect.ts",
+    "typescript/agent-learning-kit/src/templates.ts",
+    "typescript/agent-learning-kit/src/types.ts",
+    "typescript/agent-learning-kit/src/core/auth.ts",
+    "typescript/agent-learning-kit/src/local/evaluator.ts",
+    "typescript/agent-learning-kit/src/local/metrics/index.ts",
+    "typescript/agent-learning-kit/src/local/metrics/rag/index.ts",
+    "typescript/agent-learning-kit/src/local/streaming/evaluator.ts",
+    "typescript/agent-learning-kit/examples/01-basic-cloud-evaluation.ts",
+    "typescript/agent-learning-kit/examples/02-local-heuristic-metrics.ts",
+]
+
+V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE = (
+    "internal-docs/ai-evaluation-source-inventory.json"
+)
+V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND = (
+    "agent-learning.active-ai-evaluation-source-inventory.v1"
+)
+V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT = 219
+V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT = 87
+
+V1_ACTIVE_AI_EVALUATION_DOC_PHRASES = {
+    "README.md": [
+        "The active `ai-evaluation` code is included here under `src/fi/evals`",
+        "TypeScript SDK source under `typescript/agent-learning-kit/src`",
+    ],
+    "DEVELOPMENT.md": [
+        "`ai-evaluation` is an active engine for this release, not legacy history.",
+        "`ai-evaluation` TypeScript source lives under `typescript/agent-learning-kit/src`.",
+    ],
+    "LIBRARIES.md": [
+        "`ai-evaluation` remains the active evaluation engine",
+        "legacy dependency for this release",
+    ],
+}
+
 RESEARCH_SOURCES = [
     {
         "id": "agent_identity_uri_capability_discovery",
@@ -5196,6 +5258,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M0",
         evidence=typescript_consolidation,
     )
+    active_ai_evaluation_source = _release_active_ai_evaluation_source_status(root)
+    _append_release_check(
+        checks,
+        check_id="active_ai_evaluation_source_embedded",
+        passed=(
+            not active_ai_evaluation_source["missing_files"]
+            and not active_ai_evaluation_source["package_errors"]
+            and not active_ai_evaluation_source["source_count_errors"]
+            and not active_ai_evaluation_source["source_inventory_errors"]
+            and not active_ai_evaluation_source["source_inventory_missing_files"]
+            and not active_ai_evaluation_source["source_inventory_extra_files"]
+            and not active_ai_evaluation_source["import_errors"]
+            and not active_ai_evaluation_source["doc_errors"]
+        ),
+        milestone="M0",
+        evidence=active_ai_evaluation_source,
+    )
     _append_release_check(
         checks,
         check_id="cli_command_surface",
@@ -6213,6 +6292,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "typescript_public_package": TYPESCRIPT_PUBLIC_PACKAGE,
         "legacy_typescript_packages": list(LEGACY_TYPESCRIPT_PACKAGES),
         "required_typescript_sdk_files": list(V1_TYPESCRIPT_SDK_REQUIRED_FILES),
+        "required_active_ai_evaluation_python_files": list(
+            V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
+        ),
+        "required_active_ai_evaluation_typescript_files": list(
+            V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
+        ),
+        "required_active_ai_evaluation_source_inventory_file": (
+            V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+        ),
+        "required_active_ai_evaluation_source_inventory_kind": (
+            V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+        ),
+        "required_active_ai_evaluation_doc_phrases": copy.deepcopy(
+            V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+        ),
+        "required_active_ai_evaluation_min_python_file_count": (
+            V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+        ),
+        "required_active_ai_evaluation_min_typescript_file_count": (
+            V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+        ),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -7770,6 +7870,228 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _release_active_ai_evaluation_source_status(root: Path) -> dict[str, Any]:
+    required_python_files = list(V1_ACTIVE_AI_EVALUATION_PYTHON_FILES)
+    required_typescript_files = list(V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES)
+    required_doc_paths = list(V1_ACTIVE_AI_EVALUATION_DOC_PHRASES)
+    required_inventory_file = V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *required_python_files,
+            *required_typescript_files,
+            *required_doc_paths,
+            required_inventory_file,
+        ],
+    )
+    package_errors: list[dict[str, Any]] = []
+    source_count_errors: list[dict[str, Any]] = []
+    source_inventory_errors: list[dict[str, Any]] = []
+    import_errors: list[dict[str, Any]] = []
+    doc_errors: list[dict[str, Any]] = []
+
+    pyproject = _read_full_pyproject(root)
+    tool = _as_mapping(pyproject.get("tool"))
+    hatch = _as_mapping(tool.get("hatch"))
+    build = _as_mapping(hatch.get("build"))
+    targets = _as_mapping(build.get("targets"))
+    wheel = _as_mapping(targets.get("wheel"))
+    package_paths = [str(item) for item in _as_list(wheel.get("packages"))]
+    for required_package in ("src/agent_learning", "src/fi"):
+        if required_package not in package_paths:
+            package_errors.append(
+                {
+                    "field": "tool.hatch.build.targets.wheel.packages",
+                    "expected": required_package,
+                    "observed": package_paths,
+                }
+            )
+
+    python_source_files = [
+        path
+        for path in sorted((root / "src" / "fi" / "evals").rglob("*.py"))
+        if "__pycache__" not in path.parts
+    ]
+    typescript_source_files = [
+        path
+        for path in [
+            *sorted((root / "typescript" / "agent-learning-kit" / "src").rglob("*.ts")),
+            *sorted(
+                (root / "typescript" / "agent-learning-kit" / "examples").rglob("*.ts")
+            ),
+        ]
+        if "__pycache__" not in path.parts and "dist" not in path.parts
+    ]
+
+    source_inventory = _read_json_file(root / required_inventory_file)
+    source_inventory_kind = source_inventory.get("kind")
+    if source_inventory_kind != V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND:
+        source_inventory_errors.append(
+            {
+                "field": "kind",
+                "expected": V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND,
+                "observed": source_inventory_kind,
+            }
+        )
+    source_inventory_python_files = [
+        str(item) for item in _as_list(source_inventory.get("python_files"))
+    ]
+    source_inventory_typescript_files = [
+        str(item) for item in _as_list(source_inventory.get("typescript_files"))
+    ]
+    source_inventory_python = _as_mapping(source_inventory.get("python_source"))
+    source_inventory_typescript = _as_mapping(
+        source_inventory.get("typescript_source")
+    )
+    source_inventory_python_py_file_count = sum(
+        1 for path in source_inventory_python_files if path.endswith(".py")
+    )
+    source_inventory_typescript_ts_file_count = sum(
+        1 for path in source_inventory_typescript_files if path.endswith(".ts")
+    )
+    source_inventory_count_expectations = {
+        "python_source.tracked_file_count": (
+            source_inventory_python.get("tracked_file_count"),
+            len(source_inventory_python_files),
+        ),
+        "python_source.python_file_count": (
+            source_inventory_python.get("python_file_count"),
+            source_inventory_python_py_file_count,
+        ),
+        "typescript_source.tracked_file_count": (
+            source_inventory_typescript.get("tracked_file_count"),
+            len(source_inventory_typescript_files),
+        ),
+        "typescript_source.typescript_file_count": (
+            source_inventory_typescript.get("typescript_file_count"),
+            source_inventory_typescript_ts_file_count,
+        ),
+    }
+    for field, (expected, observed) in source_inventory_count_expectations.items():
+        if expected != observed:
+            source_inventory_errors.append(
+                {"field": field, "expected": expected, "observed": observed}
+            )
+
+    actual_source_inventory_python_files = sorted(
+        str(path.relative_to(root))
+        for path in (root / "src" / "fi" / "evals").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    actual_source_inventory_typescript_files = sorted(
+        str(path.relative_to(root))
+        for base in [
+            root / "typescript" / "agent-learning-kit" / "src",
+            root / "typescript" / "agent-learning-kit" / "examples",
+        ]
+        for path in base.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and "dist" not in path.parts
+    )
+    expected_source_inventory_files = sorted(
+        [*source_inventory_python_files, *source_inventory_typescript_files]
+    )
+    actual_source_inventory_files = sorted(
+        [
+            *actual_source_inventory_python_files,
+            *actual_source_inventory_typescript_files,
+        ]
+    )
+    source_inventory_missing_files = sorted(
+        set(expected_source_inventory_files) - set(actual_source_inventory_files)
+    )
+    source_inventory_extra_files = sorted(
+        set(actual_source_inventory_files) - set(expected_source_inventory_files)
+    )
+    if len(python_source_files) < V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT:
+        source_count_errors.append(
+            {
+                "path": "src/fi/evals",
+                "expected": f">={V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT}",
+                "observed": len(python_source_files),
+            }
+        )
+    if (
+        len(typescript_source_files)
+        < V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    ):
+        source_count_errors.append(
+            {
+                "path": "typescript/agent-learning-kit",
+                "expected": (
+                    f">={V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT}"
+                ),
+                "observed": len(typescript_source_files),
+            }
+        )
+
+    for module in ("fi.evals", "agent_learning.evals"):
+        try:
+            spec = importlib.util.find_spec(module)
+        except Exception as exc:
+            import_errors.append({"module": module, "error": str(exc)})
+            continue
+        if spec is None:
+            import_errors.append({"module": module, "error": "module not found"})
+
+    doc_phrase_hits: dict[str, list[str]] = {}
+    for relative_path, phrases in V1_ACTIVE_AI_EVALUATION_DOC_PHRASES.items():
+        path = root / relative_path
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        hits = [phrase for phrase in phrases if phrase in text]
+        doc_phrase_hits[relative_path] = hits
+        missing_phrases = sorted(set(phrases) - set(hits))
+        if missing_phrases:
+            doc_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "active_ai_evaluation_doc_phrases",
+                    "expected": phrases,
+                    "observed": hits,
+                    "missing": missing_phrases,
+                }
+            )
+
+    return {
+        "kind": "agent-learning.active-ai-evaluation-source.v1",
+        "required_python_files": required_python_files,
+        "required_typescript_files": required_typescript_files,
+        "source_inventory_file": required_inventory_file,
+        "source_inventory_kind": source_inventory_kind,
+        "required_source_inventory_kind": (
+            V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+        ),
+        "required_doc_phrases": copy.deepcopy(
+            V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+        ),
+        "min_python_file_count": V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT,
+        "min_typescript_file_count": (
+            V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+        ),
+        "package_paths": package_paths,
+        "python_source_file_count": len(python_source_files),
+        "typescript_source_file_count": len(typescript_source_files),
+        "source_inventory_python_file_count": len(source_inventory_python_files),
+        "source_inventory_python_py_file_count": (
+            source_inventory_python_py_file_count
+        ),
+        "source_inventory_typescript_file_count": len(
+            source_inventory_typescript_files
+        ),
+        "source_inventory_typescript_ts_file_count": (
+            source_inventory_typescript_ts_file_count
+        ),
+        "missing_files": missing_files,
+        "package_errors": package_errors,
+        "source_count_errors": source_count_errors,
+        "source_inventory_errors": source_inventory_errors,
+        "source_inventory_missing_files": source_inventory_missing_files,
+        "source_inventory_extra_files": source_inventory_extra_files,
+        "import_errors": import_errors,
+        "doc_phrase_hits": doc_phrase_hits,
+        "doc_errors": doc_errors,
+    }
 
 
 def _release_typescript_sdk_consolidation_status(root: Path) -> dict[str, Any]:

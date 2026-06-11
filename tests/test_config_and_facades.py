@@ -16937,6 +16937,27 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_typescript_sdk_files"] == (
         trinity.V1_TYPESCRIPT_SDK_REQUIRED_FILES
     )
+    assert payload["required_active_ai_evaluation_python_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
+    )
+    assert payload["required_active_ai_evaluation_typescript_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
+    )
+    assert payload["required_active_ai_evaluation_source_inventory_file"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+    )
+    assert payload["required_active_ai_evaluation_source_inventory_kind"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+    )
+    assert payload["required_active_ai_evaluation_doc_phrases"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+    )
+    assert payload["required_active_ai_evaluation_min_python_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert payload["required_active_ai_evaluation_min_typescript_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -18247,6 +18268,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(checks) == {
         "single_public_boundary",
         "typescript_sdk_consolidation_boundary",
+        "active_ai_evaluation_source_embedded",
         "cli_command_surface",
         "release_docs_present",
         "v1_examples_present",
@@ -18317,6 +18339,62 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert typescript_boundary["metadata_errors"] == []
     assert typescript_boundary["forbidden_token_findings"] == []
     assert typescript_boundary["legacy_sibling_errors"] == []
+    active_ai_evaluation = checks["active_ai_evaluation_source_embedded"]["evidence"]
+    assert active_ai_evaluation["kind"] == (
+        "agent-learning.active-ai-evaluation-source.v1"
+    )
+    assert active_ai_evaluation["required_python_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
+    )
+    assert active_ai_evaluation["required_typescript_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
+    )
+    assert active_ai_evaluation["source_inventory_file"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+    )
+    assert active_ai_evaluation["source_inventory_kind"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+    )
+    assert active_ai_evaluation["required_source_inventory_kind"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+    )
+    assert active_ai_evaluation["required_doc_phrases"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+    )
+    assert active_ai_evaluation["min_python_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert active_ai_evaluation["min_typescript_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
+    assert active_ai_evaluation["missing_files"] == []
+    assert active_ai_evaluation["package_errors"] == []
+    assert active_ai_evaluation["source_count_errors"] == []
+    assert active_ai_evaluation["source_inventory_errors"] == []
+    assert active_ai_evaluation["source_inventory_missing_files"] == []
+    assert active_ai_evaluation["source_inventory_extra_files"] == []
+    assert active_ai_evaluation["import_errors"] == []
+    assert active_ai_evaluation["doc_errors"] == []
+    assert active_ai_evaluation["python_source_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert active_ai_evaluation["typescript_source_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
+    assert active_ai_evaluation["source_inventory_python_file_count"] == 222
+    assert active_ai_evaluation["source_inventory_python_py_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert active_ai_evaluation["source_inventory_typescript_file_count"] == 89
+    assert active_ai_evaluation["source_inventory_typescript_ts_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
+    assert "src/fi" in active_ai_evaluation["package_paths"]
+    assert "src/agent_learning" in active_ai_evaluation["package_paths"]
+    for relative_path, phrases in (
+        trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES.items()
+    ):
+        assert active_ai_evaluation["doc_phrase_hits"][relative_path] == phrases
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (

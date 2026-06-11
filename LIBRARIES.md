@@ -59,6 +59,10 @@ Do not add new release-facing examples that require cloning `ai-evaluation`,
 v1 should be present in this repository before the Agent Learning Kit release is
 called complete. If a fix starts in a separate engine repo, copy the verified
 implementation into this repository before treating the public SDK work as done.
+The file
+[`internal-docs/ai-evaluation-source-inventory.json`](internal-docs/ai-evaluation-source-inventory.json)
+records the ai-evaluation source snapshots that were consolidated here, and
+`agent-learn release-check` fails if those mapped file paths are missing.
 
 ## Reviewer Checklist
 

@@ -159,6 +159,8 @@ The active `ai-evaluation` code is included here under `src/fi/evals`, with its
 TypeScript SDK source under `typescript/agent-learning-kit/src`. The
 `simulate-sdk` and `agent-opt` engine code is included under `src/fi/simulate`
 and `src/fi/opt`. See [LIBRARIES.md](LIBRARIES.md) for the complete source map.
+The ai-evaluation source inventory used by `agent-learn release-check` lives at
+[`internal-docs/ai-evaluation-source-inventory.json`](internal-docs/ai-evaluation-source-inventory.json).
 
 ## Repository Map
 
