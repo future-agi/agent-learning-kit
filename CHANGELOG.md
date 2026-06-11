@@ -33,4 +33,6 @@ First locally-cut v1 release candidate. Package labels: Python
 - Added a developer-first README opening with install, quickstart, workflow,
   release proof, repository map, and community links.
 - Hardened `agent-learn release-proof` timeout handling and raised the default
-  per-command timeout for the expanded v1 proof suite.
+  per-command timeout to 7200s for the expanded v1 proof suite (the full pytest
+  suite, which executes every release gate inside the milestone test, exceeds
+  the previous 2400s budget).

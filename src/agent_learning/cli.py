@@ -3202,7 +3202,7 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=2400.0,
+        default=7200.0,
         help="Per-command timeout in seconds.",
     )
     parser.add_argument(
