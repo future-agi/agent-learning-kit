@@ -20,6 +20,8 @@ AGENT_LEARNING_ARTIFACT_EVAL_KIND = "agent-learning.artifact-evaluation.v1"
 AGENT_LEARNING_ACTION_RUN_KIND = "agent-learning.action-run.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
+AGENT_LEARNING_PERSONA_CALIBRATION_KIND = "agent-learning.persona-calibration.v1"
+AGENT_LEARNING_PERSONA_LIBRARY_KIND = "agent-learning.persona-library.v1"
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
@@ -92,6 +94,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _eval_cli(args[1:])
     if command in {"shrink", "minimize", "minimize-counterexample"}:
         return _simulate(["shrink", *args[1:]])
+    if command == "persona":
+        return _persona(args[1:])
+    if command == "scenario":
+        return _scenario(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -4327,6 +4333,542 @@ def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[st
     raise ValueError(f"unknown release proof check: {check_id}")
 
 
+# ---------------------------------------------------------------------------
+# Phase 7 — Persona & Scenario Studio (thin dispatchers; logic in
+# agent_learning.studio, imported lazily per the _simulate_cli_module idiom)
+# ---------------------------------------------------------------------------
+
+def _studio_module() -> Any:
+    return importlib.import_module("agent_learning.studio")
+
+
+def _emit_studio_payload(payload: Mapping[str, Any]) -> int:
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _load_structured_file(path: Path) -> Any:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        import yaml
+
+        return yaml.safe_load(text)
+    return json.loads(text)
+
+
+def _write_structured_file(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _parse_axes_spec(spec: str) -> Dict[str, List[str]]:
+    axes: Dict[str, List[str]] = {}
+    for chunk in spec.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise ValueError(f"axis spec {chunk!r} must look like name=v1,v2")
+        name, values = chunk.split("=", 1)
+        axes[name.strip()] = [v.strip() for v in values.split(",") if v.strip()]
+    return axes
+
+
+def _persona_summary(persona: Any) -> Dict[str, Any]:
+    identity = getattr(persona, "identity", None)
+    provenance = getattr(persona, "provenance", None)
+    return {
+        "name": (identity.name if identity is not None else None)
+        or persona.persona.get("name"),
+        "version": persona.version or persona.content_hash(),
+        "is_typed": persona.is_typed,
+        "evidence_class": (
+            provenance.evidence_class if provenance is not None else "legacy"
+        ),
+        "calibrated": bool(provenance is not None and provenance.calibrated),
+    }
+
+
+def _library_personas(studio: Any, library: str) -> List[Any]:
+    from agent_learning.studio._library import load_index
+
+    personas = []
+    for entry in load_index(library).get("personas", []):
+        try:
+            personas.append(studio.load_persona(entry["ref"], library=library))
+        except ValueError:
+            continue
+    return personas
+
+
+def _persona(args: Sequence[str]) -> int:
+    try:
+        studio = _studio_module()
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn persona", exc)
+    parser = argparse.ArgumentParser(
+        prog="agent-learn persona",
+        description="Persona studio: create, validate, calibrate, admit, lint, list, import, pull.",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    create = sub.add_parser("create")
+    create.add_argument("--name", required=True)
+    create.add_argument("--role", default=None)
+    create.add_argument("--situation", default="Studio-created persona session.")
+    create.add_argument("--outcome", default="The task completes successfully.")
+    create.add_argument("--language", default=None)
+    create.add_argument("--rajas", type=float, default=None)
+    create.add_argument("--sattva", type=float, default=None)
+    create.add_argument("--tamas", type=float, default=None)
+    create.add_argument(
+        "--evidence-class", choices=["hand_written", "schema_sampled"],
+        default="hand_written",
+    )
+    create.add_argument("--output", default=None)
+
+    validate = sub.add_parser("validate")
+    validate.add_argument("file")
+
+    calibrate = sub.add_parser("calibrate")
+    calibrate.add_argument("file")
+    calibrate.add_argument("--library", default=None)
+    calibrate.add_argument("--target-class", default="schema_sampled")
+    calibrate.add_argument("--seed", type=int, default=7)
+    calibrate.add_argument("--repeats", type=int, default=2)
+    calibrate.add_argument("--output", default=None)
+
+    admit = sub.add_parser("admit")
+    admit.add_argument("file")
+    admit.add_argument("--library", required=True)
+
+    lint = sub.add_parser("lint")
+    lint.add_argument("library")
+    lint.add_argument("--locale", default=None)
+
+    listing = sub.add_parser("list")
+    listing.add_argument("--library", required=True)
+
+    importer = sub.add_parser("import")
+    importer.add_argument("file")
+    importer.add_argument("--format", required=True, choices=["vapi", "retell"])
+    importer.add_argument("--output", default=None)
+
+    pull = sub.add_parser("pull")
+    pull.add_argument("--list", action="store_true", dest="list_only")
+    pull.add_argument("--id", action="append", dest="ids", default=None)
+    pull.add_argument("--scope", default="all", choices=["all", "system", "workspace"])
+    pull.add_argument("--output", default=None, help="Library directory for pulled personas.")
+
+    parsed = parser.parse_args(list(args))
+
+    if parsed.subcommand == "create":
+        temperament = None
+        if any(v is not None for v in (parsed.rajas, parsed.sattva, parsed.tamas)):
+            temperament = {
+                "rajas": parsed.rajas if parsed.rajas is not None else 0.5,
+                "sattva": parsed.sattva if parsed.sattva is not None else 0.5,
+                "tamas": parsed.tamas if parsed.tamas is not None else 0.5,
+            }
+        persona = studio.build_persona(
+            name=parsed.name,
+            role=parsed.role,
+            situation=parsed.situation,
+            outcome=parsed.outcome,
+            language=parsed.language,
+            temperament=temperament,
+            evidence_class=parsed.evidence_class,
+        )
+        payload: Dict[str, Any] = {
+            "status": "created",                # source files carry no artifact kind
+            "exit_code": 0,
+            "persona": _persona_summary(persona),
+            "findings": [{
+                "type": "persona_uncalibrated",
+                "level": "info",
+                "reason": (
+                    "persona runs at the lowest evidence class until "
+                    "calibrated + admitted"
+                ),
+                "remediation": "agent-learn persona calibrate <file>",
+            }],
+            "representativeness_claim": "none",
+        }
+        if parsed.output:
+            output = Path(parsed.output)
+            _write_structured_file(output, persona.model_dump(exclude_none=True))
+            payload["persona_file"] = str(output)
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "validate":
+        data = _load_structured_file(Path(parsed.file))
+        result = studio.validate_persona(data)
+        return _emit_studio_payload(result)
+
+    if parsed.subcommand == "calibrate":
+        data = _load_structured_file(Path(parsed.file))
+        artifact = studio.calibrate_persona(
+            data,
+            library=parsed.library,
+            target_class=parsed.target_class,
+            seed=parsed.seed,
+            repeats=parsed.repeats,
+        )
+        payload = {
+            **{k: v for k, v in artifact.items() if k != "persona_payload"},
+            "exit_code": 0 if artifact["verdict"] == "admit_eligible" else 1,
+        }
+        if artifact["verdict"] == "admit_eligible":
+            # persist the calibrated provenance back to the source file so
+            # `persona admit` sees calibrated=True (the F1 flow).
+            _write_structured_file(Path(parsed.file), artifact["persona_payload"])
+            payload["persona_file_updated"] = parsed.file
+        if parsed.output:
+            _write_structured_file(Path(parsed.output), payload)
+            payload["artifact_path"] = parsed.output
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "admit":
+        data = _load_structured_file(Path(parsed.file))
+        persona = studio.upgrade_legacy_persona(data)
+        members = _library_personas(studio, parsed.library)
+        lint_result = studio.bias_lint([*members, persona])
+        if lint_result["status"] != "passed":
+            return _emit_studio_payload({
+                "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+                "status": "refused",
+                "exit_code": 1,
+                "lint": lint_result,
+                "findings": [{
+                    "type": "bias_lint_failed",
+                    "level": "error",
+                    "reason": (
+                        "set not admissible to library; admit is blocked "
+                        "for every member"
+                    ),
+                }],
+            })
+        try:
+            saved = studio.save_persona(
+                persona,
+                library=parsed.library,
+                admit=True,
+                lint_result={
+                    "status": lint_result["status"],
+                    "locales_linted": lint_result["locales_linted"],
+                },
+            )
+        except ValueError as exc:
+            return _emit_studio_payload({
+                "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "persona_admit_refused",
+                    "level": "error",
+                    "reason": str(exc),
+                }],
+            })
+        return _emit_studio_payload({
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            "status": "admitted",
+            "exit_code": 0,
+            "persona": _persona_summary(persona),
+            "library": {
+                "path": parsed.library,
+                "ref": saved["ref"],
+                "lint": {
+                    "status": lint_result["status"],
+                    "locales_linted": lint_result["locales_linted"],
+                },
+            },
+            "findings": [{
+                "type": "persona_admitted",
+                "level": "info",
+                "reason": (
+                    "rows driven by this persona now inherit "
+                    f"evidence_class={saved['evidence_class']}; fidelity "
+                    "floors for that class apply per row"
+                ),
+            }],
+        })
+
+    if parsed.subcommand == "lint":
+        members = _library_personas(studio, parsed.library)
+        result = studio.bias_lint(members)
+        payload = {
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            **result,
+        }
+        if parsed.locale:
+            payload["locale"] = parsed.locale
+            locale_checks = result["per_locale"].get(parsed.locale)
+            if locale_checks is not None:
+                payload["checks"] = locale_checks
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "list":
+        from agent_learning.studio._library import list_library
+
+        view = list_library(parsed.library)
+        return _emit_studio_payload({
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            "status": "listed",
+            "exit_code": 0,
+            "personas": view["personas"],
+            "bias_lint": view["bias_lint"],
+            "pull_receipts": view["pull_receipts"],
+        })
+
+    if parsed.subcommand == "import":
+        source = Path(parsed.file)
+        text = source.read_text(encoding="utf-8")
+        try:
+            persona, goal = studio.import_vendor_persona(text, format=parsed.format)
+        except ValueError as exc:
+            return _emit_studio_payload({
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "import_unparseable",
+                    "level": "error",
+                    "reason": str(exc),
+                }],
+            })
+        out_dir = Path(parsed.output) if parsed.output else source.parent
+        persona_file = out_dir / f"{source.stem}.persona.json"
+        _write_structured_file(persona_file, persona.model_dump(exclude_none=True))
+        scenario_draft = None
+        if goal is not None:
+            scenario_draft = out_dir / f"{source.stem}.scenario-goal.json"
+            _write_structured_file(scenario_draft, goal.model_dump())
+        import hashlib as _hashlib
+
+        return _emit_studio_payload({
+            "status": "imported",                # source files carry no artifact kind
+            "exit_code": 0,
+            "imported": {
+                "persona_file": str(persona_file),
+                "scenario_draft": str(scenario_draft) if scenario_draft else None,
+                "lossless": {
+                    "source_sha256": _hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    "preserved_at": "provenance.raw",
+                },
+                "provenance": {
+                    "evidence_class": "hand_written",
+                    "source_format": parsed.format,
+                },
+            },
+            "findings": [{
+                "type": "persona_fidelity_now_available",
+                "level": "info",
+                "reason": (
+                    "every run driven by this persona now emits a per-row "
+                    "fidelity record — the source platform does not measure "
+                    "whether this persona is actually performed"
+                ),
+                "remediation": "agent-learn persona calibrate "
+                + str(persona_file),
+            }],
+        })
+
+    if parsed.subcommand == "pull":
+        try:
+            result = studio.pull_personas(
+                scope=parsed.scope,
+                ids=parsed.ids,
+                library=parsed.output,
+                list_only=parsed.list_only,
+            )
+        except RuntimeError as exc:
+            # the canonical missing-key message (config.get_api_key) — a
+            # structured refusal, never a traceback (edge E1).
+            return _emit_studio_payload({
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "account_keys_missing",
+                    "level": "error",
+                    "reason": str(exc),
+                    "redacted": True,
+                }],
+            })
+        except Exception as exc:  # noqa: BLE001 — network refusals stay structured
+            return _emit_studio_payload({
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "account_pull_failed",
+                    "level": "error",
+                    "reason": str(exc),
+                }],
+            })
+        return _emit_studio_payload(result)
+
+    return _help(f"unknown persona subcommand: {parsed.subcommand}")
+
+
+def _scenario(args: Sequence[str]) -> int:
+    try:
+        studio = _studio_module()
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn scenario", exc)
+    parser = argparse.ArgumentParser(
+        prog="agent-learn scenario",
+        description="Scenario studio: synth, expand, coverage, list (account pulls are SDK-only: studio.pull_scenarios).",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    synth = sub.add_parser("synth")
+    synth.add_argument("--components", nargs="+", required=True)
+    synth.add_argument(
+        "--kind", default="task",
+        choices=["task", "adversarial", "regression", "perturbation", "composed"],
+    )
+    synth.add_argument("--library", default=None)
+
+    expand = sub.add_parser("expand")
+    expand.add_argument("--base", required=True)
+    expand.add_argument("--axes", required=True, help='e.g. "intents=a,b;perturbations=none,noise"')
+    expand.add_argument("--k", type=int, default=2)
+    expand.add_argument("--library", default=None)
+
+    coverage = sub.add_parser("coverage")
+    coverage.add_argument("--library", required=True)
+    coverage.add_argument("--budget", type=int, default=64)
+    coverage.add_argument("--output", default=None)
+
+    listing = sub.add_parser("list")
+    listing.add_argument("--library", required=True)
+
+    parsed = parser.parse_args(list(args))
+    from fi.simulate.simulation.models import Scenario as _Scenario
+
+    if parsed.subcommand == "synth":
+        scenarios = []
+        for component_path in parsed.components:
+            component = _load_structured_file(Path(component_path))
+            name = str(component.get("name") or Path(component_path).stem)
+            try:
+                scenario = _Scenario(
+                    name=name,
+                    description=component.get("description"),
+                    dataset=[{
+                        "persona": dict(component.get("persona") or {"name": "Task Owner", "role": "task-owner"}),
+                        "situation": str(component.get("situation") or name),
+                        "outcome": str(component.get("outcome") or "The task completes successfully."),
+                    }],
+                    kind=parsed.kind,
+                    goal={"states": [name], "success_state": name},
+                    verification={"checks": list(component.get("checks") or [])},
+                )
+            except Exception as exc:  # noqa: BLE001 — structured refusal
+                return _emit_studio_payload({
+                    "status": "refused",
+                    "exit_code": 1,
+                    "findings": [{
+                        "type": "scenario_invalid",
+                        "level": "error",
+                        "component": component_path,
+                        "reason": str(exc),
+                    }],
+                })
+            entry: Dict[str, Any] = {
+                "name": scenario.name,
+                "version": scenario.version,
+                "composed_from": [f"component:{name}"],
+            }
+            if parsed.library:
+                saved = studio.save_scenario(scenario, library=parsed.library)
+                entry["ref"] = saved["ref"]
+            scenarios.append(entry)
+        return _emit_studio_payload({
+            "status": "synthesized",            # source files carry no artifact kind
+            "exit_code": 0,
+            "scenarios": scenarios,
+            "summary": {"synthesized": len(scenarios), "all_checks_typed": True},
+        })
+
+    if parsed.subcommand == "expand":
+        base = _Scenario(**_load_structured_file(Path(parsed.base)))
+        axes = _parse_axes_spec(parsed.axes)
+        children = studio.expand_scenarios(base, axes, k=parsed.k)
+        refs = []
+        for child in children:
+            if parsed.library:
+                saved = studio.save_scenario(child, library=parsed.library)
+                refs.append(saved["ref"])
+        return _emit_studio_payload({
+            "status": "expanded",
+            "exit_code": 0,
+            "expansion": {
+                "strategy": "k_way_combinatorial",
+                "k": parsed.k,
+                "axis_values": {name: len(values) for name, values in sorted(axes.items())},
+                "scenarios_added": len(children),
+                "parent_version": base.version,
+            },
+            "refs": refs,
+            "next": "agent-learn scenario coverage --library <dir>",
+        })
+
+    if parsed.subcommand == "coverage":
+        from agent_learning.studio._library import ensure_library, load_index
+
+        root = ensure_library(parsed.library)
+        scenarios = []
+        for entry in load_index(root).get("scenarios", []):
+            try:
+                scenarios.append(studio.load_scenario(entry["ref"], library=root))
+            except ValueError:
+                continue
+        report = studio.coverage_report(scenarios)
+        axes_grid: Dict[str, List[str]] = {}
+        for scenario in scenarios:
+            if scenario.coverage is None:
+                continue
+            for axis in ("intents", "personas", "perturbations"):
+                values = getattr(scenario.coverage, axis)
+                if values:
+                    axes_grid.setdefault(axis, [])
+                    axes_grid[axis] = sorted({*axes_grid[axis], *map(str, values)})
+        residual = (
+            studio.residual_uncovered_estimate(scenarios, axes_grid, budget=parsed.budget)
+            if len(axes_grid) >= 2 else report["residual_uncovered"]
+        )
+        payload = {
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,  # coverage = index block
+            "status": "reported",
+            "exit_code": 0,
+            "obligations": report["obligation_coverage"],
+            "residual_uncovered_estimate": residual,
+            "metadata": report["metadata"],
+        }
+        raw_path = root / "coverage" / f"{int(time.time())}.json"
+        _write_structured_file(raw_path, payload)
+        payload["raw_data"] = str(raw_path)
+        if parsed.output:
+            _write_structured_file(Path(parsed.output), payload)
+            payload["artifact_path"] = parsed.output
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "list":
+        from agent_learning.studio._library import list_library
+
+        view = list_library(parsed.library)
+        return _emit_studio_payload({
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            "status": "listed",
+            "exit_code": 0,
+            "scenarios": view["scenarios"],
+        })
+
+    return _help(f"unknown scenario subcommand: {parsed.subcommand}")
+
+
 def _tail_text(value: str, limit_bytes: int) -> str:
     if limit_bytes <= 0:
         return ""
@@ -4351,7 +4893,7 @@ def _help(error: Optional[str] = None) -> int:
             "replay, report, compare, baseline, promote-to-regression, shrink, "
             "optimize-eval, optimize-suite, suite, capabilities, actions, "
             "action-run, action-optimize, trust, redteam-corpus, release-proof, "
-            "eval-cli, init"
+            "eval-cli, init, persona, scenario"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

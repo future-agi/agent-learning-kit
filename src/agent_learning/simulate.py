@@ -411,6 +411,15 @@ def build_task_run_manifest(
     Agent Learning simulation engine inside this package.
     """
 
+    # Phase 7: typed studio model instances are accepted and normalized —
+    # manifests stay pure JSON; the typed layers ride inside the scenario
+    # rows and the engine's Persona(**row) re-hydrates them. Zero signature
+    # breaks.
+    if hasattr(persona, "model_dump"):
+        persona = persona.model_dump(exclude_none=True)
+    if hasattr(scenario, "model_dump"):
+        scenario = scenario.model_dump(exclude_none=True)
+
     if not name:
         raise ValueError("name is required")
     if not agent:

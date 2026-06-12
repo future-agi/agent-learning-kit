@@ -12,6 +12,7 @@ from fi.simulate.environment import (
     coerce_environment_adapters,
 )
 from fi.simulate.simulation.engines.base import BaseEngine
+from fi.simulate.simulation.fidelity import attach_fidelity
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
 from fi.simulate.simulation.synthetic import SyntheticDataGenerator
 
@@ -285,6 +286,7 @@ class LocalTextEngine(BaseEngine):
                 messages,
                 turn_index=turn_index,
                 attacks=attacks,
+                scenario=scenario,
             )
             if not next_user_message:
                 stop_reason = "simulator_stopped"
@@ -292,7 +294,7 @@ class LocalTextEngine(BaseEngine):
             messages.append({"role": "user", "content": next_user_message})
 
         transcript = self._format_transcript(messages)
-        return TestCaseResult(
+        result = TestCaseResult(
             persona=persona,
             transcript=transcript,
             messages=messages,
@@ -312,10 +314,69 @@ class LocalTextEngine(BaseEngine):
                 "tools": tools,
             },
         )
+        # Phase 7: fidelity attaches through metadata ONLY, and only for typed
+        # personas — untyped/legacy rows behave exactly as before (back-compat).
+        if persona.is_typed:
+            attach_fidelity(result, persona, scenario)
+        return result
 
     def _initial_user_message(self, persona: Persona) -> str:
         name = persona.persona.get("name", "User")
+        if persona.is_typed:
+            if persona.identity and persona.identity.name:
+                name = persona.identity.name
+            base = f"My name is {name}. {persona.situation} I want this outcome: {persona.outcome}"
+            volunteered = " ".join(
+                f"{fact.value}."
+                for fact in persona.knowledge
+                if fact.disclosure == "volunteer"
+            )
+            return f"{base} {volunteered}".rstrip()
         return f"My name is {name}. {persona.situation} I want this outcome: {persona.outcome}"
+
+    def _policy_user_message(
+        self,
+        persona: Persona,
+        messages: List[Dict[str, Any]],
+        *,
+        turn_index: int,
+        scenario: Optional[Scenario] = None,
+    ) -> str:
+        """Conduct resolver for typed personas (ARCH §2b) — engine-owned moves
+        derived from the compiled policy, deterministic, no prompt adjectives."""
+        from fi.simulate.simulation.behavior_policy import (
+            arc_pressure,
+            render_policy_directives,
+        )
+
+        policy = persona.behavior_policy
+        next_turn = turn_index + 1  # 0-based index of the upcoming user turn
+        pressure = (
+            arc_pressure(scenario.escalation, next_turn + 1)
+            if scenario is not None and scenario.escalation is not None
+            else 0.0
+        )
+        dials = render_policy_directives(policy, next_turn, pressure)
+        if dials["patience_level"] <= 0.05:
+            return ""  # disengage: patience exhausted -> simulator_stopped
+        latest_agent = (messages[-1].get("content", "") if messages else "").lower()
+        for fact in persona.knowledge:
+            if fact.key.lower() in latest_agent:
+                if fact.disclosure == "withhold":
+                    return "I'd rather not share that."
+                if fact.disclosure == "volunteer" or dials["disclosure_rate"] >= 0.3:
+                    return f"{fact.value}."
+                return "Why do you need that?"
+        if dials["escalation_level"] >= 0.8:
+            return (
+                "This is unacceptable. I need this resolved right now or I will "
+                "escalate to a supervisor."
+            )
+        if dials["escalation_level"] >= 0.5:
+            return "I am getting frustrated. Please resolve this now."
+        if dials["interruption_propensity"] >= 0.6:
+            return "(interrupting) Let me stop you - get to the point, please."
+        return "Please continue with the next concrete step."
 
     def _next_user_message(
         self,
@@ -324,7 +385,15 @@ class LocalTextEngine(BaseEngine):
         *,
         turn_index: int,
         attacks: List[str],
+        scenario: Optional[Scenario] = None,
     ) -> str:
+        if persona.is_typed:
+            return self._policy_user_message(
+                persona,
+                messages,
+                turn_index=turn_index,
+                scenario=scenario,
+            )
         latest_agent = messages[-1].get("content", "") if messages else ""
         risk_profile = persona.persona.get("risk_profile")
 
