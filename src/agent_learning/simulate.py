@@ -2761,6 +2761,7 @@ def build_redteam_readiness_certification_run_manifest(
     simulation_engine: str = "local_text",
     min_turns: int = 5,
     max_turns: Optional[int] = None,
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build a runnable red-team readiness certification manifest.
@@ -2810,6 +2811,7 @@ def build_redteam_readiness_certification_run_manifest(
         channels=channels,
         providers=providers,
         taxonomies=taxonomies,
+        persona_conditioned_campaign=persona_conditioned_campaign,
         metadata=metadata,
     )
     readiness_payload = environments[-1]["data"]
@@ -2886,6 +2888,7 @@ def build_redteam_readiness_certification_environments(
     channels: Sequence[str] = ("chat",),
     providers: Sequence[str] = ("local_cli",),
     taxonomies: Sequence[str] = ("owasp_llm_top_10", "owasp_agentic_ai"),
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Return a complete readiness-certification environment bundle."""
@@ -2980,6 +2983,7 @@ def build_redteam_readiness_certification_environments(
         artifacts=artifact_payloads,
         required_evidence=required_evidence,
         required_signals=required_readiness_signals,
+        persona_conditioned_campaign=persona_conditioned_campaign,
         metadata=metadata,
     )
     return [
@@ -8023,7 +8027,8 @@ def _redteam_readiness_payload(
     artifacts: Sequence[Mapping[str, Any]],
     required_evidence: Sequence[str],
     required_signals: Sequence[str],
-    metadata: Optional[Mapping[str, Any]],
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     evidence = _unique_strings(
         required_evidence
@@ -8059,26 +8064,31 @@ def _redteam_readiness_payload(
             "workspace_run_manifest",
         ]
     )
-    return copy.deepcopy(
-        _simulate().normalize_red_team_readiness_manifest(
-            {
-                "name": f"{name}-readiness",
-                "target": copy.deepcopy(dict(target)),
-                "framework_import": _redteam_readiness_child_digest(framework_import),
-                "red_team_campaign": _redteam_readiness_child_digest(red_team_campaign),
-                "workspace_run": _redteam_readiness_child_digest(workspace_run),
-                "trust_boundary": _redteam_readiness_child_digest(trust_boundary),
-                "control_plane": _redteam_readiness_child_digest(control_plane),
-                "observability": copy.deepcopy(dict(observability)),
-                "artifacts": [copy.deepcopy(dict(item)) for item in artifacts],
-                "required_evidence": evidence,
-                "required_signals": signals,
-                "metadata": {
-                    "source": "agent_learning.simulate.redteam_readiness_certification",
-                    **copy.deepcopy(dict(metadata or {})),
-                },
-            }
+    readiness_manifest: dict[str, Any] = {
+        "name": f"{name}-readiness",
+        "target": copy.deepcopy(dict(target)),
+        "framework_import": _redteam_readiness_child_digest(framework_import),
+        "red_team_campaign": _redteam_readiness_child_digest(red_team_campaign),
+        "workspace_run": _redteam_readiness_child_digest(workspace_run),
+        "trust_boundary": _redteam_readiness_child_digest(trust_boundary),
+        "control_plane": _redteam_readiness_child_digest(control_plane),
+        "observability": copy.deepcopy(dict(observability)),
+        "artifacts": [copy.deepcopy(dict(item)) for item in artifacts],
+        "required_evidence": evidence,
+        "required_signals": signals,
+        "metadata": {
+            "source": "agent_learning.simulate.redteam_readiness_certification",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    if persona_conditioned_campaign:
+        # Phase 7 (§9.7): the persona-conditioned campaign block (per-attack
+        # in-character fidelity) rides on the readiness manifest.
+        readiness_manifest["persona_conditioned_campaign"] = copy.deepcopy(
+            dict(persona_conditioned_campaign)
         )
+    return copy.deepcopy(
+        _simulate().normalize_red_team_readiness_manifest(readiness_manifest)
     )
 
 

@@ -7919,6 +7919,7 @@ class RedTeamReadinessEnvironment(EnvironmentAdapter):
         artifacts: Optional[Iterable[Any]] = None,
         required_evidence: Optional[Iterable[str]] = None,
         required_signals: Optional[Iterable[str]] = None,
+        persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.initial_manifest = normalize_red_team_readiness_manifest(
@@ -7934,12 +7935,19 @@ class RedTeamReadinessEnvironment(EnvironmentAdapter):
             artifacts=artifacts,
             required_evidence=required_evidence,
             required_signals=required_signals,
+            persona_conditioned_campaign=persona_conditioned_campaign,
             metadata=metadata,
         )
         self.manifest: Dict[str, Any] = {}
 
     def reset(self, **context: Any) -> EnvironmentSnapshot:
         self.manifest = copy.deepcopy(self.initial_manifest)
+        state: Dict[str, Any] = {"red_team_readiness": self._trace_payload()}
+        persona_campaign = self.manifest.get("persona_conditioned_campaign")
+        if persona_campaign:
+            # Phase 7 (§9.7): surface the persona-conditioned campaign as its own
+            # top-level run state key (the 7th certification state key).
+            state["persona_conditioned_campaign"] = copy.deepcopy(persona_campaign)
         return EnvironmentSnapshot(
             tools=self._tool_specs(),
             artifacts=[self._trace_artifact()],
@@ -7954,7 +7962,7 @@ class RedTeamReadinessEnvironment(EnvironmentAdapter):
                     },
                 )
             ],
-            state={"red_team_readiness": self._trace_payload()},
+            state=state,
             metadata={"red_team_readiness": copy.deepcopy(self.manifest.get("summary", {}))},
         )
 
@@ -18329,6 +18337,7 @@ def normalize_red_team_readiness_manifest(
     artifacts: Optional[Iterable[Any]] = None,
     required_evidence: Optional[Iterable[str]] = None,
     required_signals: Optional[Iterable[str]] = None,
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Normalize red-team preflight evidence into one readiness gate."""
@@ -18371,6 +18380,13 @@ def normalize_red_team_readiness_manifest(
     required_signal_keys = _red_team_readiness_key_list(
         required_signals if required_signals is not None else payload_dict.get("required_signals")
     )
+    persona_campaign_record = (
+        dict(persona_conditioned_campaign)
+        if isinstance(persona_conditioned_campaign, Mapping)
+        else dict(payload_dict.get("persona_conditioned_campaign") or {})
+        if isinstance(payload_dict.get("persona_conditioned_campaign"), Mapping)
+        else {}
+    )
     summary = _red_team_readiness_summary(
         target=target_record,
         framework_import=framework_import_record,
@@ -18382,6 +18398,7 @@ def normalize_red_team_readiness_manifest(
         artifacts=artifact_records,
         required_evidence=required_evidence_keys,
         required_signals=required_signal_keys,
+        persona_conditioned_campaign=persona_campaign_record,
     )
     signals = _red_team_readiness_signals(
         target=target_record,
@@ -18398,7 +18415,7 @@ def normalize_red_team_readiness_manifest(
         **dict(payload_dict.get("metadata") or {}),
         **dict(metadata or {}),
     }
-    return {
+    result = {
         "kind": "red_team_readiness",
         "name": manifest_name,
         "target": target_record,
@@ -18415,6 +18432,11 @@ def normalize_red_team_readiness_manifest(
         "signals": signals,
         "metadata": copy.deepcopy(merged_metadata),
     }
+    if persona_campaign_record:
+        # Phase 7 (§9.7): the persona-conditioned campaign rides on the
+        # readiness manifest and is surfaced as its own top-level run state key.
+        result["persona_conditioned_campaign"] = copy.deepcopy(persona_campaign_record)
+    return result
 
 
 def load_red_team_readiness_manifest(
@@ -19961,6 +19983,21 @@ def _normalize_red_team_readiness_artifacts(value: Any) -> List[Dict[str, Any]]:
     return records
 
 
+def _red_team_readiness_persona_conditioning_ready(
+    persona_conditioned_campaign: Optional[Mapping[str, Any]],
+) -> bool:
+    """Phase 7 (§9.7): a persona-conditioned campaign is ready when it carries
+    at least one in-character attack (a per-attack fidelity verdict held)."""
+    if not isinstance(persona_conditioned_campaign, Mapping) or not persona_conditioned_campaign:
+        return False
+    summary = persona_conditioned_campaign.get("summary")
+    if not isinstance(summary, Mapping):
+        return False
+    in_character = _red_team_readiness_int(summary.get("persona_in_character_attack_count")) or 0
+    conditioned = _red_team_readiness_int(summary.get("persona_conditioned_attack_count")) or 0
+    return in_character >= 1 and conditioned >= 1
+
+
 def _red_team_readiness_summary(
     *,
     target: Mapping[str, Any],
@@ -19973,6 +20010,7 @@ def _red_team_readiness_summary(
     artifacts: Sequence[Mapping[str, Any]],
     required_evidence: Sequence[str],
     required_signals: Sequence[str],
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     component_ready = {
         "framework_import": _red_team_readiness_framework_import_ready(framework_import),
@@ -19981,6 +20019,12 @@ def _red_team_readiness_summary(
         "trust_boundary": _red_team_readiness_trust_boundary_ready(trust_boundary),
         "control_plane": _red_team_readiness_control_plane_ready(control_plane),
     }
+    # Phase 7 (§9.7): persona_conditioning becomes a ready component ONLY when a
+    # persona-conditioned campaign block is present AND at least one attack held
+    # character (per-attack fidelity verdict pass). Absent block => unchanged
+    # 5-component readiness summary (back-compat).
+    if _red_team_readiness_persona_conditioning_ready(persona_conditioned_campaign):
+        component_ready["persona_conditioning"] = True
     component_present = {
         "target": bool(target),
         "framework_import": bool(framework_import),

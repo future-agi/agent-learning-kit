@@ -380,6 +380,88 @@ def build_redteam_manifest(
 build_redteam_run_manifest = build_redteam_manifest
 
 
+def _coerce_studio_payload(obj: Any) -> dict[str, Any]:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(exclude_none=True)
+    return dict(obj)
+
+
+def build_persona_conditioned_redteam_manifest(
+    *,
+    name: str,
+    persona: Any,
+    scenario: Any,
+    taxonomies: Sequence[str] = ("owasp_llm_top_10", "owasp_agentic_ai"),
+    channels: Sequence[str] = ("chat",),
+    providers: Sequence[str] = ("local_cli",),
+    frameworks: Sequence[str] = ("agent_learning_kit",),
+    required_env: Sequence[str] = (),
+    target: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+) -> dict[str, Any]:
+    """Persona-conditioned red-team manifest (Phase 7 unit 8; PCAP).
+
+    Thin over :func:`build_redteam_manifest`: maps ``persona.attack.strategies``
+    -> ``attacks`` and ``.surfaces`` -> ``surfaces``, embeds the TYPED persona
+    into the scenario rows (replacing the default red-team-owner persona), and
+    sets ``min_turns = max_turns = len(scenario.escalation.steps)`` so the
+    Crescendo arc has turns to escalate across (R§1 2605.04019). Taxonomy
+    membership is asserted FACADE-side (``studio.validate_persona`` /
+    ``validate_scenario``) against the gate-enforced 10x6 taxonomy — never
+    re-duplicated here. PCAP-style parallel multi-persona search = N manifests
+    from N personas (the existing campaign machinery runs them; no new runner).
+    """
+    if not name:
+        raise ValueError("name is required")
+    persona_payload = _coerce_studio_payload(persona)
+    scenario_payload = _coerce_studio_payload(scenario)
+    attack = persona_payload.get("attack") or {}
+    strategies = _unique_strings(attack.get("strategies") or [])
+    surfaces = _unique_strings(attack.get("surfaces") or [])
+    escalation = scenario_payload.get("escalation") or {}
+    steps = list(escalation.get("steps") or [])
+    if not strategies:
+        raise ValueError(
+            "persona.attack.strategies is required for a persona-conditioned manifest"
+        )
+    if not steps:
+        raise ValueError(
+            "scenario.escalation.steps is required for a persona-conditioned manifest"
+        )
+    if not surfaces:
+        attack_surface = scenario_payload.get("attack_surface")
+        surfaces = _unique_strings([attack_surface] if attack_surface else [])
+    if not surfaces:
+        raise ValueError(
+            "persona.attack.surfaces or scenario.attack_surface is required"
+        )
+    turns = max(1, len(steps))
+    scenario_dict = copy.deepcopy(dict(scenario_payload))
+    scenario_dict["name"] = str(scenario_dict.get("name") or name)
+    scenario_dict["dataset"] = [copy.deepcopy(persona_payload)]
+    return build_redteam_manifest(
+        name=name,
+        attacks=strategies,
+        surfaces=surfaces,
+        taxonomies=taxonomies,
+        channels=channels,
+        providers=providers,
+        frameworks=frameworks,
+        required_env=required_env,
+        target=target,
+        scenario=scenario_dict,
+        agent=agent,
+        evaluation_config=evaluation_config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=turns,
+        max_turns=turns,
+    )
+
+
 def build_long_horizon_redteam_manifest(
     *,
     name: str = "long-horizon-agent-redteam",
@@ -1915,6 +1997,7 @@ __all__ = [
     "build_redteam_corpus_campaign",
     "build_redteam_corpus_hook_campaign",
     "build_redteam_corpus_run_campaign",
+    "build_persona_conditioned_redteam_manifest",
     "build_redteam_manifest",
     "build_redteam_run_manifest",
     "fetch_redteam_corpus_hook",

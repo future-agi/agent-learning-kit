@@ -4707,6 +4707,7 @@ def build_redteam_readiness_certification_optimization_manifest(
     simulation_engine: str = "local_text",
     min_turns: int = 5,
     max_turns: Optional[int] = None,
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
     target_metadata: Optional[Mapping[str, Any]] = None,
     research_sources: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
@@ -4752,6 +4753,7 @@ def build_redteam_readiness_certification_optimization_manifest(
             simulation_engine=simulation_engine,
             min_turns=min_turns,
             max_turns=max_turns,
+            persona_conditioned_campaign=persona_conditioned_campaign,
             metadata=target_metadata,
         )
     )

@@ -28,6 +28,12 @@ _EXPORTS = {
     # engine fidelity facades
     "persona_fidelity": ("fi.simulate.simulation.fidelity", "persona_fidelity"),
     "attach_fidelity": ("fi.simulate.simulation.fidelity", "attach_fidelity"),
+    # in-character fidelity as attack quality (unit 8)
+    "attack_quality": ("agent_learning.studio._fidelity_attack", "attack_quality"),
+    "persona_conditioned_campaign": (
+        "agent_learning.studio._fidelity_attack",
+        "persona_conditioned_campaign",
+    ),
     # studio API
     "build_persona": ("agent_learning.studio._calibration", "build_persona"),
     "validate_persona": ("agent_learning.studio._calibration", "validate_persona"),

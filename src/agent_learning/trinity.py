@@ -346,6 +346,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_multi_framework_simulation.py": "multi_framework_runtime_readiness",
     "examples/sdk_openenv_environment_optimization.py": "environment_replay_optimizer_readiness",
     "examples/sdk_optimizer_governance_optimization.py": "optimizer_governance_readiness",
+    "examples/sdk_persona_scenario_studio.py": "persona_scenario_studio_readiness",
     "examples/sdk_optimizer_portfolio_optimization.py": "optimizer_portfolio_readiness",
     "examples/sdk_optimizer_profile_matrix.py": "optimizer_profile_matrix_readiness",
     "examples/sdk_orchestration_stack_probe_optimization.py": "orchestration_stack_probe_readiness",
@@ -402,6 +403,10 @@ V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
     "agent-learning.frozen-capability-profile.v1",
     "agent-learning.apply-plan.v1",
     "agent-learning.optimizer-routing-table.v1",
+    # Phase 7 (ARCH §4 canon): the calibration lifecycle artifact + the
+    # admitted-library index; V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    "agent-learning.persona-calibration.v1",
+    "agent-learning.persona-library.v1",
 ]
 
 # Claims-lint vocabulary and license table: trigger pattern -> the only gate id
@@ -644,6 +649,80 @@ V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS = [
     "live_lane_evidence_excluded_from_recommendations",   # P4-D6
     "no_global_aggregate",
     "default_picker_resolves_overrides_and_cold_starts",  # §2.4 engagement contract
+]
+
+# ---- Phase 7: persona & scenario studio ----
+V1_PERSONA_SCENARIO_STUDIO_FILES = [
+    "examples/sdk_persona_scenario_studio.py",
+    "internal-docs/persona-scenario-studio-readiness-research.md",
+]
+V1_PERSONA_LIBRARY_FIXTURE_DIR = "examples/persona_library"
+# Exactly TWO new artifact kinds (ARCH §4 canon): the calibration lifecycle
+# artifact + the admitted-library index. Persona/scenario source files are
+# library content (no kind); fidelity = in-row run.v1 block; bias-lint =
+# block inside calibration artifacts; pull receipts = index provenance entries.
+V1_PERSONA_CALIBRATION_KIND = "agent-learning.persona-calibration.v1"
+V1_PERSONA_LIBRARY_KIND = "agent-learning.persona-library.v1"
+
+V1_PERSONA_LAYERS = [
+    "identity", "temperament", "behavior_policy", "knowledge", "provenance",
+]
+V1_PERSONA_EVIDENCE_CLASSES = [
+    "hand_written", "schema_sampled", "policy_evolved",
+    "trace_mined", "cloud_downloaded", "legacy",
+]
+V1_PERSONA_TEMPERAMENT_AXES = ["rajas", "sattva", "tamas"]
+    # byte-equal to fi.opt.optimizers.council.GUNA_AXES (council.py:40) AND
+    # fi.simulate.simulation.models.PERSONA_TEMPERAMENT_AXES — cross-pinned in tests
+V1_PERSONA_BEHAVIOR_AXES = [
+    "patience", "disclosure", "interruption", "escalation",
+    "cooperation", "repair",
+]
+V1_PERSONA_BEHAVIOR_REALIZATION_METRICS = [
+    # paired 1:1, same order, with V1_PERSONA_BEHAVIOR_AXES (ARCH §2b/§4)
+    "turns_to_escalation", "info_withholding_rate", "interruption_count",
+    "intensity_trajectory_match", "compliance_rate", "repair_turn_fraction",
+]
+V1_PERSONA_FIDELITY_RECORD_FIELDS = [
+    "persona_version", "scenario_version", "evidence_class",
+    "adherence", "consistency", "naturalness", "drift", "drift_trajectory",
+    "floors", "verdict", "verdict_reason",
+]
+V1_PERSONA_FIDELITY_VERDICTS = ["pass", "fail", "inconclusive"]
+V1_PERSONA_FIDELITY_EPIDEMIC_RATE = 0.5
+    # run-level: admission-inconclusive rate above this => exit 1 with
+    # finding "persona_fidelity_epidemic" (ARCH §4; Phase-3 void-rate mirror)
+V1_PERSONA_FIDELITY_FLOORS = {
+    # GATE-FIXTURE floors keyed by evidence class (ARCH §2c: runtime floors
+    # are library-index data seeded from these). legacy has NO floors (cannot
+    # produce fidelity evidence at all) — the dict omits it on purpose.
+    # hand_written floors bind LOCAL verdicts only: hand_written rows can
+    # never back release claims regardless of floors (PRD §4.2).
+    "hand_written":     {"adherence": 0.6, "consistency": 0.7, "naturalness": 0.5},
+    "schema_sampled":   {"adherence": 0.7, "consistency": 0.8, "naturalness": 0.6},
+    "policy_evolved":   {"adherence": 0.75, "consistency": 0.8, "naturalness": 0.65},
+    "trace_mined":      {"adherence": 0.75, "consistency": 0.85, "naturalness": 0.7},
+    "cloud_downloaded": {"adherence": 0.7, "consistency": 0.8, "naturalness": 0.6},
+}
+V1_SCENARIO_KINDS = ["task", "adversarial", "regression", "perturbation", "composed"]
+V1_SCENARIO_COVERAGE_AXES = [
+    "intents", "personas", "perturbations",
+    "tool_obligations", "delegation_obligations",
+]
+V1_SCENARIO_COVERAGE_FORBIDDEN_HEADLINE_KEYS = ["library_size", "scenario_count"]
+V1_PERSONA_CALIBRATION_STAGES = ["sampled", "validated", "interrogated", "admitted"]
+V1_PERSONA_CALIBRATION_PROBES = ["internal", "external", "retest"]
+V1_PERSONA_CONTENT_SCAN_RESULTS = ["clean", "flagged"]
+    # two-level encoding (ARCH §4): result token clean|flagged; a flagged
+    # artifact's ENVELOPE disposition is "quarantined"
+V1_PERSONA_BIAS_LINT_CHECKS = [
+    "demographic_clustering", "trait_demographic_cells",
+    "subgroup_error_redistribution", "caricature_two_sided",
+]
+V1_PERSONA_VENDOR_IMPORT_FORMATS = ["vapi", "retell"]
+V1_PERSONA_DOWNLOAD_PIN_FIELDS = [
+    "source", "source_id", "source_updated_at", "downloaded_at",
+    "checksum_sha256", "content_scan",
 ]
 
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
@@ -1953,6 +2032,7 @@ V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES = [
 V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS = [
     "control_plane",
     "framework_import",
+    "persona_conditioning",
     "red_team_campaign",
     "trust_boundary",
     "workspace_run",
@@ -1968,6 +2048,7 @@ V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS = [
     "agent_control_plane",
     "agent_trust_boundary_model",
     "framework_import_manifest",
+    "persona_conditioned_campaign",
     "red_team_campaign",
     "red_team_readiness",
     "workspace_run_manifest",
@@ -1983,7 +2064,7 @@ V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS = [
 ]
 
 V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS = {
-    "ready_component_count": 5,
+    "ready_component_count": 6,
     "artifact_count": 1,
     "observability_hook_count": 1,
     "campaign_coverage_cell_count": 4,
@@ -1991,6 +2072,8 @@ V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS = {
     "campaign_passed_run_count": 4,
     "campaign_finding_count": 4,
     "campaign_implemented_mitigation_count": 4,
+    "persona_conditioned_attack_count": 2,
+    "persona_in_character_attack_count": 1,
 }
 
 V1_REDTEAM_SOCIETY_CAUSAL_FILES = [
@@ -6784,6 +6867,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=capability_profile_freeze,
     )
+    persona_scenario_studio = _release_persona_scenario_studio_status(root)
+    _append_release_check(
+        checks,
+        check_id="persona_scenario_studio_readiness",
+        passed=(
+            not persona_scenario_studio["missing_files"]
+            and not persona_scenario_studio["execution_errors"]
+            and not persona_scenario_studio["class_contract_errors"]
+            and not persona_scenario_studio["fidelity_errors"]
+            and not persona_scenario_studio["calibration_errors"]
+            and not persona_scenario_studio["coverage_errors"]
+            and not persona_scenario_studio["bias_errors"]
+            and not persona_scenario_studio["import_errors"]
+            and not persona_scenario_studio["download_errors"]
+        ),
+        milestone="M2",   # sim/eval evidence family (ARCH §3; verified M2 members)
+        evidence=persona_scenario_studio,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -6900,6 +7001,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_optimizer_routing_checks": list(
             V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
         ),
+        "required_persona_layers": list(V1_PERSONA_LAYERS),
+        "required_persona_evidence_classes": list(V1_PERSONA_EVIDENCE_CLASSES),
+        "required_persona_temperament_axes": list(V1_PERSONA_TEMPERAMENT_AXES),
+        "required_persona_behavior_axes": list(V1_PERSONA_BEHAVIOR_AXES),
+        "required_persona_behavior_realization_metrics": list(
+            V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
+        ),
+        "required_persona_fidelity_record_fields": list(
+            V1_PERSONA_FIDELITY_RECORD_FIELDS
+        ),
+        "required_persona_fidelity_verdicts": list(V1_PERSONA_FIDELITY_VERDICTS),
+        "persona_fidelity_epidemic_rate": V1_PERSONA_FIDELITY_EPIDEMIC_RATE,
+        "required_persona_fidelity_floors": copy.deepcopy(V1_PERSONA_FIDELITY_FLOORS),
+        "required_scenario_kinds": list(V1_SCENARIO_KINDS),
+        "required_scenario_coverage_axes": list(V1_SCENARIO_COVERAGE_AXES),
+        "required_persona_calibration_stages": list(V1_PERSONA_CALIBRATION_STAGES),
+        "required_persona_calibration_probes": list(V1_PERSONA_CALIBRATION_PROBES),
+        "required_persona_content_scan_results": list(V1_PERSONA_CONTENT_SCAN_RESULTS),
+        "required_persona_bias_lint_checks": list(V1_PERSONA_BIAS_LINT_CHECKS),
+        "required_persona_vendor_import_formats": list(V1_PERSONA_VENDOR_IMPORT_FORMATS),
+        "required_persona_download_pin_fields": list(V1_PERSONA_DOWNLOAD_PIN_FIELDS),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -10600,6 +10722,361 @@ def _release_capability_profile_freeze_status(root: Path) -> dict[str, Any]:
         "veto_errors": veto_errors,
         "admission_errors": admission_errors,
         "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_persona_scenario_studio_status(root: Path) -> dict[str, Any]:
+    """Gate #71 — persona & scenario studio readiness (Phase 7, §9.2).
+
+    Exec-loads ``examples/sdk_persona_scenario_studio.py`` in a tempdir (no
+    network, no env keys — the example runs entirely on the committed
+    ``examples/persona_library/`` fixtures) and audits its evidence payload
+    field-by-field into nine error arrays. The drifted fixture row MUST be
+    quarantined as ``inconclusive``; the stereotyped set MUST fail the bias
+    lint; the tampered/unpinned/injection downloads MUST be refused.
+    """
+    missing_files = _missing_relative_paths(
+        root, [*V1_PERSONA_SCENARIO_STUDIO_FILES, V1_PERSONA_LIBRARY_FIXTURE_DIR]
+    )
+    execution_errors: list[dict[str, Any]] = []
+    class_contract_errors: list[dict[str, Any]] = []
+    fidelity_errors: list[dict[str, Any]] = []
+    calibration_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    bias_errors: list[dict[str, Any]] = []
+    import_errors: list[dict[str, Any]] = []
+    download_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        previous_environ = dict(os.environ)
+        example_path = root / "examples/sdk_persona_scenario_studio.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_persona_scenario_studio", example_path
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-persona-scenario-studio-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "persona-scenario-studio.json"
+                result = dict(module.run(output_path))
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+                if result != saved:
+                    err(
+                        execution_errors,
+                        field="output_roundtrip",
+                        expected=True,
+                        observed=False,
+                    )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_persona_scenario_studio.py",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            result = {}
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environ)
+
+    if result:
+        if result.get("kind") != "agent-learning.persona-scenario-studio-readiness.v1":
+            err(
+                execution_errors,
+                field="kind",
+                expected="agent-learning.persona-scenario-studio-readiness.v1",
+                observed=result.get("kind"),
+            )
+
+        # ---- constant mirrors ----
+        mirrors = [
+            ("persona_layers", V1_PERSONA_LAYERS),
+            ("persona_evidence_classes", V1_PERSONA_EVIDENCE_CLASSES),
+            ("persona_temperament_axes", V1_PERSONA_TEMPERAMENT_AXES),
+            ("persona_behavior_axes", V1_PERSONA_BEHAVIOR_AXES),
+            ("persona_behavior_realization_metrics", V1_PERSONA_BEHAVIOR_REALIZATION_METRICS),
+            ("persona_fidelity_verdicts", V1_PERSONA_FIDELITY_VERDICTS),
+            ("scenario_kinds", V1_SCENARIO_KINDS),
+            ("scenario_coverage_axes", V1_SCENARIO_COVERAGE_AXES),
+            ("scenario_coverage_forbidden_headline_keys", V1_SCENARIO_COVERAGE_FORBIDDEN_HEADLINE_KEYS),
+            ("persona_calibration_stages", V1_PERSONA_CALIBRATION_STAGES),
+            ("persona_calibration_probes", V1_PERSONA_CALIBRATION_PROBES),
+            ("persona_content_scan_results", V1_PERSONA_CONTENT_SCAN_RESULTS),
+            ("persona_bias_lint_checks", V1_PERSONA_BIAS_LINT_CHECKS),
+            ("persona_vendor_import_formats", V1_PERSONA_VENDOR_IMPORT_FORMATS),
+            ("persona_download_pin_fields", V1_PERSONA_DOWNLOAD_PIN_FIELDS),
+        ]
+        for field, expected in mirrors:
+            if list(result.get(field) or []) != list(expected):
+                err(execution_errors, field=field, expected=expected, observed=result.get(field))
+        if result.get("persona_fidelity_floors") != V1_PERSONA_FIDELITY_FLOORS:
+            err(
+                execution_errors,
+                field="persona_fidelity_floors",
+                expected=V1_PERSONA_FIDELITY_FLOORS,
+                observed=result.get("persona_fidelity_floors"),
+            )
+        if result.get("persona_fidelity_epidemic_rate") != V1_PERSONA_FIDELITY_EPIDEMIC_RATE:
+            err(
+                execution_errors,
+                field="persona_fidelity_epidemic_rate",
+                expected=V1_PERSONA_FIDELITY_EPIDEMIC_RATE,
+                observed=result.get("persona_fidelity_epidemic_rate"),
+            )
+
+        # ---- class_contract ----
+        contract = _as_mapping(result.get("class_contract"))
+        for field in (
+            "typed_roundtrip_stable",
+            "legacy_upgraded",
+            "legacy_keys_preserved",
+            "hash_stable",
+            "scenario_roundtrip_stable",
+            "adversarial_requires_arc",
+        ):
+            if contract.get(field) is not True:
+                err(class_contract_errors, field=f"class_contract.{field}", expected=True, observed=contract.get(field))
+        if contract.get("legacy_evidence_class") != "legacy":
+            err(
+                class_contract_errors,
+                field="class_contract.legacy_evidence_class",
+                expected="legacy",
+                observed=contract.get("legacy_evidence_class"),
+            )
+
+        # ---- fidelity ----
+        fidelity = _as_mapping(result.get("fidelity"))
+        if sorted(fidelity.get("record_fields") or []) != sorted(V1_PERSONA_FIDELITY_RECORD_FIELDS):
+            err(
+                fidelity_errors,
+                field="fidelity.record_fields",
+                expected=sorted(V1_PERSONA_FIDELITY_RECORD_FIELDS),
+                observed=sorted(fidelity.get("record_fields") or []),
+            )
+        for verdict in fidelity.get("verdicts_seen") or []:
+            if verdict not in V1_PERSONA_FIDELITY_VERDICTS:
+                err(fidelity_errors, field="fidelity.verdict", expected=V1_PERSONA_FIDELITY_VERDICTS, observed=verdict)
+        clean = _as_mapping(fidelity.get("clean"))
+        if clean.get("verdict") != "pass" or _as_mapping(clean.get("admission")).get("admissible") is not True:
+            err(fidelity_errors, field="fidelity.clean", expected={"verdict": "pass", "admissible": True}, observed=clean)
+        drifted = _as_mapping(fidelity.get("drifted"))
+        drift_admission = _as_mapping(drifted.get("admission"))
+        if (
+            drifted.get("verdict") != "inconclusive"
+            or drift_admission.get("verdict") != "inconclusive"
+            or drift_admission.get("quarantined") is not True
+            or drift_admission.get("admissible") is not False
+        ):
+            err(
+                fidelity_errors,
+                field="fidelity.drifted",
+                expected={"verdict": "inconclusive", "quarantined": True, "admissible": False},
+                observed=drifted,
+            )
+        over = _as_mapping(fidelity.get("over_acted"))
+        if over.get("verdict") != "inconclusive" or _float_or_zero(over.get("caricature_index")) <= 0.5:
+            err(
+                fidelity_errors,
+                field="fidelity.over_acted",
+                expected={"verdict": "inconclusive", "caricature_index": ">0.5"},
+                observed=over,
+            )
+        if _int_or_zero(fidelity.get("admissible_count")) != 1:
+            err(fidelity_errors, field="fidelity.admissible_count", expected=1, observed=fidelity.get("admissible_count"))
+        if _int_or_zero(fidelity.get("inconclusive_count")) != 2:
+            err(fidelity_errors, field="fidelity.inconclusive_count", expected=2, observed=fidelity.get("inconclusive_count"))
+        if _int_or_zero(drifted.get("trajectory_len")) != _int_or_zero(fidelity.get("clean_user_turn_count")):
+            err(
+                fidelity_errors,
+                field="fidelity.drift_trajectory_len",
+                expected=fidelity.get("clean_user_turn_count"),
+                observed=drifted.get("trajectory_len"),
+            )
+
+        # ---- calibration ----
+        calibration = _as_mapping(result.get("calibration"))
+        missing_stages = sorted(set(V1_PERSONA_CALIBRATION_STAGES) - set(calibration.get("stages") or []))
+        if missing_stages:
+            err(calibration_errors, field="calibration.stages", expected=V1_PERSONA_CALIBRATION_STAGES, observed=calibration.get("stages"))
+        if sorted(calibration.get("probes") or []) != sorted(V1_PERSONA_CALIBRATION_PROBES):
+            err(calibration_errors, field="calibration.probes", expected=sorted(V1_PERSONA_CALIBRATION_PROBES), observed=calibration.get("probes"))
+        cal_ok = _as_mapping(calibration.get("calibratable"))
+        if cal_ok.get("status") != "passed" or cal_ok.get("failed_probe") is not None:
+            err(calibration_errors, field="calibration.calibratable.status", expected="passed", observed=cal_ok.get("status"))
+        if cal_ok.get("kind") != V1_PERSONA_CALIBRATION_KIND:
+            err(calibration_errors, field="calibration.calibratable.kind", expected=V1_PERSONA_CALIBRATION_KIND, observed=cal_ok.get("kind"))
+        cal_class = _as_mapping(cal_ok.get("evidence_class"))
+        if cal_class.get("before") != "hand_written" or cal_class.get("after") != "schema_sampled":
+            err(
+                calibration_errors,
+                field="calibration.calibratable.evidence_class",
+                expected={"before": "hand_written", "after": "schema_sampled"},
+                observed=cal_class,
+            )
+        cal_red = _as_mapping(calibration.get("drift_seed"))
+        if cal_red.get("status") != "failed" or cal_red.get("failed_probe") != "retest":
+            err(
+                calibration_errors,
+                field="calibration.drift_seed",
+                expected={"status": "failed", "failed_probe": "retest"},
+                observed=cal_red,
+            )
+        if _as_mapping(cal_red.get("evidence_class")).get("after") != "hand_written":
+            err(
+                calibration_errors,
+                field="calibration.drift_seed.monotone",
+                expected="class unchanged on failed calibration",
+                observed=cal_red.get("evidence_class"),
+            )
+
+        # ---- coverage ----
+        coverage = _as_mapping(result.get("coverage"))
+        if sorted(coverage.get("axes") or []) != sorted(V1_SCENARIO_COVERAGE_AXES):
+            err(coverage_errors, field="coverage.axes", expected=sorted(V1_SCENARIO_COVERAGE_AXES), observed=coverage.get("axes"))
+        if coverage.get("residual_present") is not True or not (coverage.get("plateau_curve") or []):
+            err(coverage_errors, field="coverage.residual_uncovered", expected="present with plateau curve", observed=coverage.get("plateau_curve"))
+        if coverage.get("forbidden_present"):
+            err(coverage_errors, field="coverage.forbidden_headline_keys", expected=[], observed=coverage.get("forbidden_present"))
+        if coverage.get("expansion_lineage_ok") is not True:
+            err(coverage_errors, field="coverage.expansion_lineage", expected=True, observed=coverage.get("expansion_lineage_ok"))
+
+        # ---- bias ----
+        bias = _as_mapping(result.get("bias"))
+        if sorted(bias.get("checks") or []) != sorted(V1_PERSONA_BIAS_LINT_CHECKS):
+            err(bias_errors, field="bias.checks", expected=sorted(V1_PERSONA_BIAS_LINT_CHECKS), observed=bias.get("checks"))
+        if bias.get("stereotyped_status") != "failed":
+            err(bias_errors, field="bias.stereotyped_status", expected="failed", observed=bias.get("stereotyped_status"))
+        if bias.get("clean_status") != "passed":
+            err(bias_errors, field="bias.clean_status", expected="passed", observed=bias.get("clean_status"))
+        if len(bias.get("clean_locales") or []) < 2:
+            err(bias_errors, field="bias.clean_locales", expected=">=2 locales linted", observed=bias.get("clean_locales"))
+
+        # ---- import ----
+        vendor = _as_mapping(result.get("vendor_import"))
+        if list(vendor.get("formats") or []) != list(V1_PERSONA_VENDOR_IMPORT_FORMATS):
+            err(import_errors, field="vendor_import.formats", expected=V1_PERSONA_VENDOR_IMPORT_FORMATS, observed=vendor.get("formats"))
+        for fmt in V1_PERSONA_VENDOR_IMPORT_FORMATS:
+            row = _as_mapping(vendor.get(fmt))
+            if row.get("byte_exact") is not True:
+                err(import_errors, field=f"vendor_import.{fmt}.byte_exact", expected=True, observed=row.get("byte_exact"))
+            if row.get("source_format") != fmt or row.get("raw_present") is not True:
+                err(import_errors, field=f"vendor_import.{fmt}.provenance", expected={"source_format": fmt, "raw_present": True}, observed=row)
+            if row.get("persona_owns_no_goal") is not True or not (row.get("goal_states") or []):
+                err(import_errors, field=f"vendor_import.{fmt}.goal_separation", expected="goal on ScenarioGoal stub, not persona", observed=row)
+
+        # ---- download ----
+        download = _as_mapping(result.get("download"))
+        if sorted(download.get("pin_fields") or []) != sorted(V1_PERSONA_DOWNLOAD_PIN_FIELDS):
+            err(download_errors, field="download.pin_fields", expected=sorted(V1_PERSONA_DOWNLOAD_PIN_FIELDS), observed=download.get("pin_fields"))
+        if list(download.get("scan_results") or []) != list(V1_PERSONA_CONTENT_SCAN_RESULTS):
+            err(download_errors, field="download.scan_results", expected=V1_PERSONA_CONTENT_SCAN_RESULTS, observed=download.get("scan_results"))
+        dl_clean = _as_mapping(download.get("clean"))
+        if dl_clean.get("status") != "ok" or dl_clean.get("scan") != "clean" or dl_clean.get("pin_complete") is not True:
+            err(download_errors, field="download.clean", expected={"status": "ok", "scan": "clean", "pin_complete": True}, observed=dl_clean)
+        dl_tampered = _as_mapping(download.get("tampered"))
+        if dl_tampered.get("status") != "tampered" or dl_tampered.get("admissible") is not False:
+            err(download_errors, field="download.tampered", expected={"status": "tampered", "admissible": False}, observed=dl_tampered)
+        dl_unpinned = _as_mapping(download.get("unpinned"))
+        if dl_unpinned.get("status") != "unpinned" or dl_unpinned.get("admissible") is not False:
+            err(download_errors, field="download.unpinned", expected={"status": "unpinned", "admissible": False}, observed=dl_unpinned)
+        dl_injection = _as_mapping(download.get("injection"))
+        if (
+            dl_injection.get("flagged") is not True
+            or dl_injection.get("refused_in_quarantine") is not True
+            or dl_injection.get("quarantine_unloadable") is not True
+        ):
+            err(
+                download_errors,
+                field="download.injection",
+                expected={"flagged": True, "refused_in_quarantine": True, "quarantine_unloadable": True},
+                observed=dl_injection,
+            )
+
+        evidence = {
+            "kind": result.get("kind"),
+            "fixture_persona_count": result.get("fixture_persona_count"),
+            "fixture_transcript_count": result.get("fixture_transcript_count"),
+            "coverage_cells_declared": result.get("coverage_cells_declared"),
+            "class_contract": contract,
+            "fidelity": {
+                "verdicts_seen": fidelity.get("verdicts_seen"),
+                "admissible_count": fidelity.get("admissible_count"),
+                "inconclusive_count": fidelity.get("inconclusive_count"),
+            },
+            "calibration": {
+                "stages": calibration.get("stages"),
+                "calibratable_status": cal_ok.get("status"),
+                "drift_seed_failed_probe": cal_red.get("failed_probe"),
+            },
+            "coverage": {
+                "axes": coverage.get("axes"),
+                "forbidden_present": coverage.get("forbidden_present"),
+            },
+            "bias": {
+                "stereotyped_status": bias.get("stereotyped_status"),
+                "clean_status": bias.get("clean_status"),
+                "clean_locales": bias.get("clean_locales"),
+            },
+            "vendor_import": {
+                fmt: _as_mapping(vendor.get(fmt)).get("byte_exact")
+                for fmt in V1_PERSONA_VENDOR_IMPORT_FORMATS
+            },
+            "download": {
+                "tampered": dl_tampered.get("status"),
+                "unpinned": dl_unpinned.get("status"),
+                "injection_quarantined": dl_injection.get("refused_in_quarantine"),
+            },
+            "persona_conditioned_manifest": result.get("persona_conditioned_manifest"),
+        }
+        if _int_or_zero(result.get("fixture_persona_count")) <= 0:
+            err(execution_errors, field="fixture_persona_count", expected=">0", observed=result.get("fixture_persona_count"))
+        if _int_or_zero(result.get("fixture_transcript_count")) < 3:
+            err(execution_errors, field="fixture_transcript_count", expected=">=3", observed=result.get("fixture_transcript_count"))
+
+    return {
+        "kind": "agent-learning.persona-scenario-studio-readiness.v1",
+        "required_files": list(V1_PERSONA_SCENARIO_STUDIO_FILES),
+        "fixture_dir": V1_PERSONA_LIBRARY_FIXTURE_DIR,
+        "calibration_kind": V1_PERSONA_CALIBRATION_KIND,
+        "library_kind": V1_PERSONA_LIBRARY_KIND,
+        "required_persona_layers": list(V1_PERSONA_LAYERS),
+        "required_persona_evidence_classes": list(V1_PERSONA_EVIDENCE_CLASSES),
+        "required_persona_temperament_axes": list(V1_PERSONA_TEMPERAMENT_AXES),
+        "required_persona_behavior_axes": list(V1_PERSONA_BEHAVIOR_AXES),
+        "required_persona_behavior_realization_metrics": list(
+            V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
+        ),
+        "required_persona_fidelity_record_fields": list(V1_PERSONA_FIDELITY_RECORD_FIELDS),
+        "required_persona_fidelity_verdicts": list(V1_PERSONA_FIDELITY_VERDICTS),
+        "persona_fidelity_epidemic_rate": V1_PERSONA_FIDELITY_EPIDEMIC_RATE,
+        "required_persona_fidelity_floors": copy.deepcopy(V1_PERSONA_FIDELITY_FLOORS),
+        "required_scenario_kinds": list(V1_SCENARIO_KINDS),
+        "required_scenario_coverage_axes": list(V1_SCENARIO_COVERAGE_AXES),
+        "required_persona_calibration_stages": list(V1_PERSONA_CALIBRATION_STAGES),
+        "required_persona_calibration_probes": list(V1_PERSONA_CALIBRATION_PROBES),
+        "required_persona_content_scan_results": list(V1_PERSONA_CONTENT_SCAN_RESULTS),
+        "required_persona_bias_lint_checks": list(V1_PERSONA_BIAS_LINT_CHECKS),
+        "required_persona_vendor_import_formats": list(V1_PERSONA_VENDOR_IMPORT_FORMATS),
+        "required_persona_download_pin_fields": list(V1_PERSONA_DOWNLOAD_PIN_FIELDS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "class_contract_errors": class_contract_errors,
+        "fidelity_errors": fidelity_errors,
+        "calibration_errors": calibration_errors,
+        "coverage_errors": coverage_errors,
+        "bias_errors": bias_errors,
+        "import_errors": import_errors,
+        "download_errors": download_errors,
         "evidence": evidence,
     }
 
@@ -22003,6 +22480,72 @@ def _release_redteam_readiness_certification_status(root: Path) -> dict[str, Any
                 path="examples/sdk_redteam_readiness_certification_optimization.py",
                 prefix="red_team_campaign.summary",
             )
+            # Phase 7 (§9.7): the persona-conditioned campaign state proves
+            # in-character red-teaming with per-attack fidelity records.
+            persona_campaign = _as_mapping(state.get("persona_conditioned_campaign"))
+            persona_summary = _as_mapping(persona_campaign.get("summary"))
+            persona_rows = [
+                _as_mapping(row)
+                for row in _as_list(persona_campaign.get("rows"))
+                if isinstance(row, Mapping)
+            ]
+            evidence["persona_conditioned_campaign"] = {
+                "present": bool(persona_campaign),
+                "persona_conditioned_attack_count": persona_summary.get(
+                    "persona_conditioned_attack_count"
+                ),
+                "persona_in_character_attack_count": persona_summary.get(
+                    "persona_in_character_attack_count"
+                ),
+                "character_broken_attack_count": persona_summary.get(
+                    "character_broken_attack_count"
+                ),
+                "row_count": len(persona_rows),
+                "verdicts": persona_summary.get("verdicts") or [],
+            }
+            if not persona_campaign:
+                append_error(
+                    campaign_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="environment_state.persona_conditioned_campaign",
+                    expected="present",
+                    observed="absent",
+                )
+            for field in (
+                "persona_conditioned_attack_count",
+                "persona_in_character_attack_count",
+            ):
+                minimum = V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[field]
+                if _int_or_zero(persona_summary.get(field)) < minimum:
+                    append_error(
+                        campaign_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=f"persona_conditioned_campaign.summary.{field}",
+                        expected=f">={minimum}",
+                        observed=persona_summary.get(field),
+                    )
+            in_character_rows = 0
+            for index, row in enumerate(persona_rows):
+                record = _as_mapping(row.get("persona_fidelity"))
+                verdict = record.get("verdict")
+                if verdict not in V1_PERSONA_FIDELITY_VERDICTS:
+                    append_error(
+                        campaign_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=f"persona_conditioned_campaign.rows[{index}].persona_fidelity.verdict",
+                        expected=list(V1_PERSONA_FIDELITY_VERDICTS),
+                        observed=verdict,
+                    )
+                if row.get("character_held") is True:
+                    in_character_rows += 1
+            if in_character_rows < 1:
+                append_error(
+                    campaign_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="persona_conditioned_campaign.rows.character_held",
+                    expected=">=1 in-character attack row",
+                    observed=in_character_rows,
+                )
 
     return {
         "required_files": list(V1_REDTEAM_READINESS_CERTIFICATION_FILES),

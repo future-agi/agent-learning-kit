@@ -24,6 +24,8 @@
 - [Multi-Agent: rooms, handoffs, and coordination evidence](docs/simulate/multi-agent.md): twin=examples/sdk_multi_agent_room_probe_optimization.py kind=agent-learning.run.v1
 - [Multimodal Image: simulate grounding, not just looking](docs/simulate/multimodal-image.md): twin=examples/sdk_framework_adapter_browser_cua_trace.py kind=agent-learning.run.v1
 - [Orchestration: simulate the graph, not just the agents](docs/simulate/orchestration.md): twin=examples/sdk_framework_adapter_orchestration_trace.py kind=agent-learning.run.v1
+- [Persona Fidelity: did the simulated user behave as declared?](docs/simulate/persona-fidelity.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.persona-calibration.v1
+- [Persona & Scenario Studio: typed test cases you can measure](docs/simulate/persona-scenario-studio.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.persona-library.v1
 - [The Regression Lifecycle: baseline, compare, promote, replay, shrink](docs/simulate/regression-lifecycle.md): twin=examples/sdk_regression_artifact_suite.py kind=agent-learning.baseline.v1
 - [Simulate Any Framework](docs/simulate/simulate-any-framework.md): twin=examples/sdk_multi_framework_simulation.py kind=agent-learning.suite.v1
 - [Voice and Realtime: simulate the session before you dial it](docs/simulate/voice-realtime.md): twin=examples/sdk_framework_adapter_realtime_trace.py kind=agent-learning.run.v1
@@ -55,6 +57,7 @@
 - [Red-team corpora: benchmark rows as campaign evidence](docs/redteam/corpus.md): twin=examples/sdk_redteam_attack_evolution_optimization.py kind=agent-learning.redteam.v1
 - [Your first red-team campaign](docs/redteam/first-campaign.md): twin=examples/sdk_redteam_adaptive_loop_optimization.py kind=agent-learning.redteam.v1
 - [Long-horizon red-teaming](docs/redteam/long-horizon.md): twin=examples/sdk_redteam_causal_attribution_optimization.py kind=agent-learning.redteam.v1
+- [Persona-Conditioned Attacks: in-character is the attack quality](docs/redteam/persona-conditioned-attacks.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.redteam.v1
 - [Promote findings to regressions](docs/redteam/promote-to-regression.md): twin=examples/sdk_redteam_readiness_certification_optimization.py kind=agent-learning.regression-promotion.v1
 - [Red-Team Anything](docs/redteam/red-team-anything.md): twin=examples/sdk_redteam_adaptive_loop_optimization.py kind=agent-learning.redteam.v1
 - [Stored Prompt Injection: cross-session red-teaming](docs/redteam/stored-prompt-injection.md): twin=examples/sdk_memory_layer_probe_optimization.py kind=agent-learning.run.v1
