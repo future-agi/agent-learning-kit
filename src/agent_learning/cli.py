@@ -1683,6 +1683,131 @@ def _eval_task(args: Sequence[str]) -> int:
     return int(payload.get("exit_code", 0))
 
 
+_VOICE_ACOUSTIC_OPERATORS = ("noise", "interference", "reverb_blend")
+
+
+def _voice_finding_payload(
+    finding: Mapping[str, Any], *, exit_code: int, channel: str = "voice"
+) -> Dict[str, Any]:
+    """A structured voice red-team CLI finding payload (6b; UI-UX §1.2/§6.2)."""
+
+    status = "failed" if exit_code != 0 else "passed"
+    return {
+        "kind": "agent-learning.optimization.v1",
+        "status": status,
+        "exit_code": exit_code,
+        "channel": channel,
+        "findings": [dict(finding)],
+        "ab_harness": None,
+    }
+
+
+def _run_voice_ab_harness(
+    manifest: Mapping[str, Any], parsed: argparse.Namespace, redteam: Any
+) -> int:
+    """CLI front door for the composed voice-attack A/B harness (6b; D-BG10).
+
+    Same contract as the SDK runner ``run_composed_voice_attack_ab`` — one
+    contract, two doors. The findings vocabulary (loud in the CLI, silent-skip
+    in pytest) covers ``voice_rung_unavailable`` (rung-2 requested before
+    Phase-9A loopback), ``voice_corpus_channel_missing`` (version skew),
+    ``voice_codec_sim_unavailable`` (rung-2 without the codec dependency)."""
+
+    from agent_learning import trinity
+    from fi.simulate.simulation.models import Persona, Scenario
+
+    # version-skew tripwire: a voice campaign asked while this install's corpus
+    # constants say channels: ["chat"] (never silently degrade to chat).
+    if "voice" not in trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS:
+        finding = {
+            "type": "voice_corpus_channel_missing",
+            "level": "error",
+            "reason": (
+                "voice campaign requested but this install's corpus constants "
+                f"declare channels {trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS}"
+            ),
+            "remediation": "upgrade the kit to a build with the voice channel",
+        }
+        payload = _voice_finding_payload(finding, exit_code=1)
+        _emit_voice_payload(payload, parsed)
+        return 1
+
+    # rung-2 acoustic operators requested before Phase-9A loopback lands.
+    requested_ops = set()
+    for space_key in ("signal_space",):
+        space = manifest.get(space_key) or {}
+        for op in space.get("operator") or []:
+            requested_ops.add(op)
+    acoustic_requested = sorted(
+        op for op in requested_ops if op in _VOICE_ACOUSTIC_OPERATORS
+    )
+    if acoustic_requested:
+        finding = {
+            "type": "voice_rung_unavailable",
+            "level": "error",
+            "requested_rung": "acoustic",
+            "requested_operators": acoustic_requested,
+            "reason": (
+                "acoustic operators require the loopback audio transport "
+                "(Phase 9A); this kit version implements rung-1 transcript_level "
+                "only"
+            ),
+            "remediation": (
+                "run the transcript_level form of this campaign now (operators: "
+                "homophone, code_switch, near_dup, asr_error); the acoustic rung "
+                "lands as an increment when Phase-9A loopback ships"
+            ),
+        }
+        payload = _voice_finding_payload(finding, exit_code=1)
+        _emit_voice_payload(payload, parsed)
+        return 1
+
+    try:
+        persona = Persona(**manifest["persona"])
+        scenario = Scenario(**manifest["scenario"])
+        result = redteam.run_composed_voice_attack_ab(
+            name=str(manifest.get("name") or "voice-composed-ab"),
+            persona=persona,
+            scenario=scenario,
+            persona_space=manifest["persona_space"],
+            signal_space=manifest["signal_space"],
+            eval_budget_per_arm=int(manifest["eval_budget_per_arm"]),
+            seeds=tuple(manifest.get("seeds") or (7, 11, 13)),
+            voice_surfaces=tuple(manifest.get("voice_surfaces") or ()),
+            quarantine_overrides=manifest.get("quarantine_overrides"),
+        )
+    except KeyError as exc:
+        print(
+            f"agent-learn redteam --ab-harness: manifest missing key {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"agent-learn redteam --ab-harness: {exc}", file=sys.stderr)
+        return 1
+
+    _emit_voice_payload(result, parsed)
+    return int(result.get("exit_code", 0))
+
+
+def _emit_voice_payload(payload: Mapping[str, Any], parsed: argparse.Namespace) -> None:
+    payload = dict(payload)
+    output_paths = list(getattr(parsed, "output", []) or [])
+    written = False
+    for path_text in output_paths:
+        path = Path(path_text).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        written = True
+        if not getattr(parsed, "quiet", False):
+            print(f"wrote {path.resolve()}")
+    if not written and not getattr(parsed, "quiet", False):
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
 def _redteam(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn redteam",
@@ -1702,6 +1827,9 @@ def _redteam(args: Sequence[str]) -> int:
     except Exception as exc:
         print(f"agent-learn redteam: {exc}", file=sys.stderr)
         return 1
+
+    if getattr(parsed, "ab_harness", False):
+        return _run_voice_ab_harness(manifest, parsed, redteam)
 
     if isinstance(manifest.get("live_lane"), Mapping):
         # Live red-team targets ride the same lane front door (Phase 3 §6.1);
@@ -2337,6 +2465,16 @@ def _add_redteam_args(parser: argparse.ArgumentParser) -> None:
         "--quiet",
         action="store_true",
         help="Do not print JSON summary when no output path is configured.",
+    )
+    parser.add_argument(
+        "--ab-harness",
+        action="store_true",
+        help=(
+            "Phase 12: run the composed voice-attack A/B harness "
+            "(composed vs persona-only vs signal-only at equal eval_budget) "
+            "and emit the agent-learning.optimization.v1 payload with the "
+            "embedded ab_harness block."
+        ),
     )
 
 

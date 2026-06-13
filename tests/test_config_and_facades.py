@@ -17596,6 +17596,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_corpus_execution_channels"] == (
         trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
     )
+    # Phase 12 (voice red-team) payload mirrors (unit 7.5a)
+    assert payload["required_redteam_voice_surfaces"] == (
+        trinity.V1_REDTEAM_VOICE_SURFACES
+    )
+    assert payload["voice_attack_family_matrix"] == (
+        trinity.V1_VOICE_ATTACK_FAMILY_MATRIX
+    )
+    assert payload["voice_attack_maturity_levels"] == (
+        trinity.V1_VOICE_ATTACK_MATURITY_LEVELS
+    )
+    assert payload["voice_phone_survival_statuses"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_STATUSES
+    )
+    assert payload["voice_phone_survival_tiers"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_TIERS
+    )
+    assert payload["voice_attack_rungs"] == trinity.V1_VOICE_ATTACK_RUNGS
+    assert payload["voice_detection_evidence_fields"] == (
+        trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS
+    )
+    assert payload["voice_redteam_ab_arms"] == trinity.V1_VOICE_REDTEAM_AB_ARMS
+    assert payload["voice_redteam_ab_verdicts"] == (
+        trinity.V1_VOICE_REDTEAM_AB_VERDICTS
+    )
     assert payload["required_redteam_readiness_certification_files"] == (
         trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
     )
@@ -18467,6 +18491,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "capability_profile_freeze_readiness",
         "persona_scenario_studio_readiness",
         "telemetry_boundary",
+        "voice_redteam_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18885,6 +18910,47 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert tele["chain_errors"] == []
     assert tele["fault_injection_errors"] == []
     assert tele["identity_errors"] == []
+    # ---- Phase 12: voice red-team readiness gate (#73) ----
+    voice_redteam = checks["voice_redteam_readiness"]["evidence"]
+    assert voice_redteam["kind"] == "agent-learning.voice-redteam-readiness.v1"
+    assert voice_redteam["corpus_channels"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
+    )
+    assert voice_redteam["voice_surfaces"] == trinity.V1_REDTEAM_VOICE_SURFACES
+    assert voice_redteam["voice_attack_family_matrix"] == (
+        trinity.V1_VOICE_ATTACK_FAMILY_MATRIX
+    )
+    assert voice_redteam["voice_attack_maturity_levels"] == (
+        trinity.V1_VOICE_ATTACK_MATURITY_LEVELS
+    )
+    assert voice_redteam["voice_phone_survival_statuses"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_STATUSES
+    )
+    assert voice_redteam["voice_phone_survival_tiers"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_TIERS
+    )
+    assert voice_redteam["voice_attack_rungs"] == trinity.V1_VOICE_ATTACK_RUNGS
+    assert voice_redteam["voice_detection_evidence_fields"] == (
+        trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS
+    )
+    assert voice_redteam["voice_redteam_ab_arms"] == (
+        trinity.V1_VOICE_REDTEAM_AB_ARMS
+    )
+    assert voice_redteam["voice_redteam_ab_verdicts"] == (
+        trinity.V1_VOICE_REDTEAM_AB_VERDICTS
+    )
+    assert voice_redteam["voice_corpus_row_count"] == 12
+    assert voice_redteam["fixture_count"] > 0
+    assert voice_redteam["ab_arm_count"] == 3
+    assert voice_redteam["missing_files"] == []
+    assert voice_redteam["execution_errors"] == []
+    assert voice_redteam["corpus_errors"] == []
+    assert voice_redteam["matrix_errors"] == []
+    assert voice_redteam["operator_errors"] == []
+    assert voice_redteam["search_errors"] == []
+    assert voice_redteam["fidelity_errors"] == []
+    assert voice_redteam["pack_errors"] == []
+    assert voice_redteam["authorization_errors"] == []
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -21054,7 +21120,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert redteam_corpus_execution["missing_channels"] == []
     assert redteam_corpus_execution["missing_providers"] == []
     assert redteam_corpus_execution["missing_frameworks"] == []
-    assert redteam_corpus_execution["required_row_count"] == 12
+    assert redteam_corpus_execution["required_row_count"] == 24
     assert redteam_corpus_execution["campaign_kind"] == "red_team_campaign"
     assert set(redteam_corpus_execution["observed_attack_types"]) >= set(
         trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES
@@ -21072,18 +21138,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS
     )
     corpus_summary = redteam_corpus_execution["campaign_summary"]
-    assert corpus_summary["run_count"] == 12
-    assert corpus_summary["passed_run_count"] == 12
+    assert corpus_summary["run_count"] == 24
+    assert corpus_summary["passed_run_count"] == 24
     assert corpus_summary["failed_run_count"] == 0
-    assert corpus_summary["coverage_cell_count"] == 12
-    assert corpus_summary["covered_cell_count"] == 12
-    assert corpus_summary["executed_cell_count"] == 12
-    assert corpus_summary["artifact_count"] == 24
-    assert corpus_summary["finding_count"] == 12
-    assert corpus_summary["finding_mapped_count"] == 12
-    assert corpus_summary["mitigation_count"] == 12
-    assert corpus_summary["implemented_mitigation_count"] == 12
-    assert len(redteam_corpus_execution["coverage_cell_ids"]) == 12
+    assert corpus_summary["coverage_cell_count"] == 24
+    assert corpus_summary["covered_cell_count"] == 24
+    assert corpus_summary["executed_cell_count"] == 24
+    assert corpus_summary["artifact_count"] == 48
+    assert corpus_summary["finding_count"] == 24
+    assert corpus_summary["finding_mapped_count"] == 24
+    assert corpus_summary["mitigation_count"] == 24
+    assert corpus_summary["implemented_mitigation_count"] == 24
+    assert len(redteam_corpus_execution["coverage_cell_ids"]) == 24
     redteam_readiness = checks["redteam_readiness_certification"]["evidence"]
     assert redteam_readiness["required_files"] == (
         trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES

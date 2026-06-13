@@ -61,6 +61,8 @@
 - [Promote findings to regressions](docs/redteam/promote-to-regression.md): twin=examples/sdk_redteam_readiness_certification_optimization.py kind=agent-learning.regression-promotion.v1
 - [Red-Team Anything](docs/redteam/red-team-anything.md): twin=examples/sdk_redteam_adaptive_loop_optimization.py kind=agent-learning.redteam.v1
 - [Stored Prompt Injection: cross-session red-teaming](docs/redteam/stored-prompt-injection.md): twin=examples/sdk_memory_layer_probe_optimization.py kind=agent-learning.run.v1
+- [Voice attack corpus: the voice channel joins the gated matrix](docs/redteam/voice-attack-corpus.md): twin=examples/sdk_voice_redteam_campaign.py kind=agent-learning.redteam.v1
+- [Voice composed campaigns: persona × signal search and the A/B harness](docs/redteam/voice-composed-campaigns.md): twin=examples/sdk_voice_redteam_campaign.py kind=agent-learning.optimization.v1
 
 ## Frameworks
 - [A2A: offline framework-adapter simulation](docs/frameworks/a2a.md): twin=examples/sdk_framework_adapter_a2a_protocol_trace.py kind=agent-learning.run.v1

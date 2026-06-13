@@ -468,3 +468,93 @@ def test_lane_run_result_round_trips_through_the_run_payload(tmp_path):
     assert rebuilt.verdict == result.verdict
     assert rebuilt.run_id == result.run_id
     assert rebuilt.per_repeat == result.per_repeat
+
+
+# --- Phase 12 (12C): rung-1 voice-attack operators -------------------------
+# These run in the DEFAULT suite (no live markers) — the operators are pure
+# stdlib+numpy and must stay correct with no framework extra installed.
+
+_VOICE_PINNED = "please transfer the balance to my new account right here now"
+
+
+def test_voice_operators_deterministic_under_seed():
+    from agent_learning.live import _perturb
+
+    for fn in (
+        _perturb.apply_homophone_swap,
+        _perturb.apply_code_switch,
+        _perturb.apply_near_dup,
+    ):
+        a = fn(_VOICE_PINNED, seed=1142)
+        b = fn(_VOICE_PINNED, seed=1142)
+        assert a == b  # same text + seed -> identical output
+        # rate=0 is identity
+        assert fn(_VOICE_PINNED, rate=0.0, seed=1142) == _VOICE_PINNED
+    # different seed differs on a table-hit-rich sentence (high rate)
+    differ = any(
+        _perturb.apply_homophone_swap(_VOICE_PINNED, rate=1.0, seed=s) != _VOICE_PINNED
+        for s in range(20)
+    )
+    assert differ
+
+
+def test_voice_operators_table_membership():
+    from agent_learning.live import _perturb
+
+    sentence = "to for right buy cell here new wait aloud cents"  # all homophone keys
+    observed_swaps = set()
+    for seed in range(200):
+        out = _perturb.apply_homophone_swap(sentence, rate=1.0, seed=seed).split()
+        for src, dst in zip(sentence.split(), out):
+            if src != dst:
+                assert _perturb.HOMOPHONE_TABLE.get(src) == dst
+                observed_swaps.add(dst)
+    assert observed_swaps  # at least some swaps happened
+    # code_switch only ever substitutes table members
+    cs_sentence = "password account transfer delete confirm security"
+    for seed in range(50):
+        out = _perturb.apply_code_switch(cs_sentence, rate=1.0, seed=seed).split()
+        for src, dst in zip(cs_sentence.split(), out):
+            if src != dst:
+                assert _perturb.CODE_SWITCH_TABLE[src] == dst
+    # near_dup never reduces the token count
+    for seed in range(50):
+        out = _perturb.apply_near_dup(_VOICE_PINNED, rate=0.5, seed=seed)
+        assert len(out.split()) >= len(_VOICE_PINNED.split())
+
+
+def test_apply_text_perturbations_voice_dispatch_and_records():
+    from agent_learning.live import _perturb
+
+    turns = [{"user": _VOICE_PINNED}, {"role": "agent", "user": None}]
+    perturbed, applied = _perturb.apply_text_perturbations(
+        turns, ["homophone", "near_dup"], seed=7
+    )
+    by_op = {rec["operator"]: rec for rec in applied}
+    assert set(by_op) == {"homophone", "near_dup"}
+    for rec in applied:
+        assert {"operator", "rate", "seed"} <= set(rec)
+        assert rec["seed"] == 7
+    assert perturbed[1].get("user") is None  # non-user turn untouched
+    # unknown operator still raises
+    with pytest.raises(ValueError):
+        _perturb.apply_text_perturbations(turns, ["not_an_op"], seed=7)
+    # acoustic operator on text rung still raises (the rung gate)
+    with pytest.raises(ValueError):
+        _perturb.apply_text_perturbations(turns, ["noise"], seed=7)
+
+
+def test_perturbations_stanza_links_clean_twin():
+    from agent_learning.live import _perturb
+
+    turns = [{"user": _VOICE_PINNED}]
+    _, applied = _perturb.apply_text_perturbations(
+        turns, ["homophone", "code_switch", "near_dup"], seed=3
+    )
+    stanza = _perturb.perturbations_stanza(
+        applied, seed=3, paired_clean_run="clean-run-123"
+    )
+    ops = {rec["operator"] for rec in stanza["operators"]}
+    assert {"homophone", "code_switch", "near_dup"} <= ops
+    assert stanza["paired_clean_run"] == "clean-run-123"
+    assert stanza["seed"] == 3

@@ -26,6 +26,7 @@ _SUBMODULES = {
     "livekit_lane",
     "mcp_lane",
     "pipecat_lane",
+    "voice_redteam",
 }
 
 # lane name (LANE_ENV_FLAGS / LANE_EXTRAS key) → (module, entry point)
@@ -81,6 +82,11 @@ _LAZY_EXPORTS = {
     "CAPTURE_PROVENANCE_FIELDS": "_capture",
     "capture_to_fixture": "_capture",
     "replay_fixture": "_capture",
+    "run_voice_escalation_campaign": "voice_redteam",
+    "compile_arc_turns": "voice_redteam",
+    "timing_fidelity": "voice_redteam",
+    "validate_authorization": "voice_redteam",
+    "VoiceAuthorizationError": "voice_redteam",
 }
 
 

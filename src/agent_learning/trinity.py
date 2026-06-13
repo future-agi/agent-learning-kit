@@ -367,6 +367,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_task_evaluation_synthesis.py": "task_evaluation_synthesis_readiness",
     "examples/sdk_task_world_optimization.py": "task_world_optimizer_readiness",
     "examples/sdk_trinity_stack_probe_optimization.py": "trinity_stack_probe_readiness",
+    "examples/sdk_voice_redteam_campaign.py": "voice_redteam_readiness",
     "examples/sdk_workflow_hook_optimization.py": "workflow_hook_readiness",
     "examples/sdk_workflow_target_optimization.py": "workflow_target_optimizer_readiness",
     "examples/sdk_workflow_target_profile_matrix.py": "workflow_target_profile_matrix_readiness",
@@ -2083,6 +2084,17 @@ V1_REDTEAM_RESEARCH_SOURCE_URLS = [
     "https://arxiv.org/abs/2605.15338",
     "https://arxiv.org/abs/2605.17075",
     "https://arxiv.org/abs/2606.04329",
+    # Phase 12 (12B) voice red-team research lineage (MF7): each appears as a
+    # voice corpus-row source so the research gate's observed-in-corpus tripwire
+    # stays green. SMIA 2509.07677 is NOT registered this phase (voice-auth
+    # bypass — wrong lineage; no corpus row exercises it).
+    "https://arxiv.org/abs/2602.07379",  # Aegis — voice-agent red-team taxonomy
+    "https://arxiv.org/abs/2603.19127",  # JAMA — joint two-channel optimization
+    "https://arxiv.org/abs/2604.14604",  # AudioHijack — auditory prompt injection
+    "https://arxiv.org/abs/2605.20519",  # CodecAttack — codec-latent survival
+    "https://arxiv.org/abs/2606.06037",  # SpeechJBB — code-switch / pseudo-word
+    "https://arxiv.org/abs/2606.04425",  # cross-session stored injection — the
+    # base the stored_voice rows extend to voice-origin / voice-delivery
 ]
 
 V1_REDTEAM_CORPUS_EXECUTION_FILE = V1_REDTEAM_RESEARCH_CORPUS_FILE
@@ -2091,7 +2103,236 @@ V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS = ["agent_learning_kit"]
 
 V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS = ["local_cli"]
 
-V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat"]
+V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat", "voice"]
+
+# === Phase 12 (Voice AI Red-Teaming) closed vocabularies ====================
+# These are the rung-1 voice-attack canon (ARCH §3 / BUILD-GUIDE §1.1). The 6
+# semantic surfaces in V1_REDTEAM_RESEARCH_SURFACES stay FROZEN; voice adds an
+# ORTHOGONAL physical-cascade surface axis. Every voice corpus row carries BOTH
+# `surface` (one of the frozen 6) AND `voice_surface` (one of the new 6).
+
+V1_REDTEAM_VOICE_SURFACES = [
+    "asr_front_end",          # ASR/encoder ingestion (incl. initial-prompt
+                              #   poisoning at the transcription boundary)
+    "diarization",            # speaker-label poisoning / synthetic SYSTEM speaker
+    "vad_boundary",           # voice-activity-detection boundary exploitation
+    "silence_region",         # silence-region hallucination injection
+    "homophone_divergence",   # spoken-form vs transcript divergence toward injection
+    "stored_voice",           # voicemail / CRM-note / transcript-store persistence
+]
+
+V1_VOICE_ATTACK_MATURITY_LEVELS = ["classic", "established", "emerging", "frontier"]
+
+# phone_survival is a STRUCTURED object everywhere (the ONE schema across all
+# four phase-12 docs):
+#   {"status": <statuses>, "tier": <tiers>, "scope_label"?: str, "reason": str}
+V1_VOICE_PHONE_SURVIVAL_STATUSES = ["survives", "partial", "dies", "untested"]
+V1_VOICE_PHONE_SURVIVAL_TIERS = [
+    "research_pinned",
+    "channel_simulated",
+    "channel_live",
+]
+
+# attack family -> {maturity, phone_survival{...}, defended_by: [...],
+# rung_1_expressible: bool} — the RICH row shape. Source of truth:
+# RESEARCH-ACOUSTIC.md §J (the "dies" rows are load-bearing honesty — a voice
+# corpus must not sell ultrasonic coverage to a SIP agent). phone_survival here
+# is the FAMILY-level research-pinned prior (tier "research_pinned" on every row
+# at day one); per-attack phone_survival is a rung-2 measured field (unit 10) and
+# stays the rung-1 pin {"status": "untested", "tier": "research_pinned"}.
+V1_VOICE_ATTACK_FAMILY_MATRIX = {
+    "waveform_asr_perturbation": {
+        "maturity": "classic",
+        "phone_survival": {
+            "status": "dies",
+            "tier": "research_pinned",
+            "reason": "band-limit + codec strip the waveform perturbation",
+        },
+        "defended_by": ["band_limit_codec"],
+        "rung_1_expressible": False,
+    },
+    "feature_space_vocoder": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "untested",
+            "tier": "research_pinned",
+            "reason": "plausible in-band; channel proof outstanding",
+        },
+        "defended_by": ["none_mature"],
+        "rung_1_expressible": False,
+    },
+    "phonetic_dual_effect": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "partial",
+            "tier": "research_pinned",
+            "reason": "phonetic component survives; signal component degrades",
+        },
+        "defended_by": ["anti_spoofing_partial"],
+        "rung_1_expressible": True,
+    },
+    "ultrasonic_carrier": {
+        "maturity": "classic",
+        "phone_survival": {
+            "status": "dies",
+            "tier": "research_pinned",
+            "scope_label": "smart_speaker_only",
+            "reason": "8 kHz anti-alias + codec annihilate the carrier",
+        },
+        "defended_by": ["band_limit_total"],
+        "rung_1_expressible": False,
+    },
+    "over_the_air_noise_hijack": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "partial",
+            "tier": "research_pinned",
+            "reason": "in-band noise component partially survives",
+        },
+        "defended_by": ["liveness_weak"],
+        "rung_1_expressible": False,
+    },
+    "psychoacoustic_masking": {
+        "maturity": "classic",
+        "phone_survival": {
+            "status": "dies",
+            "tier": "research_pinned",
+            "reason": "perceptual codec removes exactly what masking hides in",
+        },
+        "defended_by": ["perceptual_codec"],
+        "rung_1_expressible": False,
+    },
+    "audio_native_jailbreak": {
+        "maturity": "established",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "intelligible speech; codec-invariant",
+        },
+        "defended_by": ["moderation_weak"],
+        "rung_1_expressible": True,
+    },
+    "paralinguistic_interference": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "untested",
+            "tier": "research_pinned",
+            "reason": "plausibly survives; needs verification (RESEARCH-ACOUSTIC §J)",
+        },
+        "defended_by": ["none"],
+        "rung_1_expressible": False,
+    },
+    "benign_carrier_embedding": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "partial",
+            "tier": "research_pinned",
+            "reason": "carrier survives; embedded payload degrades with bitrate",
+        },
+        "defended_by": ["waveform_defenses_partial"],
+        "rung_1_expressible": False,
+    },
+    "codec_robust_signal": {
+        "maturity": "frontier",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "engineered for the <4 kHz Opus passband",
+        },
+        "defended_by": ["neural_codec_frontend_candidate"],
+        "rung_1_expressible": False,
+    },
+    "voice_clone_spoofing": {
+        "maturity": "established",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "intelligible synthetic speech; codec-invariant",
+        },
+        "defended_by": ["asvspoof_cm_weak_generalization"],
+        "rung_1_expressible": True,
+    },
+    "backdoor_alignment_poisoning": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "scope_label": "poisoned_model_only",
+            "reason": "channel-independent; fires iff the deployed model is poisoned",
+        },
+        "defended_by": ["none_reliable"],
+        "rung_1_expressible": True,
+    },
+    "cross_modal_tool_argument": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "argument corruption rides intelligible speech; needs no safety break",
+        },
+        "defended_by": ["transcript_sanitization_cascade_only", "tool_allow_lists"],
+        "rung_1_expressible": True,
+    },
+}
+
+# Detection-evidence FIELDS per matrix family (12E; ARCH §2h / BUILD-GUIDE §6).
+# rung-1 transcript-derivable evidence only; rung-2 acoustic fields (wer_spike,
+# energy_band_fingerprint, diarization_anomaly_acoustic) land with unit 10 as a
+# separate suffix list, never mixed in silently. Evidence fields are NEVER a
+# verdict (no verdict/passed/pass keys may appear in an emitted block).
+V1_VOICE_DETECTION_EVIDENCE_FIELDS = {
+    "audio_native_jailbreak": [
+        "refusal_rate_delta",
+        "narrative_frame_marker",
+        "escalation_pressure_trace",
+    ],
+    "cross_modal_tool_argument": [
+        "tool_argument_divergence",
+        "transcript_divergence_ratio",
+    ],
+    "benign_carrier_embedding": [
+        "transcript_divergence_ratio",
+        "injection_marker_present",
+    ],
+    "codec_robust_signal": [
+        "injection_marker_present",
+        "channel_provenance_note",
+    ],
+    "voice_clone_spoofing": [
+        "caller_identity_assertion_count",
+        "challenge_response_outcome",
+    ],
+    "waveform_asr_perturbation": ["transcript_divergence_ratio"],
+    "feature_space_vocoder": ["transcript_divergence_ratio"],
+    "phonetic_dual_effect": [
+        "transcript_divergence_ratio",
+        "speaker_label_anomaly",
+    ],
+    "ultrasonic_carrier": ["channel_band_limit_note"],
+    "over_the_air_noise_hijack": ["channel_provenance_note"],
+    "psychoacoustic_masking": ["channel_band_limit_note"],
+    "paralinguistic_interference": ["refusal_rate_delta"],
+    "backdoor_alignment_poisoning": ["provenance_supply_chain_note"],
+}
+
+# --- Phase 12 gate (#73) constants (unit 7) ---------------------------------
+V1_VOICE_REDTEAM_FILES = [
+    "examples/sdk_voice_redteam_campaign.py",
+    "internal-docs/voice-redteam-readiness-research.md",
+]
+V1_VOICE_REDTEAM_FIXTURE_DIR = "examples/voice_redteam"
+# the canonized attack-rung tokens, stamped on every voice-attack artifact;
+# aligned with — not equal to — the P3 lane labels.
+V1_VOICE_ATTACK_RUNGS = ["transcript_level", "acoustic", "telephony"]
+V1_VOICE_REDTEAM_AB_ARMS = ["composed", "persona_only", "signal_only"]
+V1_VOICE_REDTEAM_AB_VERDICTS = ["composed_lift", "no_lift", "inconclusive"]
+# byte-equal to live._perturb.TEXT_RUNG_OPERATORS — cross-pinned by a unit test
+# (the Phase-7 GUNA_AXES cross-pin pattern), never imported by trinity.
+V1_VOICE_REDTEAM_TEXT_OPERATORS = ["asr_error", "homophone", "code_switch", "near_dup"]
+V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1 = {
+    "status": "untested",
+    "tier": "research_pinned",
+}
 
 V1_REDTEAM_READINESS_CERTIFICATION_FILES = [
     "examples/sdk_redteam_readiness_certification_optimization.py",
@@ -6982,6 +7223,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         # does NOT share it — REVIEW-RULINGS MF10)
         evidence=telemetry_boundary,
     )
+    voice_redteam = _release_voice_redteam_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="voice_redteam_readiness",
+        passed=(
+            not voice_redteam["missing_files"]
+            and not voice_redteam["execution_errors"]
+            and not voice_redteam["corpus_errors"]
+            and not voice_redteam["matrix_errors"]
+            and not voice_redteam["operator_errors"]
+            and not voice_redteam["search_errors"]
+            and not voice_redteam["fidelity_errors"]
+            and not voice_redteam["pack_errors"]
+            and not voice_redteam["authorization_errors"]
+        ),
+        milestone="M4",  # red-team family — same milestone as
+        # redteam_corpus_execution_readiness
+        evidence=voice_redteam,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -7602,6 +7862,18 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_redteam_corpus_execution_channels": list(
             V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
         ),
+        # Phase 12 (voice red-team) payload mirrors (unit 7.4)
+        "required_redteam_voice_surfaces": list(V1_REDTEAM_VOICE_SURFACES),
+        "voice_attack_family_matrix": copy.deepcopy(V1_VOICE_ATTACK_FAMILY_MATRIX),
+        "voice_attack_maturity_levels": list(V1_VOICE_ATTACK_MATURITY_LEVELS),
+        "voice_phone_survival_statuses": list(V1_VOICE_PHONE_SURVIVAL_STATUSES),
+        "voice_phone_survival_tiers": list(V1_VOICE_PHONE_SURVIVAL_TIERS),
+        "voice_attack_rungs": list(V1_VOICE_ATTACK_RUNGS),
+        "voice_detection_evidence_fields": copy.deepcopy(
+            V1_VOICE_DETECTION_EVIDENCE_FIELDS
+        ),
+        "voice_redteam_ab_arms": list(V1_VOICE_REDTEAM_AB_ARMS),
+        "voice_redteam_ab_verdicts": list(V1_VOICE_REDTEAM_AB_VERDICTS),
         "required_redteam_readiness_certification_files": list(
             V1_REDTEAM_READINESS_CERTIFICATION_FILES
         ),
@@ -11572,6 +11844,300 @@ def _release_persona_scenario_studio_status(root: Path) -> dict[str, Any]:
         "download_errors": download_errors,
         "evidence": evidence,
     }
+
+
+def _release_voice_redteam_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate #73 — voice red-team readiness (Phase 12, §7.2).
+
+    Exec-loads ``examples/sdk_voice_redteam_campaign.py`` in a tempdir (no
+    network, no env keys, no lanes — the example runs entirely on the committed
+    ``examples/voice_redteam/`` fixtures) and audits its evidence payload into
+    NINE error arrays. Static corpus + matrix JSON reads pin the dual-field
+    voice rows, the family/maturity/phone-survival matrix, and the new source
+    URLs. ``passed`` = all nine empty."""
+
+    missing_files = _missing_relative_paths(
+        root, [*V1_VOICE_REDTEAM_FILES, V1_VOICE_REDTEAM_FIXTURE_DIR]
+    )
+    execution_errors: list[dict[str, Any]] = []
+    corpus_errors: list[dict[str, Any]] = []
+    matrix_errors: list[dict[str, Any]] = []
+    operator_errors: list[dict[str, Any]] = []
+    search_errors: list[dict[str, Any]] = []
+    fidelity_errors: list[dict[str, Any]] = []
+    pack_errors: list[dict[str, Any]] = []
+    authorization_errors: list[dict[str, Any]] = []
+    result: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    # ---- static matrix audit (closed-vocabulary validity) ----
+    for family, row in V1_VOICE_ATTACK_FAMILY_MATRIX.items():
+        for key in ("maturity", "phone_survival", "defended_by", "rung_1_expressible"):
+            if key not in row:
+                err(matrix_errors, field=f"matrix.{family}.{key}", expected="present", observed=None)
+        maturity = row.get("maturity")
+        if maturity not in V1_VOICE_ATTACK_MATURITY_LEVELS:
+            err(matrix_errors, field=f"matrix.{family}.maturity", expected=V1_VOICE_ATTACK_MATURITY_LEVELS, observed=maturity)
+        ps = row.get("phone_survival")
+        if not isinstance(ps, Mapping) or "status" not in ps or "tier" not in ps or "reason" not in ps:
+            err(matrix_errors, field=f"matrix.{family}.phone_survival", expected="{status, tier, scope_label?, reason}", observed=ps)
+        else:
+            if ps.get("status") not in V1_VOICE_PHONE_SURVIVAL_STATUSES:
+                err(matrix_errors, field=f"matrix.{family}.phone_survival.status", expected=V1_VOICE_PHONE_SURVIVAL_STATUSES, observed=ps.get("status"))
+            if ps.get("tier") not in V1_VOICE_PHONE_SURVIVAL_TIERS:
+                err(matrix_errors, field=f"matrix.{family}.phone_survival.tier", expected=V1_VOICE_PHONE_SURVIVAL_TIERS, observed=ps.get("tier"))
+        if not isinstance(row.get("defended_by"), list):
+            err(matrix_errors, field=f"matrix.{family}.defended_by", expected="list", observed=row.get("defended_by"))
+        if not isinstance(row.get("rung_1_expressible"), bool):
+            err(matrix_errors, field=f"matrix.{family}.rung_1_expressible", expected="bool", observed=row.get("rung_1_expressible"))
+    # every matrix family must declare a detection-evidence field list
+    for family in V1_VOICE_ATTACK_FAMILY_MATRIX:
+        if family not in V1_VOICE_DETECTION_EVIDENCE_FIELDS:
+            err(matrix_errors, field=f"detection_evidence_fields.{family}", expected="present", observed=None)
+
+    # ---- static corpus audit (dual-field shape + coverage + URLs) ----
+    corpus_row_count = 0
+    corpus_path = root / V1_REDTEAM_CORPUS_EXECUTION_FILE
+    if corpus_path.is_file():
+        try:
+            corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+            rows = corpus.get("rows") or []
+        except Exception as exc:  # noqa: BLE001
+            err(corpus_errors, field="corpus.parse", expected="json", observed=f"{type(exc).__name__}: {exc}")
+            rows = []
+        voice_rows = [r for r in rows if isinstance(r, Mapping) and r.get("channel") == "voice"]
+        corpus_row_count = len(voice_rows)
+        observed_voice_surfaces: set[str] = set()
+        observed_voice_sources: set[str] = set()
+        for r in voice_rows:
+            rid = r.get("id")
+            observed_voice_sources.add(str(r.get("source")))
+            voice = r.get("voice")
+            if not isinstance(voice, Mapping):
+                err(corpus_errors, field=f"corpus.{rid}.voice", expected="block", observed=None)
+                continue
+            if r.get("surface") not in V1_REDTEAM_RESEARCH_SURFACES:
+                err(corpus_errors, field=f"corpus.{rid}.surface", expected="frozen 6 semantic", observed=r.get("surface"))
+            vs = r.get("voice_surface")
+            if vs not in V1_REDTEAM_VOICE_SURFACES:
+                err(corpus_errors, field=f"corpus.{rid}.voice_surface", expected=V1_REDTEAM_VOICE_SURFACES, observed=vs)
+            else:
+                observed_voice_surfaces.add(vs)
+            family = voice.get("attack_family")
+            if family not in V1_VOICE_ATTACK_FAMILY_MATRIX:
+                err(corpus_errors, field=f"corpus.{rid}.attack_family", expected="matrix key", observed=family)
+            else:
+                family_prior = V1_VOICE_ATTACK_FAMILY_MATRIX[family]["phone_survival"]
+                if voice.get("rung") == 1 and voice.get("phone_survival") != family_prior:
+                    err(corpus_errors, field=f"corpus.{rid}.phone_survival", expected=family_prior, observed=voice.get("phone_survival"))
+                declared = V1_VOICE_DETECTION_EVIDENCE_FIELDS.get(family)
+                if list(voice.get("detection_evidence_fields") or []) != list(declared or []):
+                    err(corpus_errors, field=f"corpus.{rid}.detection_evidence_fields", expected=declared, observed=voice.get("detection_evidence_fields"))
+            if voice.get("attack_rung") not in V1_VOICE_ATTACK_RUNGS:
+                err(corpus_errors, field=f"corpus.{rid}.attack_rung", expected=V1_VOICE_ATTACK_RUNGS, observed=voice.get("attack_rung"))
+        # every voice surface seeded >= 1 voice row
+        for surface in V1_REDTEAM_VOICE_SURFACES:
+            if surface not in observed_voice_surfaces:
+                err(corpus_errors, field=f"corpus.voice_surface_coverage.{surface}", expected=">=1 row", observed=0)
+        # the six new source URLs (unit 1.1d) must appear among voice-row sources
+        for url in V1_REDTEAM_RESEARCH_SOURCE_URLS[-6:]:
+            if url not in observed_voice_sources:
+                err(corpus_errors, field=f"corpus.source_url.{url}", expected="observed in a voice row", observed="absent")
+    else:
+        err(corpus_errors, field="corpus.file", expected=V1_REDTEAM_CORPUS_EXECUTION_FILE, observed="missing")
+
+    # ---- exec-load the example for the operator/search/fidelity/pack/auth audit ----
+    if not missing_files:
+        previous_environ = dict(os.environ)
+        example_path = root / "examples/sdk_voice_redteam_campaign.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_voice_redteam", example_path
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(prefix="agent-learning-voice-redteam-") as tmpdir:
+                output_path = Path(tmpdir) / "voice-redteam.json"
+                result = dict(module.run(output_path))
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+                if result != saved:
+                    err(execution_errors, field="output_roundtrip", expected=True, observed=False)
+        except Exception as exc:  # noqa: BLE001
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_voice_redteam_campaign.py",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            result = {}
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environ)
+
+    if result:
+        if result.get("kind") != "agent-learning.voice-redteam-campaign.v1":
+            err(execution_errors, field="kind", expected="agent-learning.voice-redteam-campaign.v1", observed=result.get("kind"))
+
+        # ---- constant mirrors ----
+        for field, expected in (
+            ("corpus_channels", V1_REDTEAM_CORPUS_EXECUTION_CHANNELS),
+            ("voice_surfaces", V1_REDTEAM_VOICE_SURFACES),
+            ("voice_attack_rungs", V1_VOICE_ATTACK_RUNGS),
+            ("ab_arms", V1_VOICE_REDTEAM_AB_ARMS),
+            ("ab_verdicts", V1_VOICE_REDTEAM_AB_VERDICTS),
+            ("text_rung_operators", V1_VOICE_REDTEAM_TEXT_OPERATORS),
+        ):
+            if list(result.get(field) or []) != list(expected):
+                err(execution_errors, field=field, expected=expected, observed=result.get(field))
+        if result.get("phone_survival_rung1") != V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1:
+            err(execution_errors, field="phone_survival_rung1", expected=V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1, observed=result.get("phone_survival_rung1"))
+
+        # ---- operators ----
+        ops = _as_mapping(result.get("operators"))
+        if list(ops.get("text_rung_operators") or []) != list(V1_VOICE_REDTEAM_TEXT_OPERATORS):
+            err(operator_errors, field="operators.text_rung_operators", expected=V1_VOICE_REDTEAM_TEXT_OPERATORS, observed=ops.get("text_rung_operators"))
+        for name, rec in _as_mapping(ops.get("pinned")).items():
+            rec = _as_mapping(rec)
+            if rec.get("deterministic") is not True:
+                err(operator_errors, field=f"operators.{name}.deterministic", expected=True, observed=rec.get("deterministic"))
+            if rec.get("rate_zero_identity") is not True:
+                err(operator_errors, field=f"operators.{name}.rate_zero_identity", expected=True, observed=rec.get("rate_zero_identity"))
+        if ops.get("acoustic_raises_at_text_rung") is not True:
+            err(operator_errors, field="operators.acoustic_raises_at_text_rung", expected=True, observed=ops.get("acoustic_raises_at_text_rung"))
+        if ops.get("unknown_operator_raises") is not True:
+            err(operator_errors, field="operators.unknown_operator_raises", expected=True, observed=ops.get("unknown_operator_raises"))
+        if ops.get("applied_records_complete") is not True:
+            err(operator_errors, field="operators.applied_records_complete", expected=True, observed=ops.get("applied_records_complete"))
+
+        # ---- search (A/B contract) ----
+        search = _as_mapping(result.get("search"))
+        if list(search.get("ab_arms") or []) != list(V1_VOICE_REDTEAM_AB_ARMS):
+            err(search_errors, field="search.ab_arms", expected=V1_VOICE_REDTEAM_AB_ARMS, observed=search.get("ab_arms"))
+        if search.get("ranking_source") != "evaluation_suite":
+            err(search_errors, field="search.ranking_source", expected="evaluation_suite", observed=search.get("ranking_source"))
+        if search.get("manifest_kind") != "agent-learning.optimization.v1":
+            err(search_errors, field="search.manifest_kind", expected="agent-learning.optimization.v1", observed=search.get("manifest_kind"))
+        if search.get("budget_equal") is not True:
+            err(search_errors, field="search.budget_equal", expected=True, observed=search.get("budget_equal"))
+        if search.get("composed_has_both") is not True:
+            err(search_errors, field="search.composed_has_both", expected=True, observed=search.get("composed_has_both"))
+        if search.get("persona_only_drops_signal") is not True:
+            err(search_errors, field="search.persona_only_drops_signal", expected=True, observed=search.get("persona_only_drops_signal"))
+        if search.get("signal_only_drops_persona") is not True:
+            err(search_errors, field="search.signal_only_drops_persona", expected=True, observed=search.get("signal_only_drops_persona"))
+        if search.get("ab_verdict") not in V1_VOICE_REDTEAM_AB_VERDICTS:
+            err(search_errors, field="search.ab_verdict", expected=V1_VOICE_REDTEAM_AB_VERDICTS, observed=search.get("ab_verdict"))
+        # the verdict must be re-derivable from the per-seed numbers
+        if search.get("ab_verdict") != search.get("ab_verdict_rederived"):
+            err(search_errors, field="search.ab_verdict_rederivable", expected=search.get("ab_verdict"), observed=search.get("ab_verdict_rederived"))
+        # lift numeric only with full equal budgets and no quarantine epidemic
+        lift = _as_mapping(search.get("lift"))
+        if search.get("budget_equal") is True and lift.get("vs_best_ablation") is None:
+            err(search_errors, field="search.lift.numeric", expected="float on full equal budget", observed=None)
+        # the null-rule negatives must fire correctly
+        negs = _as_mapping(search.get("negatives"))
+        epi = _as_mapping(negs.get("quarantine_epidemic"))
+        if epi.get("exit_code") != 1 or epi.get("lift_null") is not True or "composed_arm_quarantine_epidemic" not in (epi.get("findings") or []):
+            err(search_errors, field="search.negatives.quarantine_epidemic", expected={"exit": 1, "lift_null": True}, observed=epi)
+        bm = _as_mapping(negs.get("budget_mismatch"))
+        if bm.get("lift_null") is not True or "composed_budget_mismatch" not in (bm.get("findings") or []):
+            err(search_errors, field="search.negatives.budget_mismatch", expected={"lift_null": True}, observed=bm)
+
+        # ---- fidelity (halving, never a floor; timing proxy; rung-1 pin) ----
+        fid = _as_mapping(result.get("fidelity"))
+        if fid.get("halving_correct") is not True:
+            err(fidelity_errors, field="fidelity.halving_correct", expected=True, observed=fid.get("halving_correct"))
+        if fid.get("broken_retained") is not True:
+            err(fidelity_errors, field="fidelity.broken_retained", expected=True, observed=fid.get("broken_retained"))
+        broken = _as_mapping(fid.get("broken"))
+        if broken.get("character_broken") is not True:
+            err(fidelity_errors, field="fidelity.broken.character_broken", expected=True, observed=broken.get("character_broken"))
+        timing = _as_mapping(fid.get("timing_fidelity"))
+        if timing.get("proxy") != "timing_only" or _int_or_zero(timing.get("rung")) != 1:
+            err(fidelity_errors, field="fidelity.timing_fidelity", expected={"proxy": "timing_only", "rung": 1}, observed=timing)
+        if fid.get("phone_survival") != V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1:
+            err(fidelity_errors, field="fidelity.phone_survival", expected=V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1, observed=fid.get("phone_survival"))
+
+        # ---- pack (capture round-trip; attack extras survive) ----
+        pack = _as_mapping(result.get("pack"))
+        if pack.get("capture_tree_refused") is not True:
+            err(pack_errors, field="pack.capture_tree_refused", expected=True, observed=pack.get("capture_tree_refused"))
+        if pack.get("reviewed_replay_verdict") != "pass":
+            err(pack_errors, field="pack.reviewed_replay_verdict", expected="pass", observed=pack.get("reviewed_replay_verdict"))
+        if pack.get("reviewed_evidence_class") != "captured_fixture":
+            err(pack_errors, field="pack.reviewed_evidence_class", expected="captured_fixture", observed=pack.get("reviewed_evidence_class"))
+        if pack.get("attack_extras_survive") is not True:
+            err(pack_errors, field="pack.attack_extras_survive", expected=True, observed=pack.get("attack_extras_survive"))
+        # provenance schema NOT extended (byte-stable)
+        if sorted(pack.get("provenance_fields") or []) != sorted(_LIVE_LANE_CAPTURE_PROVENANCE_FIELDS):
+            err(pack_errors, field="pack.provenance_fields", expected=sorted(_LIVE_LANE_CAPTURE_PROVENANCE_FIELDS), observed=pack.get("provenance_fields"))
+
+        # ---- detection-evidence (per family; no verdict keys) ----
+        detection = _as_mapping(result.get("detection"))
+        if detection.get("no_verdict_keys") is not True:
+            err(pack_errors, field="detection.no_verdict_keys", expected=True, observed=detection.get("no_verdict_keys"))
+        if detection.get("unknown_family_raises") is not True:
+            err(pack_errors, field="detection.unknown_family_raises", expected=True, observed=detection.get("unknown_family_raises"))
+        blocks = _as_mapping(detection.get("blocks"))
+        for family, block in blocks.items():
+            block = _as_mapping(block)
+            if any(k in block for k in ("verdict", "passed", "pass")):
+                err(pack_errors, field=f"detection.{family}.verdict_leak", expected="no verdict key", observed=list(block))
+            declared = V1_VOICE_DETECTION_EVIDENCE_FIELDS.get(family)
+            observed_signals = [f.get("signal") for f in block.get("fields") or []]
+            if declared is None or observed_signals != list(declared):
+                err(pack_errors, field=f"detection.{family}.fields", expected=declared, observed=observed_signals)
+
+        # ---- authorization ----
+        auth = _as_mapping(result.get("authorization"))
+        if auth.get("kit_local_relationship") != "kit_local":
+            err(authorization_errors, field="authorization.kit_local", expected="kit_local", observed=auth.get("kit_local_relationship"))
+        if auth.get("non_local_refused") is not True or auth.get("non_local_finding") != "voice_target_authorization_missing":
+            err(authorization_errors, field="authorization.non_local_refusal", expected="voice_target_authorization_missing", observed=auth)
+        if auth.get("complete_relationship") != "owned":
+            err(authorization_errors, field="authorization.complete_stanza", expected="owned", observed=auth.get("complete_relationship"))
+        if auth.get("preflight_secret_free") is not True:
+            err(authorization_errors, field="authorization.preflight_secret_free", expected=True, observed=auth.get("preflight_secret_free"))
+
+    return {
+        "kind": "agent-learning.voice-redteam-readiness.v1",
+        "required_files": list(V1_VOICE_REDTEAM_FILES),
+        "fixture_dir": V1_VOICE_REDTEAM_FIXTURE_DIR,
+        "corpus_channels": list(V1_REDTEAM_CORPUS_EXECUTION_CHANNELS),
+        "voice_surfaces": list(V1_REDTEAM_VOICE_SURFACES),
+        "voice_attack_family_matrix": copy.deepcopy(V1_VOICE_ATTACK_FAMILY_MATRIX),
+        "voice_attack_maturity_levels": list(V1_VOICE_ATTACK_MATURITY_LEVELS),
+        "voice_phone_survival_statuses": list(V1_VOICE_PHONE_SURVIVAL_STATUSES),
+        "voice_phone_survival_tiers": list(V1_VOICE_PHONE_SURVIVAL_TIERS),
+        "voice_attack_rungs": list(V1_VOICE_ATTACK_RUNGS),
+        "voice_detection_evidence_fields": copy.deepcopy(V1_VOICE_DETECTION_EVIDENCE_FIELDS),
+        "voice_redteam_ab_arms": list(V1_VOICE_REDTEAM_AB_ARMS),
+        "voice_redteam_ab_verdicts": list(V1_VOICE_REDTEAM_AB_VERDICTS),
+        "voice_corpus_row_count": corpus_row_count,
+        "fixture_count": _count_voice_fixtures(root),
+        "ab_arm_count": len(V1_VOICE_REDTEAM_AB_ARMS),
+        "scanned_attack_rows": corpus_row_count,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "corpus_errors": corpus_errors,
+        "matrix_errors": matrix_errors,
+        "operator_errors": operator_errors,
+        "search_errors": search_errors,
+        "fidelity_errors": fidelity_errors,
+        "pack_errors": pack_errors,
+        "authorization_errors": authorization_errors,
+    }
+
+
+def _count_voice_fixtures(root: Path) -> int:
+    fixture_dir = root / V1_VOICE_REDTEAM_FIXTURE_DIR
+    if not fixture_dir.is_dir():
+        return 0
+    return sum(1 for _ in fixture_dir.rglob("*.json"))
 
 
 def _release_typescript_sdk_consolidation_status(root: Path) -> dict[str, Any]:
