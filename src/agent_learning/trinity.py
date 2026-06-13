@@ -309,6 +309,8 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_agent_integration_simulation.py": "agent_integration_readiness",
     "examples/sdk_browser_cua_probe_optimization.py": "browser_cua_probe_readiness",
     "examples/sdk_capability_freeze_regression.py": "capability_profile_freeze_readiness",
+    "examples/sdk_cua_improvement.py": "cua_loop_readiness",
+    "examples/sdk_cua_loop.py": "cua_loop_readiness",
     "examples/sdk_evaluation_hook_optimization.py": "evaluation_hook_readiness",
     "examples/sdk_evaluation_hook_probe_optimization.py": "evaluation_hook_probe_readiness",
     "examples/sdk_external_http_agent_optimization.py": "external_agent_adapter_readiness",
@@ -478,6 +480,14 @@ V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
     # (image-improvement-loop / perception-bypass(-guard) / image-eval-as-loss);
     # verified collision-free vs the existing docs at build time.
     r"\b(?:image[- ]improvement[- ]loop|perception[- ]bypass(?:[- ]guard)?|image[- ]eval[- ]as[- ]loss)\b": "image_loop_readiness",
+    # Phase 9C-A9: new CUA-capability wording licensed only while
+    # cua_loop_readiness is green. Scoped to the genuinely-NEW 9C phrases
+    # (cua-improvement-loop / fake-completion(-guard) / cua-eval-as-loss);
+    # verified collision-free vs the existing docs at build time. Generic terms
+    # ("computer-use", "browser", "CUA") are deliberately EXCLUDED to avoid
+    # retroactively re-gating the already-green browser/CUA probe + optimization
+    # pages (the 9A/9B scoping discipline).
+    r"\b(?:cua[- ]improvement[- ]loop|fake[- ]completion(?:[- ]guard)?|cua[- ]eval[- ]as[- ]loss)\b": "cua_loop_readiness",
     # Phase 11B-A6: new certification/coverage wording licensed only while
     # framework_adapter_preset_certification_readiness is green. Scoped to the
     # genuinely-NEW 11B phrases (verified collision-free against existing docs).
@@ -2479,6 +2489,55 @@ V1_IMAGE_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
 # a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
 # frozen EVIDENCE_CLASSES 4-tuple _contract.py:18 is unchanged). Analogue of
 # V1_VOICE_FIDELITY_TIERS.
+
+# === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
+# All are MIRRORS of the cua_loop.py canon, cross-pinned by a unit test (the
+# GUNA_AXES pattern — trinity.py never imports cua_loop so the gate runs even if it
+# is broken). NOTE: browser / computer_use are ALREADY frozen members of
+# V1_SIMULATION_WORLD_KINDS (the 9C-A1b nuance vs 9B's image) — 9C flips their
+# EXECUTABLE-LOOP status via the R4 registry record, NOT by widening the tuple; the
+# simulation_contract_readiness byte-pin + executable-split stay green.
+V1_CUA_LOOP_GATE_FIXTURE_DIR = "examples/cua_loop_fixture"
+# precedent: V1_IMAGE_LOOP_GATE_FIXTURE_DIR = "examples/image_loop_fixture"
+V1_CUA_LOOP_FILES = (
+    "examples/sdk_cua_loop.py",
+    "examples/sdk_cua_improvement.py",
+)
+V1_CUA_LOOP_GATE_FIXTURE_FILES = (
+    # checkout_baseline is the EXISTING shop.example.test fixture (referenced, not
+    # duplicated — its anchors live in V1_BROWSER_CUA_PROBE_* below).
+    "examples/cua_loop_fixture/multistep_form/form.json",
+    "examples/cua_loop_fixture/selector_drift_family/clean.json",
+    "examples/cua_loop_fixture/selector_drift_family/drifted.json",
+    "examples/cua_loop_fixture/injected_dom_family/inject.json",
+    "examples/cua_loop_fixture/injected_dom_family/clean.json",
+    "examples/cua_loop_fixture/fake_completion_sentinel/sentinels.json",
+    "examples/cua_loop_fixture/desktop_episode/episode.json",
+    "examples/cua_loop_fixture/expected/loop_trajectory.json",
+    "examples/cua_loop_fixture/expected/deterministic_anchors.json",
+    "examples/cua_loop_fixture/ab/toy_space.json",
+)
+V1_CUA_LOSS_TERM_REFS = (
+    "task_success", "state_match", "grounding_mutation_resilience",
+    "action_correctness", "step_efficiency", "safety_adherence",
+    "tool_evidence", "trace_coverage", "completion_judge",
+)   # byte-equal to cua_loop.V1_CUA_LOSS_TERM_REFS (cross-pinned by a unit test)
+V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS = ("task_success", "state_match")
+V1_CUA_DESKTOP_ANCHOR_TERMS = ("grounding_step_accuracy",)
+V1_CUA_LOSS_JUDGE_TERMS = ("completion_judge",)
+V1_CUA_LOSS_MANDATORY_SAFETY_TERMS = ("safety_adherence",)
+V1_CUA_FAILURE_SUBLAYERS = ("perception", "grounding", "action_policy", "reasoning_memory")
+V1_CUA_SURFACES = ("browser", "desktop")
+V1_CUA_COMPLETION_GUARD_KINDS = ("fake_completion", "unsafe_completion")
+V1_CUA_PERTURBATION_OPERATORS = ("selector_drift", "layout_shift", "stale_screenshot", "injected_dom")
+# NAMING MIRROR ONLY (9C-A1c) — references the kit's existing mutation-pack
+# operators (normalize_browser_mutation_pack, environment.py:5146); there is NO
+# cua_perturb.py module (the contrast with V1_IMAGE_PERTURBATION_OPERATORS, which
+# IS backed by image_perturb.py).
+V1_CUA_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
+# a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
+# frozen EVIDENCE_CLASSES 4-tuple live/_contract.py:18 is unchanged). Analogue of
+# V1_IMAGE_FIDELITY_TIERS.
 
 # === Phase 13D (gate M2/M3) closed vocabularies =============================
 # Mirrors of the contract/loss/practice canon. The status fns byte-compare these
@@ -7947,6 +8006,29 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         # voice_loopback_readiness
         evidence=image_loop,
     )
+    # --- Phase 9C gate (M4 modality-loop family) ---------------------------
+    # Registered AFTER image_loop_readiness (the modality-loop family:
+    # voice_loopback_readiness -> image_loop_readiness -> cua_loop_readiness) and
+    # DIRECTLY BEFORE docs_executability (which stays last). ARCH-9C §2.5 / 9C-A5
+    # — count-agnostic, by-name insertion; closed set 78 -> 79.
+    cua_loop = _release_cua_loop_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="cua_loop_readiness",
+        passed=(
+            not cua_loop["missing_files"]
+            and not cua_loop["loop_determinism_errors"]
+            and not cua_loop["deterministic_verifier_anchoring_errors"]
+            and not cua_loop["cua_loss_errors"]
+            and not cua_loop["completion_guard_errors"]
+            and not cua_loop["eval_wiring_errors"]
+            and not cua_loop["evidence_class_errors"]
+            and not cua_loop["ab_capstone_errors"]
+        ),
+        milestone="M4",  # modality-loop family — same milestone as
+        # voice_loopback_readiness AND image_loop_readiness
+        evidence=cua_loop,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -8595,6 +8677,17 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "image_failure_sublayers": list(V1_IMAGE_FAILURE_SUBLAYERS),
         "image_perturbation_operators": list(V1_IMAGE_PERTURBATION_OPERATORS),
         "image_fidelity_tiers": list(V1_IMAGE_FIDELITY_TIERS),
+        # Phase 9C (CUA / browser / computer-use loop) payload mirrors (unit 5.5)
+        "cua_loss_term_refs": list(V1_CUA_LOSS_TERM_REFS),
+        "cua_loss_deterministic_anchor_terms": list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "cua_desktop_anchor_terms": list(V1_CUA_DESKTOP_ANCHOR_TERMS),
+        "cua_loss_judge_terms": list(V1_CUA_LOSS_JUDGE_TERMS),
+        "cua_loss_mandatory_safety_terms": list(V1_CUA_LOSS_MANDATORY_SAFETY_TERMS),
+        "cua_failure_sublayers": list(V1_CUA_FAILURE_SUBLAYERS),
+        "cua_surfaces": list(V1_CUA_SURFACES),
+        "cua_completion_guard_kinds": list(V1_CUA_COMPLETION_GUARD_KINDS),
+        "cua_perturbation_operators": list(V1_CUA_PERTURBATION_OPERATORS),
+        "cua_fidelity_tiers": list(V1_CUA_FIDELITY_TIERS),
         "required_redteam_readiness_certification_files": list(
             V1_REDTEAM_READINESS_CERTIFICATION_FILES
         ),
@@ -13380,6 +13473,257 @@ def _release_image_loop_readiness_status(root: Path) -> dict[str, Any]:
         "deterministic_loss_anchoring_errors": deterministic_loss_anchoring_errors,
         "image_loss_errors": image_loss_errors,
         "perception_guard_errors": perception_guard_errors,
+        "eval_wiring_errors": eval_wiring_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "ab_capstone_errors": ab_capstone_errors,
+    }
+
+
+def _release_cua_loop_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate (M4) — CUA / browser / computer-use loop readiness (Phase 9C,
+    ARCH-9C §2.5/§2.6).
+
+    Exec-loads ``examples/sdk_cua_loop.py`` + ``sdk_cua_improvement.py`` in a
+    tempdir (no network, no env keys, no lanes, no real browser, no VM — entirely
+    on the committed ``examples/cua_loop_fixture/`` fixtures, over the
+    already-shipped ``BrowserEnvironment`` + ``score_browser_cua_probe_result``) and
+    audits their evidence into EIGHT error arrays. The ``cua_fidelity_overclaim``
+    token (9C-D6) fires inside ``evidence_class_errors`` for any
+    ``deterministic_fixture`` artifact carrying ``live_lane`` (the §2.6 binding
+    correction). ``passed`` = all eight empty.
+
+    NOTE the array name ``deterministic_verifier_anchoring_errors`` (the 9C rename
+    of 9B's ``deterministic_loss_anchoring_errors`` — intentional, ARCH-9C §2.5)."""
+
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *V1_CUA_LOOP_FILES,
+            V1_CUA_LOOP_GATE_FIXTURE_DIR,
+            *V1_CUA_LOOP_GATE_FIXTURE_FILES,
+        ],
+    )
+    loop_determinism_errors: list[dict[str, Any]] = []
+    deterministic_verifier_anchoring_errors: list[dict[str, Any]] = []
+    cua_loss_errors: list[dict[str, Any]] = []
+    completion_guard_errors: list[dict[str, Any]] = []
+    eval_wiring_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    ab_capstone_errors: list[dict[str, Any]] = []
+
+    loop: dict[str, Any] = {}
+    improvement: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        loop, lp_err = _exec_example_run(
+            root, "examples/sdk_cua_loop.py", "agent_learning_release_cua_loop"
+        )
+        if lp_err is not None:
+            err(loop_determinism_errors, field="example.run", expected="executes", observed=lp_err)
+        improvement, imp_err = _exec_example_run(
+            root, "examples/sdk_cua_improvement.py", "agent_learning_release_cua_improvement"
+        )
+        if imp_err is not None:
+            err(cua_loss_errors, field="example.run", expected="executes", observed=imp_err)
+
+    if loop:
+        if loop.get("kind") != "agent-learning.cua-loop.v1":
+            err(loop_determinism_errors, field="kind", expected="agent-learning.cua-loop.v1", observed=loop.get("kind"))
+
+        # ---- constant mirrors (the gate pins them against the example) ----
+        for field, expected in (
+            ("fidelity_tiers", list(V1_CUA_FIDELITY_TIERS)),
+            ("loss_term_refs", list(V1_CUA_LOSS_TERM_REFS)),
+            ("deterministic_anchor_terms", list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS)),
+            ("desktop_anchor_terms", list(V1_CUA_DESKTOP_ANCHOR_TERMS)),
+            ("judge_terms", list(V1_CUA_LOSS_JUDGE_TERMS)),
+            ("mandatory_safety_terms", list(V1_CUA_LOSS_MANDATORY_SAFETY_TERMS)),
+            ("failure_sublayers", list(V1_CUA_FAILURE_SUBLAYERS)),
+            ("surfaces", list(V1_CUA_SURFACES)),
+            ("completion_guard_kinds", list(V1_CUA_COMPLETION_GUARD_KINDS)),
+            ("perturbation_operators", list(V1_CUA_PERTURBATION_OPERATORS)),
+        ):
+            if list(loop.get(field) or []) != expected:
+                err(loop_determinism_errors, field=f"mirror.{field}", expected=expected, observed=loop.get(field))
+
+        # ---- loop determinism (same seed ⇒ byte-identical) ----
+        det = _as_mapping(loop.get("loop_determinism"))
+        for key in (
+            "trajectory_matches_golden_seed", "env_reset_deterministic",
+            "mutation_pack_stressed_byte_identical", "paired_clean_link",
+        ):
+            if det.get(key) is not True:
+                err(loop_determinism_errors, field=f"determinism.{key}", expected=True, observed=det.get(key))
+
+        # ---- deterministic verifier anchoring (anchors reproducible under seed) ----
+        anchors = _as_mapping(loop.get("deterministic_anchors"))
+        if anchors.get("matches_golden") is not True:
+            err(deterministic_verifier_anchoring_errors, field="anchors.matches_golden", expected=True, observed=anchors.get("matches_golden"))
+        if list(anchors.get("anchor_terms") or []) != list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS):
+            err(deterministic_verifier_anchoring_errors, field="anchors.anchor_terms", expected=list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS), observed=anchors.get("anchor_terms"))
+        # the desktop objective carries the narrower grounding_step_accuracy anchor.
+        if list(anchors.get("desktop_anchor_terms") or []) != list(V1_CUA_DESKTOP_ANCHOR_TERMS):
+            err(deterministic_verifier_anchoring_errors, field="anchors.desktop_anchor_terms", expected=list(V1_CUA_DESKTOP_ANCHOR_TERMS), observed=anchors.get("desktop_anchor_terms"))
+        computed = _as_mapping(anchors.get("computed"))
+        # the state_quality anchor recomputes deterministically over the fixtures
+        # via score_browser_cua_probe_result (the post-state ground-truth anchor).
+        for cell in ("multistep_form", "genuine_completion"):
+            cell_map = _as_mapping(computed.get(cell))
+            if cell_map.get("state_quality") != 1.0:
+                err(deterministic_verifier_anchoring_errors, field=f"anchors.computed.{cell}.state_quality", expected=1.0, observed=cell_map.get("state_quality"))
+        ds = _as_mapping(computed.get("desktop_episode"))
+        if ds.get("grounding_step_accuracy") != 1.0:
+            err(deterministic_verifier_anchoring_errors, field="anchors.computed.desktop_episode.grounding_step_accuracy", expected=1.0, observed=ds.get("grounding_step_accuracy"))
+
+        # ---- fake/unsafe-completion guard (the half-built kit rule completed) ----
+        guard = _as_mapping(loop.get("completion_guard"))
+        # the binding tripwire: the fake-completion sentinel MUST be score-zeroed on
+        # the deterministic anchor (the narration cannot lift the score).
+        if guard.get("fake_completion_score_zeroed_on_anchor") is not True:
+            err(completion_guard_errors, field="guard.fake_completion_score_zeroed", expected=True, observed=guard.get("fake_completion_score_zeroed_on_anchor"))
+        if guard.get("fake_completion_state_quality") != 0.0:
+            err(completion_guard_errors, field="guard.fake_completion_state_quality", expected=0.0, observed=guard.get("fake_completion_state_quality"))
+        if guard.get("genuine_completion_state_quality") != 1.0:
+            err(completion_guard_errors, field="guard.genuine_completion_state_quality", expected=1.0, observed=guard.get("genuine_completion_state_quality"))
+        # the unsafe-completion canary trips on an injected-DOM-following config
+        # (prompt_injection_touched > 0 -> zeroed on action_quality).
+        if guard.get("unsafe_completion_canary_tripped") is not True:
+            err(completion_guard_errors, field="guard.unsafe_completion_canary_tripped", expected=True, observed=guard.get("unsafe_completion_canary_tripped"))
+        if guard.get("injected_action_quality") != 0.0:
+            err(completion_guard_errors, field="guard.injected_action_quality", expected=0.0, observed=guard.get("injected_action_quality"))
+        # the verifier reads counted trace facts, never the agent prose.
+        if guard.get("reads_counted_facts_not_prose") is not True:
+            err(completion_guard_errors, field="guard.reads_counted_facts_not_prose", expected=True, observed=guard.get("reads_counted_facts_not_prose"))
+        if list(guard.get("completion_guard_kinds") or []) != ["fake_completion", "unsafe_completion"]:
+            err(completion_guard_errors, field="guard.kinds", expected=["fake_completion", "unsafe_completion"], observed=guard.get("completion_guard_kinds"))
+
+        # ---- eval wiring + R4 executable-loop registration (byte-pin stays green) ----
+        wiring = _as_mapping(loop.get("eval_wiring"))
+        for key in (
+            "uses_browser_environment", "browser_registered_via_hook",
+            "computer_use_registered_via_hook", "executable_loop_record_present",
+            "frozen_vocab_byte_stable",
+        ):
+            if wiring.get(key) is not True:
+                err(eval_wiring_errors, field=f"wiring.{key}", expected=True, observed=wiring.get(key))
+        # the live registry assertion (browser executable-loop-registered through
+        # the R4 hook WITHOUT widening the frozen tuple — the 9C-A1b critical
+        # honesty re-checked at gate time; the byte-pin trinity.py:13452 + the
+        # executable-split trinity.py:13456-13457 stay green).
+        from fi.simulate.simulation import contract as _cua_contract  # downward import (gate-only)
+        try:
+            from . import cua_loop as _cua_loop  # used only to register; gate stays robust if broken
+            _cua_loop._ensure_cua_world_registered("browser")
+            _cua_loop._ensure_cua_world_registered("desktop")
+        except Exception as exc:  # noqa: BLE001
+            err(eval_wiring_errors, field="registration.import", expected="cua_loop registers", observed=f"{type(exc).__name__}: {exc}")
+        if "browser" not in _cua_contract.resolved_world_kinds():
+            err(eval_wiring_errors, field="registry.browser_resolved", expected="browser in resolved_world_kinds", observed=False)
+        # the executable-loop _EXTRA_WORLD_KINDS record is present (keyed by the
+        # kind_token; the vendor.name lives in the record's name field).
+        _cua_rec = _cua_contract._EXTRA_WORLD_KINDS.get("browser") or {}
+        if _cua_rec.get("name") != "agentlearning.browser_cua" or _cua_rec.get("kind_token") != "browser":
+            err(eval_wiring_errors, field="registry.executable_loop_record", expected="agentlearning.browser_cua record present", observed=_cua_rec)
+        # the byte-pin: the frozen vocab is byte-stable (NOT widened by 9C).
+        if tuple(_cua_contract.SIMULATION_WORLD_KINDS) != (
+            "conversation", "tool_api", "browser", "computer_use", "code_exec", "voice_telephony"
+        ):
+            err(eval_wiring_errors, field="registry.frozen_byte_pin", expected="V1_SIMULATION_WORLD_KINDS byte-stable", observed=tuple(_cua_contract.SIMULATION_WORLD_KINDS))
+        # the executable-split: browser/computer_use stay typed-only (NOT moved
+        # into the executable tuple — keeps the executable-split check green).
+        if "browser" not in _cua_contract.TYPED_ONLY_WORLD_KINDS_V1 or "browser" in _cua_contract.EXECUTABLE_WORLD_KINDS_V1:
+            err(eval_wiring_errors, field="registry.executable_split", expected="browser stays typed-only", observed=True)
+
+        # ---- evidence-class honesty + the cua_fidelity_overclaim token (§2.6) ----
+        clean = _as_mapping(loop.get("clean_artifact"))
+        if clean.get("evidence_class") == "live_lane":
+            evidence_class_errors.append({
+                "artifact": "clean_artifact",
+                "reason": (
+                    "cua_fidelity_overclaim: a deterministic_fixture artifact stamped "
+                    "evidence_class=live_lane; a deterministic in-process fixture is "
+                    "local_gate/captured_fixture, never live_lane (9C-D6)"
+                ),
+            })
+        if clean.get("evidence_class") not in ("local_gate", "captured_fixture"):
+            err(evidence_class_errors, field="clean_artifact.evidence_class", expected="local_gate|captured_fixture", observed=clean.get("evidence_class"))
+        if clean.get("fidelity_tier") != "deterministic_fixture":
+            err(evidence_class_errors, field="clean_artifact.fidelity_tier", expected="deterministic_fixture", observed=clean.get("fidelity_tier"))
+        # the frozen 4-tuple is byte-stable (no new evidence class via this gate)
+        from .live import _contract as _live_contract  # downward import (gate-only)
+        if tuple(_live_contract.EVIDENCE_CLASSES) != ("local_gate", "live_lane", "live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="evidence_classes.frozen", expected=("local_gate", "live_lane", "live_stressed", "captured_fixture"), observed=tuple(_live_contract.EVIDENCE_CLASSES))
+        # the constructed overclaim negatives MUST be catchable — the example
+        # hand-builds them; the gate verifies the discipline catches each.
+        negatives = _as_mapping(loop.get("negatives"))
+        neg_live = _as_mapping(negatives.get("deterministic_claims_live_lane"))
+        if not (neg_live.get("fidelity_tier") == "deterministic_fixture" and neg_live.get("evidence_class") == "live_lane"):
+            err(evidence_class_errors, field="negatives.deterministic_claims_live_lane", expected="constructed deterministic_fixture+live_lane overclaim", observed=neg_live)
+        neg_keyed = _as_mapping(negatives.get("keyed_without_credential"))
+        if not (neg_keyed.get("fidelity_tier") == "keyed_live_model" and neg_keyed.get("credentialed") is False):
+            err(evidence_class_errors, field="negatives.keyed_without_credential", expected="keyed_live_model without credential", observed=neg_keyed)
+
+    if improvement:
+        if improvement.get("kind") != "agent-learning.cua-improvement.v1":
+            err(cua_loss_errors, field="improvement.kind", expected="agent-learning.cua-improvement.v1", observed=improvement.get("kind"))
+        if improvement.get("multi_objective_compiles") is not True:
+            err(cua_loss_errors, field="improvement.multi_objective", expected=True, observed=improvement.get("multi_objective_compiles"))
+        if improvement.get("judge_only_rejected") is not True:
+            err(cua_loss_errors, field="improvement.judge_only_rejected", expected=True, observed=improvement.get("judge_only_rejected"))
+        if improvement.get("single_term_rejected") is not True:
+            err(cua_loss_errors, field="improvement.single_term_rejected", expected=True, observed=improvement.get("single_term_rejected"))
+        if improvement.get("desktop_objective_compiles") is not True:
+            err(cua_loss_errors, field="improvement.desktop_objective_compiles", expected=True, observed=improvement.get("desktop_objective_compiles"))
+        if improvement.get("search_space_is_whole_agent") is not True:
+            err(cua_loss_errors, field="improvement.whole_agent_search_space", expected=True, observed=improvement.get("search_space_is_whole_agent"))
+        # the missing-anchor objective is rejected (deterministic_verifier_anchoring).
+        if improvement.get("missing_anchor_rejected") is not True:
+            err(deterministic_verifier_anchoring_errors, field="improvement.missing_anchor_rejected", expected=True, observed=improvement.get("missing_anchor_rejected"))
+        if improvement.get("world_kind") != "browser":
+            err(eval_wiring_errors, field="improvement.world_kind", expected="browser", observed=improvement.get("world_kind"))
+        if improvement.get("cua_surface") != "browser":
+            err(eval_wiring_errors, field="improvement.cua_surface", expected="browser", observed=improvement.get("cua_surface"))
+        # the cua_sublayer attribution is in the closed set (9C §2.3)
+        for cell, sub in _as_mapping(improvement.get("cua_sublayers")).items():
+            if sub not in V1_CUA_FAILURE_SUBLAYERS:
+                err(cua_loss_errors, field=f"improvement.cua_sublayer.{cell}", expected=V1_CUA_FAILURE_SUBLAYERS, observed=sub)
+        # ---- the no-loop A/B capstone (loop improves, canaries hold) ----
+        if improvement.get("ab_equal_budget") is not True:
+            err(ab_capstone_errors, field="improvement.ab_equal_budget", expected=True, observed=improvement.get("ab_equal_budget"))
+        if improvement.get("ab_loop_improves") is not True:
+            err(ab_capstone_errors, field="improvement.ab_loop_improves", expected=True, observed=improvement.get("ab_loop_improves"))
+        if improvement.get("ab_canaries_hold") is not True:
+            err(ab_capstone_errors, field="improvement.ab_canaries_hold", expected=True, observed=improvement.get("ab_canaries_hold"))
+
+    return {
+        "kind": "agent-learning.cua-loop-readiness.v1",
+        "required_files": list(V1_CUA_LOOP_FILES),
+        "fixture_dir": V1_CUA_LOOP_GATE_FIXTURE_DIR,
+        "cua_fidelity_tiers": list(V1_CUA_FIDELITY_TIERS),
+        "cua_loss_term_refs": list(V1_CUA_LOSS_TERM_REFS),
+        "cua_loss_deterministic_anchor_terms": list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "cua_desktop_anchor_terms": list(V1_CUA_DESKTOP_ANCHOR_TERMS),
+        "cua_loss_judge_terms": list(V1_CUA_LOSS_JUDGE_TERMS),
+        "cua_loss_mandatory_safety_terms": list(V1_CUA_LOSS_MANDATORY_SAFETY_TERMS),
+        "cua_failure_sublayers": list(V1_CUA_FAILURE_SUBLAYERS),
+        "cua_surfaces": list(V1_CUA_SURFACES),
+        "cua_completion_guard_kinds": list(V1_CUA_COMPLETION_GUARD_KINDS),
+        "cua_perturbation_operators": list(V1_CUA_PERTURBATION_OPERATORS),
+        "fixture_count": sum(
+            1 for _ in (root / V1_CUA_LOOP_GATE_FIXTURE_DIR).rglob("*")
+            if (root / V1_CUA_LOOP_GATE_FIXTURE_DIR).is_dir() and _.is_file()
+        ),
+        "cua_loss_term_count": len(V1_CUA_LOSS_TERM_REFS),
+        "cua_surface_count": len(V1_CUA_SURFACES),
+        "cua_perturbation_operator_count": len(V1_CUA_PERTURBATION_OPERATORS),
+        "missing_files": missing_files,
+        "loop_determinism_errors": loop_determinism_errors,
+        "deterministic_verifier_anchoring_errors": deterministic_verifier_anchoring_errors,
+        "cua_loss_errors": cua_loss_errors,
+        "completion_guard_errors": completion_guard_errors,
         "eval_wiring_errors": eval_wiring_errors,
         "evidence_class_errors": evidence_class_errors,
         "ab_capstone_errors": ab_capstone_errors,

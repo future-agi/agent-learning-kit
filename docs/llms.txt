@@ -19,6 +19,7 @@
 - [Task evidence](docs/eval/task-evidence.md): twin=examples/sdk_task_evaluation_synthesis.py kind=agent-learning.artifact-evaluation.v1
 
 ## Simulate
+- [CUA loop: the deterministic browser/computer-use substrate, credential-free](docs/simulate/cua-loop.md): twin=examples/sdk_cua_loop.py kind=agent-learning.run.v1
 - [Your First Simulation Run](docs/simulate/first-run.md): twin=examples/sdk_agent_integration_simulation.py kind=agent-learning.run.v1
 - [Image loop: the deterministic multimodal substrate, credential-free](docs/simulate/image-loop.md): twin=examples/sdk_image_loop.py kind=agent-learning.run.v1
 - [Memory: simulate the layer that persists between sessions](docs/simulate/memory.md): twin=examples/sdk_framework_adapter_memory_trace.py kind=agent-learning.run.v1
@@ -38,6 +39,7 @@
 - [Backend Routing: evidence-cited defaults, never a cage](docs/optimize/backend-routing.md): twin=examples/sdk_optimizer_profile_matrix.py kind=agent-learning.optimizer-routing-table.v1
 - [Behavior and Collaboration: optimizing how agents act together](docs/optimize/behavior-and-collaboration.md): twin=examples/sdk_multi_agent_room_probe_optimization.py kind=agent-learning.optimization.v1
 - [Capability-Profile Freezing: the frozen rows a winner must not break](docs/optimize/capability-profile-freezing.md): twin=examples/sdk_capability_freeze_regression.py kind=agent-learning.optimization.v1
+- [CUA improvement loop: the 13D Practice Loop on browser/computer-use](docs/optimize/cua-improvement.md): twin=examples/sdk_cua_improvement.py kind=agent-learning.practice-report.v1
 - [Eval-Suite Optimization](docs/optimize/eval-suite-optimization.md): twin=examples/sdk_evaluation_hook_probe_optimization.py kind=agent-learning.eval-optimization.v1
 - [Optimizer Governance: the steward's veto](docs/optimize/governance.md): twin=examples/sdk_optimizer_governance_optimization.py kind=agent-learning.optimization.v1
 - [Image improvement loop: the 13D Practice Loop on image](docs/optimize/image-improvement.md): twin=examples/sdk_image_improvement.py kind=agent-learning.practice-report.v1

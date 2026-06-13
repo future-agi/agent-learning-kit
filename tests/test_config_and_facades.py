@@ -18506,6 +18506,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "practice_loop_readiness",
         "voice_loopback_readiness",
         "image_loop_readiness",
+        "cua_loop_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -19143,6 +19144,90 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_IMAGE_PERTURBATION_OPERATORS
     )
     assert payload["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
+    # --- Phase 9C (CUA / browser / computer-use loop) gate (unit 5/5.5) -----
+    cua_loop_ev = checks["cua_loop_readiness"]["evidence"]
+    assert cua_loop_ev["kind"] == "agent-learning.cua-loop-readiness.v1"
+    assert checks["cua_loop_readiness"]["milestone"] == "M4"
+    # frozen-canon mirrors (mirror == module/cua_loop canon cross-pin):
+    assert cua_loop_ev["cua_fidelity_tiers"] == list(trinity.V1_CUA_FIDELITY_TIERS)
+    assert cua_loop_ev["cua_loss_term_refs"] == list(trinity.V1_CUA_LOSS_TERM_REFS)
+    assert cua_loop_ev["cua_loss_deterministic_anchor_terms"] == list(
+        trinity.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert cua_loop_ev["cua_desktop_anchor_terms"] == list(trinity.V1_CUA_DESKTOP_ANCHOR_TERMS)
+    assert cua_loop_ev["cua_loss_judge_terms"] == list(trinity.V1_CUA_LOSS_JUDGE_TERMS)
+    assert cua_loop_ev["cua_loss_mandatory_safety_terms"] == list(
+        trinity.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS
+    )
+    assert cua_loop_ev["cua_failure_sublayers"] == list(trinity.V1_CUA_FAILURE_SUBLAYERS)
+    assert cua_loop_ev["cua_surfaces"] == list(trinity.V1_CUA_SURFACES)
+    assert cua_loop_ev["cua_completion_guard_kinds"] == list(
+        trinity.V1_CUA_COMPLETION_GUARD_KINDS
+    )
+    assert cua_loop_ev["cua_perturbation_operators"] == list(
+        trinity.V1_CUA_PERTURBATION_OPERATORS
+    )
+    # the eight arrays (NOTE the 9C name deterministic_verifier_anchoring_errors):
+    assert cua_loop_ev["missing_files"] == []
+    assert cua_loop_ev["loop_determinism_errors"] == []
+    assert cua_loop_ev["deterministic_verifier_anchoring_errors"] == []
+    assert cua_loop_ev["cua_loss_errors"] == []
+    assert cua_loop_ev["completion_guard_errors"] == []
+    assert cua_loop_ev["eval_wiring_errors"] == []
+    assert cua_loop_ev["evidence_class_errors"] == []
+    assert cua_loop_ev["ab_capstone_errors"] == []
+    # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
+    assert tuple(_live_contract.EVIDENCE_CLASSES) == (
+        "local_gate", "live_lane", "live_stressed", "captured_fixture"
+    )
+    # THE key property: the simulation_contract_readiness byte-pin + the
+    # executable-split stay GREEN (9C registers browser/computer_use EXECUTABLE-LOOP
+    # status via the R4 record, NOT by widening the frozen tuple).
+    from fi.simulate.simulation import contract as _cua_contract
+    assert tuple(_cua_contract.SIMULATION_WORLD_KINDS) == (
+        "conversation", "tool_api", "browser", "computer_use", "code_exec", "voice_telephony"
+    )
+    assert "browser" in _cua_contract.TYPED_ONLY_WORLD_KINDS_V1
+    assert "browser" not in _cua_contract.EXECUTABLE_WORLD_KINDS_V1
+    assert "computer_use" in _cua_contract.TYPED_ONLY_WORLD_KINDS_V1
+    assert "computer_use" not in _cua_contract.EXECUTABLE_WORLD_KINDS_V1
+    assert checks["simulation_contract_readiness"]["status"] == "passed"
+    # cross-pin: trinity mirrors == the cua_loop canon (GUNA_AXES pattern —
+    # trinity never imports the module)
+    from agent_learning import cua_loop as _cua_loop
+    assert tuple(trinity.V1_CUA_LOSS_TERM_REFS) == _cua_loop.V1_CUA_LOSS_TERM_REFS
+    assert tuple(trinity.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS) == (
+        _cua_loop.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert tuple(trinity.V1_CUA_DESKTOP_ANCHOR_TERMS) == _cua_loop.V1_CUA_DESKTOP_ANCHOR_TERMS
+    assert tuple(trinity.V1_CUA_LOSS_JUDGE_TERMS) == _cua_loop.V1_CUA_LOSS_JUDGE_TERMS
+    assert tuple(trinity.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS) == (
+        _cua_loop.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS
+    )
+    assert tuple(trinity.V1_CUA_FAILURE_SUBLAYERS) == _cua_loop.V1_CUA_FAILURE_SUBLAYERS
+    assert tuple(trinity.V1_CUA_SURFACES) == _cua_loop.V1_CUA_SURFACES
+    assert tuple(trinity.V1_CUA_FIDELITY_TIERS) == _cua_loop.V1_CUA_FIDELITY_TIERS
+    assert tuple(trinity.V1_CUA_COMPLETION_GUARD_KINDS) == (
+        _cua_loop.V1_CUA_COMPLETION_GUARD_KINDS
+    )
+    assert tuple(trinity.V1_CUA_PERTURBATION_OPERATORS) == (
+        _cua_loop.V1_CUA_PERTURBATION_OPERATORS
+    )
+    # the new CUA claims-lint row is registered (unit 5.5)
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:cua[- ]improvement[- ]loop|fake[- ]completion(?:[- ]guard)?|"
+            r"cua[- ]eval[- ]as[- ]loss)\b"
+        ]
+        == "cua_loop_readiness"
+    )
+    # payload mirrors (release_status) carry the CUA constants
+    assert payload["cua_loss_term_refs"] == list(trinity.V1_CUA_LOSS_TERM_REFS)
+    assert payload["cua_failure_sublayers"] == list(trinity.V1_CUA_FAILURE_SUBLAYERS)
+    assert payload["cua_surfaces"] == list(trinity.V1_CUA_SURFACES)
+    assert payload["cua_completion_guard_kinds"] == list(trinity.V1_CUA_COMPLETION_GUARD_KINDS)
+    assert payload["cua_perturbation_operators"] == list(trinity.V1_CUA_PERTURBATION_OPERATORS)
+    assert payload["cua_fidelity_tiers"] == list(trinity.V1_CUA_FIDELITY_TIERS)
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (

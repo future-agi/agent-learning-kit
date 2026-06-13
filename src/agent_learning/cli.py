@@ -4780,6 +4780,21 @@ def _practice(args: Sequence[str]) -> int:
         choices=["understanding", "generation"],
         help="understanding (deterministic, day-one) | generation (keyed opt-in)",
     )
+    # Phase 9C: the CUA / browser / computer-use loop front door (ARCH-9C §2.7).
+    # No new engine — it builds a CUA practice-loop manifest and renders the
+    # deterministic CUA-trajectory metrics. --cua-surface selects the loss profile;
+    # desktop full-post-state is infra-gated (refuses loudly without VM/sim infra;
+    # the grounding/step rung runs credential-free).
+    p_cua = sub.add_parser("cua")
+    p_cua.add_argument("manifest")
+    p_cua.add_argument("--output", "-o", default=None)
+    p_cua.add_argument("--quiet", action="store_true")
+    p_cua.add_argument(
+        "--cua-surface", dest="cua_surface", default="browser",
+        choices=["browser", "desktop"],
+        help="browser (deterministic, day-one) | desktop (grounding/step rung "
+             "credential-free; full-post-state infra-gated)",
+    )
     parsed = parser.parse_args(list(args))
 
     if parsed.subcommand == "run":
@@ -4872,6 +4887,9 @@ def _practice(args: Sequence[str]) -> int:
 
     if parsed.subcommand == "image":
         return _practice_image(parsed)
+
+    if parsed.subcommand == "cua":
+        return _practice_cua(parsed)
     return 1
 
 
@@ -4881,6 +4899,15 @@ _IMAGE_CLI_FINDINGS = (
     "image_fixture_missing",
     "image_judge_key_unavailable",
     "image_mode_unavailable",
+)
+
+# Phase 9C CLI findings vocabulary (closed set; loud in CLI / silent-skip in
+# pytest). ARCH-9C §2.7 / §6.5.
+_CUA_CLI_FINDINGS = (
+    "cua_fixture_missing",
+    "cua_judge_key_unavailable",
+    "cua_desktop_infra_unavailable",
+    "cua_surface_unavailable",
 )
 
 
@@ -4972,6 +4999,135 @@ def _practice_image(parsed: Any) -> int:
     }
     return _emit_contract_payload(
         {"status": "ran", "exit_code": 0, "image_render": render}, parsed
+    )
+
+
+def _practice_cua(parsed: Any) -> int:
+    """The CUA / browser / computer-use loop CLI front door (Phase 9C). Builds a
+    CUA practice-loop manifest from the supplied manifest file and renders the
+    deterministic CUA-trajectory metrics. browser surface is credential-free;
+    desktop full-post-state refuses loudly without VM/sim infra (the grounding/step
+    rung still runs); the keyed completion_judge term refuses loudly without a
+    judge key (never a fake number). NEVER shows a judge score on the
+    credential-free path."""
+    from agent_learning import cua_loop
+
+    manifest_path = Path(parsed.manifest)
+    if not manifest_path.is_file():
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "cua_fixture_missing", "level": "error",
+                    "reason": f"cua manifest not found at {manifest_path}",
+                    "remediation": "pass an existing CUA practice-loop manifest",
+                }],
+            },
+            parsed,
+        )
+    manifest = _load_structured_file(manifest_path)
+
+    cua_surface = str(getattr(parsed, "cua_surface", "browser"))
+    # the desktop full-post-state rung is infra-gated — refuse loudly without the
+    # VM/sim infra (exit 0 + warning + withheld value; the grounding/step rung
+    # still runs credential-free). The grounding/step rung needs no infra.
+    if cua_surface == "desktop":
+        import os as _os
+        if not _os.environ.get("AGENT_LEARNING_CUA_DESKTOP_VM"):
+            return _emit_contract_payload(
+                {
+                    "status": "withheld", "exit_code": 0,
+                    "cua_surface": "desktop",
+                    "findings": [{
+                        "type": "cua_desktop_infra_unavailable", "level": "warning",
+                        "reason": (
+                            "the desktop full-post-state rung requires VM/sim infra; "
+                            "withheld -- the grounding/step rung still runs "
+                            "credential-free (never a fake number)"
+                        ),
+                        "remediation": "provision a desktop VM/sim and set AGENT_LEARNING_CUA_DESKTOP_VM",
+                    }],
+                    "deterministic_floor": "grounding_step_accuracy (the credential-free desktop anchor)",
+                },
+                parsed,
+            )
+
+    # the keyed completion_judge term is a keyed opt-in lane — refuse loudly
+    # without the judge key when the objective declares it (exit 0 + warning + the
+    # deterministic anchors still run).
+    objective = manifest.get("objective") or (
+        manifest.get("simulation", {}).get("inline", {}).get("objective")
+    )
+    declared_refs = [
+        str(t.get("eval"))
+        for t in ((objective or {}).get("evals") or (objective or {}).get("terms") or [])
+        if isinstance(t, dict)
+    ]
+    if "completion_judge" in declared_refs:
+        import os as _os
+        if not (_os.environ.get("AGENT_LEARNING_CUA_JUDGE_KEY") or _os.environ.get("OPENAI_API_KEY")):
+            return _emit_contract_payload(
+                {
+                    "status": "withheld", "exit_code": 0,
+                    "cua_surface": cua_surface,
+                    "findings": [{
+                        "type": "cua_judge_key_unavailable", "level": "warning",
+                        "reason": (
+                            "the completion_judge term calls a judge model; withheld "
+                            "-- never a fake number, the deterministic anchors still run"
+                        ),
+                        "remediation": "set AGENT_LEARNING_CUA_JUDGE_KEY (or OPENAI_API_KEY)",
+                    }],
+                    "deterministic_floor": "the deterministic post-state anchors",
+                },
+                parsed,
+            )
+
+    try:
+        built = cua_loop.build_cua_practice_loop_manifest(
+            name=str(manifest.get("name") or "cua-loop"),
+            base_agent=manifest.get("base_agent") or {"model": "gpt-4o"},
+            search_space=manifest.get("search_space") or {"agent.model": ["gpt-4o"]},
+            objective=objective or {},
+            eval_budget=int(manifest.get("eval_budget", 4)),
+            seed=int(manifest.get("seed", 1142)),
+            cua_surface=cua_surface,
+        )
+    except cua_loop.CuaLossCompositionError as exc:
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "cua_surface_unavailable", "level": "error",
+                    "reason": str(exc).splitlines()[0],
+                    "remediation": "declare a multi-objective loss with >= 1 deterministic post-state anchor",
+                }],
+            },
+            parsed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _emit_contract_payload(
+            {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+            parsed,
+        )
+
+    # the deterministic CUA-trajectory metric render — NEVER a judge score on the
+    # credential-free path (only anchors + guard outcome + fidelity marker).
+    anchor_terms = (
+        list(cua_loop.V1_CUA_DESKTOP_ANCHOR_TERMS)
+        if cua_surface == "desktop"
+        else list(cua_loop.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS)
+    )
+    render = {
+        "world_kind": built["practice"]["simulation"]["inline"]["world"]["kind"],
+        "cua_surface": cua_surface,
+        "deterministic_anchor_terms": anchor_terms,
+        "fidelity_tier": "deterministic_fixture",
+        "eval_budget": built["practice"]["eval_budget"],
+        "search_space_paths": sorted(built["practice"]["search_space"]),
+    }
+    return _emit_contract_payload(
+        {"status": "ran", "exit_code": 0, "cua_render": render}, parsed
     )
 
 
