@@ -25,6 +25,10 @@ _EXPORTS = {
     "AttackConditioning": ("fi.simulate.simulation.models", "AttackConditioning"),
     "PersonaProvenance": ("fi.simulate.simulation.models", "PersonaProvenance"),
     "EscalationArc": ("fi.simulate.simulation.models", "EscalationArc"),
+    # Phase 13D simulation contract (one class, one home — ARCH §2.0 last row)
+    "Simulation": ("fi.simulate.simulation.contract", "Simulation"),
+    "ScenarioBinding": ("fi.simulate.simulation.contract", "ScenarioBinding"),
+    "CastMember": ("fi.simulate.simulation.contract", "CastMember"),
     # engine fidelity facades
     "persona_fidelity": ("fi.simulate.simulation.fidelity", "persona_fidelity"),
     "attach_fidelity": ("fi.simulate.simulation.fidelity", "attach_fidelity"),

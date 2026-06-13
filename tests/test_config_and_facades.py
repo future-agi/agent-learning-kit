@@ -18492,6 +18492,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "persona_scenario_studio_readiness",
         "telemetry_boundary",
         "voice_redteam_readiness",
+        "simulation_contract_readiness",
+        "practice_loop_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18951,6 +18953,59 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert voice_redteam["fidelity_errors"] == []
     assert voice_redteam["pack_errors"] == []
     assert voice_redteam["authorization_errors"] == []
+    # ---- Phase 13D: simulation contract gate (M2) ----
+    sim_contract = checks["simulation_contract_readiness"]["evidence"]
+    assert sim_contract["kind"] == "agent-learning.simulation-contract-readiness.v1"
+    assert checks["simulation_contract_readiness"]["milestone"] == "M2"
+    # frozen-canon mirrors (mirror == module canon cross-pin):
+    from fi.simulate.simulation import contract as _sim_contract_mod
+    assert sim_contract["simulation_kind"] == _sim_contract_mod.SIMULATION_KIND
+    assert sim_contract["world_kinds"] == list(_sim_contract_mod.SIMULATION_WORLD_KINDS)
+    assert sim_contract["executable_world_kinds"] == list(_sim_contract_mod.EXECUTABLE_WORLD_KINDS_V1)
+    assert sim_contract["typed_only_world_kinds"] == list(_sim_contract_mod.TYPED_ONLY_WORLD_KINDS_V1)
+    assert sim_contract["tool_mock_levels"] == list(_sim_contract_mod.TOOL_MOCK_LEVELS)
+    assert sim_contract["cast_roles"] == list(_sim_contract_mod.SIMULATION_CAST_ROLES)
+    assert sim_contract["dynamics_event_kinds"] == list(_sim_contract_mod.DYNAMICS_EVENT_KINDS)
+    assert sim_contract["episode_persistence"] == list(_sim_contract_mod.EPISODE_PERSISTENCE)
+    assert sim_contract["goal_check_kinds"] == list(_sim_contract_mod.GOAL_CHECK_KINDS)
+    from agent_learning import simulate as _sim_facade
+    assert sim_contract["stable_result_envelope_fields"] == list(_sim_facade.STABLE_RESULT_ENVELOPE_FIELDS)
+    assert sim_contract["objective_sources"] == ["declared", "derived"]
+    assert sim_contract["builders_round_tripped"] >= 1
+    # the nine arrays:
+    assert sim_contract["rehydration_errors"] == []
+    assert sim_contract["goal_binding_errors"] == []
+    assert sim_contract["roundtrip_errors"] == []
+    assert sim_contract["cast_role_errors"] == []
+    assert sim_contract["world_kind_errors"] == []
+    assert sim_contract["tool_mock_errors"] == []
+    assert sim_contract["canonicalization_errors"] == []
+    assert sim_contract["objective_schema_errors"] == []
+    assert sim_contract["derived_view_errors"] == []
+    # ---- Phase 13D: practice loop gate (M3) ----
+    practice_loop = checks["practice_loop_readiness"]["evidence"]
+    assert practice_loop["kind"] == "agent-learning.practice-loop-readiness.v1"
+    assert checks["practice_loop_readiness"]["milestone"] == "M3"
+    from agent_learning.practice import _contract as _prac
+    assert practice_loop["practice_phases"] == list(_prac.PRACTICE_PHASES)
+    assert practice_loop["practice_artifact_kinds"] == list(_prac.PRACTICE_ARTIFACT_KINDS)
+    assert practice_loop["scaffold_types"] == list(_prac.SCAFFOLD_TYPES)
+    assert practice_loop["ladder_states"] == list(_prac.LADDER_STATES)
+    assert practice_loop["schedule_intervals"] == list(_prac.PRACTICE_REPLAY_INTERVALS)
+    assert practice_loop["store_active_cap"] == _prac.PRACTICE_STORE_ACTIVE_CAP
+    assert practice_loop["zpd_band"] == list(_prac.ZPD_BAND)
+    assert practice_loop["review_ratio"] == _prac.REVIEW_RATIO
+    assert practice_loop["budget_plan"] == list(_prac.BUDGET_PLAN)
+    assert practice_loop["scaffold_fade_default"] == list(_prac.SCAFFOLD_FADE_DEFAULT)
+    # the six arrays:
+    assert practice_loop["determinism_errors"] == []
+    assert practice_loop["schedule_errors"] == []
+    assert practice_loop["promotion_veto_errors"] == []
+    assert practice_loop["interference_errors"] == []
+    assert practice_loop["budget_errors"] == []
+    assert practice_loop["claims_errors"] == []
+    # the claims-lint row is registered.
+    assert trinity.V1_DOCS_CLAIM_PHRASE_GATES[r"\btrain(?:ing|er|ed|s)?\b"] == "practice_loop_readiness"
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (

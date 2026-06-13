@@ -85,8 +85,10 @@
 - [Artifact Actions: every result knows its next step](docs/prove/actions.md): twin=examples/sdk_agent_integration_optimization.py kind=agent-learning.optimization.v1
 - [Capability Catalogs: pin what your pipeline assumes](docs/prove/capabilities.md): twin=examples/sdk_framework_adapter_capability_profiles.py kind=agent-learning.run.v1
 - [Observability: evidence that makes artifacts replayable](docs/prove/observability.md): twin=examples/sdk_framework_adapter_trace_export.py kind=agent-learning.optimization.v1
+- [Practice loop (search-backed): spaced regression replay that never weakens the veto](docs/prove/practice-loop.md): twin=examples/sdk_practice_loop.py kind=agent-learning.practice-loop.v1
 - [Release-Check in Your CI: a verdict you can re-run](docs/prove/release-check-in-your-ci.md): twin=examples/sdk_trinity_stack_probe_optimization.py kind=agent-learning.release-check.v1
 - [Run ledger: every run leaves a verifiable local row](docs/prove/run-ledger.md): twin=examples/sdk_run_ledger.py kind=agent-learning.run.v1
+- [Simulation contract: one typed world, every builder lifts into it](docs/prove/simulation-contract.md): twin=examples/sdk_simulation_contract.py kind=agent-learning.simulation.v1
 - [The Trinity Suite: one manifest, one verdict](docs/prove/trinity-suite.md): twin=examples/sdk_framework_adapter_trinity_suite.py kind=agent-learning.suite.v1
 - [Trust Certificates: promotion verdicts you can verify later](docs/prove/trust-certificates.md): twin=examples/sdk_redteam_readiness_certification_optimization.py kind=agent-learning.suite.v1
 

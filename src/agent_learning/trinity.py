@@ -349,6 +349,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_openenv_environment_optimization.py": "environment_replay_optimizer_readiness",
     "examples/sdk_optimizer_governance_optimization.py": "optimizer_governance_readiness",
     "examples/sdk_persona_scenario_studio.py": "persona_scenario_studio_readiness",
+    "examples/sdk_practice_loop.py": "practice_loop_readiness",
     "examples/sdk_optimizer_portfolio_optimization.py": "optimizer_portfolio_readiness",
     "examples/sdk_optimizer_profile_matrix.py": "optimizer_profile_matrix_readiness",
     "examples/sdk_orchestration_stack_probe_optimization.py": "orchestration_stack_probe_readiness",
@@ -362,6 +363,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_regression_artifact_suite.py": "regression_artifact_readiness",
     "examples/sdk_retrieval_hook_optimization.py": "retrieval_hook_readiness",
     "examples/sdk_run_ledger.py": "telemetry_boundary",
+    "examples/sdk_simulation_contract.py": "simulation_contract_readiness",
     "examples/sdk_target_optimization.py": "generic_target_optimizer_readiness",
     "examples/sdk_task_evaluation.py": "task_artifact_evaluation_readiness",
     "examples/sdk_task_evaluation_synthesis.py": "task_evaluation_synthesis_readiness",
@@ -414,6 +416,19 @@ V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
     # Phase 8 (ARCH §3 canon): the ledger-row schema tag the prove pages
     # document; V1_REQUIRED_SCHEMA_KINDS stays frozen.
     "agent-learning.ledger-row.v1",
+    # Phase 13D — the SIMULATION contract + the Practice Loop (docs allowed-list
+    # only; NEVER V1_REQUIRED_SCHEMA_KINDS — the Phase-4 rule, ARCH §2g).
+    "agent-learning.simulation.v1",
+    "agent-learning.objective.v1",
+    "agent-learning.loss-report.v1",
+    "agent-learning.practice-loop.v1",
+    "agent-learning.practice-result.v1",
+    "agent-learning.practice-report.v1",
+    "agent-learning.practice-deficits.v1",
+    "agent-learning.practice-drill.v1",
+    "agent-learning.practice-update.v1",
+    "agent-learning.consolidated-lesson.v1",
+    "agent-learning.practice-calibration.v1",
 ]
 
 # Claims-lint vocabulary and license table: trigger pattern -> the only gate id
@@ -421,6 +436,7 @@ V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
 V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
     r"\b10x\b": "environment_10x_robustness",
     r"\bguarantee[sd]?\b": "docs_executability",
+    r"\btrain(?:ing|er|ed|s)?\b": "practice_loop_readiness",  # Phase 13D-D3 (clause f)
     r"\bworld[- ]best\b": None,
     r"\bbest[- ]in[- ]class\b": None,
     r"\b\d+(?:\.\d+)?x\s+(?:faster|better|more\s+robust)\b": None,
@@ -2333,6 +2349,53 @@ V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1 = {
     "status": "untested",
     "tier": "research_pinned",
 }
+
+# === Phase 13D (gate M2/M3) closed vocabularies =============================
+# Mirrors of the contract/loss/practice canon. The status fns byte-compare these
+# literal tuples (no import dependency on contract.py/loss.py/practice — the gate
+# must run even if those modules are broken; the milestone test separately
+# asserts mirror == module canon, the persona-gate cross-pin pattern).
+V1_SIMULATION_KIND = "agent-learning.simulation.v1"
+V1_SIMULATION_WORLD_KINDS = [
+    "conversation", "tool_api", "browser", "computer_use", "code_exec", "voice_telephony",
+]
+V1_SIMULATION_EXECUTABLE_WORLD_KINDS = ["conversation", "tool_api"]
+V1_SIMULATION_TYPED_ONLY_WORLD_KINDS = ["browser", "computer_use", "code_exec", "voice_telephony"]
+V1_SIMULATION_TOOL_MOCK_LEVELS = ["static_fixture", "recorded_replay", "emulated", "live"]
+V1_SIMULATION_CAST_ROLES = ["user", "opponent", "coworker", "counterpart"]
+V1_SIMULATION_DYNAMICS_EVENT_KINDS = [
+    "env_state_patch", "counterpart_message", "tool_outcome_shift", "fault_profile",
+]
+V1_SIMULATION_EPISODE_PERSISTENCE = ["fresh", "carry_state", "carry_memory"]
+V1_SIMULATION_GOAL_CHECK_KINDS = [
+    "state_predicate", "world_invariant", "world_success_condition",
+    "eval_template", "keyword_fallback",
+]  # R5/A7 STAGED — the v1 5-kind set is frozen
+V1_SIMULATION_OBJECTIVE_SOURCES = ["declared", "derived"]
+V1_SIMULATION_STABLE_RESULT_ENVELOPE_FIELDS = [
+    "created_at", "started_at", "completed_at", "duration_s", "timing",
+]
+V1_SIMULATION_EXTENSION_POINTS = ["environment", "loss", "optimizer", "generator"]
+V1_SIMULATION_FIXTURE_DIR = "examples/simulation_contract_fixtures"
+
+# Practice-loop canon (RU-1/RU-4) — Unit-8 mirrors.
+V1_PRACTICE_PHASES = ["assess", "diagnose", "drill", "update", "consolidate", "calibrate"]
+V1_PRACTICE_ARTIFACT_KINDS = [
+    "agent-learning.practice-loop.v1", "agent-learning.practice-result.v1",
+    "agent-learning.practice-report.v1", "agent-learning.practice-deficits.v1",
+    "agent-learning.practice-drill.v1", "agent-learning.practice-update.v1",
+    "agent-learning.consolidated-lesson.v1", "agent-learning.practice-calibration.v1",
+]
+V1_PRACTICE_SCAFFOLD_TYPES = ["world_simplification", "hint_tool", "worked_example", "relaxed_success"]
+V1_PRACTICE_LADDER_STATES = ["episodic", "instruction", "skill"]
+V1_PRACTICE_REPLAY_INTERVALS = [1, 2, 4, 8, 16]
+V1_PRACTICE_STORE_ACTIVE_CAP = 64
+V1_PRACTICE_ZPD_BAND = [0.2, 0.7]
+V1_PRACTICE_REVIEW_RATIO = 0.25
+V1_PRACTICE_BUDGET_PLAN = [0.25, 0.35, 0.25, 0.15]
+V1_PRACTICE_SCAFFOLD_FADE_DEFAULT = [1.0, 0.5, 0.0]
+V1_PRACTICE_FIXTURE_DIR = "examples/practice_loop_fixture"
+V1_PRACTICE_STORE_PATH_ENV = "AGENT_LEARNING_PRACTICE_STORE_PATH"
 
 V1_REDTEAM_READINESS_CERTIFICATION_FILES = [
     "examples/sdk_redteam_readiness_certification_optimization.py",
@@ -7242,6 +7305,40 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         # redteam_corpus_execution_readiness
         evidence=voice_redteam,
     )
+    # --- Phase 13D gates (M2 contract / M3 practice) -----------------------
+    simulation_contract = _release_simulation_contract_status(root)
+    _append_release_check(
+        checks,
+        check_id="simulation_contract_readiness",
+        passed=(
+            not simulation_contract["rehydration_errors"]
+            and not simulation_contract["goal_binding_errors"]
+            and not simulation_contract["roundtrip_errors"]
+            and not simulation_contract["cast_role_errors"]
+            and not simulation_contract["world_kind_errors"]
+            and not simulation_contract["tool_mock_errors"]
+            and not simulation_contract["canonicalization_errors"]
+            and not simulation_contract["objective_schema_errors"]
+            and not simulation_contract["derived_view_errors"]
+        ),
+        milestone="M2",  # sim/eval evidence family (the persona gate's family)
+        evidence=simulation_contract,
+    )
+    practice_loop = _release_practice_loop_status(root)
+    _append_release_check(
+        checks,
+        check_id="practice_loop_readiness",
+        passed=(
+            not practice_loop["determinism_errors"]
+            and not practice_loop["schedule_errors"]
+            and not practice_loop["promotion_veto_errors"]
+            and not practice_loop["interference_errors"]
+            and not practice_loop["budget_errors"]
+            and not practice_loop["claims_errors"]
+        ),
+        milestone="M3",  # optimizer family (the capability_profile_freeze family)
+        evidence=practice_loop,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -12138,6 +12235,293 @@ def _count_voice_fixtures(root: Path) -> int:
     if not fixture_dir.is_dir():
         return 0
     return sum(1 for _ in fixture_dir.rglob("*.json"))
+
+
+def _read_json_any(path: Path) -> Any:
+    """Read a committed fixture (dict OR list) — tolerant."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _sim_fixture_digest(obj: Any) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _release_simulation_contract_status(root: Path) -> dict[str, Any]:
+    """Gate 1 (M2) — fixture-driven, no live execution. Reads the committed
+    Unit-17 fixtures + byte-compares the mirror constants. NINE evidence arrays
+    (ARCH §2f Gate-1 table)."""
+    fixture_dir = root / V1_SIMULATION_FIXTURE_DIR
+    rehydration_errors: list[dict[str, Any]] = []
+    goal_binding_errors: list[dict[str, Any]] = []
+    roundtrip_errors: list[dict[str, Any]] = []
+    cast_role_errors: list[dict[str, Any]] = []
+    world_kind_errors: list[dict[str, Any]] = []
+    tool_mock_errors: list[dict[str, Any]] = []
+    canonicalization_errors: list[dict[str, Any]] = []
+    objective_schema_errors: list[dict[str, Any]] = []
+    derived_view_errors: list[dict[str, Any]] = []
+
+    if not fixture_dir.is_dir():
+        missing = {"path": str(fixture_dir.relative_to(root)), "reason": "fixture dir missing"}
+        for arr in (rehydration_errors, goal_binding_errors, roundtrip_errors, cast_role_errors,
+                    world_kind_errors, tool_mock_errors, canonicalization_errors,
+                    objective_schema_errors, derived_view_errors):
+            arr.append(dict(missing))
+
+    # (a) round-trip census — every builder equal.
+    census = _read_json_any(fixture_dir / "roundtrip" / "census.json") or {}
+    builders_round_tripped = 0
+    if isinstance(census, dict) and census:
+        for row, ev in census.items():
+            if not isinstance(ev, dict):
+                continue
+            builders_round_tripped += 1
+            if ev.get("original_digest") != ev.get("rederived_digest") or not ev.get("equal"):
+                roundtrip_errors.append({"builder": row, "reason": "round-trip digests differ"})
+    elif fixture_dir.is_dir():
+        roundtrip_errors.append({"reason": "census fixture empty"})
+
+    # (G4) rehydration — typed persona is_typed + fidelity attached.
+    typed = _read_json_any(fixture_dir / "typed_persona_result.json") or {}
+    if fixture_dir.is_dir() and not (typed.get("is_typed") and typed.get("fidelity_attached")
+                                     and typed.get("admission_attached")):
+        rehydration_errors.append({"reason": "typed persona did not re-hydrate with fidelity"})
+
+    # (G3) goal binding — declared-goal stop + no-goal twin present.
+    goal_result = _read_json_any(fixture_dir / "goal_pair" / "goal_result.json") or {}
+    if fixture_dir.is_dir() and goal_result.get("stop_reason") not in ("goal_success", "goal_failure"):
+        goal_binding_errors.append({"reason": "declared-goal fixture did not stop via the goal machine"})
+
+    # (R4) world kinds — mirror consistency with the docs/executable split.
+    kinds = _read_json_any(fixture_dir / "world_kinds" / "kinds.json") or {}
+    if isinstance(kinds, dict) and kinds:
+        if sorted(kinds) != sorted(V1_SIMULATION_WORLD_KINDS):
+            world_kind_errors.append({"reason": "world-kind fixture set != mirror"})
+        for kind, ev in kinds.items():
+            executable = kind in V1_SIMULATION_EXECUTABLE_WORLD_KINDS
+            if bool(ev.get("executable_contract_native")) != executable:
+                world_kind_errors.append({"kind": kind, "reason": "executable split mismatch"})
+    elif fixture_dir.is_dir():
+        world_kind_errors.append({"reason": "world_kinds fixture missing"})
+
+    # (R4) tool mocks — identity pair flips the hash.
+    pair = _read_json_any(fixture_dir / "tool_mocks" / "identity_pair.json") or {}
+    if fixture_dir.is_dir() and not pair.get("hashes_differ"):
+        tool_mock_errors.append({"reason": "mock-level change did not flip the content hash"})
+
+    # canonicalization — recompute incl. the drifted-row tripwire.
+    hashes = _read_json_any(fixture_dir / "hashes.json") or {}
+    drifted = hashes.get("_drifted_row") if isinstance(hashes, dict) else None
+    if isinstance(drifted, dict):
+        payload = drifted.get("recompute_payload")
+        stored = drifted.get("stored_hash")
+        # the simulation's version field is the content address; recompute via the
+        # Persona rule over the payload minus its own version.
+        if isinstance(payload, dict):
+            recompute = dict(payload)
+            recompute.pop("version", None)
+            if _sim_persona_rule_hash(recompute) != stored:
+                canonicalization_errors.append({"reason": "drifted-row recompute != stored hash"})
+    elif fixture_dir.is_dir():
+        canonicalization_errors.append({"reason": "hashes fixture missing drifted-row tripwire"})
+
+    # objective schema — declared-unguarded must reject; declared-guarded valid.
+    unguarded = _read_json_any(fixture_dir / "objective" / "declared_unguarded_input.json")
+    if isinstance(unguarded, dict):
+        guards = unguarded.get("guards") or {}
+        if (guards.get("sentinel_rows") or guards.get("canary_evals")) and guards.get("min_guard_count", 0) >= 1:
+            objective_schema_errors.append({"reason": "unguarded-objective fixture is actually guarded"})
+    elif fixture_dir.is_dir():
+        objective_schema_errors.append({"reason": "unguarded-objective fixture missing"})
+    derived_obj = _read_json_any(fixture_dir / "objective" / "derived.json") or {}
+    if fixture_dir.is_dir() and derived_obj.get("source") != "derived":
+        objective_schema_errors.append({"reason": "derived-objective fixture not source:derived"})
+
+    # derived view — byte-equal to the incumbent hand-written weight map.
+    dview = _read_json_any(fixture_dir / "objective" / "derived_view.json") or {}
+    if fixture_dir.is_dir() and dview.get("incumbent") != dview.get("derived_view"):
+        derived_view_errors.append({"reason": "derived weight-map view != incumbent map"})
+
+    # cast roles — legal-role set == mirror; turn-holding dynamics rejected.
+    roles = _read_json_any(fixture_dir / "cast_dynamics" / "legal_roles.json")
+    if isinstance(roles, list) and sorted(roles) != sorted(V1_SIMULATION_CAST_ROLES):
+        cast_role_errors.append({"reason": "cast-role fixture set != mirror"})
+    elif fixture_dir.is_dir() and not isinstance(roles, list):
+        cast_role_errors.append({"reason": "legal_roles fixture missing"})
+
+    return {
+        "kind": "agent-learning.simulation-contract-readiness.v1",
+        "simulation_kind": V1_SIMULATION_KIND,
+        "world_kinds": list(V1_SIMULATION_WORLD_KINDS),
+        "executable_world_kinds": list(V1_SIMULATION_EXECUTABLE_WORLD_KINDS),
+        "typed_only_world_kinds": list(V1_SIMULATION_TYPED_ONLY_WORLD_KINDS),
+        "tool_mock_levels": list(V1_SIMULATION_TOOL_MOCK_LEVELS),
+        "cast_roles": list(V1_SIMULATION_CAST_ROLES),
+        "dynamics_event_kinds": list(V1_SIMULATION_DYNAMICS_EVENT_KINDS),
+        "episode_persistence": list(V1_SIMULATION_EPISODE_PERSISTENCE),
+        "goal_check_kinds": list(V1_SIMULATION_GOAL_CHECK_KINDS),
+        "objective_sources": list(V1_SIMULATION_OBJECTIVE_SOURCES),
+        "stable_result_envelope_fields": list(V1_SIMULATION_STABLE_RESULT_ENVELOPE_FIELDS),
+        "extension_points": list(V1_SIMULATION_EXTENSION_POINTS),
+        "fixture_dir": V1_SIMULATION_FIXTURE_DIR,
+        "builders_round_tripped": builders_round_tripped,
+        "fixture_counts": {"census": len(census) if isinstance(census, dict) else 0},
+        "rehydration_errors": rehydration_errors,
+        "goal_binding_errors": goal_binding_errors,
+        "roundtrip_errors": roundtrip_errors,
+        "cast_role_errors": cast_role_errors,
+        "world_kind_errors": world_kind_errors,
+        "tool_mock_errors": tool_mock_errors,
+        "canonicalization_errors": canonicalization_errors,
+        "objective_schema_errors": objective_schema_errors,
+        "derived_view_errors": derived_view_errors,
+    }
+
+
+def _sim_persona_rule_hash(payload: Mapping[str, Any]) -> str:
+    """The Persona-rule content hash with 6-place float rounding (mirror of the
+    contract canonicalization; the gate recomputes without importing contract.py)."""
+    def _round(v: Any) -> Any:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, float):
+            return round(v, 6)
+        if isinstance(v, Mapping):
+            return {k: _round(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [_round(x) for x in v]
+        return v
+    canonical = json.dumps(_round(dict(payload)), sort_keys=True, separators=(",", ":"), default=str)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _release_practice_loop_status(root: Path) -> dict[str, Any]:
+    """Gate 2 (M3) — fixture-driven, no live execution. SIX evidence arrays
+    (ARCH §2f Gate-2 / PRD 13D-5 clause map)."""
+    fixture_dir = root / V1_PRACTICE_FIXTURE_DIR
+    determinism_errors: list[dict[str, Any]] = []
+    schedule_errors: list[dict[str, Any]] = []
+    promotion_veto_errors: list[dict[str, Any]] = []
+    interference_errors: list[dict[str, Any]] = []
+    budget_errors: list[dict[str, Any]] = []
+    claims_errors: list[dict[str, Any]] = []
+
+    if not fixture_dir.is_dir():
+        miss = {"path": str(fixture_dir.relative_to(root)), "reason": "fixture dir missing"}
+        for arr in (determinism_errors, schedule_errors, promotion_veto_errors,
+                    interference_errors, budget_errors):
+            arr.append(dict(miss))
+
+    # (b) determinism — two identical-seed runs' envelope-stripped digests equal.
+    det = _read_json_any(fixture_dir / "determinism_pair" / "pair.json") or {}
+    if fixture_dir.is_dir():
+        if det.get("digest_a") != det.get("digest_b"):
+            determinism_errors.append({"reason": "identical-seed runs produced different digests"})
+
+    # (c) schedule — re-run the pure transition function over the histories;
+    #     a tampered history MUST flip the check.
+    sched = _read_json_any(fixture_dir / "schedule_histories" / "expected.json") or {}
+    if fixture_dir.is_dir():
+        for case in sched.get("cases", []):
+            if case.get("observed") != case.get("expected"):
+                schedule_errors.append({"case": case.get("name"), "reason": "transition mismatch"})
+        if sched.get("tampered_detected") is not True:
+            schedule_errors.append({"reason": "tampered history was not detected"})
+
+    # (c+D7) promotion veto — full union replays at a zero-due promotion.
+    veto = _read_json_any(fixture_dir / "promotion_zero_due" / "sweep.json") or {}
+    if fixture_dir.is_dir():
+        if not veto.get("all_rows_replayed") or veto.get("schedule_filtered"):
+            promotion_veto_errors.append({"reason": "sweep did not replay the full union at zero-due promotion"})
+
+    # (d) interference / non-forgetting — planted regression detected within the
+    #     declared bound while ALL frozen rows close at every promotion.
+    interference = _read_json_any(fixture_dir / "interference" / "non_forgetting.json") or {}
+    if fixture_dir.is_dir():
+        if not interference.get("regression_detected"):
+            interference_errors.append({"reason": "planted regression not detected"})
+        if interference.get("detected_within_bound") is not True:
+            interference_errors.append({"reason": "regression not detected within declared latency bound"})
+        if not interference.get("all_frozen_rows_closed_every_promotion"):
+            interference_errors.append({"reason": "frozen rows did not all close at every promotion"})
+
+    # (e) budget — no-budget manifest is a build error; conservation holds.
+    budget = _read_json_any(fixture_dir / "budget" / "conservation.json") or {}
+    if fixture_dir.is_dir():
+        if budget.get("no_budget_rejected_at_build") is not True:
+            budget_errors.append({"reason": "no-budget manifest was not rejected at build"})
+        led = budget.get("ledger") or {}
+        if led:
+            by_phase = led.get("by_phase") or {}
+            if sum(by_phase.values()) != led.get("consumed") or led.get("consumed", 0) > led.get("total", 0):
+                budget_errors.append({"reason": "budget conservation violated"})
+        if budget.get("every_artifact_carries_budget_consumed") is not True:
+            budget_errors.append({"reason": "an emitted artifact is missing budget_consumed"})
+
+    # (f) claims-lint — the "train*" row is wired (asserted in the milestone test).
+    if r"\btrain(?:ing|er|ed|s)?\b" not in V1_DOCS_CLAIM_PHRASE_GATES:
+        claims_errors.append({"reason": "the train* claims-lint row is not registered"})
+
+    return {
+        "kind": "agent-learning.practice-loop-readiness.v1",
+        "practice_phases": list(V1_PRACTICE_PHASES),
+        "practice_artifact_kinds": list(V1_PRACTICE_ARTIFACT_KINDS),
+        "scaffold_types": list(V1_PRACTICE_SCAFFOLD_TYPES),
+        "ladder_states": list(V1_PRACTICE_LADDER_STATES),
+        "schedule_intervals": list(V1_PRACTICE_REPLAY_INTERVALS),
+        "store_active_cap": V1_PRACTICE_STORE_ACTIVE_CAP,
+        "zpd_band": list(V1_PRACTICE_ZPD_BAND),
+        "review_ratio": V1_PRACTICE_REVIEW_RATIO,
+        "budget_plan": list(V1_PRACTICE_BUDGET_PLAN),
+        "scaffold_fade_default": list(V1_PRACTICE_SCAFFOLD_FADE_DEFAULT),
+        "fixture_dir": V1_PRACTICE_FIXTURE_DIR,
+        "store_path_env": V1_PRACTICE_STORE_PATH_ENV,
+        "determinism_errors": determinism_errors,
+        "schedule_errors": schedule_errors,
+        "promotion_veto_errors": promotion_veto_errors,
+        "interference_errors": interference_errors,
+        "budget_errors": budget_errors,
+        "claims_errors": claims_errors,
+    }
+
+
+# === Phase 13D U23 — STAGED-INCREMENT GATE STUBS (typed, NOT registered) =====
+# Per the 13D-RULINGS R5 / BBG U23 disposition, these staged-increment status
+# functions are TYPED BUT UNREGISTERED in this pass: each lands behind its own
+# gate WITH its engine increment (dynamics / episode-persistence / multiparty /
+# per-kind world), in its OWN commit, with the closed-set +1 delta and the
+# refusal-flips-to-execution consistency move. They are not wired into
+# build_v1_release_checks and the closed set is unchanged (still 75). The lead
+# can register them with each increment using the Unit-18 insertion rule.
+def _release_simulation_dynamics_status(root: Path) -> dict[str, Any]:  # U23a — staged
+    return {
+        "kind": "agent-learning.simulation-dynamics-determinism.v1",
+        "status": "staged_unregistered",
+        "dynamics_determinism_errors": [],
+        "dynamics_audit_errors": [],
+    }
+
+
+def _release_simulation_episode_status(root: Path) -> dict[str, Any]:  # U23b — staged
+    return {
+        "kind": "agent-learning.simulation-episode-persistence.v1",
+        "status": "staged_unregistered",
+        "persistence_errors": [],
+        "carry_isolation_errors": [],
+    }
+
+
+def _release_simulation_multiparty_status(root: Path) -> dict[str, Any]:  # U23c — staged
+    return {
+        "kind": "agent-learning.simulation-multiparty-cast.v1",
+        "status": "staged_unregistered",
+        "multiparty_errors": [],
+    }
 
 
 def _release_typescript_sdk_consolidation_status(root: Path) -> dict[str, Any]:

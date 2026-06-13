@@ -13,6 +13,7 @@ from fi.simulate.environment import (
 )
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.fidelity import attach_fidelity
+from fi.simulate.simulation import goal_machine
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
 from fi.simulate.simulation.synthetic import SyntheticDataGenerator
 
@@ -132,6 +133,12 @@ class LocalTextEngine(BaseEngine):
             "adapters": [adapter.name for adapter in environment_adapters],
         }
         stop_reason = "max_turns"
+        # G3 (ARCH §1.9): a declared scenario.goal binds the goal machine; with
+        # no declared goal the keyword path runs byte-identically (back-compat).
+        scenario_goal = getattr(scenario, "goal", None)
+        verification_spec = getattr(scenario, "verification", None)
+        goal_states_reached: List[str] = []
+        goal_checks: List[Dict[str, Any]] = []
 
         for adapter in environment_adapters:
             snapshot = adapter.reset(
@@ -270,11 +277,27 @@ class LocalTextEngine(BaseEngine):
                     metadata=environment_metadata,
                 )
 
+            if scenario_goal is not None:               # declared goal ⇒ goal machine
+                verdict = goal_machine.evaluate_turn(
+                    scenario_goal,
+                    verification_spec,
+                    environment_state=environment_state,
+                    world_status=environment_state.get("world_contract") or {},
+                    messages=messages,
+                )
+                for name in verdict["states_reached"]:
+                    if name not in goal_states_reached:
+                        goal_states_reached.append(name)
+                goal_checks.extend(verdict["checks"])
+                if verdict["stop"]:
+                    stop_reason = verdict["stop"]          # "goal_success" | "goal_failure"
+                    break
+
             if turn_index + 1 >= min_turns:
                 if stop_when and stop_when(messages, persona):
                     stop_reason = "custom_stop"
                     break
-                if self._outcome_satisfied(response.content, persona.outcome):
+                if scenario_goal is None and self._outcome_satisfied(response.content, persona.outcome):
                     stop_reason = "outcome_satisfied"
                     break
 
@@ -293,7 +316,39 @@ class LocalTextEngine(BaseEngine):
                 break
             messages.append({"role": "user", "content": next_user_message})
 
+        if scenario_goal is not None:                  # episode-end settle rung
+            settle = goal_machine.evaluate_settle(
+                scenario_goal,
+                verification_spec,
+                environment_state=environment_state,
+                world_status=environment_state.get("world_contract") or {},
+                messages=messages,
+            )
+            for name in settle["states_reached"]:
+                if name not in goal_states_reached:
+                    goal_states_reached.append(name)
+            goal_checks.extend(settle["checks"])
+
         transcript = self._format_transcript(messages)
+        metadata: Dict[str, Any] = {
+            "engine": "local_text",
+            "modality": modality,
+            "scenario_name": scenario.name,
+            "thread_id": thread_id,
+            "turn_count": len([m for m in messages if m.get("role") == "assistant"]),
+            "stop_reason": stop_reason,
+            "duration_ms": int((time.time() - started_at) * 1000),
+            "environment": environment_metadata,
+            "environment_state": environment_state,
+            "tools": tools,
+        }
+        if scenario_goal is not None:
+            # attach_fidelity metadata-only idiom — no structural TestCaseResult change.
+            metadata["goal_machine"] = {
+                "states_reached": goal_states_reached,
+                "stop_reason": stop_reason if stop_reason in ("goal_success", "goal_failure") else None,
+                "checks": goal_checks,
+            }
         result = TestCaseResult(
             persona=persona,
             transcript=transcript,
@@ -301,18 +356,7 @@ class LocalTextEngine(BaseEngine):
             tool_calls=tool_calls,
             artifacts=artifacts,
             events=events,
-            metadata={
-                "engine": "local_text",
-                "modality": modality,
-                "scenario_name": scenario.name,
-                "thread_id": thread_id,
-                "turn_count": len([m for m in messages if m.get("role") == "assistant"]),
-                "stop_reason": stop_reason,
-                "duration_ms": int((time.time() - started_at) * 1000),
-                "environment": environment_metadata,
-                "environment_state": environment_state,
-                "tools": tools,
-            },
+            metadata=metadata,
         )
         # Phase 7: fidelity attaches through metadata ONLY, and only for typed
         # personas — untyped/legacy rows behave exactly as before (back-compat).

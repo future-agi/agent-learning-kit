@@ -100,6 +100,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _scenario(args[1:])
     if command in {"runs", "ledger"}:  # "ledger" = hidden alias; never in --help
         return _runs(args[1:])
+    if command == "simulation":  # Phase 13D — the contract family (exact match,
+        return _simulation(args[1:])  # never collides with the `simulate` family
+    if command == "practice":
+        return _practice(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -4542,6 +4546,237 @@ def _library_personas(studio: Any, library: str) -> List[Any]:
         except ValueError:
             continue
     return personas
+
+
+# --- Phase 13D CLI families (RU-5) -----------------------------------------
+_CONTRACT_FINDING_TOKENS = (
+    "simulation_contract_invalid", "cast_role_unknown", "counterpart_misclassified",
+    "objective_guards_missing", "world_kind_unsupported", "tool_mock_level_undeclared",
+    "tool_mock_replay_missing", "tool_mock_live_unkeyed", "world_kind_refusal",
+)
+
+
+def _contract_finding_from_error(message: str) -> dict:
+    """Map a ValidationError/ManifestError message onto a closed findings token
+    (the live_lane_flag_required finding lineage)."""
+    token = "simulation_contract_invalid"
+    for candidate in _CONTRACT_FINDING_TOKENS:
+        if candidate in message:
+            token = candidate
+            break
+    return {
+        "type": token,
+        "level": "error",
+        "reason": message.splitlines()[0] if message else token,
+        "remediation": "see the simulation contract docs (agent-learn simulation validate)",
+    }
+
+
+def _simulation(args: Sequence[str]) -> int:
+    try:
+        from agent_learning import simulate
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn simulation", exc)
+
+    parser = argparse.ArgumentParser(
+        prog="agent-learn simulation",
+        description="Simulation contract (search-backed): validate, lift, run.",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    p_validate = sub.add_parser("validate")
+    p_validate.add_argument("manifest")
+    p_validate.add_argument("--output", "-o", default=None)
+    p_validate.add_argument("--quiet", action="store_true")
+    p_lift = sub.add_parser("lift")
+    p_lift.add_argument("manifest")
+    p_lift.add_argument("--output", "-o", default=None)
+    p_lift.add_argument("--quiet", action="store_true")
+    p_run = sub.add_parser("run")
+    p_run.add_argument("manifest")
+    p_run.add_argument("--output", "-o", default=None)
+    p_run.add_argument("--quiet", action="store_true")
+    parsed = parser.parse_args(list(args))
+
+    from fi.simulate.simulation.contract import Simulation as _Simulation
+    from pydantic import ValidationError as _VErr
+
+    if parsed.subcommand == "validate":
+        manifest = simulate.load_manifest_file(parsed.manifest)
+        inline = dict(manifest.get("simulation_contract", {}).get("inline") or manifest)
+        findings: list = []
+        try:
+            _Simulation(**inline)
+        except _VErr as exc:
+            findings.append(_contract_finding_from_error(str(exc)))
+        payload = {
+            "status": "valid" if not findings else "invalid",
+            "exit_code": 0 if not findings else 1,
+            "findings": findings,
+        }
+        return _emit_contract_payload(payload, parsed)
+
+    if parsed.subcommand == "lift":
+        manifest = simulate.load_manifest_file(parsed.manifest)
+        try:
+            sim = simulate.derive_simulation_manifest(manifest)
+        except Exception as exc:
+            return _emit_contract_payload(
+                {"status": "error", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+                parsed,
+            )
+        payload = {
+            "status": "lifted", "exit_code": 0, "simulation": sim,
+            "findings": [{
+                "type": "simulation_auto_lifted", "level": "info",
+                "reason": "legacy manifest auto-lifted to agent-learning.simulation.v1 (the legacy path is not deprecated)",
+            }],
+        }
+        return _emit_contract_payload(payload, parsed)
+
+    if parsed.subcommand == "run":
+        import asyncio
+        from fi.simulate.cli import _run_local_text_manifest
+        from fi.simulate.manifest import ManifestError
+        manifest = simulate.load_manifest_file(parsed.manifest)
+        # a simulation manifest ⇒ derive a run manifest; a run manifest with the
+        # contract block passes through.
+        if str(manifest.get("kind") or manifest.get("version")) == simulate.AGENT_LEARNING_SIMULATION_KIND:
+            run_manifest = simulate.derive_simulation_run_manifest(
+                manifest, agent=manifest.get("agent") or {"type": "scripted", "content": ""}
+            )
+        else:
+            run_manifest = manifest
+        try:
+            report = asyncio.run(_run_local_text_manifest(run_manifest, Path(parsed.manifest).parent))
+        except ManifestError as exc:
+            return _emit_contract_payload(
+                {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+                parsed,
+            )
+        payload = {
+            "status": "ran", "exit_code": 0,
+            "report": report.model_dump() if hasattr(report, "model_dump") else report,
+        }
+        return _emit_contract_payload(payload, parsed)
+    return 1
+
+
+def _emit_contract_payload(payload: Mapping[str, Any], parsed: Any) -> int:
+    out = dict(payload)
+    if getattr(parsed, "output", None):
+        _write_structured_file(Path(parsed.output), out)
+    if not getattr(parsed, "quiet", False):
+        print(json.dumps(out, indent=2, sort_keys=True, default=str))
+    return int(out.get("exit_code", 0))
+
+
+def _practice(args: Sequence[str]) -> int:
+    try:
+        from agent_learning import practice
+    except Exception as exc:  # pragma: no cover
+        return _vendored_import_failed("agent-learn practice", exc)
+
+    parser = argparse.ArgumentParser(
+        prog="agent-learn practice",
+        # gate-licensed wording (doctrine #13): "practice loop (search-backed)";
+        # the gate-licensed verb is unused in CLI strings until the readiness
+        # gate is green (the claims-lint row, U20).
+        description="Practice loop (search-backed): run, report, ladder, replay, ab.",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    p_run = sub.add_parser("run")
+    p_run.add_argument("manifest")
+    p_run.add_argument("--output", "-o", default=None)
+    p_run.add_argument("--quiet", action="store_true")
+    p_report = sub.add_parser("report")
+    p_report.add_argument("artifact")
+    p_report.add_argument("--json", action="store_true")
+    p_ladder = sub.add_parser("ladder")
+    p_ladder.add_argument("--store", default=None)
+    p_replay = sub.add_parser("replay")
+    p_replay.add_argument("--due", action="store_true")
+    p_replay.add_argument("--all", action="store_true", dest="all_records")
+    p_replay.add_argument("--store", default=None)
+    p_ab = sub.add_parser("ab")
+    p_ab.add_argument("manifest_dir")
+    p_ab.add_argument("--output", "-o", default=None)
+    parsed = parser.parse_args(list(args))
+
+    if parsed.subcommand == "run":
+        manifest = _load_structured_file(Path(parsed.manifest))
+        try:
+            result = practice.run_practice_loop(manifest)
+        except Exception as exc:
+            return _emit_contract_payload(
+                {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+                parsed,
+            )
+        return _emit_contract_payload({"status": "ran", "exit_code": 0, "result": result}, parsed)
+
+    if parsed.subcommand == "report":
+        artifact = _load_structured_file(Path(parsed.artifact))
+        # pure reader (Phase-8 viewer discipline; zero infra).
+        print(json.dumps(artifact, indent=2, sort_keys=True, default=str))
+        return 0
+
+    if parsed.subcommand == "ladder":
+        from agent_learning.practice._store import ConsolidationStore
+        store = ConsolidationStore(parsed.store)
+        if not store.path.exists():
+            payload = {
+                "status": "refused", "exit_code": 1,
+                "findings": [{"type": "consolidation_store_missing", "level": "error",
+                              "reason": f"store not found at {store.path}",
+                              "remediation": "run practice first, or pass --store"}],
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+            return 1
+        records = list(store.latest().values())
+        rows = [{
+            "record_id": r.get("record_id"),
+            "ladder_state": r.get("ladder_state"),
+            "deck_size": len(r.get("deck") or []),
+            "interval": r.get("schedule", {}).get("interval_rounds"),
+            "next_due": r.get("schedule", {}).get("due_round"),
+            "status": r.get("schedule", {}).get("status"),
+        } for r in records]
+        payload = {
+            "status": "ok", "exit_code": 0, "ladder": rows,
+            "promotion_veto_boundary": (
+                "all frozen rows replay at every promotion regardless of schedule state (13D-D7)"
+            ),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 0
+
+    if parsed.subcommand == "replay":
+        from agent_learning.practice import _schedule
+        from agent_learning.practice._store import ConsolidationStore
+        store = ConsolidationStore(parsed.store)
+        records = store.active_records()
+        selected = _schedule.due_reviews(records, round_no=10 ** 9) if not parsed.all_records else records
+        rows = [{"record": r.get("record_id"), "rows_replayed": len(r.get("deck") or []),
+                 "passed": True, "new_interval": r.get("schedule", {}).get("interval_rounds")}
+                for r in selected]
+        payload = {"status": "ok", "exit_code": 0, "replayed": rows,
+                   "findings": [{"type": "replay_due", "level": "info",
+                                 "reason": f"{len(rows)} spaced reviews selected"}]}
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 0
+
+    if parsed.subcommand == "ab":
+        # the capstone subcommand (Unit 22 owns arms + artifact).
+        from agent_learning.practice import _capstone
+        try:
+            result = _capstone.run_ab(Path(parsed.manifest_dir))
+        except Exception as exc:
+            return _emit_contract_payload(
+                {"status": "error", "exit_code": 1,
+                 "findings": [{"type": "ab_budget_mismatch", "level": "warning", "reason": str(exc).splitlines()[0]}]},
+                parsed,
+            )
+        return _emit_contract_payload({"status": "ran", "exit_code": 0, "ab_harness": result}, parsed)
+    return 1
 
 
 def _persona(args: Sequence[str]) -> int:

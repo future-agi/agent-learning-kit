@@ -1788,6 +1788,118 @@ def build_whole_agent_optimization_manifest(
     return manifest
 
 
+def build_practice_loop_manifest(
+    *,
+    name: str,
+    simulation: Mapping[str, Any],
+    base_agent: Mapping[str, Any],
+    search_space: Mapping[str, Sequence[Any]],
+    eval_budget: int,
+    seed: int,
+    budget_plan: Optional[Sequence[float]] = None,
+    review_ratio: Optional[float] = None,
+    zpd: Optional[Mapping[str, Any]] = None,
+    scaffold_fade: Optional[Mapping[str, Any]] = None,
+    schedule: Optional[Mapping[str, Any]] = None,
+    store: Optional[Mapping[str, Any]] = None,
+    inner_operator: Optional[Mapping[str, Any]] = None,
+    max_rounds: int = 8,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build the ``agent-learning.practice-loop.v1`` manifest (R1; RU-6 home).
+
+    There is NO ``objective=`` kwarg — the objective rides the SIMULATION (ARCH
+    §2d field table; AD-E: one declared loss shared across every candidate;
+    Appendix B-16). Delegates to ``build_whole_agent_optimization_manifest`` so
+    its validators (``eval_budget`` REQUIRED int>=1; ``ranking_source:
+    "evaluation_suite"``; finite search_space; layer_locality) hold VERBATIM.
+    Declared-MANDATORY (no default): ``eval_budget``, ``seed`` (RU-1).
+    """
+    from . import loss as _loss  # facade imports facade (downward, legal)
+
+    if not name:
+        raise ValueError("name is required")
+    if seed is None:
+        raise ValueError("seed is required (declared-MANDATORY pair: eval_budget + seed)")
+
+    sim = dict(simulation)
+    inline = dict(sim.get("inline") or sim)
+    objective = inline.get("objective")
+    # the simulation's objective MUST be source:"declared" with guards.
+    if objective is None:
+        raise ValueError(
+            "objective_guards_missing: the practice simulation must declare a "
+            "source:'declared' objective with guards (ARCH §2d)"
+        )
+    if str(objective.get("source", "declared")) == "derived":
+        raise ValueError(
+            "objective_guards_missing: a derived objective cannot be a training "
+            "loss; declare an objective with guards"
+        )
+    _loss.refuse_derived_for_training(objective)  # the §4-E2 SDK twin
+
+    # RU-1 defaults (every default echoed — UI-UX §5 disclosure rule).
+    budget_plan = tuple(budget_plan or (0.25, 0.35, 0.25, 0.15))
+    review_ratio = float(review_ratio if review_ratio is not None else 0.25)
+    zpd = dict(zpd or {"band": [0.2, 0.7], "k": 8, "icc_floor": 0.5})
+    scaffold_fade = dict(scaffold_fade or {"intensities": [1.0, 0.5, 0.0]})
+    fade = list(scaffold_fade.get("intensities") or [1.0, 0.5, 0.0])
+    if not fade or float(fade[-1]) != 0.0:
+        raise ValueError("scaffold_fade.intensities MUST end at 0.0 (unscaffolded)")
+    schedule = dict(schedule or {})
+    schedule.setdefault("intervals", [1, 2, 4, 8, 16])
+    schedule.setdefault("max_interval", 16)
+    schedule.setdefault("detection_latency_bound", schedule["max_interval"])
+    store = dict(store or {})
+    store.setdefault("active_cap", 64)
+    inner_operator = dict(inner_operator or {"backend": "society"})
+    backend = str(inner_operator.get("backend", "society"))
+    if backend not in OPTIMIZER_PROFILE_MATRIX_BACKENDS:
+        # registry tokens are also valid; verified at run time via extension
+        # admission. Here we only reject obviously-bogus tokens.
+        from . import extensions as _ext
+        if _ext.resolve("optimizer", backend) is None:
+            raise ValueError(
+                f"inner_operator.backend {backend!r} not in "
+                f"{OPTIMIZER_PROFILE_MATRIX_BACKENDS} ∪ registry"
+            )
+
+    eval_config = dict(evaluation_config or {"metric_weights": _loss.objective_metric_weights(objective)})
+
+    # delegate to the whole-agent lineage so its validators hold VERBATIM.
+    embedded = build_whole_agent_optimization_manifest(
+        name=name,
+        base_agent=base_agent,
+        search_space=search_space,
+        evaluation_config=eval_config,
+        eval_budget=eval_budget,  # REQUIRED int >= 1 (validated downstream)
+    )
+
+    manifest: dict[str, Any] = {
+        "version": "agent-learning.practice-loop.v1",
+        "name": str(name),
+        "whole_agent": embedded["whole_agent"],
+        "optimization": embedded["optimization"],
+        "practice": {
+            "simulation": {"version": inline.get("version") or sim.get("version"), "inline": inline},
+            "base_agent": copy.deepcopy(dict(base_agent)),
+            "search_space": {k: list(v) for k, v in search_space.items()},
+            "eval_budget": int(eval_budget),
+            "seed": int(seed),
+            "budget_plan": list(budget_plan),
+            "review_ratio": review_ratio,
+            "zpd": zpd,
+            "scaffold_fade": {"intensities": fade},
+            "schedule": schedule,
+            "store": store,
+            "inner_operator": inner_operator,
+            "max_rounds": int(max_rounds),
+        },
+        "result_kind": "agent-learning.practice-result.v1",
+    }
+    return manifest
+
+
 def build_apply_plan(optimization: Mapping[str, Any]) -> dict[str, Any]:
     """Build the ``agent-learning.apply-plan.v1`` artifact (ARCH §2c/Decision 9).
 

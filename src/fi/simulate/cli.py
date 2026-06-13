@@ -16,6 +16,8 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 
+from pydantic import ValidationError
+
 from fi.simulate import (
     AdversarialEnvironmentPack,
     AgentControlPlaneEnvironment,
@@ -691,16 +693,145 @@ def _evaluate_manifest_report(manifest: Mapping[str, Any], report: Any) -> Any:
     )
 
 
+# Phase 13D execution staging (ARCH §2a) — what runs contract-native in v1 vs
+# what refuses until each kind's engine increment lands.
+_EXECUTABLE_WORLD_KINDS_V1 = ("conversation", "tool_api")
+# typed-only kinds with a deriving builder/adapter that runs derived-legacy:
+_DERIVED_LEGACY_WORLD_KINDS_V1 = ("browser", "voice_telephony")
+_VALIDATION_ONLY_WORLD_KINDS_V1 = ("computer_use", "code_exec")
+
+
+def _simulation_contract_preflight(manifest: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Recognize the additive ``simulation_contract`` block on a run manifest and
+    apply the U7 refusal rules BEFORE any episode. Returns a refusal artifact
+    mapping when execution must be refused, else None (run proceeds)."""
+    block = manifest.get("simulation_contract")
+    if not isinstance(block, Mapping):
+        return None
+    inline = dict(block.get("inline") or {})
+    if not inline:
+        return None
+    # Parse through the contract (validation at the engine door).
+    from fi.simulate.simulation.contract import (
+        EXECUTABLE_WORLD_KINDS_V1,
+        Simulation,
+    )
+
+    simulation = Simulation(**inline)
+    world = simulation.world
+    requested_kind = world.kind
+
+    # contract-native features beyond today's path refuse until U23 increments.
+    episodes = simulation.episodes
+    has_dynamics = bool(simulation.dynamics)
+    has_multiparty = any(b.casting == "together" for b in simulation.scenarios)
+    contract_native_requested = (
+        episodes.count > 1
+        or episodes.persistence != "fresh"
+        or has_dynamics
+        or has_multiparty
+    )
+
+    # live mock preflight: refuse outright in gate/release; require keyed env.
+    import os
+    for binding in world.tools:
+        level = binding.mock.get("level")
+        if level == "live":
+            missing = [name for name in binding.required_env if not os.environ.get(name)]
+            if missing:
+                return {
+                    "type": "tool_mock_live_unkeyed",
+                    "level": "error",
+                    "tool": binding.name,
+                    "missing_env": missing,
+                    "reason": (
+                        f"tool {binding.name!r} declares mock.level=live but "
+                        f"required_env {missing} not set"
+                    ),
+                    "remediation": "live mocks run only on keyed lanes; set the env or lower the mock level",
+                }
+
+    if requested_kind in EXECUTABLE_WORLD_KINDS_V1:
+        if contract_native_requested:
+            return {
+                "type": "world_kind_refusal",
+                "level": "error",
+                "requested_kind": requested_kind,
+                "kind_status": "executable kind, contract-native feature staged",
+                "reason": (
+                    "episodes>1 / non-fresh persistence / dynamics / casting:together "
+                    "refuse until the staged increment lands (U23)"
+                ),
+                "executable_kinds_this_install": list(EXECUTABLE_WORLD_KINDS_V1),
+            }
+        return None  # contract-native ≡ today's loop + goal binding + mock recording
+
+    if requested_kind in _DERIVED_LEGACY_WORLD_KINDS_V1:
+        if contract_native_requested:
+            return {
+                "type": "world_kind_refusal",
+                "level": "error",
+                "requested_kind": requested_kind,
+                "kind_status": "typed now, engine staged",
+                "executable_kinds_this_install": list(EXECUTABLE_WORLD_KINDS_V1),
+                "reason": "contract-native execution staged behind the per-kind gate (RU-8)",
+            }
+        return None  # derived-legacy rung-1 runs through the existing adapter path
+
+    # computer_use / code_exec: validation + refusal only (no deriving builder).
+    return {
+        "type": "world_kind_refusal",
+        "level": "error",
+        "requested_kind": requested_kind,
+        "kind_status": "typed now, engine staged",
+        "executable_kinds_this_install": list(EXECUTABLE_WORLD_KINDS_V1),
+        "reason": "validation-only kind; no deriving builder in v1 (refusal recorded, never silent)",
+    }
+
+
+def _record_mock_profile(report: Any, manifest: Mapping[str, Any]) -> None:
+    """R4/AD-O: attach the effective (declared) mock profile to each case's
+    metadata (the metadata-only idiom). Engine path is unchanged."""
+    block = manifest.get("simulation_contract")
+    if not isinstance(block, Mapping):
+        return
+    inline = dict(block.get("inline") or {})
+    world = dict(inline.get("world") or {})
+    tools = world.get("tools") or []
+    profile: Dict[str, Any] = {}
+    for binding in tools:
+        if not isinstance(binding, Mapping):
+            continue
+        mock = dict(binding.get("mock") or {})
+        prov = dict(mock.get("provenance") or {})
+        profile[str(binding.get("name"))] = {
+            "level": mock.get("level"),
+            "source_hash": prov.get("capture") or mock.get("source"),
+        }
+    if not profile:
+        return
+    for result in getattr(report, "results", []) or []:
+        meta = getattr(result, "metadata", None)
+        if isinstance(meta, dict):
+            meta["tool_mock_profile"] = profile
+
+
 async def _run_local_text_manifest(manifest: Mapping[str, Any], manifest_path: Path) -> Any:
     simulation = dict(manifest.get("simulation") or {})
     engine = str(simulation.get("engine") or "local_text").lower().replace("-", "_")
     if engine not in {"local_text", "local"}:
         raise ManifestError(f"unsupported simulation.engine for CLI slice: {engine}")
 
+    # Phase 13D (ARCH §2a): a simulation_contract block triggers preflight
+    # refusals (recorded, never silent) BEFORE any episode.
+    refusal = _simulation_contract_preflight(manifest)
+    if refusal is not None:
+        raise ManifestError(f"{refusal['type']}: {refusal['reason']}")
+
     scenario = _build_scenario(manifest)
     agent_callback = _build_agent_callback(dict(manifest.get("agent") or {}), manifest_path.parent)
     environments = _build_environments(_environment_specs(manifest), manifest_path.parent)
-    return await TestRunner().run_test(
+    report = await TestRunner().run_test(
         scenario=scenario,
         agent_callback=agent_callback,
         environment=environments,
@@ -710,9 +841,16 @@ async def _run_local_text_manifest(manifest: Mapping[str, Any], manifest_path: P
         attacks=simulation.get("attacks"),
         auto_execute_tools=bool(simulation.get("auto_execute_tools", True)),
     )
+    _record_mock_profile(report, manifest)
+    return report
 
 
 def _build_scenario(manifest: Mapping[str, Any]) -> Scenario:
+    # G4 re-hydration (ARCH §1.9, BBG U1): construct ``Persona(**row)`` so every
+    # Phase-7 typed layer (identity/temperament/behavior_policy/knowledge/attack/
+    # provenance/version) survives, and carry the typed Scenario block
+    # (kind/goal/verification/coverage/...). The three legacy fields are defaulted
+    # EXACTLY as before, so untyped manifests construct byte-identical personas.
     raw = dict(manifest.get("scenario") or {})
     if not raw:
         raise ManifestError("manifest requires a scenario")
@@ -723,18 +861,34 @@ def _build_scenario(manifest: Mapping[str, Any]) -> Scenario:
     for index, item in enumerate(dataset, start=1):
         if not isinstance(item, Mapping):
             raise ManifestError(f"scenario.dataset[{index}] must be an object")
-        personas.append(
-            Persona(
-                persona=dict(item.get("persona") or {"name": f"persona-{index}"}),
-                situation=str(item.get("situation") or ""),
-                outcome=str(item.get("outcome") or ""),
-            )
+        row = dict(item)
+        # default the three required legacy fields EXACTLY as today (§1.9):
+        row["persona"] = dict(row.get("persona") or {"name": f"persona-{index}"})
+        row["situation"] = str(row.get("situation") or "")
+        row["outcome"] = str(row.get("outcome") or "")
+        try:
+            personas.append(Persona(**row))          # every typed layer re-hydrates
+        except ValidationError as exc:
+            raise ManifestError(
+                f"scenario.dataset[{index}] failed typed-persona validation: {exc}"
+            ) from exc                                # named row index, never a silent drop
+    scenario_block = {
+        key: raw[key]
+        for key in (
+            "kind", "goal", "verification", "coverage", "constraints",
+            "escalation", "attack_type", "attack_surface", "version",
+            "parent_version", "description",
         )
-    return Scenario(
-        name=str(raw.get("name") or manifest.get("name") or "agent-simulate-cli"),
-        description=raw.get("description"),
-        dataset=personas,
-    )
+        if key in raw
+    }
+    try:
+        return Scenario(
+            name=str(raw.get("name") or manifest.get("name") or "agent-simulate-cli"),
+            dataset=personas,
+            **scenario_block,
+        )
+    except ValidationError as exc:
+        raise ManifestError(f"scenario failed typed validation: {exc}") from exc
 
 
 def _build_agent_callback(agent: Mapping[str, Any], base_dir: Path) -> Callable[..., Any]:
