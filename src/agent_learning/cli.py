@@ -98,6 +98,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _persona(args[1:])
     if command == "scenario":
         return _scenario(args[1:])
+    if command in {"runs", "ledger"}:  # "ledger" = hidden alias; never in --help
+        return _runs(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -4869,6 +4871,518 @@ def _scenario(args: Sequence[str]) -> int:
     return _help(f"unknown scenario subcommand: {parsed.subcommand}")
 
 
+# --- run-ledger viewer + keyed-sync DX (Phase 8, UI-UX §1-§5) ---------------
+# The viewer subcommands (list/show/verify) are pure file readers over the
+# local ledger — zero infrastructure, zero network, no keys needed. Only
+# `runs sync` (non-dry-run) may open a connection, and only with keys present
+# and AGENT_LEARNING_TELEMETRY not "off". `ledger` is a hidden alias of
+# `runs` (dispatch only; never documented in --help).
+
+
+def _runs(args: Sequence[str]) -> int:
+    try:
+        from agent_learning import telemetry
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn runs", exc)
+
+    parser = argparse.ArgumentParser(
+        prog="agent-learn runs",
+        description=(
+            "Local run ledger: list, show, verify (always local) + keyed "
+            "sync and tombstone forget."
+        ),
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    listing = sub.add_parser("list")
+    listing.add_argument("--kind", default=None)
+    listing.add_argument(
+        "--verdict", default=None, choices=list(telemetry.VERDICTS)
+    )
+    listing.add_argument(
+        "--evidence", default=None, choices=list(telemetry.EVIDENCE_CLASSES)
+    )
+    listing.add_argument(
+        "--synced", default=None, choices=list(telemetry.SYNC_STATES)
+    )
+    listing.add_argument("--since", default=None)
+    listing.add_argument("--limit", type=int, default=None)
+    listing.add_argument("--json", action="store_true", dest="as_json")
+
+    show = sub.add_parser("show")
+    show.add_argument("run_id")
+    show.add_argument("--json", action="store_true", dest="as_json")
+
+    sub.add_parser("verify")
+
+    sync = sub.add_parser("sync")
+    sync.add_argument("run_id", nargs="?", default=None)
+    sync.add_argument("--content", action="store_true")
+    sync.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sync.add_argument("--queued", action="store_true")
+
+    forget = sub.add_parser("forget")
+    forget.add_argument("run_id")
+    group = forget.add_mutually_exclusive_group(required=True)
+    group.add_argument("--content", action="store_true")
+    group.add_argument("--run", action="store_true", dest="whole_run")
+    forget.add_argument("--yes", action="store_true")
+
+    parsed = parser.parse_args(list(args))
+    ledger = telemetry.RunLedger()
+
+    if parsed.subcommand == "list":
+        return _runs_list(telemetry, ledger, parsed)
+    if parsed.subcommand == "show":
+        return _runs_show(telemetry, ledger, parsed)
+    if parsed.subcommand == "verify":
+        return _runs_verify(ledger)
+    if parsed.subcommand == "sync":
+        return _runs_sync(telemetry, ledger, parsed)
+    if parsed.subcommand == "forget":
+        return _runs_forget(telemetry, ledger, parsed)
+    return _help(f"unknown runs subcommand: {parsed.subcommand}")
+
+
+def _runs_rows(telemetry: Any, ledger: Any) -> List[Dict[str, Any]]:
+    return [
+        row
+        for row in ledger.iter_rows()
+        if row.get("schema") == telemetry.LEDGER_ROW_SCHEMA
+    ]
+
+
+def _runs_tombstoned(telemetry: Any, ledger: Any) -> Dict[str, Dict[str, Any]]:
+    return {
+        str(row.get("tombstones")): row
+        for row in ledger.iter_rows()
+        if row.get("schema") == telemetry.TOMBSTONE_SCHEMA
+    }
+
+
+def _runs_sync_state(row: Mapping[str, Any], synced_map: Mapping[str, str]) -> str:
+    return str(synced_map.get(str(row.get("run_id")), "local"))
+
+
+def _runs_list(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    rows = _runs_rows(telemetry, ledger)
+    tombstoned = _runs_tombstoned(telemetry, ledger)
+    synced_map = ledger.read_cursor()["synced"]
+    selected: List[Dict[str, Any]] = []
+    for row in rows:
+        if parsed.kind and row.get("kind") != parsed.kind:
+            continue
+        if parsed.verdict and row.get("verdict") != parsed.verdict:
+            continue
+        if parsed.evidence and row.get("evidence_class") != parsed.evidence:
+            continue
+        if parsed.synced and _runs_sync_state(row, synced_map) != parsed.synced:
+            continue
+        if parsed.since and str(row.get("created_at") or "") < parsed.since:
+            continue
+        selected.append(row)
+    if parsed.limit is not None:
+        selected = selected[-max(parsed.limit, 0):]
+    if parsed.as_json:
+        print(json.dumps(selected, indent=2, sort_keys=True, default=str))
+        return 0
+    if not rows:
+        print(
+            "no runs yet · ledger will be created at "
+            f"{ledger.rows_path} on your first run · chain genesis = "
+            f'"{telemetry.GENESIS}"'
+        )
+        return 0
+    header = (
+        f"{'RUN_ID':<9} {'KIND':<23} {'VERDICT':<10} {'EVIDENCE':<16} "
+        f"{'WHEN':<17} SYNCED"
+    )
+    print(header)
+    for row in selected:
+        run_id = str(row.get("run_id") or "")
+        redacted = run_id in tombstoned
+        verdict = "[redacted]" if redacted else str(row.get("verdict"))
+        when = str(row.get("created_at") or "")[:16].replace("T", " ")
+        print(
+            f"{run_id[:8]:<9} {str(row.get('kind')):<23} {verdict:<10} "
+            f"{str(row.get('evidence_class')):<16} {when:<17} "
+            f"{_runs_sync_state(row, synced_map)}"
+        )
+    verify = ledger.verify()
+    chain_note = (
+        "chain OK"
+        if verify["chain_intact"]
+        else f"chain BROKEN at row {verify['breaks'][0]['index']}"
+    )
+    print(f"\n{len(selected)} runs · {chain_note} · ledger {ledger.rows_path}")
+    return 0
+
+
+def _runs_resolve(
+    telemetry: Any, ledger: Any, prefix: str
+) -> tuple[Optional[Dict[str, Any]], List[str], int]:
+    """Resolve an id prefix to one row; refuse ambiguity (UI-UX §6.5)."""
+
+    rows = _runs_rows(telemetry, ledger)
+    matches = [
+        row for row in rows if str(row.get("run_id") or "").startswith(prefix)
+    ]
+    if not matches:
+        print(f"agent-learn runs: no run matches id {prefix!r}", file=sys.stderr)
+        return None, [], 1
+    if len(matches) > 1:
+        print(
+            f"agent-learn runs: id prefix {prefix!r} is ambiguous — "
+            "give more characters:",
+            file=sys.stderr,
+        )
+        for row in matches:
+            print(f"  {row.get('run_id')}", file=sys.stderr)
+        return None, [str(row.get("run_id")) for row in matches], 1
+    return matches[0], [str(matches[0].get("run_id"))], 0
+
+
+def _runs_show(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id)
+    if row is None:
+        return code
+    if parsed.as_json:
+        # The exact canonical addressed-core bytes, NO trailing newline:
+        # `agent-learn runs show <id> --json | shasum -a 256` == run_id.
+        sys.stdout.write(telemetry.canonical_row_bytes(row).decode("utf-8"))
+        sys.stdout.flush()
+        return 0
+    all_rows = ledger.rows()
+    chained = [
+        item
+        for item in all_rows
+        if item.get("schema") != telemetry.UNREADABLE_LINE_SCHEMA
+    ]
+    chain_index = next(
+        (
+            index
+            for index, item in enumerate(chained)
+            if item.get("run_id") == row.get("run_id")
+        ),
+        None,
+    )
+    verify = ledger.verify()
+    link_ok = not any(
+        item.get("index") == chain_index for item in verify["breaks"]
+    )
+    tombstoned = _runs_tombstoned(telemetry, ledger)
+    synced_map = ledger.read_cursor()["synced"]
+    run_id = str(row.get("run_id"))
+    print(f"run_id          {run_id}")
+    print(f"chain_index     {chain_index}")
+    print(
+        f"chain_i         {str(row.get('chain'))[:8]}…   "
+        f"(= H(chain_{{i-1}} || run_id_i))   "
+        f"chain link {'OK' if link_ok else 'BROKEN'}"
+    )
+    print(f"schema          {row.get('schema')}")
+    print(f"kind            {row.get('kind')}")
+    print(f"phase           {row.get('phase')}")
+    print(f"evidence_class  {row.get('evidence_class')}")
+    print(f"verdict         {row.get('verdict')}")
+    print(
+        f"semconv         {row.get('semconv_version')}   "
+        "(OTEL_SEMCONV_STABILITY_OPT_IN)"
+    )
+    print(f"created_at      {row.get('created_at')}")
+    tomb = tombstoned.get(run_id)
+    if tomb is not None:
+        print(
+            f"content         [redacted: {tomb.get('reason')} via tombstone "
+            f"{str(tomb.get('run_id'))[:8]} on "
+            f"{str(tomb.get('created_at'))[:10]}]"
+        )
+        print(f"redacted_fields {tomb.get('redacted_fields')}")
+    print("\nasset references (content addresses — never copies)")
+    print(f"  manifest        {row.get('manifest_address')}")
+    for ref in row.get("asset_refs") or []:
+        account = (
+            f"  (account obj {ref.get('account_object_id')})"
+            if isinstance(ref, Mapping) and ref.get("account_object_id")
+            else ""
+        )
+        if isinstance(ref, Mapping):
+            print(
+                f"  {str(ref.get('kind')):<15} "
+                f"{str(ref.get('content_address'))}{account}"
+            )
+    for trace_id in row.get("trace_ids") or []:
+        print(f"  traceAI trace   {trace_id}")
+    print("\nsync")
+    print(f"  state   {_runs_sync_state(row, synced_map)}")
+    redaction = row.get("redaction")
+    if isinstance(redaction, Mapping) and redaction:
+        names = " · ".join(sorted(str(name) for name in redaction))
+        print(
+            "  content map present  →  redaction: "
+            f"redact_env_values + denylist  ({len(redaction)} env names)"
+        )
+        print("\nrequired_env (NAMES only — never values)")
+        print(f"  {names}")
+    print("\ncanonical row (the bytes run_id is computed over)")
+    print(json.dumps(
+        {
+            key: value
+            for key, value in row.items()
+            if key not in telemetry.NON_CANONICAL_FIELDS
+        },
+        indent=2,
+        sort_keys=True,
+        default=str,
+    ))
+    return 0
+
+
+def _runs_verify(ledger: Any) -> int:
+    verify = ledger.verify()
+    print(f"ledger    {verify['ledger']}")
+    print(f"rows      {verify['row_count']}")
+    print(
+        "genesis   sentinel OK  "
+        f"(chain_0 = H(\"{verify['genesis']}\" || run_id_0))"
+    )
+    print(
+        f"\ncontent addresses + chain links recomputed over "
+        f"{verify['row_count']} rows"
+    )
+    print(
+        f"tombstones         {verify['tombstone_count']} redaction rows"
+        + (
+            " · all reference resolvable prior addresses"
+            if not verify["unresolved_tombstones"]
+            else f" · UNRESOLVED: {verify['unresolved_tombstones']}"
+        )
+    )
+    if verify["gap_count"]:
+        print(
+            f"gap markers        {verify['gap_count']}  (telemetry queue "
+            f"overflow — {verify['gap_dropped_total']} dropped rows counted, "
+            "not hidden)"
+        )
+    if verify["chain_intact"]:
+        print("\nCHAIN OK — ledger is intact and append-only")
+        return 0
+    first = verify["breaks"][0]
+    print(
+        f"\nCHAIN BROKEN — first break at row {first['index']} "
+        f"({first['reason']})"
+    )
+    for item in verify["breaks"]:
+        print(f"  row {item['index']}: {item['reason']}")
+    return 1
+
+
+def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    from agent_learning.telemetry import _sync
+
+    if not parsed.queued and not parsed.run_id:
+        print(
+            "agent-learn runs sync: give a <run_id> (or --queued)",
+            file=sys.stderr,
+        )
+        return 1
+    if parsed.dry_run:
+        return _runs_sync_dry_run(telemetry, ledger, parsed, _sync)
+    if telemetry.kill_switch_on():
+        print(f"✗ sync disabled  {telemetry.TELEMETRY_ENV}=off")
+        print(
+            "  no rows were sent. unset the variable (or set it to anything "
+            'but "off") to re-enable.'
+        )
+        return 0
+    if not _sync.sync_enabled():
+        print("no Future AGI keys present — nothing was sent anywhere.")
+        print(
+            "  set AGENT_LEARNING_API_KEY / FUTURE_AGI_API_KEY / FI_API_KEY "
+            "to sync runs to your own account."
+        )
+        return 0
+    targets: List[Dict[str, Any]] = []
+    if parsed.queued:
+        synced_map = ledger.read_cursor()["synced"]
+        targets = [
+            row
+            for row in _runs_rows(telemetry, ledger)
+            if str(row.get("run_id")) not in synced_map
+        ]
+        if not targets:
+            print("nothing queued — every row is already synced (no-op).")
+            return 0
+    else:
+        row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id)
+        if row is None:
+            return code
+        targets = [row]
+    exit_code = 0
+    for row in targets:
+        result = _sync.sync_run(row, content=parsed.content, ledger=ledger)
+        run_id = str(row.get("run_id"))[:8]
+        if result["status"] == "synced":
+            print(
+                f"↑ synced to Future AGI  run {run_id}  "
+                f"({result['channel']})  via {result['endpoint']}"
+            )
+        elif result["status"] == "noop":
+            print(
+                f"= already synced  run {run_id}  ({result['channel']}) — "
+                "re-sync is a no-op (idempotent by content address)"
+            )
+        elif result["status"] == "refused":
+            print(f"✗ content sync REFUSED  run {run_id}")
+            print(f"  reason: {result['reason']}")
+            print(
+                "  content (transcripts/prompts/tool I/O) is NOT sent "
+                "without a redaction contract —"
+            )
+            print(
+                "  this is the same rule live_lane_boundary enforces on "
+                "captured fixtures."
+            )
+            print(
+                "\n  refusal exits 0 — your run and your metadata sync are "
+                "unaffected."
+            )
+        else:  # deferred
+            print(
+                f"↑ sync deferred  run {run_id}  (queued — "
+                f"{result.get('reason', 'collector unreachable')}; run "
+                "unaffected)"
+            )
+            print(
+                "  retry anytime:  agent-learn runs sync --queued     "
+                "(idempotent — re-sends are no-ops)"
+            )
+    return exit_code
+
+
+def _runs_sync_dry_run(
+    telemetry: Any, ledger: Any, parsed: Any, _sync: Any
+) -> int:
+    """The literal-JSON transparency surface (UI-UX §4). NEVER opens a
+    socket: pure string work over the stored row + env names."""
+
+    row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id or "")
+    if row is None:
+        return code
+    destination = _sync.sync_destination()
+    keys_present = (
+        destination["headers"]["X-Api-Key"] == "present"
+        and destination["headers"]["X-Secret-Key"] == "present"
+    )
+    if not keys_present:
+        print(
+            "DRY RUN — and there are no Future AGI keys, so a REAL sync "
+            "would also send nothing."
+        )
+        print(
+            "\nno destination: AGENT_LEARNING_API_KEY / FUTURE_AGI_API_KEY / "
+            "FI_API_KEY all unset."
+        )
+        print(
+            f"your runs live only in  {ledger.dir}  — fully yours, fully "
+            "offline."
+        )
+        print(
+            "\nthere is no anonymous channel: the kit has no usage/analytics "
+            "endpoint to fall back to."
+        )
+        print(
+            "(verified by the telemetry_boundary gate, which scans "
+            "src/agent_learning/ AND vendored fi/*.)"
+        )
+        return 0
+    print("DRY RUN — nothing is sent.  this is exactly what a real sync "
+          "would transmit:")
+    print("\ndestination")
+    print(f"  POST {destination['endpoint']}      (OTLP HTTP)")
+    print(
+        f"  headers: X-Api-Key=[{destination['headers']['X-Api-Key']}] · "
+        f"X-Secret-Key=[{destination['headers']['X-Secret-Key']}]   "
+        "(values never printed)"
+    )
+    if parsed.content and not _sync.content_sync_admissible(row):
+        print(
+            "\nchannel: metadata        (no capture contract on this run — "
+            "content would be REFUSED: capture_contract_missing)"
+        )
+    elif parsed.content:
+        print("\nchannel: metadata+content")
+    else:
+        print("\nchannel: metadata")
+    payload = _sync.encode_metadata_row(row)
+    print("\npayload (the canonical row — literal bytes, sort_keys=True):")
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    redaction = row.get("redaction")
+    names = sorted(str(name) for name in redaction) if isinstance(
+        redaction, Mapping
+    ) else []
+    blob = json.dumps(payload, sort_keys=True, default=str)
+    residue = sum(
+        1
+        for name in names
+        if os.environ.get(name) and os.environ[name] in blob
+    )
+    print(
+        f"\n{residue} residual sentinel bytes "
+        "(seeded-secret scan over the literal payload "
+        + ("passed)" if residue == 0 else "FAILED)")
+    )
+    print(
+        "nothing was sent.  to send for real:  "
+        f"agent-learn runs sync {str(row.get('run_id'))[:8]}"
+    )
+    return 0 if residue == 0 else 1
+
+
+def _runs_forget(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id)
+    if row is None:
+        return code
+    run_id = str(row.get("run_id"))
+    scope = "--run (whole row)" if parsed.whole_run else "--content"
+    if not parsed.yes:
+        print(f"about to redact run {run_id[:8]} ({scope}).")
+        print("  · a tombstone row will be APPENDED (the row itself is "
+              "never rewritten)")
+        print("  · the chain stays verifiable; the content disappears")
+        answer = input("proceed? [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            print("aborted — nothing was appended.")
+            return 0
+    redacted_fields = (
+        ["*"] if parsed.whole_run else ["asset_refs", "trace_ids"]
+    )
+    tomb = ledger.append_tombstone(
+        target_run_id=run_id,
+        reason="forget",
+        redacted_fields=redacted_fields,
+        evidence_class=str(row.get("evidence_class")),
+    )
+    verify = ledger.verify()
+    chained_total = verify["row_count"]
+    print(
+        f"✓ tombstone appended  run {run_id[:8]}  →  tombstone "
+        f"{str(tomb.get('run_id'))[:8]}  (chain row {chained_total - 1})"
+    )
+    print(f"  redacted_fields: {redacted_fields}")
+    synced_map = ledger.read_cursor()["synced"]
+    if synced_map.get(run_id) == "metadata+content":
+        print(
+            "  this run was content-synced — queue a content-forget with "
+            "your account admin (account-side erasure is owner-keyed)."
+        )
+    print(
+        "  chain stays verifiable: agent-learn runs verify  "
+        f"({'OK' if verify['chain_intact'] else 'BROKEN'})"
+    )
+    return 0
+
+
 def _tail_text(value: str, limit_bytes: int) -> str:
     if limit_bytes <= 0:
         return ""
@@ -4893,7 +5407,7 @@ def _help(error: Optional[str] = None) -> int:
             "replay, report, compare, baseline, promote-to-regression, shrink, "
             "optimize-eval, optimize-suite, suite, capabilities, actions, "
             "action-run, action-optimize, trust, redteam-corpus, release-proof, "
-            "eval-cli, init, persona, scenario"
+            "eval-cli, init, persona, scenario, runs"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

@@ -17077,6 +17077,17 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_persona_download_pin_fields"] == (
         trinity.V1_PERSONA_DOWNLOAD_PIN_FIELDS
     )
+    # ---- Phase 8: telemetry boundary payload mirrors ----
+    assert payload["telemetry_kill_switch_env"] == (
+        trinity.V1_TELEMETRY_KILL_SWITCH_ENV
+    )
+    assert payload["telemetry_scan_roots"] == trinity.V1_TELEMETRY_SCAN_ROOTS
+    assert payload["telemetry_forbidden_analytics_hosts"] == (
+        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+    )
+    assert payload["telemetry_evidence_classes"] == (
+        trinity.V1_TELEMETRY_EVIDENCE_CLASSES
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -18455,6 +18466,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "optimizer_profile_matrix_readiness",
         "capability_profile_freeze_readiness",
         "persona_scenario_studio_readiness",
+        "telemetry_boundary",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18838,6 +18850,41 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         persona_studio_evidence["calibration"]["drift_seed_failed_probe"] == "retest"
     )
     assert persona_studio_evidence["download"]["injection_quarantined"] is True
+    # ---- Phase 8: telemetry boundary gate (#72) ----
+    tele = checks["telemetry_boundary"]["evidence"]
+    assert tele["kind"] == "agent-learning.telemetry-boundary.v1"
+    # frozen-canon mirrors:
+    assert tele["row_fields"] == trinity.V1_TELEMETRY_ROW_FIELDS
+    assert tele["evidence_classes"] == trinity.V1_TELEMETRY_EVIDENCE_CLASSES
+    assert tele["kill_switch_env"] == trinity.V1_TELEMETRY_KILL_SWITCH_ENV
+    assert tele["ledger_paths"] == trinity.V1_TELEMETRY_LEDGER_PATHS
+    assert tele["genesis_sentinel"] == "agent-learning.ledger.genesis.v1"
+    assert tele["tombstone_fields"] == trinity.V1_TELEMETRY_TOMBSTONE_FIELDS
+    assert tele["analytics_denylist"] == {
+        "hosts": trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS,
+        "imports": trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS,
+    }
+    # scan mirrors:
+    assert tele["scan_roots"] == trinity.V1_TELEMETRY_SCAN_ROOTS
+    assert tele["forbidden_analytics_hosts"] == (
+        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+    )
+    assert tele["forbidden_analytics_imports"] == (
+        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS
+    )
+    assert tele["sync_module"] == trinity.V1_TELEMETRY_SYNC_MODULE
+    # observed:
+    assert tele["scanned_module_count"] > 0  # both trees were walked
+    assert tele["scanned_artifact_count"] > 0  # fixture ledger rows read
+    assert tele["telemetry_flags_set_in_release_env"] == []
+    # the seven error arrays:
+    assert tele["network_emission_errors"] == []
+    assert tele["analytics_denylist_errors"] == []
+    assert tele["evidence_class_errors"] == []
+    assert tele["redaction_errors"] == []
+    assert tele["chain_errors"] == []
+    assert tele["fault_injection_errors"] == []
+    assert tele["identity_errors"] == []
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -30216,3 +30263,147 @@ def test_release_live_lane_boundary_status_audits_evidence_and_redaction(
     ]
     assert clean_errors == []
     assert status["scanned_artifact_count"] == 4
+
+
+def test_release_telemetry_boundary_flags_planted_analytics_endpoint(tmp_path):
+    """A planted analytics endpoint MUST fail the gate (P8-D1 doctrine)."""
+
+    from agent_learning import trinity
+
+    al = tmp_path / "src" / "agent_learning"
+    al.mkdir(parents=True)
+    fi = tmp_path / "src" / "fi"
+    fi.mkdir(parents=True)
+    # the planted leak — a posthog endpoint smuggled into VENDORED fi/* (the
+    # VS Code "bind everything incl. fi/*" test):
+    (fi / "rogue_telemetry.py").write_text(
+        "URL = 'https://app.posthog.com/capture/'\nimport posthog\n",
+        encoding="utf-8",
+    )
+    tele = al / "telemetry"
+    tele.mkdir()
+    (tele / "_ledger.py").write_text("X = 1\n", encoding="utf-8")
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    hosts = {
+        error["host"]
+        for error in status["analytics_denylist_errors"]
+        if "host" in error
+    }
+    assert "app.posthog.com" in hosts
+    imports = {
+        error.get("import") for error in status["analytics_denylist_errors"]
+    }
+    assert "posthog" in imports
+    # proves the scan reached src/fi, not just src/agent_learning:
+    assert any(
+        error["path"].startswith("src/fi/")
+        for error in status["analytics_denylist_errors"]
+    )
+
+
+def test_release_telemetry_boundary_flags_network_import_in_no_key_path(
+    tmp_path,
+):
+    """A network-capable import in the no-key telemetry path MUST fail the
+    zero-emission check; the sanctioned sync module may import lazily."""
+
+    tele = tmp_path / "src" / "agent_learning" / "telemetry"
+    tele.mkdir(parents=True)
+    (tele / "_ledger.py").write_text(
+        "import urllib.request\nX = 1\n", encoding="utf-8"
+    )
+    (tele / "_sync.py").write_text(
+        "def sync_run():\n"
+        "    import requests\n"
+        "    return requests\n"
+        "def sync_enabled():\n"
+        "    return kill_switch_on()\n"
+        "def kill_switch_on():\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+
+    from agent_learning import trinity
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    flagged = {
+        (error["path"], error.get("import"))
+        for error in status["network_emission_errors"]
+    }
+    assert (
+        "src/agent_learning/telemetry/_ledger.py",
+        "urllib.request",
+    ) in flagged
+    # the lazy in-function import in the sanctioned sync module is legal:
+    assert not any(
+        path == "src/agent_learning/telemetry/_sync.py"
+        for path, _ in flagged
+    )
+
+
+def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
+    """A correctly-redacted ledger (sentinel value never on disk) passes
+    check 3; the seeded sentinel scan and marker scan find nothing."""
+
+    from agent_learning import trinity
+
+    fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
+    fixtures.mkdir(parents=True)
+    # row where the sentinel value was redacted to [redacted:SECRET_ENV]:
+    row = {
+        "schema": "agent-learning.ledger-row.v1",
+        "kind": "agent-learning.run.v1",
+        "evidence_class": "local_gate",
+        "phase": "simulate",
+        "run_id": "a" * 64,
+        "chain": "b" * 64,
+        "scores": {"note": "auth=[redacted:SECRET_ENV]"},
+    }
+    (fixtures / "runs.jsonl").write_text(
+        json.dumps(row) + "\n", encoding="utf-8"
+    )
+    (fixtures / "sentinel.json").write_text(
+        json.dumps(
+            {
+                "seeded_secret_env": "SECRET_ENV",
+                "seeded_secret_value": "sk-sentinel-do-not-leak",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    assert status["redaction_errors"] == []  # zero sentinel bytes, zero markers
+
+
+def test_release_telemetry_boundary_tampered_chain_breaks(tmp_path):
+    """A rewritten row body MUST break the gate (chain integrity, check 4)."""
+
+    from agent_learning import trinity
+
+    fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
+    fixtures.mkdir(parents=True)
+    # a row whose run_id no longer matches its (tampered) body:
+    tampered = {
+        "schema": "agent-learning.ledger-row.v1",
+        "kind": "agent-learning.run.v1",
+        "evidence_class": "local_gate",
+        "phase": "simulate",
+        "scores": {"tampered": "AFTER-THE-FACT"},
+        "run_id": "0" * 64,
+        "chain": "0" * 64,
+    }
+    (fixtures / "runs.jsonl").write_text(
+        json.dumps(tampered) + "\n", encoding="utf-8"
+    )
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    reasons = {item["reason"] for item in status["chain_errors"]}
+    assert (
+        "content_address_mismatch" in reasons or "chain_mismatch" in reasons
+    )

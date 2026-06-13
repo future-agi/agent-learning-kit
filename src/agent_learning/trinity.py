@@ -4,6 +4,7 @@ import ast
 import asyncio
 import copy
 import fnmatch
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -295,6 +296,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/framework_certification_optimization.json": "framework_optimizer_readiness",
     "examples/framework_import_repair_optimization.json": "framework_optimizer_readiness",
     "examples/multi_agent_framework_handoff_optimization.json": "framework_optimizer_readiness",
+    "examples/sdk_account_sync.py": "telemetry_boundary",
     "examples/sdk_agent_control_plane_optimization.py": "agent_control_plane_readiness",
     "examples/sdk_agent_control_plane_simulation.py": "agent_control_plane_readiness",
     "examples/sdk_agent_integration_optimization.py": "agent_integration_readiness",
@@ -359,6 +361,7 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_redteam_society_optimization.py": "redteam_society_causal_readiness",
     "examples/sdk_regression_artifact_suite.py": "regression_artifact_readiness",
     "examples/sdk_retrieval_hook_optimization.py": "retrieval_hook_readiness",
+    "examples/sdk_run_ledger.py": "telemetry_boundary",
     "examples/sdk_target_optimization.py": "generic_target_optimizer_readiness",
     "examples/sdk_task_evaluation.py": "task_artifact_evaluation_readiness",
     "examples/sdk_task_evaluation_synthesis.py": "task_evaluation_synthesis_readiness",
@@ -407,6 +410,9 @@ V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
     # admitted-library index; V1_REQUIRED_SCHEMA_KINDS stays frozen.
     "agent-learning.persona-calibration.v1",
     "agent-learning.persona-library.v1",
+    # Phase 8 (ARCH §3 canon): the ledger-row schema tag the prove pages
+    # document; V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    "agent-learning.ledger-row.v1",
 ]
 
 # Claims-lint vocabulary and license table: trigger pattern -> the only gate id
@@ -724,6 +730,78 @@ V1_PERSONA_DOWNLOAD_PIN_FIELDS = [
     "source", "source_id", "source_updated_at", "downloaded_at",
     "checksum_sha256", "content_scan",
 ]
+
+# ---- Phase 8: account-integrated telemetry (gate #72, telemetry_boundary) ----
+# --- kill switch + row vocabulary (ARCH §3 canon) ---------------------------
+V1_TELEMETRY_KILL_SWITCH_ENV = "AGENT_LEARNING_TELEMETRY"  # "off" binds all (P8-D6)
+V1_TELEMETRY_KILL_SWITCH_OFF_VALUE = "off"
+V1_TELEMETRY_ROW_SCHEMA = "agent-learning.ledger-row.v1"
+V1_TELEMETRY_TOMBSTONE_SCHEMA = "agent-learning.ledger-tombstone.v1"
+V1_TELEMETRY_GAP_SCHEMA = "agent-learning.ledger-gap.v1"
+V1_TELEMETRY_UNREADABLE_SCHEMA = "agent-learning.ledger-unreadable-line.v1"
+V1_TELEMETRY_GENESIS_SENTINEL = "agent-learning.ledger.genesis.v1"
+V1_TELEMETRY_RUN_KIND = "agent-learning.run.v1"  # == live/_contract.py:15
+V1_TELEMETRY_ROW_FIELDS = [  # ARCH §2a, full set (MF3)
+    "schema", "kind", "phase", "evidence_class", "verdict", "scores",
+    "gate_outcomes", "semconv_version", "manifest_address", "asset_refs",
+    "trace_ids", "content_bearing", "redaction", "created_at", "run_id",
+    "chain",
+]
+V1_TELEMETRY_TOMBSTONE_FIELDS = [  # ARCH §2b
+    "schema", "kind", "tombstones", "reason", "redacted_fields",
+    "evidence_class", "created_at", "run_id", "chain",
+]
+V1_TELEMETRY_EVIDENCE_CLASSES = list(V1_LIVE_EVIDENCE_CLASSES)  # reuse live vocab
+V1_TELEMETRY_CONTENT_BEARING_REQUIRES = ["redaction"]  # row-level contract field
+
+# --- modules in the no-key telemetry path (scanned for network emission) ---
+V1_TELEMETRY_LOCAL_PATH_MODULES = [
+    "src/agent_learning/telemetry/__init__.py",
+    "src/agent_learning/telemetry/_contract.py",
+    "src/agent_learning/telemetry/_row.py",
+    "src/agent_learning/telemetry/_ledger.py",
+    "src/agent_learning/telemetry/_queue.py",
+    "src/agent_learning/_schema.py",  # hosts the emission hook
+]
+V1_TELEMETRY_SYNC_MODULE = (
+    "src/agent_learning/telemetry/_sync.py"  # the ONLY sanctioned network home
+)
+
+# --- ledger disk layout (ARCH §2a) ------------------------------------------
+V1_TELEMETRY_LEDGER_HOME_ENV = "AGENT_LEARNING_HOME"
+V1_TELEMETRY_LEDGER_PATH_ENV = "AGENT_LEARNING_LEDGER_PATH"  # overrides the DIRECTORY
+V1_TELEMETRY_LEDGER_PATHS = [
+    "ledger/runs.jsonl", "ledger/chain.head", "ledger/sync.cursor",
+]
+
+# --- scan scope: BOTH trees (the VS Code "bind everything incl. fi/*" lesson) ---
+V1_TELEMETRY_SCAN_ROOTS = ["src/agent_learning", "src/fi"]
+
+# --- forbidden analytics-endpoint denylist (anywhere in kit source) --------
+# P8-D1: no anonymous analytics channel exists. Any hostname/SDK below ANYWHERE
+# in src/* fails the release. This is the structural proof the third channel
+# is absent. Never remove a host from this list to make a build pass; if a
+# host is genuinely needed it is, by definition, the wrong build.
+V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS = [
+    "posthog.com", "i.posthog.com", "app.posthog.com",
+    "api.segment.io", "segment.com", "cdn.segment.com",
+    "google-analytics.com", "analytics.google.com", "www.googletagmanager.com",
+    "api.mixpanel.com", "mixpanel.com",
+    "api.amplitude.com", "amplitude.com",
+    "api2.amplitude.com",
+]
+V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS = [
+    "posthog", "segment", "analytics", "mixpanel", "amplitude",
+]
+
+# --- network-capable call markers (the import scan keys off these) ---------
+V1_TELEMETRY_NETWORK_IMPORT_ROOTS = [
+    "requests", "httpx", "urllib", "http", "socket", "aiohttp", "websockets",
+    "grpc", "fi_instrumentation",
+]
+
+# --- the gate's own committed fixtures (ARCH §5) ----------------------------
+V1_TELEMETRY_GATE_FIXTURE_DIR = "examples/telemetry_ledger_fixture"
 
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
     "README.md",
@@ -6885,6 +6963,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M2",   # sim/eval evidence family (ARCH §3; verified M2 members)
         evidence=persona_scenario_studio,
     )
+    telemetry_boundary = _release_telemetry_boundary_status(root)
+    _append_release_check(
+        checks,
+        check_id="telemetry_boundary",
+        passed=(
+            not telemetry_boundary["network_emission_errors"]
+            and not telemetry_boundary["analytics_denylist_errors"]
+            and not telemetry_boundary["evidence_class_errors"]
+            and not telemetry_boundary["redaction_errors"]
+            and not telemetry_boundary["chain_errors"]
+            and not telemetry_boundary["fault_injection_errors"]
+            and not telemetry_boundary["identity_errors"]
+            and not telemetry_boundary["telemetry_flags_set_in_release_env"]
+        ),
+        milestone="M6",  # boundary family — same as live_lane_boundary /
+        # openenv_compatibility_boundary (persona's M2 is its own; Phase 8
+        # does NOT share it — REVIEW-RULINGS MF10)
+        evidence=telemetry_boundary,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -7022,6 +7119,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_persona_bias_lint_checks": list(V1_PERSONA_BIAS_LINT_CHECKS),
         "required_persona_vendor_import_formats": list(V1_PERSONA_VENDOR_IMPORT_FORMATS),
         "required_persona_download_pin_fields": list(V1_PERSONA_DOWNLOAD_PIN_FIELDS),
+        "telemetry_kill_switch_env": V1_TELEMETRY_KILL_SWITCH_ENV,
+        "telemetry_scan_roots": list(V1_TELEMETRY_SCAN_ROOTS),
+        "telemetry_forbidden_analytics_hosts": list(
+            V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+        ),
+        "telemetry_evidence_classes": list(V1_TELEMETRY_EVIDENCE_CLASSES),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -9593,6 +9696,396 @@ def _release_live_lane_boundary_status(root: Path) -> dict[str, Any]:
         "evidence_class_errors": evidence_class_errors,
         "env_flag_errors": env_flag_errors,
         "redaction_errors": redaction_errors,
+    }
+
+
+def _read_telemetry_ledger_rows(path: Path) -> list[dict[str, Any]]:
+    """Tolerant fixture-ledger reader, inlined so the gate has NO import
+    dependency on the telemetry package (it must run even if
+    ``telemetry/_ledger.py`` is broken — the same independence
+    ``live_lane_boundary`` keeps from the lane modules)."""
+
+    rows: list[dict[str, Any]] = []
+    if not path.is_file():
+        return rows
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return rows
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            loaded = json.loads(line)
+        except ValueError:
+            rows.append(
+                {
+                    "schema": V1_TELEMETRY_UNREADABLE_SCHEMA,
+                    "line_number": line_number,
+                }
+            )
+            continue
+        rows.append(
+            loaded
+            if isinstance(loaded, dict)
+            else {
+                "schema": V1_TELEMETRY_UNREADABLE_SCHEMA,
+                "line_number": line_number,
+            }
+        )
+    return rows
+
+
+def _telemetry_row_address(row: Mapping[str, Any]) -> str:
+    """Recompute a row's content address with the canonical recipe
+    (``sort_keys=True``, ``separators=(",", ":")``, ``default=str``) over the
+    addressed core — ``created_at``/``run_id``/``chain`` excluded, and ONLY
+    those three (ARCH §2a)."""
+
+    preimage = {
+        key: value
+        for key, value in row.items()
+        if key not in ("created_at", "run_id", "chain")
+    }
+    data = json.dumps(
+        preimage, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _recompute_telemetry_chain_breaks(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One linear pass from the genesis sentinel: recompute every content
+    address (tamper on the body) AND every chain link (tamper on
+    order/insertion). Either mismatch is a break (gate #72 check 4)."""
+
+    prev = V1_TELEMETRY_GENESIS_SENTINEL
+    breaks: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if row.get("schema") == V1_TELEMETRY_UNREADABLE_SCHEMA:
+            breaks.append(
+                {
+                    "index": index,
+                    "reason": "unreadable_line",
+                    "line_number": row.get("line_number"),
+                }
+            )
+            continue
+        recomputed = _telemetry_row_address(row)
+        if row.get("run_id") != recomputed:
+            breaks.append(
+                {
+                    "index": index,
+                    "reason": "content_address_mismatch",
+                    "run_id": row.get("run_id"),
+                    "recomputed": recomputed,
+                }
+            )
+        expected = hashlib.sha256(
+            (prev + str(row.get("run_id") or "")).encode("utf-8")
+        ).hexdigest()
+        if row.get("chain") != expected:
+            breaks.append(
+                {
+                    "index": index,
+                    "reason": "chain_mismatch",
+                    "chain": row.get("chain"),
+                    "expected": expected,
+                }
+            )
+        prev = row.get("chain") or prev
+    return breaks
+
+
+def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
+    """Gate #72 (Phase 8): the architectural twin of ``live_lane_boundary``.
+
+    Six checks mapped to SEVEN error arrays (REVIEW-RULINGS MF6); static +
+    committed-fixture recompute only — the gate never opens a socket. The
+    dynamic twins (a real run redacts a real sentinel; a real ledger failure
+    leaves a real verdict unchanged) live in the focused tests and
+    ``examples/sdk_run_ledger.py``; the gate verifies the residue and the
+    recomputation. Same gate-vs-substrate division the live gate documents.
+    """
+
+    network_emission_errors: list[dict[str, Any]] = []
+    analytics_denylist_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    redaction_errors: list[dict[str, Any]] = []
+    chain_errors: list[dict[str, Any]] = []
+    fault_injection_errors: list[dict[str, Any]] = []
+    identity_errors: list[dict[str, Any]] = []
+    scanned_module_count = 0
+    sync_module = V1_TELEMETRY_SYNC_MODULE
+    telemetry_prefix = "src/agent_learning/telemetry/"
+    local_path_modules = set(V1_TELEMETRY_LOCAL_PATH_MODULES)
+    # The gate module itself declares the denylist (these literal hostnames)
+    # so the substring scan skips it; the AST import scan still covers it.
+    denylist_home = "src/agent_learning/trinity.py"
+
+    # ---- CHECK 1: zero-emission (no-key path) + analytics denylist, BOTH
+    # trees (src/agent_learning AND src/fi — the P8-D6 "bind everything"
+    # scope). Network-capable imports are forbidden anywhere in the declared
+    # no-key telemetry path (V1_TELEMETRY_LOCAL_PATH_MODULES + the telemetry
+    # package); telemetry/_sync.py is the only sanctioned network home, and
+    # even there the import must be lazy (in-function), never module scope.
+    for base in V1_TELEMETRY_SCAN_ROOTS:
+        base_dir = root / base
+        if not base_dir.is_dir():
+            continue
+        for path in sorted(base_dir.rglob("*.py")):
+            relative = str(path.relative_to(root)).replace(os.sep, "/")
+            scanned_module_count += 1
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                network_emission_errors.append(
+                    {"path": relative, "error": f"unreadable: {exc}"}
+                )
+                continue
+            lowered = text.lower()
+            # 1a. denylist: any analytics host ANYWHERE in kit source fails:
+            if relative != denylist_home:
+                for host in V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS:
+                    if host in lowered:
+                        analytics_denylist_errors.append(
+                            {"path": relative, "host": host}
+                        )
+            try:
+                tree = ast.parse(text)
+            except SyntaxError as exc:
+                network_emission_errors.append(
+                    {"path": relative, "error": f"unparseable: {exc}"}
+                )
+                continue
+            lazy_node_ids = {
+                id(node)
+                for fn in ast.walk(tree)
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                for node in ast.walk(fn)
+            }
+            in_no_key_path = (
+                relative in local_path_modules
+                or (
+                    relative.startswith(telemetry_prefix)
+                    and relative != sync_module
+                )
+            )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots = [alias.name.split(".")[0] for alias in node.names]
+                    dotted = [alias.name for alias in node.names]
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.level == 0
+                ):
+                    roots = [node.module.split(".")[0]]
+                    dotted = [node.module]
+                else:
+                    continue
+                for root_name, full_name in zip(roots, dotted):
+                    # 1b. denylist: analytics SDK import anywhere fails:
+                    if root_name in V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS:
+                        analytics_denylist_errors.append(
+                            {
+                                "path": relative,
+                                "import": root_name,
+                                "line": node.lineno,
+                            }
+                        )
+                    if root_name not in V1_TELEMETRY_NETWORK_IMPORT_ROOTS:
+                        continue
+                    # 1c. zero-emission: the no-key path carries NOTHING
+                    # network-capable, at any scope; the sync module may
+                    # import network roots lazily (in-function) only.
+                    if in_no_key_path:
+                        network_emission_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": (
+                                    "network import only in telemetry/"
+                                    "_sync.py (lazy), unreachable with "
+                                    "no keys"
+                                ),
+                                "observed": (
+                                    "network-capable import in the "
+                                    "no-key path"
+                                ),
+                            }
+                        )
+                    elif (
+                        relative == sync_module
+                        and id(node) not in lazy_node_ids
+                    ):
+                        network_emission_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": (
+                                    "lazy in-function network import "
+                                    "(after the kill-switch + key gates)"
+                                ),
+                                "observed": (
+                                    "module-scope network import in the "
+                                    "sync module"
+                                ),
+                            }
+                        )
+            # 1d. kill-switch guard discipline (the require_lane_enabled
+            # analogue): every emission front door routes through the one
+            # guard that honors AGENT_LEARNING_TELEMETRY=off.
+            if relative in (
+                "src/agent_learning/telemetry/__init__.py",
+                sync_module,
+            ):
+                calls = {
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else getattr(node.func, "id", "")
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                }
+                if not calls & {"kill_switch_on", "_kill_switch_on"}:
+                    network_emission_errors.append(
+                        {
+                            "path": relative,
+                            "expected": "kill_switch_on(...) guard call",
+                            "observed": "absent",
+                        }
+                    )
+
+    # ---- CHECK 2: evidence-class discipline on the gate's fixture ledger ----
+    fixture_dir = root / V1_TELEMETRY_GATE_FIXTURE_DIR
+    rows = _read_telemetry_ledger_rows(fixture_dir / "runs.jsonl")
+    for index, row in enumerate(rows):
+        if row.get("schema") in (
+            V1_TELEMETRY_TOMBSTONE_SCHEMA,
+            V1_TELEMETRY_GAP_SCHEMA,
+            V1_TELEMETRY_UNREADABLE_SCHEMA,
+        ):
+            continue  # tombstones/gaps have their own field sets
+        for field in V1_TELEMETRY_ROW_FIELDS:
+            if field not in row:
+                evidence_class_errors.append(
+                    {"index": index, "field": field, "observed": "missing"}
+                )
+        if row.get("evidence_class") not in V1_TELEMETRY_EVIDENCE_CLASSES:
+            evidence_class_errors.append(
+                {
+                    "index": index,
+                    "field": "evidence_class",
+                    "observed": row.get("evidence_class"),
+                }
+            )
+        if row.get("content_bearing") is True:
+            if not _as_mapping(row.get("redaction")):
+                evidence_class_errors.append(
+                    {
+                        "index": index,
+                        "field": "redaction",
+                        "observed": (
+                            "content_bearing without a redaction mapping"
+                        ),
+                    }
+                )
+
+    # ---- CHECK 3: redaction proof — seeded sentinel must not appear ----
+    for index, row in enumerate(rows):
+        redaction_errors.extend(
+            _release_secret_marker_findings(
+                f"{V1_TELEMETRY_GATE_FIXTURE_DIR}#row{index}",
+                {"ledger_row": row},
+            )
+        )
+    sentinel = _read_json_file(fixture_dir / "sentinel.json")
+    sentinel_value = (sentinel or {}).get("seeded_secret_value")
+    if sentinel_value:
+        blob = json.dumps(rows, default=str)
+        if str(sentinel_value) in blob:
+            redaction_errors.append(
+                {
+                    "reason": "seeded secret value present in ledger",
+                    "sentinel_env": (sentinel or {}).get("seeded_secret_env"),
+                }
+            )
+
+    # ---- CHECK 4: chain integrity — recompute over the fixture ledger ----
+    chain_errors.extend(_recompute_telemetry_chain_breaks(rows))
+
+    # ---- CHECK 5: never-run-blocking — fault-injection fixture ----
+    # The prep example records, in faults.json, a run verdict computed (a)
+    # normally and (b) with the ledger write forced to fail. Equal or red.
+    faults = _read_json_file(fixture_dir / "faults.json") or {}
+    if faults.get("verdict_without_telemetry") != faults.get(
+        "verdict_with_failing_ledger"
+    ):
+        fault_injection_errors.append(
+            {
+                "reason": "verdict differs when telemetry I/O fails",
+                "clean": faults.get("verdict_without_telemetry"),
+                "faulted": faults.get("verdict_with_failing_ledger"),
+            }
+        )
+
+    # ---- CHECK 6: identity equivalence — local == sync-encoder address ----
+    identity = _read_json_file(fixture_dir / "identity.json") or {}
+    if identity.get("local_run_id") != identity.get("encoded_run_id"):
+        identity_errors.append(
+            {
+                "reason": "content address differs local vs sync encoder",
+                "local": identity.get("local_run_id"),
+                "encoded": identity.get("encoded_run_id"),
+            }
+        )
+
+    # ---- runtime half: no telemetry flag may be set in the release process
+    # (the lane_flags_set_in_release_env analogue; ARCH §2e — must be []).
+    telemetry_flags_set_in_release_env = [
+        name
+        for name in (V1_TELEMETRY_KILL_SWITCH_ENV,)
+        if os.environ.get(name, "").strip()
+    ]
+
+    return {
+        "kind": "agent-learning.telemetry-boundary.v1",
+        # constant mirrors — the UNION set (ARCH §3, MF6): frozen canon +
+        # scan mirrors; the milestone test asserts the full union.
+        "row_fields": list(V1_TELEMETRY_ROW_FIELDS),
+        "evidence_classes": list(V1_TELEMETRY_EVIDENCE_CLASSES),
+        "kill_switch_env": V1_TELEMETRY_KILL_SWITCH_ENV,
+        "ledger_paths": list(V1_TELEMETRY_LEDGER_PATHS),
+        "genesis_sentinel": V1_TELEMETRY_GENESIS_SENTINEL,
+        "tombstone_fields": list(V1_TELEMETRY_TOMBSTONE_FIELDS),
+        "analytics_denylist": {
+            "hosts": list(V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS),
+            "imports": list(V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS),
+        },
+        "scan_roots": list(V1_TELEMETRY_SCAN_ROOTS),
+        "forbidden_analytics_hosts": list(
+            V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+        ),
+        "forbidden_analytics_imports": list(
+            V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS
+        ),
+        "sync_module": V1_TELEMETRY_SYNC_MODULE,
+        # observed:
+        "scanned_module_count": scanned_module_count,
+        "scanned_artifact_count": len(rows),
+        "telemetry_flags_set_in_release_env": telemetry_flags_set_in_release_env,
+        # the seven error arrays:
+        "network_emission_errors": network_emission_errors,
+        "analytics_denylist_errors": analytics_denylist_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "redaction_errors": redaction_errors,
+        "chain_errors": chain_errors,
+        "fault_injection_errors": fault_injection_errors,
+        "identity_errors": identity_errors,
     }
 
 
