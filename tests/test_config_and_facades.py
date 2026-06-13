@@ -18480,6 +18480,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "multi_agent_room_probe_readiness",
         "framework_adapter_probe_readiness",
         "framework_adapter_io_readiness",
+        "framework_adapter_preset_certification_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "browser_cua_probe_readiness",
@@ -19016,6 +19017,13 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert practice_loop["claims_errors"] == []
     # the claims-lint row is registered.
     assert trinity.V1_DOCS_CLAIM_PHRASE_GATES[r"\btrain(?:ing|er|ed|s)?\b"] == "practice_loop_readiness"
+    # Phase 11B-A6: certification-wording claims-lint row.
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:certified[- ]preset|preset[- ]certification|first[- ]class[- ]adapter)\b"
+        ]
+        == "framework_adapter_preset_certification_readiness"
+    )
     # ---- Phase 9A: voice loopback readiness gate (M4) ----
     voice_loopback = checks["voice_loopback_readiness"]["evidence"]
     assert voice_loopback["kind"] == "agent-learning.voice-loopback-readiness.v1"
@@ -25650,6 +25658,78 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert handoff_transcript["state_observations"][
         "framework_handoffs.reconciliations.0.accepted_source"
     ] == "retrieval_agent"
+
+    # Phase 11B — framework-adapter preset certification gate.
+    preset_cert_check = checks["framework_adapter_preset_certification_readiness"]
+    assert preset_cert_check["milestone"] == "M6"
+    assert preset_cert_check["status"] == "passed"
+    preset_cert = preset_cert_check["evidence"]
+    assert preset_cert["kind"] == (
+        "agent-learning.framework-adapter-preset-certification-readiness.v1"
+    )
+    assert preset_cert["required_files"] == (
+        trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
+    )
+    assert preset_cert["framework_preset_certification_frameworks"] == list(
+        trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
+    )
+    assert preset_cert["framework_preset_vector_db_names"] == list(
+        trinity.V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
+    )
+    assert preset_cert["framework_preset_live_validation_status"] == list(
+        trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+    )
+    assert preset_cert["framework_preset_live_validation_lane"] == [
+        dict(row) for row in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
+    ]
+    assert preset_cert["framework_preset_corrections"] == []
+    assert preset_cert["certified_framework_count"] == 19
+    assert preset_cert["live_lane_register_count"] == 12
+    for array in (
+        "missing_files",
+        "preset_registration_errors",
+        "input_mode_errors",
+        "probe_determinism_errors",
+        "io_contract_binding_errors",
+        "cookbook_coverage_errors",
+        "live_lane_register_errors",
+    ):
+        assert preset_cert[array] == [], (array, preset_cert[array])
+    # ◐ live lane is well-formed; every row pending; ollama excluded (11B-A9).
+    lane = {row["framework"]: row for row in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE}
+    assert "ollama" not in lane
+    for keyed in (
+        "bedrock",
+        "cerebras",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "litellm",
+        "portkey",
+        "together",
+        "xai",
+        "instructor",
+        "huggingface",
+        "strands",
+    ):
+        assert lane[keyed]["env_var"]
+        assert lane[keyed]["recipe"]
+        assert lane[keyed]["status"] in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+    # Vector-DB exclusion (the category guard, §2.7).
+    from fi.simulate.agent.frameworks import FRAMEWORK_PRESETS
+
+    assert not (
+        set(trinity.V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES) & set(FRAMEWORK_PRESETS)
+    )
+    # input_mode validity (NOT discovery-equality) — the §6 amendment.
+    from typing import get_args
+
+    from fi.simulate.agent.generic import InputMode
+
+    valid_input_modes = set(get_args(InputMode))
+    for framework in trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS:
+        assert FRAMEWORK_PRESETS[framework].input_mode in valid_input_modes
+
     protocol_adapter = checks["protocol_adapter_readiness"]["evidence"]
     assert protocol_adapter["required_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES

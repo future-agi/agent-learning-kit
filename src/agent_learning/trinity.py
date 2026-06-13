@@ -292,6 +292,12 @@ V1_DOCS_REQUIRED_PAGES = [
 # Populated from the spec_from_file_location sites in this module; the
 # milestone test pins every value into the closed check-id set.
 V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
+    # Phase 11B (§7.3 / Appendix A2): the 5 profile pages are admitted via their
+    # OWN backing IO-contract example, which is ALREADY mapped below — streaming
+    # / typed_output / nested_method examples -> framework_adapter_io_readiness;
+    # message_history / handoff_transcript examples ->
+    # framework_adapter_probe_readiness. No page-key entry is needed (the docs
+    # gate resolves coverage by the page's backing path, not the page path).
     "examples/custom_framework_optimization.json": "framework_optimizer_readiness",
     "examples/framework_certification_optimization.json": "framework_optimizer_readiness",
     "examples/framework_import_repair_optimization.json": "framework_optimizer_readiness",
@@ -311,6 +317,25 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_framework_adapter_auto_discovery_optimization.py": "framework_adapter_probe_readiness",
     "examples/sdk_framework_adapter_auto_discovery_promotion.py": "framework_adapter_probe_readiness",
     "examples/sdk_framework_adapter_browser_cua_trace.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_cert_a2a.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_agno.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_bedrock.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_beeai.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_cerebras.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_claude_agent_sdk.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_cohere.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_deepseek.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_fireworks.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_google_adk.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_huggingface.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_instructor.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_litellm.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_ollama.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_portkey.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_smolagents.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_strands.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_together.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_xai.py": "framework_adapter_preset_certification_readiness",
     "examples/sdk_framework_adapter_discovery.py": "framework_adapter_probe_readiness",
     "examples/sdk_framework_adapter_handoff_transcript.py": "framework_adapter_probe_readiness",
     "examples/sdk_framework_adapter_http_transport.py": "framework_http_transport_readiness",
@@ -446,6 +471,12 @@ V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
     # uses it (BBG §6.5: "must not collide with existing licensed/unlicensed
     # phrases — verify against the dict at build time").
     r"\b(?:codec[- ]survival|audio[- ]loopback)\b": "voice_loopback_readiness",
+    # Phase 11B-A6: new certification/coverage wording licensed only while
+    # framework_adapter_preset_certification_readiness is green. Scoped to the
+    # genuinely-NEW 11B phrases (verified collision-free against existing docs).
+    r"\b(?:certified[- ]preset|preset[- ]certification|first[- ]class[- ]adapter)\b": (
+        "framework_adapter_preset_certification_readiness"
+    ),
     r"\bworld[- ]best\b": None,
     r"\bbest[- ]in[- ]class\b": None,
     r"\b\d+(?:\.\d+)?x\s+(?:faster|better|more\s+robust)\b": None,
@@ -5340,6 +5371,411 @@ V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS = [
     "export_framework_adapter_probe_replay_lock",
 ]
 
+# Phase 11B: framework-adapter preset certification (closed sets, gate-pinned).
+# Certification of already-shipped FRAMEWORK_PRESETS rows — the 19 agent/model
+# clients carry the six-artifact set (ARCH 11B-A1); the 9 vector DBs are EXCLUDED
+# (they bind to RetrievalHookEnvironment, never FRAMEWORK_PRESETS, §2.7).
+V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS = (
+    # agentic (7)
+    "a2a",
+    "agno",
+    "beeai",
+    "claude_agent_sdk",
+    "google_adk",
+    "instructor",
+    "smolagents",
+    # model clients (12)
+    "bedrock",
+    "cerebras",
+    "cohere",
+    "deepseek",
+    "fireworks",
+    "huggingface",
+    "litellm",
+    "ollama",
+    "portkey",
+    "strands",
+    "together",
+    "xai",
+)
+
+# Asserted ABSENT from FRAMEWORK_PRESETS by the certification gate (category
+# guard, §2.7): a vector DB has no turn/policy/tool-selection decision, so it is
+# never an agent preset. Its home is the retrieval_hook_readiness gate.
+V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES = (
+    "chromadb",
+    "lancedb",
+    "milvus",
+    "mongodb-vector",
+    "pgvector",
+    "pinecone",
+    "qdrant",
+    "redis-vector",
+    "weaviate",
+)
+
+# ◐ renders live_validation_pending; ✅ renders live_validated. The ◐ lane NEVER
+# gates — the gate asserts the register is well-formed, never reads its status.
+V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS = (
+    "live_validation_pending",
+    "live_validated",
+)
+
+# 10 hard-keyed + 2 conditional; ollama is NOT here (11B-A9, a local daemon is
+# not a credential). The env_var names are build-time-recheckable data (BBG A4) —
+# the gate never reads a key; the live run is owner-keyed, opt-in, never a gate
+# prerequisite (11B-A3).
+V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE = (
+    {
+        "framework": "bedrock",
+        "status": "live_validation_pending",
+        "env_var": "AWS_BEARER_TOKEN_BEDROCK",
+        "recipe": "agent-learn probe bedrock --live",
+    },
+    {
+        "framework": "cerebras",
+        "status": "live_validation_pending",
+        "env_var": "CEREBRAS_API_KEY",
+        "recipe": "agent-learn probe cerebras --live",
+    },
+    {
+        "framework": "cohere",
+        "status": "live_validation_pending",
+        "env_var": "COHERE_API_KEY",
+        "recipe": "agent-learn probe cohere --live",
+    },
+    {
+        "framework": "deepseek",
+        "status": "live_validation_pending",
+        "env_var": "DEEPSEEK_API_KEY",
+        "recipe": "agent-learn probe deepseek --live",
+    },
+    {
+        "framework": "fireworks",
+        "status": "live_validation_pending",
+        "env_var": "FIREWORKS_API_KEY",
+        "recipe": "agent-learn probe fireworks --live",
+    },
+    {
+        "framework": "litellm",
+        "status": "live_validation_pending",
+        "env_var": "OPENAI_API_KEY",
+        "recipe": "agent-learn probe litellm --live",
+    },
+    {
+        "framework": "portkey",
+        "status": "live_validation_pending",
+        "env_var": "PORTKEY_API_KEY",
+        "recipe": "agent-learn probe portkey --live",
+    },
+    {
+        "framework": "together",
+        "status": "live_validation_pending",
+        "env_var": "TOGETHER_API_KEY",
+        "recipe": "agent-learn probe together --live",
+    },
+    {
+        "framework": "xai",
+        "status": "live_validation_pending",
+        "env_var": "XAI_API_KEY",
+        "recipe": "agent-learn probe xai --live",
+    },
+    {
+        "framework": "instructor",
+        "status": "live_validation_pending",
+        "env_var": "OPENAI_API_KEY",
+        "recipe": "agent-learn probe instructor --live",
+    },
+    # conditional (hosted inference)
+    {
+        "framework": "huggingface",
+        "status": "live_validation_pending",
+        "env_var": "HF_TOKEN",
+        "recipe": "agent-learn probe huggingface --live",
+    },
+    # conditional (model-backed)
+    {
+        "framework": "strands",
+        "status": "live_validation_pending",
+        "env_var": "AWS_BEARER_TOKEN_BEDROCK",
+        "recipe": "agent-learn probe strands --live",
+    },
+)
+
+# EMPTY today (11B-A8: the audit found NO drift; every preset's method/input_mode
+# matches its framework's current SDK). Rows
+# {framework, old, new, reason, sdk_version} are added ONLY if a probe proves a
+# default wrong — the only circumstance a shipped default changes.
+V1_FRAMEWORK_PRESET_CORRECTIONS: tuple[dict[str, str], ...] = ()
+
+# The certified frameworks' probe shims + consolidated promotions + cookbook
+# pages (the gate's missing_files check). a2a.md already exists (EDITED, 11B-A11).
+V1_FRAMEWORK_PRESET_CERTIFICATION_FILES = [
+    # probe shims (one per framework)
+    "examples/sdk_framework_adapter_cert_a2a.py",
+    "examples/sdk_framework_adapter_cert_agno.py",
+    "examples/sdk_framework_adapter_cert_beeai.py",
+    "examples/sdk_framework_adapter_cert_claude_agent_sdk.py",
+    "examples/sdk_framework_adapter_cert_google_adk.py",
+    "examples/sdk_framework_adapter_cert_instructor.py",
+    "examples/sdk_framework_adapter_cert_smolagents.py",
+    "examples/sdk_framework_adapter_cert_bedrock.py",
+    "examples/sdk_framework_adapter_cert_cerebras.py",
+    "examples/sdk_framework_adapter_cert_cohere.py",
+    "examples/sdk_framework_adapter_cert_deepseek.py",
+    "examples/sdk_framework_adapter_cert_fireworks.py",
+    "examples/sdk_framework_adapter_cert_huggingface.py",
+    "examples/sdk_framework_adapter_cert_litellm.py",
+    "examples/sdk_framework_adapter_cert_ollama.py",
+    "examples/sdk_framework_adapter_cert_portkey.py",
+    "examples/sdk_framework_adapter_cert_strands.py",
+    "examples/sdk_framework_adapter_cert_together.py",
+    "examples/sdk_framework_adapter_cert_xai.py",
+    # consolidated promotions (one per IO-surface family, §2.4)
+    "examples/sdk_framework_adapter_cert_keyword_inputs_promotion.py",
+    "examples/sdk_framework_adapter_cert_message_history_promotion.py",
+    "examples/sdk_framework_adapter_cert_provider_response_promotion.py",
+    "examples/sdk_framework_adapter_cert_typed_output_promotion.py",
+    "examples/sdk_framework_adapter_cert_side_kwargs_promotion.py",
+    "examples/sdk_framework_adapter_cert_nested_method_promotion.py",
+    # cookbook pages (a2a.md already exists; the other 18 are new)
+    "docs/frameworks/a2a.md",
+    "docs/frameworks/agno.md",
+    "docs/frameworks/beeai.md",
+    "docs/frameworks/claude_agent_sdk.md",
+    "docs/frameworks/google_adk.md",
+    "docs/frameworks/instructor.md",
+    "docs/frameworks/smolagents.md",
+    "docs/frameworks/bedrock.md",
+    "docs/frameworks/cerebras.md",
+    "docs/frameworks/cohere.md",
+    "docs/frameworks/deepseek.md",
+    "docs/frameworks/fireworks.md",
+    "docs/frameworks/huggingface.md",
+    "docs/frameworks/litellm.md",
+    "docs/frameworks/ollama.md",
+    "docs/frameworks/portkey.md",
+    "docs/frameworks/strands.md",
+    "docs/frameworks/together.md",
+    "docs/frameworks/xai.md",
+]
+
+# One row per certified framework — mirrors V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+# shape. io_surface from the §2.4 classification (a classification of the preset
+# shape against the 8 existing V1_FRAMEWORK_ADAPTER_IO_CONTRACTS surfaces, NOT a
+# new contract). live_lane = True for the keyed/conditional clients (◐ register).
+V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS = [
+    {
+        "framework": "a2a",
+        "path": "examples/sdk_framework_adapter_cert_a2a.py",
+        "expected_method": "send_message",
+        "expected_input_mode": "dict",
+        "io_surface": "side_kwargs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "agno",
+        "path": "examples/sdk_framework_adapter_cert_agno.py",
+        "expected_method": "run",
+        "expected_input_mode": "dict",
+        "io_surface": "keyword_inputs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "beeai",
+        "path": "examples/sdk_framework_adapter_cert_beeai.py",
+        "expected_method": "run",
+        "expected_input_mode": "dict",
+        "io_surface": "keyword_inputs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "claude_agent_sdk",
+        "path": "examples/sdk_framework_adapter_cert_claude_agent_sdk.py",
+        "expected_method": "query",
+        "expected_input_mode": "text",
+        "io_surface": "message_history",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "google_adk",
+        "path": "examples/sdk_framework_adapter_cert_google_adk.py",
+        "expected_method": "run",
+        "expected_input_mode": "dict",
+        "io_surface": "keyword_inputs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "instructor",
+        "path": "examples/sdk_framework_adapter_cert_instructor.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "typed_output",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "smolagents",
+        "path": "examples/sdk_framework_adapter_cert_smolagents.py",
+        "expected_method": "run",
+        "expected_input_mode": "text",
+        "io_surface": "message_history",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "bedrock",
+        "path": "examples/sdk_framework_adapter_cert_bedrock.py",
+        "expected_method": "invoke_model",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "cerebras",
+        "path": "examples/sdk_framework_adapter_cert_cerebras.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "cohere",
+        "path": "examples/sdk_framework_adapter_cert_cohere.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "deepseek",
+        "path": "examples/sdk_framework_adapter_cert_deepseek.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "fireworks",
+        "path": "examples/sdk_framework_adapter_cert_fireworks.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "huggingface",
+        "path": "examples/sdk_framework_adapter_cert_huggingface.py",
+        "expected_method": "__call__",
+        "expected_input_mode": "dict",
+        "io_surface": "nested_method",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "litellm",
+        "path": "examples/sdk_framework_adapter_cert_litellm.py",
+        "expected_method": "completion",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "ollama",
+        "path": "examples/sdk_framework_adapter_cert_ollama.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "portkey",
+        "path": "examples/sdk_framework_adapter_cert_portkey.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "strands",
+        "path": "examples/sdk_framework_adapter_cert_strands.py",
+        "expected_method": "__call__",
+        "expected_input_mode": "text",
+        "io_surface": "message_history",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "together",
+        "path": "examples/sdk_framework_adapter_cert_together.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "xai",
+        "path": "examples/sdk_framework_adapter_cert_xai.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+]
+
 V1_PROTOCOL_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
@@ -7004,6 +7440,34 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_adapter_io,
     )
+    framework_adapter_preset_certification = (
+        _release_framework_adapter_preset_certification_status(root)
+    )
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_preset_certification_readiness",
+        passed=(
+            not framework_adapter_preset_certification["missing_files"]
+            and not framework_adapter_preset_certification[
+                "preset_registration_errors"
+            ]
+            and not framework_adapter_preset_certification["input_mode_errors"]
+            and not framework_adapter_preset_certification[
+                "probe_determinism_errors"
+            ]
+            and not framework_adapter_preset_certification[
+                "io_contract_binding_errors"
+            ]
+            and not framework_adapter_preset_certification[
+                "cookbook_coverage_errors"
+            ]
+            and not framework_adapter_preset_certification[
+                "live_lane_register_errors"
+            ]
+        ),
+        milestone="M6",  # framework-adapter family — same as the probe/io gates
+        evidence=framework_adapter_preset_certification,
+    )
     protocol_adapter = _release_protocol_adapter_status(root)
     _append_release_check(
         checks,
@@ -8611,6 +9075,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_adapter_io_contracts": copy.deepcopy(
             V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
         ),
+        "framework_preset_certification_frameworks": list(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
+        ),
+        "framework_preset_vector_db_names": list(
+            V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
+        ),
+        "framework_preset_live_validation_status": list(
+            V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+        ),
+        "framework_preset_live_validation_lane": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
+        ],
+        "framework_preset_corrections": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_CORRECTIONS
+        ],
+        "required_framework_preset_certification_files": list(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
+        ),
+        "required_framework_preset_certification_contracts": copy.deepcopy(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS
+        ),
         "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
         "required_protocol_adapter_contracts": copy.deepcopy(
             V1_PROTOCOL_ADAPTER_CONTRACTS
@@ -9691,6 +10176,10 @@ def _release_docs_executability_status(
         page
         for page in V1_DOCS_REQUIRED_PAGES
         if page.startswith(("docs/reference/", "docs/quickstart/"))
+    } | {
+        # Phase 11B (11B-A10): the profile-doc index is a cross-link page with
+        # no executable twin — it rides the backing_optional lane (ARCH §2.8).
+        "docs/frameworks/profiles/index.md",
     }
 
     for path in page_paths:
@@ -39611,6 +40100,374 @@ def _append_framework_optimizer_minimum_error(
     )
 
 
+def _run_framework_adapter_cert_shim(
+    root: Path, contract: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Exec-load a certification probe shim in a tempdir and return its artifact.
+
+    Mirrors the framework_adapter_probe_readiness exec-load pattern: never
+    imports the real framework, never touches the network, never reads a key.
+    """
+
+    relative_path = str(contract["path"])
+    example_path = root / relative_path
+    spec = importlib.util.spec_from_file_location(
+        f"agent_learning_release_framework_adapter_cert_{contract['framework']}",
+        example_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load {example_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with tempfile.TemporaryDirectory(
+        prefix=f"agent-learning-cert-{contract['framework']}-"
+    ) as tmpdir:
+        output_path = Path(tmpdir) / f"{contract['framework']}.json"
+        module.run(output_path)
+        return json.loads(output_path.read_text(encoding="utf-8"))
+
+
+def _framework_adapter_cert_evidence_keys(saved: Mapping[str, Any]) -> list[str]:
+    """The deterministic evidence-key fingerprint the gate compares across runs."""
+
+    summary = _as_mapping(saved.get("summary"))
+    return [
+        f"resolved_method={saved.get('method')}",
+        f"resolved_input_mode={saved.get('input_mode')}",
+        f"status={saved.get('status')}",
+        "summary_keys=" + ",".join(sorted(str(key) for key in summary)),
+        "tool_call_count=" + str(summary.get("tool_call_count")),
+        "runtime_trace_count=" + str(summary.get("runtime_trace_count")),
+    ]
+
+
+def _release_framework_adapter_preset_certification_status(
+    root: Path,
+) -> dict[str, Any]:
+    """Phase 11B: certify the 19 already-shipped agent/model-client presets.
+
+    Lightweight, credential-free, deterministic — exec-loads each committed
+    cert shim on local fixtures (the framework_adapter_probe_readiness idiom
+    scaled per framework). NEVER imports a real framework, NEVER network, NEVER
+    a key. The 9 vector DBs are positively excluded (category guard, §2.7). The
+    ◐ live lane is asserted well-formed but its status NEVER gates (11B-A3).
+    """
+
+    from typing import get_args
+
+    from fi.simulate.agent.frameworks import FRAMEWORK_PRESETS
+    from fi.simulate.agent.generic import InputMode
+
+    valid_input_modes = set(get_args(InputMode))
+    io_surfaces = {
+        str(contract["surface"])
+        for contract in V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
+    }
+
+    missing_files = _missing_relative_paths(
+        root, V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
+    )
+    preset_registration_errors: list[dict[str, Any]] = []
+    input_mode_errors: list[dict[str, Any]] = []
+    probe_determinism_errors: list[dict[str, Any]] = []
+    io_contract_binding_errors: list[dict[str, Any]] = []
+    cookbook_coverage_errors: list[dict[str, Any]] = []
+    live_lane_register_errors: list[dict[str, Any]] = []
+    certifications: list[dict[str, Any]] = []
+
+    # Category guard (§2.7): the 9 vector DBs must NOT be registered as agent
+    # presets. A maintainer who adds one fails the gate here.
+    for vector_db in V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES:
+        key = vector_db.replace("-", "_")
+        if vector_db in FRAMEWORK_PRESETS or key in FRAMEWORK_PRESETS:
+            preset_registration_errors.append(
+                {
+                    "framework": vector_db,
+                    "expected": "absent from FRAMEWORK_PRESETS (retrieval-hook target)",
+                    "observed": "present in FRAMEWORK_PRESETS",
+                }
+            )
+
+    for contract in V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS:
+        framework = str(contract["framework"])
+        expected_method = str(contract["expected_method"])
+        expected_input_mode = str(contract["expected_input_mode"])
+        io_surface = str(contract["io_surface"])
+
+        # Artifact #1 — the preset row resolves a FrameworkAdapterSpec.
+        spec = FRAMEWORK_PRESETS.get(framework)
+        if spec is None:
+            preset_registration_errors.append(
+                {
+                    "framework": framework,
+                    "expected": "FrameworkAdapterSpec in FRAMEWORK_PRESETS",
+                    "observed": "missing",
+                }
+            )
+            continue
+        if str(spec.method) != expected_method:
+            preset_registration_errors.append(
+                {
+                    "framework": framework,
+                    "field": "method",
+                    "expected": expected_method,
+                    "observed": spec.method,
+                }
+            )
+        if str(spec.input_mode) != expected_input_mode:
+            preset_registration_errors.append(
+                {
+                    "framework": framework,
+                    "field": "input_mode",
+                    "expected": expected_input_mode,
+                    "observed": spec.input_mode,
+                }
+            )
+
+        # input_mode validity (NOT discovery-equality, §6 amendment b): the
+        # preset's input_mode must be a valid InputMode member; the round-trip
+        # is proven by the probe resolving the same input_mode below.
+        if str(spec.input_mode) not in valid_input_modes:
+            input_mode_errors.append(
+                {
+                    "framework": framework,
+                    "input_mode": spec.input_mode,
+                    "expected": "member of InputMode",
+                    "observed": "invalid",
+                }
+            )
+
+        # IO-contract binding (§2.4): the assigned surface must exist among the
+        # 8 V1_FRAMEWORK_ADAPTER_IO_CONTRACTS surfaces.
+        if io_surface not in io_surfaces:
+            io_contract_binding_errors.append(
+                {
+                    "framework": framework,
+                    "io_surface": io_surface,
+                    "expected": "member of V1_FRAMEWORK_ADAPTER_IO_CONTRACTS surfaces",
+                    "observed": "unknown surface",
+                }
+            )
+
+        if missing_files:
+            # Files absent — recorded in missing_files; skip exec-load.
+            continue
+
+        # Artifact #2 — exec-load the probe shim TWICE for determinism.
+        try:
+            first = _run_framework_adapter_cert_shim(root, contract)
+            second = _run_framework_adapter_cert_shim(root, contract)
+        except Exception as exc:  # pragma: no cover - exercised by negatives
+            probe_determinism_errors.append(
+                {"framework": framework, "error": str(exc)}
+            )
+            continue
+
+        resolved_method = str(first.get("method"))
+        resolved_input_mode = str(first.get("input_mode"))
+        summary = _as_mapping(first.get("summary"))
+        tool_call_count = int(summary.get("tool_call_count") or 0)
+        runtime_trace_count = int(summary.get("runtime_trace_count") or 0)
+
+        # The probe must resolve the preset method/input_mode (round-trip) and
+        # pass with evidence.
+        if first.get("status") != "passed":
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "status",
+                    "expected": "passed",
+                    "observed": first.get("status"),
+                }
+            )
+        if resolved_method != expected_method:
+            io_contract_binding_errors.append(
+                {
+                    "framework": framework,
+                    "field": "resolved_method",
+                    "expected": expected_method,
+                    "observed": resolved_method,
+                }
+            )
+        if resolved_input_mode != expected_input_mode:
+            input_mode_errors.append(
+                {
+                    "framework": framework,
+                    "field": "resolved_input_mode",
+                    "expected": expected_input_mode,
+                    "observed": resolved_input_mode,
+                }
+            )
+        if tool_call_count < int(contract.get("min_tool_call_count") or 0):
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "tool_call_count",
+                    "expected": f">={contract.get('min_tool_call_count')}",
+                    "observed": tool_call_count,
+                }
+            )
+        if runtime_trace_count < int(contract.get("min_runtime_trace_count") or 0):
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "runtime_trace_count",
+                    "expected": f">={contract.get('min_runtime_trace_count')}",
+                    "observed": runtime_trace_count,
+                }
+            )
+
+        # Determinism: identical resolved method/input_mode + evidence keys.
+        first_keys = _framework_adapter_cert_evidence_keys(first)
+        second_keys = _framework_adapter_cert_evidence_keys(second)
+        if first_keys != second_keys:
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "evidence_keys",
+                    "expected": first_keys,
+                    "observed": second_keys,
+                }
+            )
+
+        # Artifact #5/#6 — cookbook page present, backed by the probe shim.
+        page_path = f"docs/frameworks/{framework}.md"
+        page_file = root / page_path
+        if not page_file.is_file():
+            cookbook_coverage_errors.append(
+                {
+                    "framework": framework,
+                    "expected": page_path,
+                    "observed": "missing",
+                }
+            )
+        else:
+            page_meta = _parse_docs_frontmatter(
+                page_file.read_text(encoding="utf-8")
+            )
+            backing = (
+                [str(item) for item in _as_list((page_meta or {}).get("backing"))]
+                if page_meta is not None
+                else []
+            )
+            if str(contract["path"]) not in backing:
+                cookbook_coverage_errors.append(
+                    {
+                        "framework": framework,
+                        "page": page_path,
+                        "field": "backing",
+                        "expected": contract["path"],
+                        "observed": backing,
+                    }
+                )
+
+        certifications.append(
+            {
+                "framework": framework,
+                "resolved_method": resolved_method,
+                "resolved_input_mode": resolved_input_mode,
+                "io_surface": io_surface,
+                "tool_call_count": tool_call_count,
+                "runtime_trace_count": runtime_trace_count,
+                "live_lane": bool(contract.get("live_lane")),
+                "evidence_keys": first_keys,
+            }
+        )
+
+    # live_lane_register_errors — assert the ◐ register is WELL-FORMED only
+    # (shape, never status). The keyed set is every live_lane=True contract.
+    expected_lane = {
+        str(row["framework"])
+        for row in V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS
+        if row.get("live_lane")
+    }
+    lane_frameworks = {str(row["framework"]) for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE}
+    for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE:
+        framework = str(row.get("framework") or "")
+        if not row.get("env_var") or not row.get("recipe"):
+            live_lane_register_errors.append(
+                {
+                    "framework": framework,
+                    "expected": "env_var + recipe",
+                    "observed": {
+                        "env_var": row.get("env_var"),
+                        "recipe": row.get("recipe"),
+                    },
+                }
+            )
+        if str(row.get("status")) not in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS:
+            live_lane_register_errors.append(
+                {
+                    "framework": framework,
+                    "field": "status",
+                    "expected": list(V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS),
+                    "observed": row.get("status"),
+                }
+            )
+        # No framework may be marked live_validated without proof (none is, here:
+        # this is a credential-free release — a live run lands later, opt-in).
+        if str(row.get("status")) == "live_validated" and not row.get(
+            "live_validated_proof"
+        ):
+            live_lane_register_errors.append(
+                {
+                    "framework": framework,
+                    "field": "status",
+                    "expected": "live_validated requires proof",
+                    "observed": "live_validated without proof",
+                }
+            )
+    if lane_frameworks != expected_lane:
+        live_lane_register_errors.append(
+            {
+                "field": "lane_membership",
+                "expected": sorted(expected_lane),
+                "observed": sorted(lane_frameworks),
+            }
+        )
+    # ollama is credential-free ✅, NOT a ◐ row (11B-A9).
+    if "ollama" in lane_frameworks:
+        live_lane_register_errors.append(
+            {
+                "framework": "ollama",
+                "expected": "absent from live lane (credential-free, 11B-A9)",
+                "observed": "present in live lane",
+            }
+        )
+
+    return {
+        "kind": (
+            "agent-learning.framework-adapter-preset-certification-readiness.v1"
+        ),
+        "required_files": list(V1_FRAMEWORK_PRESET_CERTIFICATION_FILES),
+        "framework_preset_certification_frameworks": list(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
+        ),
+        "framework_preset_vector_db_names": list(
+            V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
+        ),
+        "framework_preset_live_validation_status": list(
+            V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+        ),
+        "framework_preset_live_validation_lane": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
+        ],
+        "framework_preset_corrections": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_CORRECTIONS
+        ],
+        "certified_framework_count": len(certifications),
+        "live_lane_register_count": len(V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE),
+        "certifications": certifications,
+        "missing_files": missing_files,
+        "preset_registration_errors": preset_registration_errors,
+        "input_mode_errors": input_mode_errors,
+        "probe_determinism_errors": probe_determinism_errors,
+        "io_contract_binding_errors": io_contract_binding_errors,
+        "cookbook_coverage_errors": cookbook_coverage_errors,
+        "live_lane_register_errors": live_lane_register_errors,
+    }
+
+
 def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_FRAMEWORK_ADAPTER_PROBE_FILES)
     execution_errors: list[dict[str, Any]] = []
@@ -47350,6 +48207,13 @@ __all__ = [
     "V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS",
     "V1_FRAMEWORK_ADAPTER_IO_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_IO_FILES",
+    "V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS",
+    "V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES",
+    "V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS",
+    "V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE",
+    "V1_FRAMEWORK_PRESET_CORRECTIONS",
+    "V1_FRAMEWORK_PRESET_CERTIFICATION_FILES",
+    "V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS",
     "V1_FRAMEWORK_OPENENV_ADAPTER_FILES",
     "V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA",
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS",

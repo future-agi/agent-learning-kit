@@ -67,20 +67,45 @@
 - [Voice composed campaigns: persona × signal search and the A/B harness](docs/redteam/voice-composed-campaigns.md): twin=examples/sdk_voice_redteam_campaign.py kind=agent-learning.optimization.v1
 
 ## Frameworks
-- [A2A: offline framework-adapter simulation](docs/frameworks/a2a.md): twin=examples/sdk_framework_adapter_a2a_protocol_trace.py kind=agent-learning.run.v1
+- [A2A: offline framework-adapter simulation](docs/frameworks/a2a.md): twin=examples/sdk_framework_adapter_cert_a2a.py kind=agent-learning.run.v1
+- [Agno: offline framework-adapter simulation](docs/frameworks/agno.md): twin=examples/sdk_framework_adapter_cert_agno.py kind=agent-learning.run.v1
 - [AutoGen: offline framework-adapter simulation](docs/frameworks/autogen.md): twin=examples/sdk_framework_adapter_message_history.py kind=agent-learning.run.v1
+- [Bedrock: offline framework-adapter simulation](docs/frameworks/bedrock.md): twin=examples/sdk_framework_adapter_cert_bedrock.py kind=agent-learning.run.v1
+- [BeeAI: offline framework-adapter simulation](docs/frameworks/beeai.md): twin=examples/sdk_framework_adapter_cert_beeai.py kind=agent-learning.run.v1
 - [Browser Use: offline framework-adapter simulation](docs/frameworks/browser-use.md): twin=examples/sdk_framework_adapter_browser_cua_trace.py kind=agent-learning.run.v1
+- [Cerebras: offline framework-adapter simulation](docs/frameworks/cerebras.md): twin=examples/sdk_framework_adapter_cert_cerebras.py kind=agent-learning.run.v1
+- [Claude Agent SDK: offline framework-adapter simulation](docs/frameworks/claude_agent_sdk.md): twin=examples/sdk_framework_adapter_cert_claude_agent_sdk.py kind=agent-learning.run.v1
+- [Cohere: offline framework-adapter simulation](docs/frameworks/cohere.md): twin=examples/sdk_framework_adapter_cert_cohere.py kind=agent-learning.run.v1
 - [CrewAI: offline framework-adapter simulation](docs/frameworks/crewai.md): twin=examples/sdk_framework_adapter_keyword_inputs.py kind=agent-learning.run.v1
 - [Custom frameworks: offline framework-adapter simulation](docs/frameworks/custom.md): twin=examples/sdk_framework_adapter_discovery.py kind=agent-learning.run.v1
+- [DeepSeek: offline framework-adapter simulation](docs/frameworks/deepseek.md): twin=examples/sdk_framework_adapter_cert_deepseek.py kind=agent-learning.run.v1
+- [Fireworks: offline framework-adapter simulation](docs/frameworks/fireworks.md): twin=examples/sdk_framework_adapter_cert_fireworks.py kind=agent-learning.run.v1
+- [Google ADK: offline framework-adapter simulation](docs/frameworks/google_adk.md): twin=examples/sdk_framework_adapter_cert_google_adk.py kind=agent-learning.run.v1
+- [Hugging Face: offline framework-adapter simulation](docs/frameworks/huggingface.md): twin=examples/sdk_framework_adapter_cert_huggingface.py kind=agent-learning.run.v1
+- [Instructor: offline framework-adapter simulation](docs/frameworks/instructor.md): twin=examples/sdk_framework_adapter_cert_instructor.py kind=agent-learning.run.v1
 - [LangChain: offline framework-adapter simulation](docs/frameworks/langchain.md): twin=examples/sdk_framework_adapter_langchain_invoke_promotion.py kind=agent-learning.run.v1
 - [LangGraph: offline framework-adapter simulation](docs/frameworks/langgraph.md): twin=examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py kind=agent-learning.run.v1
+- [LiteLLM: offline framework-adapter simulation](docs/frameworks/litellm.md): twin=examples/sdk_framework_adapter_cert_litellm.py kind=agent-learning.run.v1
 - [LiveKit: offline framework-adapter simulation](docs/frameworks/livekit.md): twin=examples/sdk_framework_adapter_livekit_run_session_promotion.py kind=agent-learning.run.v1
 - [LlamaIndex: offline framework-adapter simulation](docs/frameworks/llamaindex.md): twin=examples/sdk_framework_adapter_probe.py kind=agent-learning.run.v1
 - [MCP: offline framework-adapter simulation](docs/frameworks/mcp.md): twin=examples/sdk_framework_adapter_mcp_tool_session.py kind=agent-learning.run.v1
+- [Ollama: offline framework-adapter simulation](docs/frameworks/ollama.md): twin=examples/sdk_framework_adapter_cert_ollama.py kind=agent-learning.run.v1
 - [OpenAI Agents: offline framework-adapter simulation](docs/frameworks/openai-agents.md): twin=examples/sdk_framework_adapter_handoff_transcript.py kind=agent-learning.run.v1
 - [OpenEnv: compatibility inputs for environment replay](docs/frameworks/openenv.md): twin=examples/sdk_framework_adapter_openenv_trace.py kind=agent-learning.run.v1
 - [Pipecat: offline framework-adapter simulation](docs/frameworks/pipecat.md): twin=examples/sdk_framework_adapter_pipecat_process_promotion.py kind=agent-learning.run.v1
+- [Portkey: offline framework-adapter simulation](docs/frameworks/portkey.md): twin=examples/sdk_framework_adapter_cert_portkey.py kind=agent-learning.run.v1
+- [Profile: Handoff transcript](docs/frameworks/profiles/handoff_transcript.md): twin=examples/sdk_framework_adapter_handoff_transcript.py kind=agent-learning.run.v1
+- [Framework-adapter IO profiles](docs/frameworks/profiles/index.md): twin=none kind=none
+- [Profile: Message history](docs/frameworks/profiles/message_history.md): twin=examples/sdk_framework_adapter_message_history.py kind=agent-learning.run.v1
+- [Profile: Nested method](docs/frameworks/profiles/nested_method.md): twin=examples/sdk_framework_adapter_nested_method.py kind=agent-learning.run.v1
+- [Profile: Streaming](docs/frameworks/profiles/streaming.md): twin=examples/sdk_framework_adapter_streaming.py kind=agent-learning.run.v1
+- [Profile: Typed output](docs/frameworks/profiles/typed_output.md): twin=examples/sdk_framework_adapter_typed_output.py kind=agent-learning.run.v1
 - [PydanticAI: offline framework-adapter simulation](docs/frameworks/pydantic-ai.md): twin=examples/sdk_multi_framework_simulation.py kind=agent-learning.run.v1
+- [SmolAgents: offline framework-adapter simulation](docs/frameworks/smolagents.md): twin=examples/sdk_framework_adapter_cert_smolagents.py kind=agent-learning.run.v1
+- [Strands: offline framework-adapter simulation](docs/frameworks/strands.md): twin=examples/sdk_framework_adapter_cert_strands.py kind=agent-learning.run.v1
+- [Together: offline framework-adapter simulation](docs/frameworks/together.md): twin=examples/sdk_framework_adapter_cert_together.py kind=agent-learning.run.v1
+- [Vector stores: offline retrieval-hook simulation](docs/frameworks/vector-stores.md): twin=examples/sdk_retrieval_hook_optimization.py kind=agent-learning.run.v1
+- [xAI: offline framework-adapter simulation](docs/frameworks/xai.md): twin=examples/sdk_framework_adapter_cert_xai.py kind=agent-learning.run.v1
 
 ## Prove
 - [Account sync: keyed, explicit, metadata by default](docs/prove/account-sync.md): twin=examples/sdk_account_sync.py kind=agent-learning.run.v1

@@ -4,13 +4,12 @@ track: frameworks
 objective: behavior
 stage: simulate
 backing:
-  - examples/sdk_framework_adapter_a2a_protocol_trace.py
+  - examples/sdk_framework_adapter_cert_a2a.py
 artifact_kinds:
   - agent-learning.run.v1
 commands:
-  - python examples/sdk_framework_adapter_a2a_protocol_trace.py artifacts/framework-a2a.json
-  - agent-learn run artifacts/framework-a2a.manifest.json --output artifacts/framework-a2a-cli.json
-postcondition: python -c "import json; p=json.load(open('artifacts/framework-a2a.json')); assert p['kind']=='agent-learning.run.v1', p['kind']; print('ok')"
+  - python examples/sdk_framework_adapter_cert_a2a.py artifacts/framework-cert-a2a.json
+postcondition: python -c "import json; p=json.load(open('artifacts/framework-cert-a2a.json')); assert p['status']=='passed', p['status']; assert p['method']=='send_message' and p['input_mode']=='dict'; print('ok')"
 claims: []
 doctor_checks:
   - missing_engine_modules
@@ -20,82 +19,82 @@ opt_in_lane: false
 
 # A2A: offline framework-adapter simulation
 
-> **Twin:** [`examples/sdk_framework_adapter_a2a_protocol_trace.py`](../../examples/sdk_framework_adapter_a2a_protocol_trace.py)
-> · emits `agent-learning.run.v1` · offline, no credentials.
+> **Twin:** [`examples/sdk_framework_adapter_cert_a2a.py`](../../examples/sdk_framework_adapter_cert_a2a.py)
+> · emits the framework-adapter probe evidence · offline, no credentials.
 > A coding agent can complete this page from the frontmatter alone.
 
 ## 1. What you are testing
 
-Agent2Agent (A2A) coverage in the kit is probe-promoted at the protocol layer: what
-gets simulated is an A2A protocol trace export, not a string answer. The twin,
-[`examples/sdk_framework_adapter_a2a_protocol_trace.py`](../../examples/sdk_framework_adapter_a2a_protocol_trace.py),
-builds a local `LocalA2AReviewAgent` whose verified `send_message` entrypoint
-returns a typed `A2AProtocolTraceExport`: the agent card (name, url, version,
-`protocolVersion: 0.3.0`, `preferredTransport: JSONRPC`, input modes), the A2A
-event stream, and the task list with context and task ids. A weak `run(text)` path
-with no protocol-task evidence exists on the same object, and promotion records it
-as weak.
+Agent2Agent (A2A) ships a preset in `FRAMEWORK_PRESETS`: method `send_message`,
+input mode `dict`. This page certifies that preset is real — the twin,
+[`examples/sdk_framework_adapter_cert_a2a.py`](../../examples/sdk_framework_adapter_cert_a2a.py),
+builds a local `LocalA2ASession` exposing exactly `send_message` (a `message`
+kwarg plus a `session` side-kwarg) and wraps it through the same `wrap_framework`
+/ `run_framework_adapter_probe` path a manifest uses, so the probe exercises the
+real adapter resolution. The shim returns contract-shaped synthetic evidence — a
+`framework_trace` event and a `framework_trace_status` tool call — and **never
+imports a real a2a-sdk and never touches the network**.
 
-The failure class this catches is task-state loss: an agent that participates in
-A2A delegation can return acceptable text while the harness never confirms the task
-lifecycle — created, status updates, completion — that the protocol is built
-around. The trace export makes the agent card and per-task event history checkable
-fields of the artifact.
+The failure class this catches is preset drift: if the `send_message`/`dict`
+shape no longer resolves through the adapter, the probe fails and the preset is
+corrected. The IO surface this preset binds to is `side_kwargs` (the message
+kwarg + session metadata pattern, like pipecat's frame kwarg) — one of the eight
+existing framework-adapter IO contracts, classified by adapter shape.
 
-There is no separate manifest file for this page: the twin builds its run manifest
-in code, writes it next to the output
-(`artifacts/framework-a2a.manifest.json`), and executes it through the same
-`simulate.run_manifest_file` path the CLI uses. Everything runs on the local
-engine: offline, deterministic, no remote agent endpoint and no provider keys.
+A2A is deliberately doubly-covered: this certification probe keeps the closed
+required set homogeneous, while the deeper A2A protocol surfaces live in the live
+lane and the protocol-trace example (see section 5).
 
 ## 2. Run it
 
-CLI — the twin is executable and writes both the run artifact and the manifest it
-ran, which you can then replay through `agent-learn`:
+CLI — the twin is executable and writes the probe artifact:
 
 ```bash
-python examples/sdk_framework_adapter_a2a_protocol_trace.py artifacts/framework-a2a.json
-agent-learn run artifacts/framework-a2a.manifest.json \
-  --output artifacts/framework-a2a-cli.json
+python examples/sdk_framework_adapter_cert_a2a.py artifacts/framework-cert-a2a.json
 ```
 
 SDK, same operation:
 
 ```python
-from sdk_framework_adapter_a2a_protocol_trace import run  # examples/ on sys.path
+from sdk_framework_adapter_cert_a2a import run  # examples/ on sys.path
 
-result = run("artifacts/framework-a2a.json")
-assert result["kind"] == "agent-learning.run.v1"
+result = run("artifacts/framework-cert-a2a.json")
+assert result["status"] == "passed"
+assert result["method"] == "send_message" and result["input_mode"] == "dict"
 ```
 
 ## 3. What you built
 
-Postcondition (machine-checkable — the same check the docs gate pattern uses):
+Postcondition (machine-checkable):
 
 ```bash
-python -c "import json; p=json.load(open('artifacts/framework-a2a.json')); assert p['kind']=='agent-learning.run.v1', p['kind']; print('ok')"
+python -c "import json; p=json.load(open('artifacts/framework-cert-a2a.json')); assert p['status']=='passed', p['status']; assert p['method']=='send_message' and p['input_mode']=='dict'; print('ok')"
 ```
 
-The artifact carries `status`, the simulated transcript, the evaluation report,
-and the A2A protocol export — agent card, events, and tasks with their context and
-task ids — plus the exact manifest that produced it. It is a replayable record,
-not a log line: the same file feeds `baseline`, `compare`, and `replay`.
+The artifact carries the resolved method/input mode, the framework runtime trace,
+and the message round-trip evidence the adapter extracted — a replayable record
+the release gate re-executes.
 
 ## 4. When it fails
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| manifest replay rejected | config fault | `agent-learn doctor` → `summary.public_boundary_passed` plus the manifest error line |
-| export missing the agent card or task events (weak text path) | behavior regression | re-run the twin promotion and compare the protocol export against the text fallback |
+| `vendored import failed` | infra | `agent-learn doctor` -> `summary.missing_engine_modules` |
+| probe `status` is `failed` (method did not resolve) | behavior regression | confirm `send_message`/`dict` against the current A2A SDK; if drifted, add a `V1_FRAMEWORK_PRESET_CORRECTIONS` row and fix the preset |
+| public-boundary mismatch | config fault | `agent-learn doctor` -> `summary.public_boundary_passed` |
 
 ## 5. Prove it / keep it
 
-The twin is admitted by the `protocol_adapter_readiness` release gate, so every
-`agent-learn release-check` re-executes this exact protocol-trace path — the page
-stays true or the release fails. To keep your own A2A endpoint honest, promote the
-run artifact into a regression baseline with the `baseline` /
-`promote-to-regression` / `compare` command family, and treat the protocol export
-as the contract: a card or task-lifecycle change shows up in the artifact diff
-before it surprises a peer agent. The reader's job here is maintenance of a living
-proof, not a one-off demo.
+The twin is admitted by the `framework_adapter_preset_certification_readiness`
+release gate, so every `agent-learn release-check` re-executes this exact probe —
+the page stays true or the release fails.
+
+For the deeper A2A protocol surfaces, two existing artifacts go beyond preset
+certification: the A2A live lane
+([`src/agent_learning/live/a2a_lane.py`](../../src/agent_learning/live/a2a_lane.py))
+and the protocol-trace example
+([`examples/sdk_framework_adapter_a2a_protocol_trace.py`](../../examples/sdk_framework_adapter_a2a_protocol_trace.py),
+admitted by `protocol_adapter_readiness`), which export the agent card, the A2A
+event stream, and the per-task lifecycle. To keep your own A2A endpoint honest,
+promote the run artifact into a regression baseline with the `baseline` /
+`promote-to-regression` / `compare` command family.
