@@ -1,9 +1,8 @@
 """Unit 9 (BBG U9) — consolidation store + T1-T7 schedule + D7 boundary."""
 from __future__ import annotations
 
-import pytest
 
-from agent_learning.practice import _schedule, _store
+from agent_learning.practice import _schedule
 from agent_learning.practice._store import ConsolidationStore, build_record, record_id
 
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from agent_learning import cli
 from agent_learning.practice import _capstone

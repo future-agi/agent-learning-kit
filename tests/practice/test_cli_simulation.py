@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from agent_learning import cli
 from agent_learning import loss as L

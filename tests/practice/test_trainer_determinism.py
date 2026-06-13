@@ -6,7 +6,7 @@ import json
 import pytest
 
 from agent_learning import loss as L
-from agent_learning.practice import _calibrate, _store
+from agent_learning.practice import _calibrate
 from agent_learning.practice._trainer import PracticeRefusal, run_practice_loop
 
 STRIP = ("created_at", "started_at", "completed_at", "duration_s", "timing")

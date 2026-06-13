@@ -10,7 +10,6 @@ import json
 import shutil
 from pathlib import Path
 
-import pytest
 
 from agent_learning import trinity
 

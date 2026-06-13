@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning.practice import _budget, _contract
+from agent_learning.practice import _contract
 from agent_learning.practice._budget import BudgetExhausted, BudgetMeter
 
 

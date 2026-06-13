@@ -28,7 +28,6 @@ def _run(manifest):
 
 
 def _build_sim(world_kind, tools=None, **over):
-    p = {"persona": {"name": "A"}, "situation": "s", "outcome": "done"}
     sim = S.build_simulation_manifest(
         name="cn",
         personas=[_persona_dump("A")],
