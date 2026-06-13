@@ -16,7 +16,9 @@ from typing import Any
 _SUBMODULES = {
     "_attribution",
     "_capture",
+    "_codec",
     "_contract",
+    "_loopback",
     "_perturb",
     "_runner",
     "_stats",
@@ -87,6 +89,11 @@ _LAZY_EXPORTS = {
     "timing_fidelity": "voice_redteam",
     "validate_authorization": "voice_redteam",
     "VoiceAuthorizationError": "voice_redteam",
+    # Phase 9A: codec-survival facade (9A-A12, home _codec) + loopback runner
+    "score_codec_survival": "_codec",
+    "CodecUnsupportedError": "_codec",
+    "run_loopback_roundtrip": "_loopback",
+    "LoopbackFixtureMissing": "_loopback",
 }
 
 

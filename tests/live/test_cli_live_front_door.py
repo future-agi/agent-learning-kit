@@ -486,6 +486,102 @@ def _live_run_artifact(tmp_path: Path, *, complete: bool = True) -> Path:
     return artifact
 
 
+# --- Phase 9A unit 5: the live_lane.loopback sub-stanza (rung == 2 only) ----
+
+_LIVEKIT_RUNG2_STANZA = {
+    "lane": "livekit",
+    "rung": 2,
+    "scenario": {"name": "s1"},
+}
+
+
+def test_dispatch_rung2_loopback_stanza_reaches_lane():
+    # the dispatch reads the loopback sub-stanza ONLY at rung == 2 and passes
+    # loopback= + codec_profile= into the lane runner (the unit-2 signature).
+    import agent_learning.live as live
+
+    captured = {}
+
+    def _stub_run_lane(lane, *args, **kwargs):
+        captured.update({"lane": lane, **kwargs})
+        return {"live_lane": {}}
+
+    import unittest.mock as mock
+    with mock.patch.object(live, "run_lane", _stub_run_lane):
+        cli._dispatch_live_lane_scenario(
+            live,
+            "livekit",
+            {"name": "s1"},
+            {"loopback": {"user_wav": "u.wav", "codec_profile": "g711_alaw_8k_ge"}},
+            {"repeats": 4},
+            2,
+        )
+    assert captured["loopback"]["user_wav"] == "u.wav"
+    assert captured["codec_profile"] == "g711_alaw_8k_ge"
+
+
+def test_dispatch_rung1_ignores_loopback_stanza():
+    # rung-1 manifests are unaffected: the loopback stanza is NOT read.
+    import agent_learning.live as live
+
+    captured = {}
+
+    def _stub_run_lane(lane, *args, **kwargs):
+        captured.update(kwargs)
+        return {"live_lane": {}}
+
+    import unittest.mock as mock
+    with mock.patch.object(live, "run_lane", _stub_run_lane):
+        cli._dispatch_live_lane_scenario(
+            live, "livekit", {"name": "s1"}, {"loopback": {"user_wav": "u.wav"}},
+            {"repeats": 4}, 1,
+        )
+    assert "loopback" not in captured
+    assert "codec_profile" not in captured
+
+
+def test_dispatch_rung2_invalid_codec_profile_raises():
+    import agent_learning.live as live
+
+    with pytest.raises(ValueError):
+        cli._dispatch_live_lane_scenario(
+            live, "livekit", {"name": "s1"},
+            {"loopback": {"codec_profile": "not_a_profile"}}, {"repeats": 4}, 2,
+        )
+
+
+def test_dispatch_rung2_invalid_tick_raises():
+    import agent_learning.live as live
+
+    with pytest.raises(ValueError):
+        cli._dispatch_live_lane_scenario(
+            live, "livekit", {"name": "s1"},
+            {"loopback": {"tick_ms": -1}}, {"repeats": 4}, 2,
+        )
+
+
+def test_cli_loopback_missing_fixture_finding(tmp_path, monkeypatch):
+    # a rung-2 run whose user_wav fixture is missing -> exit 1 +
+    # loopback_user_fixture_missing naming the path; lane not "succeeded".
+    _clear_lane_flags(monkeypatch)
+    monkeypatch.setenv("AGENT_LEARNING_LIVE_LIVEKIT", "1")
+    monkeypatch.setattr(cli, "_live_lane_extra_available", lambda lane: True)
+    stanza = {
+        "lane": "livekit",
+        "rung": 2,
+        "scenario": {"name": "s1", "turns": [{"user": "hi", "turn_id": "turn_1"}]},
+        "loopback": {
+            "user_wav": [{"turn_id": "turn_1", "wav": str(tmp_path / "absent.wav")}]
+        },
+    }
+    manifest_path = _write_manifest(tmp_path, stanza)
+    exit_code, payload = _run_cli(tmp_path, manifest_path)
+    assert exit_code == 1
+    finding = payload["findings"][0]
+    assert finding["type"] == "loopback_user_fixture_missing"
+    assert "absent.wav" in str(finding["missing"])
+
+
 def test_capture_fixture_writes_a_candidate(tmp_path, capsys):
     artifact = _live_run_artifact(tmp_path)
     output = tmp_path / "candidates" / "s1.fixture.json"

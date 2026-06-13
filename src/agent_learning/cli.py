@@ -957,6 +957,30 @@ def _dispatch_live_lane_scenario(
                 kwargs[key] = stanza[key]
         if stanza.get("perturbations") is not None:
             kwargs["perturbations"] = list(stanza["perturbations"])
+        # Phase 9A unit 5: the loopback sub-stanza is read ONLY at rung == 2
+        # (the existing lane/rung/required_env fields are untouched; rung-1/rung-3
+        # manifests are unaffected). A missing user_wav at the rung-2 default is a
+        # structured-loud refusal (loopback_user_fixture_missing), never a silent
+        # zero buffer.
+        if rung == 2:
+            loop_cfg = stanza.get("loopback")
+            loop_cfg = dict(loop_cfg) if isinstance(loop_cfg, Mapping) else {}
+            codec_profile = str(loop_cfg.get("codec_profile", "g711_ulaw_8k_ge"))
+            from .live import _codec as _codec_mod
+
+            if codec_profile not in _codec_mod.V1_VOICE_CODEC_PROFILES:
+                raise ValueError(
+                    f"live_lane.loopback.codec_profile {codec_profile!r} must be "
+                    f"one of {_codec_mod.V1_VOICE_CODEC_PROFILES}"
+                )
+            tick = loop_cfg.get("tick_ms")
+            if tick is not None and (not isinstance(tick, (int, float)) or tick <= 0):
+                raise ValueError(
+                    f"loopback_tick_invalid: live_lane.loopback.tick_ms must be a "
+                    f"positive number, got {tick!r}"
+                )
+            kwargs["loopback"] = loop_cfg or None
+            kwargs["codec_profile"] = codec_profile
         if lane == "livekit":
             return live.run_lane("livekit", scenario, **kwargs)
         return live.run_lane(
@@ -1223,6 +1247,36 @@ def _run_live_lane_manifest(
             )
         except (ImportError, ModuleNotFoundError):
             return _live_lane_extra_missing(prog, lane, extra)
+        except live._loopback.LoopbackFixtureMissing as exc:
+            # Phase 9A unit 5: a missing/unreadable rung-2 user WAV fixture is a
+            # structured-loud refusal (never a silent zero buffer).
+            return _refuse(
+                [
+                    {
+                        "type": "loopback_user_fixture_missing",
+                        "level": "error",
+                        "lane": lane,
+                        "missing": list(exc.missing),
+                        "reason": str(exc),
+                        "remediation": (
+                            "bind each rung-2 turn to a committed PCM-WAV fixture "
+                            "via live_lane.loopback.user_wav (a path or a list of "
+                            "{turn_id, wav})"
+                        ),
+                    }
+                ]
+            )
+        except live._codec.CodecUnsupportedError as exc:
+            # a post-v1 codec (opus_nb/amr_nb) requested but its build-dep extra
+            # is absent: warn + withhold the survival number, exit 0 (numpy
+            # codecs still run). Mirrors the LANE_EXTRAS auto-skip discipline.
+            print(
+                f"{prog}: voice_codec_unavailable: codec {exc.codec!r} requires "
+                f"{exc.install} (post-v1, not installed); the G.711 numpy codecs "
+                "still run, the codec's survival number is withheld",
+                file=sys.stderr,
+            )
+            return 0
         except Exception as exc:
             print(f"{prog}: {exc}", file=sys.stderr)
             return 1

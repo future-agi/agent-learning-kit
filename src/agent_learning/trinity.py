@@ -369,6 +369,8 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_task_evaluation_synthesis.py": "task_evaluation_synthesis_readiness",
     "examples/sdk_task_world_optimization.py": "task_world_optimizer_readiness",
     "examples/sdk_trinity_stack_probe_optimization.py": "trinity_stack_probe_readiness",
+    "examples/sdk_voice_improvement.py": "voice_loopback_readiness",
+    "examples/sdk_voice_loopback.py": "voice_loopback_readiness",
     "examples/sdk_voice_redteam_campaign.py": "voice_redteam_readiness",
     "examples/sdk_workflow_hook_optimization.py": "workflow_hook_readiness",
     "examples/sdk_workflow_target_optimization.py": "workflow_target_optimizer_readiness",
@@ -437,6 +439,13 @@ V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
     r"\b10x\b": "environment_10x_robustness",
     r"\bguarantee[sd]?\b": "docs_executability",
     r"\btrain(?:ing|er|ed|s)?\b": "practice_loop_readiness",  # Phase 13D-D3 (clause f)
+    # Phase 9A-A8: new voice-capability wording licensed only while
+    # voice_loopback_readiness is green. Scoped to codec-survival/audio-loopback
+    # (the genuinely-NEW 9A phrases); "phone-survival" is deliberately EXCLUDED
+    # to avoid retroactively re-gating the already-green redteam corpus page that
+    # uses it (BBG §6.5: "must not collide with existing licensed/unlicensed
+    # phrases — verify against the dict at build time").
+    r"\b(?:codec[- ]survival|audio[- ]loopback)\b": "voice_loopback_readiness",
     r"\bworld[- ]best\b": None,
     r"\bbest[- ]in[- ]class\b": None,
     r"\b\d+(?:\.\d+)?x\s+(?:faster|better|more\s+robust)\b": None,
@@ -2349,6 +2358,47 @@ V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1 = {
     "status": "untested",
     "tier": "research_pinned",
 }
+
+# === Phase 9A (gate M4) — voice loopback / codec-survival vocabularies =======
+# Closed sets, gate-pinned. Mirrors of the live._codec / voice_loop canon —
+# cross-pinned by the milestone test (the GUNA_AXES cross-pin pattern); trinity
+# never imports those modules so the gate runs even if they are broken.
+V1_VOICE_FIDELITY_TIERS = ("deterministic_loopback", "keyed_live_channel")
+# a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
+# frozen 4-tuple live._contract.EVIDENCE_CLASSES is unchanged).
+V1_VOICE_CODECS = ("g711_ulaw", "g711_alaw", "opus_nb", "amr_nb")
+# g711_* = v1 pure-numpy; opus_nb/amr_nb = post-v1 build-dep, auto-skip.
+V1_VOICE_PACKET_LOSS_MODELS = ("gilbert_elliott",)
+V1_VOICE_CODEC_PROFILES = (
+    "g711_ulaw_8k_ge", "g711_alaw_8k_ge",  # v1
+    "opus_nb_8k_ge", "amr_nb_8k_ge",       # post-v1, auto-skip
+    "none",                                 # opt-out (clean-PCM loopback)
+)
+V1_VOICE_FAILURE_SUBLAYERS = ("acoustic_codec", "asr_mishear", "llm", "tts_endpointing")
+V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR = "examples/voice_loopback_fixture"
+# precedent: V1_TELEMETRY_GATE_FIXTURE_DIR = "examples/telemetry_ledger_fixture"
+V1_VOICE_LOOPBACK_FILES = (
+    "examples/sdk_voice_loopback.py",
+    "examples/sdk_voice_improvement.py",
+)
+V1_VOICE_LOOPBACK_GATE_FIXTURE_FILES = (
+    "examples/voice_loopback_fixture/user_turns/turn_1.wav",
+    "examples/voice_loopback_fixture/user_turns/turn_2.wav",
+    "examples/voice_loopback_fixture/agent_turns/turn_1.wav",
+    "examples/voice_loopback_fixture/agent_turns/turn_2.wav",
+    "examples/voice_loopback_fixture/expected/loopback_channels.json",
+    "examples/voice_loopback_fixture/expected/codec_roundtrip.json",
+    "examples/voice_loopback_fixture/expected/phone_survival.json",
+    "examples/voice_loopback_fixture/ab/toy_space.json",
+)
+V1_VOICE_LOSS_TERM_REFS = (
+    "task_success", "tool_argument_correctness", "barge_in_latency", "ttfb",
+    "wer_delta", "recovery", "selectivity", "codec_survival", "perturbation_robustness",
+)
+V1_VOICE_LOSS_NON_TIMING_QUALITY_TERMS = ("task_success", "tool_argument_correctness")
+V1_VOICE_PHONE_SURVIVAL_RUNG1 = {"status": "untested", "tier": "research_pinned"}
+# byte-equal to live.voice_redteam.PHONE_SURVIVAL_RUNG1 — cross-pinned by a unit
+# test, never imported by trinity (the GUNA_AXES cross-pin pattern).
 
 # === Phase 13D (gate M2/M3) closed vocabularies =============================
 # Mirrors of the contract/loss/practice canon. The status fns byte-compare these
@@ -7339,6 +7389,28 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",  # optimizer family (the capability_profile_freeze family)
         evidence=practice_loop,
     )
+    # --- Phase 9A gate (M4 voice/red-team evidence family) -----------------
+    # Registered as the LAST gate before docs_executability (BBG §6.0 / A1: the
+    # binding invariant is "after voice_redteam_readiness, before
+    # docs_executability"; the 13D gates sit between them, harmless to the set).
+    voice_loopback = _release_voice_loopback_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="voice_loopback_readiness",
+        passed=(
+            not voice_loopback["missing_files"]
+            and not voice_loopback["loopback_determinism_errors"]
+            and not voice_loopback["codec_roundtrip_errors"]
+            and not voice_loopback["metrics_wiring_errors"]
+            and not voice_loopback["voice_loss_errors"]
+            and not voice_loopback["evidence_class_errors"]
+            and not voice_loopback["phone_survival_errors"]
+            and not voice_loopback["rung_honesty_errors"]
+        ),
+        milestone="M4",  # red-team/voice evidence family — same milestone as
+        # voice_redteam_readiness / redteam_corpus_execution_readiness
+        evidence=voice_loopback,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -7971,6 +8043,13 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "voice_redteam_ab_arms": list(V1_VOICE_REDTEAM_AB_ARMS),
         "voice_redteam_ab_verdicts": list(V1_VOICE_REDTEAM_AB_VERDICTS),
+        # Phase 9A (voice loopback / codec-survival) payload mirrors (unit 6.4)
+        "voice_fidelity_tiers": list(V1_VOICE_FIDELITY_TIERS),
+        "voice_codecs": list(V1_VOICE_CODECS),
+        "voice_packet_loss_models": list(V1_VOICE_PACKET_LOSS_MODELS),
+        "voice_codec_profiles": list(V1_VOICE_CODEC_PROFILES),
+        "voice_failure_sublayers": list(V1_VOICE_FAILURE_SUBLAYERS),
+        "voice_loss_term_refs": list(V1_VOICE_LOSS_TERM_REFS),
         "required_redteam_readiness_certification_files": list(
             V1_REDTEAM_READINESS_CERTIFICATION_FILES
         ),
@@ -12235,6 +12314,253 @@ def _count_voice_fixtures(root: Path) -> int:
     if not fixture_dir.is_dir():
         return 0
     return sum(1 for _ in fixture_dir.rglob("*.json"))
+
+
+def _exec_example_run(root: Path, relative: str, modname: str) -> tuple[Any, str | None]:
+    """Exec-load an example by file location and call its ``run(output_path)`` in
+    a tempdir, asserting the returned payload round-trips through the written
+    JSON (the Phase-4/7/12 executing-gate idiom). Returns (payload, error)."""
+
+    previous_environ = dict(os.environ)
+    example_path = root / relative
+    try:
+        spec = importlib.util.spec_from_file_location(modname, example_path)
+        if spec is None or spec.loader is None:
+            return {}, f"Unable to load {example_path}"
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory(prefix="agent-learning-voice-loopback-") as tmp:
+            output_path = Path(tmp) / "out.json"
+            result = dict(module.run(output_path))
+            saved = json.loads(output_path.read_text(encoding="utf-8"))
+            if result != saved:
+                return result, "output_roundtrip"
+            return result, None
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"{type(exc).__name__}: {exc}"
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_environ)
+
+
+def _release_voice_loopback_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate #76 (M4) — voice loopback readiness (Phase 9A, ARCH §2.4 / §2.5).
+
+    Exec-loads ``examples/sdk_voice_loopback.py`` + ``sdk_voice_improvement.py``
+    in a tempdir (no network, no env keys, no lanes — entirely on the committed
+    ``examples/voice_loopback_fixture/`` fixtures) and audits their evidence into
+    EIGHT error arrays. The ``loopback_fidelity_overclaim`` token (9A-A10) fires
+    inside ``evidence_class_errors`` for any rung-2 / ``deterministic_loopback``
+    artifact carrying ``live_lane`` (the §2.5 binding correction). ``passed`` =
+    all eight empty."""
+
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *V1_VOICE_LOOPBACK_FILES,
+            V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR,
+            *V1_VOICE_LOOPBACK_GATE_FIXTURE_FILES,
+        ],
+    )
+    loopback_determinism_errors: list[dict[str, Any]] = []
+    codec_roundtrip_errors: list[dict[str, Any]] = []
+    metrics_wiring_errors: list[dict[str, Any]] = []
+    voice_loss_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    phone_survival_errors: list[dict[str, Any]] = []
+    rung_honesty_errors: list[dict[str, Any]] = []
+
+    loopback: dict[str, Any] = {}
+    improvement: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        loopback, lb_err = _exec_example_run(
+            root, "examples/sdk_voice_loopback.py", "agent_learning_release_voice_loopback"
+        )
+        if lb_err is not None:
+            err(loopback_determinism_errors, field="example.run", expected="executes", observed=lb_err)
+        improvement, imp_err = _exec_example_run(
+            root, "examples/sdk_voice_improvement.py", "agent_learning_release_voice_improvement"
+        )
+        if imp_err is not None:
+            err(voice_loss_errors, field="example.run", expected="executes", observed=imp_err)
+
+    if loopback:
+        if loopback.get("kind") != "agent-learning.voice-loopback.v1":
+            err(loopback_determinism_errors, field="kind", expected="agent-learning.voice-loopback.v1", observed=loopback.get("kind"))
+
+        # ---- constant mirrors (the gate pins them against the example) ----
+        for field, expected in (
+            ("fidelity_tiers", list(V1_VOICE_FIDELITY_TIERS)),
+            ("codecs", list(V1_VOICE_CODECS)),
+            ("packet_loss_models", list(V1_VOICE_PACKET_LOSS_MODELS)),
+            ("codec_profiles", list(V1_VOICE_CODEC_PROFILES)),
+            ("failure_sublayers", list(V1_VOICE_FAILURE_SUBLAYERS)),
+            ("loss_term_refs", list(V1_VOICE_LOSS_TERM_REFS)),
+        ):
+            if list(loopback.get(field) or []) != expected:
+                err(loopback_determinism_errors, field=f"mirror.{field}", expected=expected, observed=loopback.get(field))
+
+        # ---- loopback determinism (same seed ⇒ byte-identical) ----
+        det = _as_mapping(loopback.get("loopback_determinism"))
+        for key in ("user_pcm_byte_identical", "agent_pcm_byte_identical", "channels_identical", "provenance_identical"):
+            if det.get(key) is not True:
+                err(loopback_determinism_errors, field=f"determinism.{key}", expected=True, observed=det.get(key))
+        if det.get("produces_only_two_pcm_streams") is not True:
+            err(loopback_determinism_errors, field="determinism.two_streams_only", expected=True, observed=det.get("produces_only_two_pcm_streams"))
+        # cross-check against the committed golden channels block
+        golden_path = root / "examples/voice_loopback_fixture/expected/loopback_channels.json"
+        if golden_path.is_file() and det.get("channels_identical") is not True:
+            err(loopback_determinism_errors, field="determinism.golden", expected="channels match committed golden", observed=det.get("channels_identical"))
+
+        # ---- codec round-trip reproducibility + opus auto-skip ----
+        codec = _as_mapping(loopback.get("codec_roundtrip"))
+        for key in ("g711_ulaw_reproducible", "g711_alaw_reproducible", "gilbert_elliott_reproducible"):
+            if codec.get(key) is not True:
+                err(codec_roundtrip_errors, field=f"codec.{key}", expected=True, observed=codec.get(key))
+        if codec.get("opus_auto_skip") is not True:
+            err(codec_roundtrip_errors, field="codec.opus_auto_skip", expected=True, observed=codec.get("opus_auto_skip"))
+        if codec.get("text_rung_raises") is not True:
+            err(codec_roundtrip_errors, field="codec.text_rung_raises", expected=True, observed=codec.get("text_rung_raises"))
+
+        # ---- metrics wiring (rung-2 has channels; rung-1 does NOT) ----
+        rung2 = _as_mapping(loopback.get("rung2"))
+        rung1 = _as_mapping(loopback.get("rung1"))
+        if rung2.get("channels_at_rung2") is not True:
+            err(metrics_wiring_errors, field="rung2.channels_present", expected=True, observed=rung2.get("channels_at_rung2"))
+        if rung2.get("byte_parallel_lanes") is not True:
+            err(metrics_wiring_errors, field="rung2.byte_parallel_lanes", expected=True, observed=rung2.get("byte_parallel_lanes"))
+        if rung1.get("has_channels_block") is not False:
+            err(metrics_wiring_errors, field="rung1.no_channels", expected=False, observed=rung1.get("has_channels_block"))
+        if rung2.get("codec_none_optout_has_channels") is not True:
+            err(metrics_wiring_errors, field="rung2.none_optout_channels", expected=True, observed=rung2.get("codec_none_optout_has_channels"))
+
+        # ---- evidence-class + the loopback_fidelity_overclaim token (§2.5) ----
+        artifact = _as_mapping(rung2.get("rung2_artifact"))
+        if artifact.get("evidence_class") == "live_lane":
+            evidence_class_errors.append({
+                "artifact": "rung2.rung2_artifact",
+                "reason": (
+                    "loopback_fidelity_overclaim: rung loopback_transport stamped "
+                    "evidence_class=live_lane; a deterministic in-process loopback "
+                    "is live_stressed/captured_fixture, never live_lane (9A-D6 corrected)"
+                ),
+            })
+        if artifact.get("evidence_class") not in ("live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="rung2.evidence_class", expected="live_stressed|captured_fixture", observed=artifact.get("evidence_class"))
+        if artifact.get("fidelity_tier") != "deterministic_loopback":
+            err(evidence_class_errors, field="rung2.fidelity_tier", expected="deterministic_loopback", observed=artifact.get("fidelity_tier"))
+        # the frozen 4-tuple is byte-stable (no new evidence class via this gate)
+        from .live import _contract as _live_contract  # downward import (gate-only)
+        if tuple(_live_contract.EVIDENCE_CLASSES) != ("local_gate", "live_lane", "live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="evidence_classes.frozen", expected=("local_gate", "live_lane", "live_stressed", "captured_fixture"), observed=tuple(_live_contract.EVIDENCE_CLASSES))
+
+        # the constructed overclaim negatives MUST be catchable — the example
+        # hand-builds them; the gate verifies the discipline catches each.
+        negatives = _as_mapping(loopback.get("negatives"))
+        neg_live = _as_mapping(negatives.get("rung2_claims_live_lane"))
+        if neg_live.get("evidence_class") != "live_lane":
+            err(evidence_class_errors, field="negatives.rung2_claims_live_lane", expected="constructed live_lane overclaim", observed=neg_live.get("evidence_class"))
+        neg_keyed = _as_mapping(negatives.get("keyed_without_credential"))
+        if not (neg_keyed.get("fidelity_tier") == "keyed_live_channel" and neg_keyed.get("credentialed") is False):
+            err(evidence_class_errors, field="negatives.keyed_without_credential", expected="keyed_live_channel without credential", observed=neg_keyed)
+
+        # ---- phone_survival (no survives/partial without a channel record) ----
+        ps = _as_mapping(rung2.get("phone_survival"))
+        if ps.get("tier") not in ("channel_simulated", "channel_live"):
+            err(phone_survival_errors, field="rung2.phone_survival.tier", expected="channel_simulated|channel_live", observed=ps.get("tier"))
+        if ps.get("status") in ("survives", "partial"):
+            for f in ("pre_channel_success", "post_channel_success", "band_energy_lt_4khz"):
+                if f not in ps:
+                    err(phone_survival_errors, field=f"rung2.phone_survival.{f}", expected="present at channel_simulated", observed="absent")
+        if rung2.get("codec_none_optout_has_no_phone_survival") is not True:
+            err(phone_survival_errors, field="rung2.none_optout_no_phone_survival", expected=True, observed=rung2.get("codec_none_optout_has_no_phone_survival"))
+        # rung-1 pin byte-identical to Phase-12 (no extra fields)
+        rung1_ps = _as_mapping(rung1.get("phone_survival"))
+        if dict(rung1_ps) != dict(V1_VOICE_PHONE_SURVIVAL_RUNG1):
+            err(phone_survival_errors, field="rung1.phone_survival_pin", expected=dict(V1_VOICE_PHONE_SURVIVAL_RUNG1), observed=rung1_ps)
+        # the constructed survives-without-channel negative is research_pinned (caught)
+        neg_survives = _as_mapping(negatives.get("survives_without_channel"))
+        neg_ps = _as_mapping(neg_survives.get("phone_survival"))
+        if not (neg_ps.get("status") == "survives" and neg_ps.get("tier") == "research_pinned"):
+            err(phone_survival_errors, field="negatives.survives_without_channel", expected="constructed survives+research_pinned overclaim", observed=neg_ps)
+
+        # ---- rung honesty (labels, rung-1 no channels, rung wall raises) ----
+        if artifact.get("rung") != "loopback_transport":
+            err(rung_honesty_errors, field="rung2.rung_label", expected="loopback_transport", observed=artifact.get("rung"))
+        if rung1.get("rung") != "virtual_clock":
+            err(rung_honesty_errors, field="rung1.rung_label", expected="virtual_clock", observed=rung1.get("rung"))
+        neg_channels_rung1 = _as_mapping(negatives.get("channels_at_rung1"))
+        if not (neg_channels_rung1.get("rung") == "virtual_clock" and "channels" in neg_channels_rung1):
+            err(rung_honesty_errors, field="negatives.channels_at_rung1", expected="constructed rung-1 channels overclaim", observed=neg_channels_rung1)
+        # the live rung wall still raises for rung-3-without-keys / unknown rung
+        try:
+            from .live import livekit_lane as _lk
+            previous = dict(os.environ)
+            try:
+                os.environ["AGENT_LEARNING_LIVE_LIVEKIT"] = "1"
+                wall_ok = True
+                try:
+                    _lk.run_livekit_lane({"name": "gate"}, rung=3)
+                    wall_ok = False  # rung-3 without credentialed must refuse
+                except Exception:
+                    wall_ok = True
+                if not wall_ok:
+                    err(rung_honesty_errors, field="rung_wall.rung3_refuses", expected="raises without keys", observed="did not raise")
+            finally:
+                os.environ.clear()
+                os.environ.update(previous)
+        except Exception as exc:  # noqa: BLE001
+            err(rung_honesty_errors, field="rung_wall.probe", expected="probe runs", observed=f"{type(exc).__name__}: {exc}")
+
+    if improvement:
+        if improvement.get("kind") != "agent-learning.voice-improvement.v1":
+            err(voice_loss_errors, field="improvement.kind", expected="agent-learning.voice-improvement.v1", observed=improvement.get("kind"))
+        if improvement.get("multi_objective_compiles") is not True:
+            err(voice_loss_errors, field="improvement.multi_objective", expected=True, observed=improvement.get("multi_objective_compiles"))
+        if improvement.get("single_timing_rejected") is not True:
+            err(voice_loss_errors, field="improvement.single_timing_rejected", expected=True, observed=improvement.get("single_timing_rejected"))
+        if improvement.get("search_space_is_whole_agent") is not True:
+            err(voice_loss_errors, field="improvement.whole_agent_search_space", expected=True, observed=improvement.get("search_space_is_whole_agent"))
+        if improvement.get("ab_equal_budget") is not True:
+            err(voice_loss_errors, field="improvement.ab_equal_budget", expected=True, observed=improvement.get("ab_equal_budget"))
+        if improvement.get("world_kind") != "voice_telephony":
+            err(voice_loss_errors, field="improvement.world_kind", expected="voice_telephony", observed=improvement.get("world_kind"))
+        # the voice_sublayer attribution is in the closed set (9A-A14)
+        for cell, sub in _as_mapping(improvement.get("voice_sublayers")).items():
+            if sub not in V1_VOICE_FAILURE_SUBLAYERS:
+                err(voice_loss_errors, field=f"improvement.voice_sublayer.{cell}", expected=V1_VOICE_FAILURE_SUBLAYERS, observed=sub)
+
+    return {
+        "kind": "agent-learning.voice-loopback-readiness.v1",
+        "required_files": list(V1_VOICE_LOOPBACK_FILES),
+        "fixture_dir": V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR,
+        "voice_fidelity_tiers": list(V1_VOICE_FIDELITY_TIERS),
+        "voice_codecs": list(V1_VOICE_CODECS),
+        "voice_packet_loss_models": list(V1_VOICE_PACKET_LOSS_MODELS),
+        "voice_codec_profiles": list(V1_VOICE_CODEC_PROFILES),
+        "voice_failure_sublayers": list(V1_VOICE_FAILURE_SUBLAYERS),
+        "voice_loss_term_refs": list(V1_VOICE_LOSS_TERM_REFS),
+        "voice_loss_non_timing_quality_terms": list(V1_VOICE_LOSS_NON_TIMING_QUALITY_TERMS),
+        "phone_survival_rung1": dict(V1_VOICE_PHONE_SURVIVAL_RUNG1),
+        "fixture_count": sum(
+            1 for _ in (root / V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR).rglob("*")
+            if (root / V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR).is_dir() and _.is_file()
+        ),
+        "voice_codec_count": len(V1_VOICE_CODECS),
+        "voice_loss_term_count": len(V1_VOICE_LOSS_TERM_REFS),
+        "missing_files": missing_files,
+        "loopback_determinism_errors": loopback_determinism_errors,
+        "codec_roundtrip_errors": codec_roundtrip_errors,
+        "metrics_wiring_errors": metrics_wiring_errors,
+        "voice_loss_errors": voice_loss_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "phone_survival_errors": phone_survival_errors,
+        "rung_honesty_errors": rung_honesty_errors,
+    }
 
 
 def _read_json_any(path: Path) -> Any:

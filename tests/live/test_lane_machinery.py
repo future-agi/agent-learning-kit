@@ -558,3 +558,107 @@ def test_perturbations_stanza_links_clean_twin():
     assert {"homophone", "code_switch", "near_dup"} <= ops
     assert stanza["paired_clean_run"] == "clean-run-123"
     assert stanza["seed"] == 3
+
+
+# --- Phase 9A unit 2: the rung-2 loopback dispatch helper (flag-free; pure
+# stdlib+numpy; the dispatch the rung-2 lane branch calls) -------------------
+
+_RUNG2_TURNS = [
+    {"user": "Hello, can you confirm my appointment for tomorrow?"},
+    {"user": "And please send the receipt to my new account here."},
+]
+
+
+def test_rung2_produces_channels_block():
+    from agent_learning.live import livekit_lane
+
+    channels, tier = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=5
+    )
+    assert channels["source"] == "derive_channel_evidence"
+    assert channels["rung"] == "loopback_transport"
+    assert channels["fidelity_tier"] == "deterministic_loopback"
+    assert tier == "deterministic_loopback"
+    # the §1.2 derived keys are present
+    for key in ("barge_in_latency_ms", "overlap_total_ms", "ttfb_ms", "frame_ms"):
+        assert key in channels["derived"]
+    # default-ON codec → a codec_round_trip record + computed phone_survival
+    assert channels["codec_round_trip"]["applied"] is True
+    assert channels["phone_survival"]["tier"] == "channel_simulated"
+
+
+def test_rung2_codec_none_optout_no_phone_survival():
+    from agent_learning.live import livekit_lane
+
+    channels, _ = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback={"codec_profile": "none"}, codec_profile="none", seed=5
+    )
+    assert "derived" in channels  # channels block still present
+    assert "phone_survival" not in channels  # clean-PCM loopback, no survival
+    assert "codec_round_trip" not in channels
+
+
+def test_rung2_evidence_class_never_live_lane():
+    # the §2.5 binding correction: every rung-2 artifact is live_stressed /
+    # captured_fixture + fidelity_tier deterministic_loopback, NEVER live_lane.
+    from agent_learning.live import livekit_lane, pipecat_lane
+
+    for mod in (livekit_lane, pipecat_lane):
+        channels, tier = mod._rung2_loopback_channels(
+            _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=9
+        )
+        assert tier == "deterministic_loopback"
+        assert channels["fidelity_tier"] == "deterministic_loopback"
+        # the channels block never carries an evidence_class key (live_lane_boundary
+        # forbids top-level evidence_class; the lane sets evidence_class on the run)
+        assert "evidence_class" not in channels
+
+
+def test_rung2_loopback_deterministic_under_seed():
+    from agent_learning.live import livekit_lane
+
+    a, _ = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142
+    )
+    b, _ = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142
+    )
+    # the derived block is identical under the same seed (the determinism the
+    # gate's loopback_determinism_errors array asserts)
+    assert a["derived"] == b["derived"]
+    assert a["phone_survival"] == b["phone_survival"]
+
+
+def test_pipecat_rung2_byte_parallel():
+    from agent_learning.live import livekit_lane, pipecat_lane
+
+    lk, _ = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=4
+    )
+    pc, _ = pipecat_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=4
+    )
+    # both lanes stamp the byte-identical rung-2 label + the same channels shape
+    assert lk["rung"] == pc["rung"] == "loopback_transport"
+    assert set(lk) == set(pc)
+
+
+def test_rung3_still_raises_without_keys(monkeypatch):
+    from agent_learning.live import _contract, livekit_lane, pipecat_lane
+
+    _clear_lane_flags(monkeypatch)
+    monkeypatch.setenv("AGENT_LEARNING_LIVE_LIVEKIT", "1")
+    monkeypatch.setenv("AGENT_LEARNING_LIVE_PIPECAT", "1")
+    # rung-3 without the credentialed flag refuses (require_lane_enabled, which
+    # runs at rung>=3 BEFORE the rung-label validation).
+    with pytest.raises(_contract.LaneDisabledError):
+        livekit_lane.run_livekit_lane({"name": "smoke"}, rung=3)
+    with pytest.raises(_contract.LaneDisabledError):
+        pipecat_lane.run_pipecat_lane(None, {"name": "smoke"}, rung=3)
+    # a sub-rung-3 unknown rung still raises ValueError (no credential gate below 3)
+    with pytest.raises(ValueError):
+        livekit_lane.run_livekit_lane({"name": "smoke"}, rung=0)
+    # with the credentialed flag, rung-3 reaches the NotImplementedError wall
+    monkeypatch.setenv("AGENT_LEARNING_LIVE_CREDENTIALED", "1")
+    with pytest.raises(NotImplementedError):
+        livekit_lane.run_livekit_lane({"name": "smoke"}, rung=3)

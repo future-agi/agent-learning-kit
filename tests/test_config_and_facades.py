@@ -17620,6 +17620,15 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["voice_redteam_ab_verdicts"] == (
         trinity.V1_VOICE_REDTEAM_AB_VERDICTS
     )
+    # Phase 9A (voice loopback / codec-survival) payload mirrors
+    assert payload["voice_fidelity_tiers"] == list(trinity.V1_VOICE_FIDELITY_TIERS)
+    assert payload["voice_codecs"] == list(trinity.V1_VOICE_CODECS)
+    assert payload["voice_packet_loss_models"] == list(
+        trinity.V1_VOICE_PACKET_LOSS_MODELS
+    )
+    assert payload["voice_codec_profiles"] == list(trinity.V1_VOICE_CODEC_PROFILES)
+    assert payload["voice_failure_sublayers"] == list(trinity.V1_VOICE_FAILURE_SUBLAYERS)
+    assert payload["voice_loss_term_refs"] == list(trinity.V1_VOICE_LOSS_TERM_REFS)
     assert payload["required_redteam_readiness_certification_files"] == (
         trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
     )
@@ -18494,6 +18503,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "voice_redteam_readiness",
         "simulation_contract_readiness",
         "practice_loop_readiness",
+        "voice_loopback_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -19006,6 +19016,55 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert practice_loop["claims_errors"] == []
     # the claims-lint row is registered.
     assert trinity.V1_DOCS_CLAIM_PHRASE_GATES[r"\btrain(?:ing|er|ed|s)?\b"] == "practice_loop_readiness"
+    # ---- Phase 9A: voice loopback readiness gate (M4) ----
+    voice_loopback = checks["voice_loopback_readiness"]["evidence"]
+    assert voice_loopback["kind"] == "agent-learning.voice-loopback-readiness.v1"
+    assert checks["voice_loopback_readiness"]["milestone"] == "M4"
+    # frozen-canon mirrors (mirror == module/voice_loop canon cross-pin):
+    assert voice_loopback["voice_fidelity_tiers"] == list(trinity.V1_VOICE_FIDELITY_TIERS)
+    assert voice_loopback["voice_codecs"] == list(trinity.V1_VOICE_CODECS)
+    assert voice_loopback["voice_packet_loss_models"] == list(
+        trinity.V1_VOICE_PACKET_LOSS_MODELS
+    )
+    assert voice_loopback["voice_codec_profiles"] == list(trinity.V1_VOICE_CODEC_PROFILES)
+    assert voice_loopback["voice_failure_sublayers"] == list(
+        trinity.V1_VOICE_FAILURE_SUBLAYERS
+    )
+    assert voice_loopback["voice_loss_term_refs"] == list(trinity.V1_VOICE_LOSS_TERM_REFS)
+    # the eight arrays:
+    assert voice_loopback["missing_files"] == []
+    assert voice_loopback["loopback_determinism_errors"] == []
+    assert voice_loopback["codec_roundtrip_errors"] == []
+    assert voice_loopback["metrics_wiring_errors"] == []
+    assert voice_loopback["voice_loss_errors"] == []
+    assert voice_loopback["evidence_class_errors"] == []
+    assert voice_loopback["phone_survival_errors"] == []
+    assert voice_loopback["rung_honesty_errors"] == []
+    # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
+    from agent_learning.live import _contract as _live_contract
+    assert tuple(_live_contract.EVIDENCE_CLASSES) == (
+        "local_gate", "live_lane", "live_stressed", "captured_fixture"
+    )
+    # cross-pin: trinity mirrors == the voice_loop / _codec canon (GUNA_AXES pattern)
+    from agent_learning import voice_loop as _voice_loop
+    from agent_learning.live import _codec as _live_codec
+    assert tuple(trinity.V1_VOICE_LOSS_TERM_REFS) == _voice_loop.V1_VOICE_LOSS_TERM_REFS
+    assert tuple(trinity.V1_VOICE_FAILURE_SUBLAYERS) == _voice_loop.V1_VOICE_FAILURE_SUBLAYERS
+    assert tuple(trinity.V1_VOICE_CODECS) == _live_codec.V1_VOICE_CODECS
+    assert tuple(trinity.V1_VOICE_CODEC_PROFILES) == _live_codec.V1_VOICE_CODEC_PROFILES
+    # cross-pin: the rung-1 phone_survival pin is byte-equal to the live constant
+    from agent_learning.live import voice_redteam as _vrt
+    assert (
+        tuple(trinity.V1_VOICE_PHONE_SURVIVAL_RUNG1.items())
+        == tuple(_vrt.PHONE_SURVIVAL_RUNG1.items())
+    )
+    # the new claims-lint row is registered (unit 6.5)
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:codec[- ]survival|audio[- ]loopback)\b"
+        ]
+        == "voice_loopback_readiness"
+    )
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (

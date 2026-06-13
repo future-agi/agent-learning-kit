@@ -10,12 +10,14 @@ success a capture candidate may be emitted via the existing ``_capture`` engine
 (unit 5) — the attack block rides the ``scenario`` payload; the provenance schema
 is untouched.
 
-Honest tiering is structural: the lanes raise ``NotImplementedError`` for any
-rung != 1, and the acoustic operators raise at text-rung — there is no path by
-which an acoustic/phone claim can be made before the audio channel (Phase-9A
-loopback) exists. Every artifact stamps ``attack_rung: "transcript_level"`` and
-the rung-1 ``phone_survival`` pin ``{"status": "untested", "tier":
-"research_pinned"}``.
+Honest tiering is structural. At rung-1 the acoustic operators raise at
+text-rung and every artifact stamps ``attack_rung: "transcript_level"`` and the
+``phone_survival`` pin ``{"status": "untested", "tier": "research_pinned"}``.
+Phase-9A adds the rung-2 loopback transport (the audio channel the wall
+referenced), so a rung-2 campaign with a codec round-trip EARNS the computed
+``phone_survival`` (``tier: "channel_simulated"``) and flips ``attack_rung`` to
+``audio_level`` — by computation, never by relaxing the pin. rung-1 records keep
+the byte-identical transcript-level stamp + research_pinned pin.
 """
 
 from __future__ import annotations
@@ -26,6 +28,11 @@ from typing import Any, Mapping, Optional, Sequence
 # The rung-1 pin (P12-D2): no deployable-channel wording without channel proof.
 PHONE_SURVIVAL_RUNG1 = {"status": "untested", "tier": "research_pinned"}
 ATTACK_RUNG_TRANSCRIPT = "transcript_level"
+# Phase 9A unit 3b: the honesty-pin UPGRADE the codec scorer enables. The
+# attack_rung flips transcript_level -> audio_level ONLY on rung-2+ records
+# (where a real audio channel + codec round-trip exists). rung-1 keeps the
+# byte-identical transcript_level stamp + the research_pinned phone_survival pin.
+ATTACK_RUNG_AUDIO = "audio_level"
 
 AUTHORIZATION_RELATIONSHIPS = ("owned", "authorized", "kit_local")
 _AUTHORIZATION_FIELDS = (
@@ -337,24 +344,48 @@ def run_voice_escalation_campaign(
     )
     hardening = simulator_hardening(transcript_events)
 
-    # 5. campaign stanza
+    # 5. campaign stanza — Phase 9A unit 3b: the honesty-pin UPGRADE.
+    # At rung-1 the pin stays byte-identical {untested, research_pinned} and
+    # attack_rung stays transcript_level. At rung-2 (when the lane attached a
+    # computed channels.phone_survival via the codec round-trip), the campaign
+    # earns the computed object (tier: channel_simulated) and attack_rung flips
+    # to audio_level — but only by computation, never by relaxing the pin.
+    computed_phone_survival = None
+    if rung >= 2:
+        channels = stressed_payload.get("channels")
+        if isinstance(channels, Mapping):
+            ps = channels.get("phone_survival")
+            if isinstance(ps, Mapping) and ps.get("tier") in (
+                "channel_simulated",
+                "channel_live",
+            ):
+                computed_phone_survival = dict(ps)
+    attack_rung = (
+        ATTACK_RUNG_AUDIO if computed_phone_survival is not None else ATTACK_RUNG_TRANSCRIPT
+    )
+    phone_survival = (
+        computed_phone_survival
+        if computed_phone_survival is not None
+        else dict(PHONE_SURVIVAL_RUNG1)
+    )
+
     voice_redteam = {
         "arc": arc_turns,
         "lane": lane,
         "rung_label": _rung_label(rung),
-        "attack_rung": ATTACK_RUNG_TRANSCRIPT,
+        "attack_rung": attack_rung,
         "operators": op_list,
         "seed": seed,
         "paired": {"clean_run": clean_run_id, "stressed_run": (stressed_payload.get("live_lane") or {}).get("run_id")},
         "authorization_preflight": authorization_preflight,
         "timing_fidelity": timing,
         "simulator_hardening": hardening,
-        "phone_survival": dict(PHONE_SURVIVAL_RUNG1),
+        "phone_survival": phone_survival,
     }
 
     payload = dict(stressed_payload)
     payload["voice_redteam"] = voice_redteam
-    payload["attack_rung"] = ATTACK_RUNG_TRANSCRIPT
+    payload["attack_rung"] = attack_rung
     payload["channel"] = "voice"
     payload["authorization_preflight"] = authorization_preflight
 

@@ -28,6 +28,7 @@
 - [Persona & Scenario Studio: typed test cases you can measure](docs/simulate/persona-scenario-studio.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.persona-library.v1
 - [The Regression Lifecycle: baseline, compare, promote, replay, shrink](docs/simulate/regression-lifecycle.md): twin=examples/sdk_regression_artifact_suite.py kind=agent-learning.baseline.v1
 - [Simulate Any Framework](docs/simulate/simulate-any-framework.md): twin=examples/sdk_multi_framework_simulation.py kind=agent-learning.suite.v1
+- [Voice loopback: the deterministic audio channel, credential-free](docs/simulate/voice-loopback.md): twin=examples/sdk_voice_loopback.py kind=agent-learning.run.v1
 - [Voice and Realtime: simulate the session before you dial it](docs/simulate/voice-realtime.md): twin=examples/sdk_framework_adapter_realtime_trace.py kind=agent-learning.run.v1
 - [Worlds and Hooks: simulate against executable state](docs/simulate/worlds-and-hooks.md): twin=examples/sdk_world_hooks_optimization.py kind=agent-learning.optimization.v1
 
@@ -45,6 +46,7 @@
 - [Optimizer Portfolio: choosing the optimizer with evidence](docs/optimize/optimizer-portfolio.md): twin=examples/sdk_optimizer_portfolio_optimization.py kind=agent-learning.optimization.v1
 - [Optimizer Profile Matrix: 33 declared cells, per-cell winners only](docs/optimize/optimizer-profile-matrix.md): twin=examples/sdk_optimizer_profile_matrix.py kind=agent-learning.optimization.v1
 - [Society of Agents: optimization as a sabha](docs/optimize/society-of-agents.md): twin=examples/sdk_redteam_society_optimization.py kind=agent-learning.optimization.v1
+- [Voice improvement loop: the 13D Practice Loop on voice](docs/optimize/voice-improvement.md): twin=examples/sdk_voice_improvement.py kind=agent-learning.practice-report.v1
 - [Workflow Profile Matrix: one workflow target, six frameworks](docs/optimize/workflow-profile-matrix.md): twin=examples/sdk_workflow_target_profile_matrix.py kind=agent-learning.optimization.v1
 - [World-Model Optimization](docs/optimize/world-model.md): twin=examples/sdk_world_hooks_optimization.py kind=agent-learning.optimization.v1
 

@@ -98,6 +98,81 @@ def test_campaign_rung_wall_and_authorization_ordering(monkeypatch):
     assert exc.value.finding["type"] == "voice_target_authorization_missing"
 
 
+# --- Phase 9A unit 3b: the honesty-pin UPGRADE (research-pin -> computed) ----
+# These run flag-free by stubbing the lane runner with a deterministic payload
+# (the lane dispatch itself is unit-2 tested; here we prove the rung-aware
+# phone_survival / attack_rung flip in the campaign stanza).
+
+
+def _stub_lane_runner(monkeypatch, *, channels=None):
+    """Replace the campaign's lane runner with a deterministic stub so the
+    rung-aware stanza logic can be tested without an env flag / framework."""
+    from agent_learning.live import voice_redteam
+
+    def runner(scenario, *, rung=1, repeats=4, stressed=False, perturbations=None,
+               seed=0, required_env=None, artifacts_dir=None, **kw):
+        payload = {
+            "kind": "agent-learning.run.v1",
+            "live_lane": {"run_id": f"stub{rung}{int(stressed)}"},
+            "summary": {"verdict": "pass"},
+            "realtime_trace": {"items": []},
+            "evidence_class": "live_stressed" if (stressed or rung == 2) else "live_lane",
+        }
+        if channels is not None and rung == 2:
+            payload["channels"] = channels
+            payload["fidelity_tier"] = "deterministic_loopback"
+        return payload
+
+    monkeypatch.setattr(voice_redteam, "_resolve_lane_runner", lambda lane: runner)
+    return voice_redteam
+
+
+def test_rung1_campaign_keeps_research_pinned(monkeypatch):
+    vr = _stub_lane_runner(monkeypatch)
+    payload = vr.run_voice_escalation_campaign(
+        _scenario(), lane="livekit", rung=1, seed=7, capture_candidates=False
+    )
+    assert payload["voice_redteam"]["phone_survival"] == {
+        "status": "untested",
+        "tier": "research_pinned",
+    }
+    assert payload["voice_redteam"]["attack_rung"] == "transcript_level"
+    assert payload["attack_rung"] == "transcript_level"
+
+
+def test_rung2_campaign_computes_phone_survival_and_flips_attack_rung(monkeypatch):
+    computed = {
+        "status": "partial",
+        "tier": "channel_simulated",
+        "reason": "codec=g711_ulaw ...",
+        "pre_channel_success": 0.8,
+        "post_channel_success": 0.5,
+        "band_energy_lt_4khz": 0.9,
+    }
+    vr = _stub_lane_runner(
+        monkeypatch,
+        channels={
+            "derived": {"ttfb_ms": 100.0},
+            "source": "derive_channel_evidence",
+            "rung": "loopback_transport",
+            "fidelity_tier": "deterministic_loopback",
+            "phone_survival": computed,
+        },
+    )
+    payload = vr.run_voice_escalation_campaign(
+        _scenario(), lane="livekit", rung=2, seed=7, capture_candidates=False
+    )
+    ps = payload["voice_redteam"]["phone_survival"]
+    assert ps["tier"] == "channel_simulated"
+    assert ps["status"] == "partial"
+    assert "pre_channel_success" in ps  # the 3 computed-evidence fields ride
+    # attack_rung flips to audio_level ONLY on the rung-2 record
+    assert payload["voice_redteam"]["attack_rung"] == "audio_level"
+    assert payload["attack_rung"] == "audio_level"
+    # no rung-2 artifact carries evidence_class live_lane
+    assert payload["evidence_class"] != "live_lane"
+
+
 # --- lane tier (env-gated, auto-skip bare) ----------------------------------
 
 pytestmark = []

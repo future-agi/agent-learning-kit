@@ -21,7 +21,12 @@ from typing import Any, Mapping, Optional, Sequence
 from ._contract import lane_budget_s, require_lane_enabled
 from ._perturb import apply_text_perturbations, perturbations_stanza
 from ._runner import run_worker_once
-from ._stats import lane_run_payload, primary_transcript_events, run_repeated
+from ._stats import (
+    derive_channel_evidence,
+    lane_run_payload,
+    primary_transcript_events,
+    run_repeated,
+)
 
 _WORKERS = Path(__file__).resolve().parent / "_workers"
 _RUNG_LABELS = {1: "virtual_clock", 2: "loopback_transport", 3: "cloud_sip"}
@@ -98,6 +103,75 @@ def _realtime_state(
     }
 
 
+def _rung2_loopback_channels(
+    turns: Sequence[Mapping[str, Any]],
+    *,
+    loopback: Optional[Mapping[str, Any]],
+    codec_profile: str,
+    seed: int,
+) -> tuple[dict[str, Any], str]:
+    """Phase 9A unit 2 — the rung-2 loopback dispatch (§2.1 / §2.5).
+
+    Produce the two PCM streams via the deterministic ``_loopback`` round-trip,
+    apply the default-ON codec round-trip (9A-A11) unless ``codec_profile ==
+    "none"``, feed the ALREADY-BUILT ``derive_channel_evidence`` (REUSED, NOT
+    rebuilt), and return the ``channels`` block + the ``fidelity_tier`` marker.
+    The loopback module is reached via the sanctioned ``from agent_learning import
+    live`` function-body idiom (cli.py front-door idiom) so this module stays
+    framework-free and the ``live_lane_boundary`` import discipline holds."""
+
+    from agent_learning import live  # sanctioned facade idiom (cli.py)
+
+    cfg = dict(loopback or {})
+    tick_ms = float(cfg.get("tick_ms", live._loopback.DEFAULT_TICK_MS))
+    sample_rate = int(cfg.get("sample_rate", live._loopback.DEFAULT_SAMPLE_RATE))
+    loop_seed = int(cfg.get("seed", seed))
+    profile = str(cfg.get("codec_profile", codec_profile))
+
+    loop = live._loopback.run_loopback_roundtrip(
+        list(turns),
+        user_wav=cfg.get("user_wav"),
+        agent_wav=cfg.get("agent_wav"),
+        tick_ms=tick_ms,
+        sample_rate=sample_rate,
+        seed=loop_seed,
+    )
+    user_pcm, agent_pcm = loop["user_pcm"], loop["agent_pcm"]
+
+    codec_record: dict[str, Any] | None = None
+    phone_survival: dict[str, Any] | None = None
+    if profile != "none":
+        user_pcm, agent_pcm, codec_record = live._codec.apply_codec_profile(
+            user_pcm, agent_pcm, profile=profile, seed=loop_seed, sample_rate=sample_rate
+        )
+        codec, packet_loss = live._codec._PROFILE_BUNDLE[profile]
+        phone_survival = live._codec.score_codec_survival(
+            loop["user_pcm"],
+            loop["agent_pcm"],
+            codec=codec,
+            packet_loss=packet_loss,
+            seed=loop_seed,
+            sample_rate=sample_rate,
+        )
+
+    derived = derive_channel_evidence(
+        user_pcm, agent_pcm, sample_rate=(8000 if profile != "none" else sample_rate)
+    )
+    channels: dict[str, Any] = {
+        "derived": derived,
+        "source": "derive_channel_evidence",
+        "rung": _RUNG_LABELS[2],
+        "fidelity_tier": "deterministic_loopback",
+        "seed": loop_seed,
+        "loopback_provenance": loop["provenance"],
+    }
+    if codec_record is not None:
+        channels["codec_round_trip"] = codec_record
+    if phone_survival is not None:
+        channels["phone_survival"] = phone_survival
+    return channels, "deterministic_loopback"
+
+
 def run_livekit_lane(
     scenario: Mapping[str, Any],
     *,
@@ -110,28 +184,50 @@ def run_livekit_lane(
     version_requirement: str | None = None,
     budget_s: float | None = None,
     artifacts_dir: str | Path | None = None,
+    # Phase 9A (BBG A2): additive optional loopback config consumed ONLY on the
+    # rung==2 branch; rung-1/rung-3 callers are unaffected.
+    loopback: Optional[Mapping[str, Any]] = None,
+    codec_profile: str = "g711_ulaw_8k_ge",
 ) -> dict[str, Any]:
     require_lane_enabled("livekit")
     if rung >= 3:
         require_lane_enabled("credentialed")
     if rung not in _RUNG_LABELS:
         raise ValueError(f"rung must be one of {sorted(_RUNG_LABELS)}, got {rung}")
-    if rung != 1:
-        # Rung-1 virtual-clock is the implemented default (P3-D3); the
-        # loopback-transport and Cloud/SIP rungs land with the lane test
-        # suites (build units 4-6) — flag discipline above applies already.
-        raise NotImplementedError(
-            f"livekit lane rung {rung} ({_RUNG_LABELS[rung]}) is not "
-            "implemented yet; rung 1 (virtual_clock) is the supported tier"
-        )
 
     required = tuple(required_env) if required_env is not None else ()
     operators = list(perturbations or (["asr_error"] if stressed else []))
-    evidence_class = "live_stressed" if operators else "live_lane"
     turns = _scenario_turns(scenario)
     applied: list[dict[str, Any]] = []
     if operators:
         turns, applied = apply_text_perturbations(turns, operators, seed=seed)
+
+    # Phase 9A unit 2: the rung wall narrows — rung-2 dispatches into the
+    # deterministic loopback (§2.1); rung-3 still raises (the owner live-proof,
+    # unit 7). rung-1 is completely untouched (timing-only, NO channels block).
+    channels: dict[str, Any] | None = None
+    fidelity_tier: str | None = None
+    if rung == 2:
+        channels, fidelity_tier = _rung2_loopback_channels(
+            turns, loopback=loopback, codec_profile=codec_profile, seed=seed
+        )
+        # §2.5 binding correction: a deterministic in-process loopback is
+        # NEVER live_lane. Default codec round-trip is ON (9A-A11) → a stressed
+        # run → live_stressed; a no-op (codec_profile="none") clean run is also
+        # live_stressed at rung-2 (it never claims live_lane). captured_fixture
+        # is reached through the capture flow, not here.
+        evidence_class = "live_stressed"
+    elif rung != 1:
+        # rung == 3: unchanged keyed path; still requires the credentialed flag
+        # + RUNG3_REQUIRED_ENV; rung-3 lands as the owner live-proof (unit 7).
+        raise NotImplementedError(
+            f"livekit lane rung {rung} ({_RUNG_LABELS[rung]}) is not "
+            "implemented yet; rung 1 (virtual_clock) and rung 2 "
+            "(loopback_transport) are the supported tiers — rung 3 (cloud_sip) "
+            "is the owner-keyed live-proof lane"
+        )
+    else:
+        evidence_class = "live_stressed" if operators else "live_lane"
 
     base_dir = (
         Path(artifacts_dir)
@@ -216,4 +312,11 @@ def run_livekit_lane(
         payload["live_lane"]["perturbations"] = perturbations_stanza(
             applied, seed=seed, paired_clean_run=None
         )
+    if channels is not None:
+        # rung-2: attach the dual-channel evidence + the fidelity marker (§2.5 /
+        # 9A-A10). fidelity_tier is a MARKER FIELD, not a new evidence class.
+        payload["channels"] = channels
+        if isinstance(payload.get("live_lane"), dict):
+            payload["live_lane"]["fidelity_tier"] = fidelity_tier
+        payload["fidelity_tier"] = fidelity_tier
     return payload
