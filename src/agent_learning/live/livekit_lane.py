@@ -109,16 +109,27 @@ def _rung2_loopback_channels(
     loopback: Optional[Mapping[str, Any]],
     codec_profile: str,
     seed: int,
-) -> tuple[dict[str, Any], str]:
-    """Phase 9A unit 2 — the rung-2 loopback dispatch (§2.1 / §2.5).
+    acoustic_operators: Sequence[str] = (),
+) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+    """Phase 9A unit 2 + Phase-12 12C rung-2 — the rung-2 loopback dispatch
+    (§2.1 / §2.5 + ARCH §2c).
 
     Produce the two PCM streams via the deterministic ``_loopback`` round-trip,
-    apply the default-ON codec round-trip (9A-A11) unless ``codec_profile ==
-    "none"``, feed the ALREADY-BUILT ``derive_channel_evidence`` (REUSED, NOT
-    rebuilt), and return the ``channels`` block + the ``fidelity_tier`` marker.
-    The loopback module is reached via the sanctioned ``from agent_learning import
-    live`` function-body idiom (cli.py front-door idiom) so this module stays
-    framework-free and the ``live_lane_boundary`` import discipline holds."""
+    apply the rung-2 ACOUSTIC operators (Phase-12 12C: ``mix_noise`` /
+    ``mix_interference`` / ``reverb_blend`` over the user PCM — the attack the
+    framework hears) BEFORE the codec stage, apply the default-ON codec
+    round-trip (9A-A11) unless ``codec_profile == "none"``, feed the
+    ALREADY-BUILT ``derive_channel_evidence`` (REUSED, NOT rebuilt), and return
+    the ``channels`` block + the ``fidelity_tier`` marker + the applied acoustic
+    operator records (the paired-clean stanza). The loopback module is reached
+    via the sanctioned ``from agent_learning import live`` function-body idiom so
+    this module stays framework-free and the ``live_lane_boundary`` import
+    discipline holds.
+
+    The codec-survival score is computed on the PERTURBED-then-channel signal so
+    ``phone_survival`` honestly reflects whether the acoustic attack reproduces
+    through the 8 kHz telephony channel (P12-D2): no ``survives``/``partial``
+    claim without a codec record."""
 
     from agent_learning import live  # sanctioned facade idiom (cli.py)
 
@@ -138,6 +149,20 @@ def _rung2_loopback_channels(
     )
     user_pcm, agent_pcm = loop["user_pcm"], loop["agent_pcm"]
 
+    # Phase-12 12C rung-2: the acoustic attack rides the USER channel (the side
+    # the framework hears). Applied to the CLEAN loopback PCM before the codec
+    # stage; deterministic under loop_seed. The agent side is untouched.
+    acoustic_applied: list[dict[str, Any]] = []
+    attacked_user_pcm = user_pcm
+    if acoustic_operators:
+        attacked_user_pcm, acoustic_applied = live._perturb.apply_acoustic_perturbations(
+            user_pcm,
+            list(acoustic_operators),
+            seed=loop_seed,
+            sample_rate=sample_rate,
+        )
+    user_pcm = attacked_user_pcm
+
     codec_record: dict[str, Any] | None = None
     phone_survival: dict[str, Any] | None = None
     if profile != "none":
@@ -145,9 +170,11 @@ def _rung2_loopback_channels(
             user_pcm, agent_pcm, profile=profile, seed=loop_seed, sample_rate=sample_rate
         )
         codec, packet_loss = live._codec._PROFILE_BUNDLE[profile]
+        # the attack rides the USER channel, so re-validate the user side through
+        # the channel (the clean user PCM is the pre-channel twin).
         phone_survival = live._codec.score_codec_survival(
             loop["user_pcm"],
-            loop["agent_pcm"],
+            attacked_user_pcm,
             codec=codec,
             packet_loss=packet_loss,
             seed=loop_seed,
@@ -169,7 +196,9 @@ def _rung2_loopback_channels(
         channels["codec_round_trip"] = codec_record
     if phone_survival is not None:
         channels["phone_survival"] = phone_survival
-    return channels, "deterministic_loopback"
+    if acoustic_applied:
+        channels["acoustic_operators"] = acoustic_applied
+    return channels, "deterministic_loopback", acoustic_applied
 
 
 def run_livekit_lane(
@@ -198,18 +227,40 @@ def run_livekit_lane(
     required = tuple(required_env) if required_env is not None else ()
     operators = list(perturbations or (["asr_error"] if stressed else []))
     turns = _scenario_turns(scenario)
+    # Phase-12 12C rung-2: split text-rung operators (applied to the turn script)
+    # from acoustic operators (applied to the rung-2 loopback PCM). At rung-1 an
+    # acoustic operator still raises inside ``apply_text_perturbations`` (the
+    # rung wall is unchanged for text-rung input).
+    from ._perturb import ACOUSTIC_RUNG_OPERATORS
+
+    acoustic_operators = [op for op in operators if op in ACOUSTIC_RUNG_OPERATORS]
+    text_operators = [op for op in operators if op not in ACOUSTIC_RUNG_OPERATORS]
+    if rung != 2 and acoustic_operators:
+        # acoustic operators require the rung-2 PCM channel; outside it they hit
+        # the same rung wall ``apply_text_perturbations`` enforces (no silent
+        # acoustic claim before the audio channel exists — ARCH §2c).
+        raise ValueError(
+            f"acoustic operators {acoustic_operators} need a real audio channel "
+            "(rung 2 loopback transport or above); rung "
+            f"{rung} ({_RUNG_LABELS[rung]}) is a text-rung tier"
+        )
     applied: list[dict[str, Any]] = []
-    if operators:
-        turns, applied = apply_text_perturbations(turns, operators, seed=seed)
+    if text_operators:
+        turns, applied = apply_text_perturbations(turns, text_operators, seed=seed)
 
     # Phase 9A unit 2: the rung wall narrows — rung-2 dispatches into the
     # deterministic loopback (§2.1); rung-3 still raises (the owner live-proof,
     # unit 7). rung-1 is completely untouched (timing-only, NO channels block).
     channels: dict[str, Any] | None = None
     fidelity_tier: str | None = None
+    acoustic_applied: list[dict[str, Any]] = []
     if rung == 2:
-        channels, fidelity_tier = _rung2_loopback_channels(
-            turns, loopback=loopback, codec_profile=codec_profile, seed=seed
+        channels, fidelity_tier, acoustic_applied = _rung2_loopback_channels(
+            turns,
+            loopback=loopback,
+            codec_profile=codec_profile,
+            seed=seed,
+            acoustic_operators=acoustic_operators,
         )
         # §2.5 binding correction: a deterministic in-process loopback is
         # NEVER live_lane. Default codec round-trip is ON (9A-A11) → a stressed
@@ -308,9 +359,12 @@ def run_livekit_lane(
             "voice_timing": _voice_timing(events),
         },
     )
-    if applied:
+    # the perturbations stanza carries BOTH families (text-rung records + the
+    # rung-2 acoustic records); the clean-twin link is filled by the campaign.
+    all_applied = list(applied) + list(acoustic_applied)
+    if all_applied:
         payload["live_lane"]["perturbations"] = perturbations_stanza(
-            applied, seed=seed, paired_clean_run=None
+            all_applied, seed=seed, paired_clean_run=None
         )
     if channels is not None:
         # rung-2: attach the dual-channel evidence + the fidelity marker (§2.5 /

@@ -166,11 +166,76 @@ def test_rung2_campaign_computes_phone_survival_and_flips_attack_rung(monkeypatc
     assert ps["tier"] == "channel_simulated"
     assert ps["status"] == "partial"
     assert "pre_channel_success" in ps  # the 3 computed-evidence fields ride
-    # attack_rung flips to audio_level ONLY on the rung-2 record
-    assert payload["voice_redteam"]["attack_rung"] == "audio_level"
-    assert payload["attack_rung"] == "audio_level"
+    # attack_rung flips to the canonical "acoustic" ONLY on the rung-2 record
+    # (Phase-12 12C rung-2 reconciled 9A's interim "audio_level" → the
+    # gate-pinned V1_VOICE_ATTACK_RUNGS token "acoustic").
+    assert payload["voice_redteam"]["attack_rung"] == "acoustic"
+    assert payload["attack_rung"] == "acoustic"
+    # "acoustic" is in the canonical Phase-12 attack-rung vocabulary
+    from agent_learning import trinity
+
+    assert "acoustic" in trinity.V1_VOICE_ATTACK_RUNGS
+    # the legacy 9A token is retained as a back-compat alias only
+    assert vr.ATTACK_RUNG_AUDIO == "acoustic"
     # no rung-2 artifact carries evidence_class live_lane
     assert payload["evidence_class"] != "live_lane"
+
+
+def test_rung1_acoustic_operator_raises_rung2_passes(monkeypatch):
+    # Phase-12 12C rung-2: an acoustic operator raises at rung-1 (no audio
+    # channel) but is accepted at rung-2 and forwarded to the lane runner.
+    from agent_learning.live import voice_redteam
+
+    scenario = _scenario()
+    # rung-1: acoustic operator hits the campaign rung wall
+    with pytest.raises(ValueError):
+        voice_redteam.run_voice_escalation_campaign(
+            scenario, lane="livekit", rung=1, operators=["noise"]
+        )
+
+    # rung-2: the acoustic operator flows through to the (stubbed) lane runner
+    seen = {}
+
+    def runner(scenario, *, rung=1, repeats=4, stressed=False, perturbations=None,
+               seed=0, required_env=None, artifacts_dir=None, **kw):
+        seen.setdefault(rung, []).append(list(perturbations or []))
+        payload = {
+            "kind": "agent-learning.run.v1",
+            "live_lane": {"run_id": f"stub{rung}{int(stressed)}"},
+            "summary": {"verdict": "pass"},
+            "realtime_trace": {"items": []},
+            "evidence_class": "live_stressed" if rung == 2 else "live_lane",
+        }
+        if rung == 2 and perturbations:
+            payload["channels"] = {
+                "derived": {"ttfb_ms": 100.0},
+                "source": "derive_channel_evidence",
+                "rung": "loopback_transport",
+                "fidelity_tier": "deterministic_loopback",
+                "acoustic_operators": [{"operator": "reverb_blend", "seed": seed}],
+                "phone_survival": {
+                    "status": "survives",
+                    "tier": "channel_simulated",
+                    "reason": "codec=g711_ulaw ...",
+                    "pre_channel_success": 0.7,
+                    "post_channel_success": 0.65,
+                    "band_energy_lt_4khz": 0.95,
+                },
+            }
+            payload["fidelity_tier"] = "deterministic_loopback"
+        return payload
+
+    monkeypatch.setattr(voice_redteam, "_resolve_lane_runner", lambda lane: runner)
+    payload = voice_redteam.run_voice_escalation_campaign(
+        scenario, lane="livekit", rung=2, operators=["reverb_blend"], seed=7,
+        capture_candidates=False,
+    )
+    # the acoustic operator was forwarded to BOTH the clean and stressed lane runs
+    assert any("reverb_blend" in ops for ops in seen.get(2, []))
+    # the campaign earned the computed phone_survival + flipped attack_rung
+    assert payload["voice_redteam"]["phone_survival"]["tier"] == "channel_simulated"
+    assert payload["voice_redteam"]["attack_rung"] == "acoustic"
+    assert payload["attack_rung"] == "acoustic"
 
 
 # --- lane tier (env-gated, auto-skip bare) ----------------------------------

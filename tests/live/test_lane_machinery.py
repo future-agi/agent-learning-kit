@@ -560,6 +560,56 @@ def test_perturbations_stanza_links_clean_twin():
     assert stanza["seed"] == 3
 
 
+# --- Phase-12 12C rung-2: acoustic operators (direct, pre-loopback) ----------
+
+
+def test_reverb_blend_deterministic_and_text_rung_raises():
+    import numpy as np
+
+    from agent_learning.live import _perturb
+
+    x = (0.5 * np.sin(2 * np.pi * 220 * np.arange(8000) / 24000)).astype(np.float32)
+    a = _perturb.apply_reverb_blend(x, seed=1142)
+    b = _perturb.apply_reverb_blend(x, seed=1142)
+    assert np.array_equal(a, b)  # same seed → identical
+    assert not np.array_equal(a, _perturb.apply_reverb_blend(x, seed=7))  # seed differs
+    assert a.shape == x.shape  # length-preserving blend (wet mixed in)
+    # an empty / zero-decay input is the identity
+    assert _perturb.apply_reverb_blend(x, decay=0.0).shape == x.shape
+    # text-rung input raises (the rung wall, mirrors mix_noise)
+    with pytest.raises(ValueError):
+        _perturb.apply_reverb_blend("hello")
+
+
+def test_apply_acoustic_perturbations_dispatch_records_and_rung_wall():
+    import numpy as np
+
+    from agent_learning.live import _perturb
+
+    x = (0.5 * np.sin(2 * np.pi * 300 * np.arange(8000) / 24000)).astype(np.float32)
+    out, applied = _perturb.apply_acoustic_perturbations(
+        x, ["noise", "interference", "reverb_blend"], seed=5
+    )
+    assert [r["operator"] for r in applied] == ["noise", "interference", "reverb_blend"]
+    for rec in applied:
+        assert rec["seed"] == 5
+    # deterministic under the seed
+    out2, _ = _perturb.apply_acoustic_perturbations(
+        x, ["noise", "interference", "reverb_blend"], seed=5
+    )
+    assert np.array_equal(out, out2)
+    # a text-rung operator over the PCM channel raises (rung wall, both directions)
+    with pytest.raises(ValueError):
+        _perturb.apply_acoustic_perturbations(x, ["homophone"], seed=5)
+    # an unknown operator raises
+    with pytest.raises(ValueError):
+        _perturb.apply_acoustic_perturbations(x, ["not_an_op"], seed=5)
+    # ACOUSTIC_RUNG_OPERATORS is the closed acoustic set; reverb_blend registered
+    assert _perturb.ACOUSTIC_RUNG_OPERATORS == ("noise", "interference", "reverb_blend")
+    assert "reverb_blend" in _perturb.PERTURBATION_OPERATORS
+    assert "reverb_blend" not in _perturb.TEXT_RUNG_OPERATORS
+
+
 # --- Phase 9A unit 2: the rung-2 loopback dispatch helper (flag-free; pure
 # stdlib+numpy; the dispatch the rung-2 lane branch calls) -------------------
 
@@ -572,13 +622,14 @@ _RUNG2_TURNS = [
 def test_rung2_produces_channels_block():
     from agent_learning.live import livekit_lane
 
-    channels, tier = livekit_lane._rung2_loopback_channels(
+    channels, tier, acoustic = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=5
     )
     assert channels["source"] == "derive_channel_evidence"
     assert channels["rung"] == "loopback_transport"
     assert channels["fidelity_tier"] == "deterministic_loopback"
     assert tier == "deterministic_loopback"
+    assert acoustic == []  # no acoustic operators → no records
     # the §1.2 derived keys are present
     for key in ("barge_in_latency_ms", "overlap_total_ms", "ttfb_ms", "frame_ms"):
         assert key in channels["derived"]
@@ -590,7 +641,7 @@ def test_rung2_produces_channels_block():
 def test_rung2_codec_none_optout_no_phone_survival():
     from agent_learning.live import livekit_lane
 
-    channels, _ = livekit_lane._rung2_loopback_channels(
+    channels, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback={"codec_profile": "none"}, codec_profile="none", seed=5
     )
     assert "derived" in channels  # channels block still present
@@ -604,7 +655,7 @@ def test_rung2_evidence_class_never_live_lane():
     from agent_learning.live import livekit_lane, pipecat_lane
 
     for mod in (livekit_lane, pipecat_lane):
-        channels, tier = mod._rung2_loopback_channels(
+        channels, tier, _ = mod._rung2_loopback_channels(
             _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=9
         )
         assert tier == "deterministic_loopback"
@@ -617,10 +668,10 @@ def test_rung2_evidence_class_never_live_lane():
 def test_rung2_loopback_deterministic_under_seed():
     from agent_learning.live import livekit_lane
 
-    a, _ = livekit_lane._rung2_loopback_channels(
+    a, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142
     )
-    b, _ = livekit_lane._rung2_loopback_channels(
+    b, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142
     )
     # the derived block is identical under the same seed (the determinism the
@@ -632,15 +683,84 @@ def test_rung2_loopback_deterministic_under_seed():
 def test_pipecat_rung2_byte_parallel():
     from agent_learning.live import livekit_lane, pipecat_lane
 
-    lk, _ = livekit_lane._rung2_loopback_channels(
+    lk, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=4
     )
-    pc, _ = pipecat_lane._rung2_loopback_channels(
+    pc, _, _ = pipecat_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=4
     )
     # both lanes stamp the byte-identical rung-2 label + the same channels shape
     assert lk["rung"] == pc["rung"] == "loopback_transport"
     assert set(lk) == set(pc)
+
+
+# --- Phase-12 12C rung-2: acoustic operators over the loopback PCM channel ----
+
+
+def test_rung2_acoustic_operators_apply_over_loopback_and_record():
+    from agent_learning.live import livekit_lane, pipecat_lane
+
+    for mod in (livekit_lane, pipecat_lane):
+        clean, _, clean_app = mod._rung2_loopback_channels(
+            _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=7,
+            acoustic_operators=[],
+        )
+        attacked, _, app = mod._rung2_loopback_channels(
+            _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=7,
+            acoustic_operators=["noise", "reverb_blend"],
+        )
+        assert clean_app == []
+        # the applied records carry operator + seed (paired-clean stanza shape)
+        assert [r["operator"] for r in app] == ["noise", "reverb_blend"]
+        for rec in app:
+            assert rec["seed"] == 7
+        assert attacked["acoustic_operators"] == app
+        # phone_survival is COMPUTED (channel_simulated) with the 3 evidence
+        # fields — an honest channel record, never a research pin.
+        ps = attacked["phone_survival"]
+        assert ps["tier"] == "channel_simulated"
+        for f in ("pre_channel_success", "post_channel_success", "band_energy_lt_4khz"):
+            assert f in ps
+        # the acoustic attack changes the channel signal → phone_survival's
+        # post-channel evidence differs from the clean twin (the attack is real,
+        # measured on the user side that carries the perturbation).
+        assert (
+            attacked["phone_survival"]["post_channel_success"]
+            != clean["phone_survival"]["post_channel_success"]
+        )
+
+
+def test_rung2_acoustic_operator_determinism_over_loopback():
+    # the gate-asserted rung-2 contract: same seed → BYTE-IDENTICAL channels
+    # (the acoustic operator over the loopback replays exactly).
+    import json
+
+    from agent_learning.live import livekit_lane
+
+    a, _, app_a = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
+        acoustic_operators=["noise", "interference", "reverb_blend"],
+    )
+    b, _, app_b = livekit_lane._rung2_loopback_channels(
+        _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
+        acoustic_operators=["noise", "interference", "reverb_blend"],
+    )
+    assert json.dumps(a, sort_keys=True, default=str) == json.dumps(
+        b, sort_keys=True, default=str
+    )
+    assert app_a == app_b
+
+
+def test_rung2_acoustic_text_operator_raises_over_pcm():
+    # the rung wall runs in both directions: a text-rung operator over the PCM
+    # channel is a contract error (mirrors mix_noise over a transcript raising).
+    from agent_learning.live import livekit_lane
+
+    with pytest.raises(ValueError):
+        livekit_lane._rung2_loopback_channels(
+            _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=3,
+            acoustic_operators=["homophone"],
+        )
 
 
 def test_rung3_still_raises_without_keys(monkeypatch):

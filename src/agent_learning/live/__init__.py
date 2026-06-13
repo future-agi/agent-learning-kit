@@ -89,6 +89,10 @@ _LAZY_EXPORTS = {
     "timing_fidelity": "voice_redteam",
     "validate_authorization": "voice_redteam",
     "VoiceAuthorizationError": "voice_redteam",
+    # Phase-12 12C rung-2: acoustic operators over the loopback PCM channel.
+    "apply_acoustic_perturbations": "_perturb",
+    "apply_reverb_blend": "_perturb",
+    "ACOUSTIC_RUNG_OPERATORS": "_perturb",
     # Phase 9A: codec-survival facade (9A-A12, home _codec) + loopback runner
     "score_codec_survival": "_codec",
     "CodecUnsupportedError": "_codec",

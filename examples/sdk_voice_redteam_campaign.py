@@ -401,6 +401,132 @@ def _detection() -> dict[str, Any]:
     }
 
 
+def _rung2_acoustic() -> dict[str, Any]:
+    """Phase-12 12C rung-2: acoustic operators over the Phase-9A loopback PCM +
+    computed phone_survival honesty + attack_rung correctness.
+
+    Runs ENTIRELY offline (no env flag / no lane subprocess): the rung-2 loopback
+    dispatch helper (``_rung2_loopback_channels``) is pure stdlib+numpy and is the
+    exact dispatch the rung-2 lane branch calls. Proves: acoustic operators apply
+    over the loopback PCM and replay byte-identically under the seed; the
+    text-rung wall holds in both directions; the codec round-trip yields a COMPUTED
+    ``phone_survival`` (``channel_simulated`` + the 3 evidence fields), never a
+    research pin; ``reverb_blend`` (the BBG-deferred operator) is registered."""
+
+    from agent_learning.live import _perturb, livekit_lane, pipecat_lane
+
+    turns = [
+        {"user": "please confirm my appointment and transfer the balance"},
+        {"user": "send the receipt to my new account right here now"},
+    ]
+    acoustic_ops = ["noise", "interference", "reverb_blend"]
+
+    # determinism over the loopback: same seed → BYTE-IDENTICAL channels.
+    a, _tier_a, app_a = livekit_lane._rung2_loopback_channels(
+        turns, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
+        acoustic_operators=acoustic_ops,
+    )
+    b, _tier_b, app_b = livekit_lane._rung2_loopback_channels(
+        turns, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
+        acoustic_operators=acoustic_ops,
+    )
+    operator_deterministic = (
+        json.dumps(a, sort_keys=True, default=str)
+        == json.dumps(b, sort_keys=True, default=str)
+        and app_a == app_b
+    )
+
+    # the clean twin (no acoustic operators) vs the attacked run.
+    clean, _ct, clean_app = livekit_lane._rung2_loopback_channels(
+        turns, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
+        acoustic_operators=[],
+    )
+    # the acoustic attack genuinely degrades the channel signal (the user side
+    # carrying the perturbation): post-channel success differs from the clean twin.
+    attack_changes_channel = (
+        a["phone_survival"]["post_channel_success"]
+        != clean["phone_survival"]["post_channel_success"]
+    )
+
+    # computed phone_survival honesty: channel_simulated + the 3 evidence fields,
+    # status in the closed set; NEVER a research pin on a channel-validated row.
+    ps = a["phone_survival"]
+    computed_phone_survival_honest = (
+        ps["tier"] == "channel_simulated"
+        and ps["status"] in ("survives", "partial", "dies", "untested")
+        and all(
+            f in ps
+            for f in ("pre_channel_success", "post_channel_success", "band_energy_lt_4khz")
+        )
+        # the clean-PCM opt-out (codec_profile="none") carries NO phone_survival.
+        and "phone_survival"
+        not in livekit_lane._rung2_loopback_channels(
+            turns, loopback={"codec_profile": "none"}, codec_profile="none", seed=1142,
+            acoustic_operators=acoustic_ops,
+        )[0]
+    )
+
+    # the applied acoustic operator records ride the channels block + the
+    # perturbations stanza shape (operator + seed).
+    applied_records_complete = (
+        clean_app == []
+        and [r["operator"] for r in app_a] == acoustic_ops
+        and all("seed" in r for r in app_a)
+        and a.get("acoustic_operators") == app_a
+    )
+
+    # the rung wall runs in BOTH directions: a text-rung operator over the PCM
+    # channel raises; an acoustic operator over a transcript raises.
+    import numpy as np
+
+    pcm_probe = np.zeros(8, dtype=np.float32)
+    acoustic_text_op_raises = False
+    try:
+        _perturb.apply_acoustic_perturbations(pcm_probe, ["homophone"], seed=1)
+    except ValueError:
+        acoustic_text_op_raises = True
+    text_acoustic_op_raises = False
+    try:
+        _perturb.apply_text_perturbations([{"user": "x"}], ["reverb_blend"], seed=1)
+    except ValueError:
+        text_acoustic_op_raises = True
+
+    # byte-parallel across both lanes (the seam stays identical).
+    lk_keys = set(a)
+    pc, _pt, _pa = pipecat_lane._rung2_loopback_channels(
+        turns, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
+        acoustic_operators=acoustic_ops,
+    )
+    byte_parallel_lanes = lk_keys == set(pc) and a["rung"] == pc["rung"]
+
+    # attack_rung correctness: the canonical "acoustic" token (V1_VOICE_ATTACK_RUNGS).
+    from agent_learning.live import voice_redteam
+
+    attack_rung_canonical = (
+        voice_redteam.ATTACK_RUNG_ACOUSTIC == "acoustic"
+        and voice_redteam.ATTACK_RUNG_AUDIO == "acoustic"  # legacy alias reconciled
+    )
+
+    return {
+        "acoustic_operators": list(_perturb.ACOUSTIC_RUNG_OPERATORS),
+        "reverb_blend_registered": (
+            "reverb_blend" in _perturb.PERTURBATION_OPERATORS
+            and "reverb_blend" not in _perturb.TEXT_RUNG_OPERATORS
+        ),
+        "operator_deterministic_over_loopback": operator_deterministic,
+        "attack_changes_channel": attack_changes_channel,
+        "computed_phone_survival_honest": computed_phone_survival_honest,
+        "applied_records_complete": applied_records_complete,
+        "acoustic_text_op_raises": acoustic_text_op_raises,
+        "text_acoustic_op_raises": text_acoustic_op_raises,
+        "byte_parallel_lanes": byte_parallel_lanes,
+        "attack_rung": "acoustic",
+        "attack_rung_canonical": attack_rung_canonical,
+        "phone_survival": {k: ps[k] for k in ("status", "tier")},
+        "fidelity_tier": a["fidelity_tier"],
+    }
+
+
 def run(output_path: str | Path | None = None) -> dict[str, Any]:
     persona = Persona(**_load_json("personas/attacker.json"))
     scenario = Scenario(**_load_json("scenarios/adversarial.json"))
@@ -427,6 +553,8 @@ def run(output_path: str | Path | None = None) -> dict[str, Any]:
         "authorization": _authorization(),
         "pack": _pack(out),
         "detection": _detection(),
+        # Phase-12 12C rung-2: acoustic operators over the Phase-9A loopback.
+        "rung2": _rung2_acoustic(),
     }
 
     if out is not None:

@@ -14,10 +14,18 @@ Honest tiering is structural. At rung-1 the acoustic operators raise at
 text-rung and every artifact stamps ``attack_rung: "transcript_level"`` and the
 ``phone_survival`` pin ``{"status": "untested", "tier": "research_pinned"}``.
 Phase-9A adds the rung-2 loopback transport (the audio channel the wall
-referenced), so a rung-2 campaign with a codec round-trip EARNS the computed
-``phone_survival`` (``tier: "channel_simulated"``) and flips ``attack_rung`` to
-``audio_level`` — by computation, never by relaxing the pin. rung-1 records keep
-the byte-identical transcript-level stamp + research_pinned pin.
+referenced) and Phase-12 12C rung-2 wires the acoustic operators
+(``noise``/``interference``/``reverb_blend``) over that loopback PCM, so a
+rung-2 campaign with a codec round-trip EARNS the computed ``phone_survival``
+(``tier: "channel_simulated"``) and flips ``attack_rung`` to ``acoustic`` — by
+computation, never by relaxing the pin. rung-1 records keep the byte-identical
+transcript-level stamp + research_pinned pin.
+
+``attack_rung`` uses the canonical Phase-12 vocabulary
+``V1_VOICE_ATTACK_RUNGS = ("transcript_level", "acoustic", "telephony")`` (the
+gate-pinned set the corpus rows validate against). Phase-9A's interim
+``audio_level`` token is retained as a backward-compatible ALIAS but the
+rung-2 records stamp the canonical ``acoustic``.
 """
 
 from __future__ import annotations
@@ -28,11 +36,14 @@ from typing import Any, Mapping, Optional, Sequence
 # The rung-1 pin (P12-D2): no deployable-channel wording without channel proof.
 PHONE_SURVIVAL_RUNG1 = {"status": "untested", "tier": "research_pinned"}
 ATTACK_RUNG_TRANSCRIPT = "transcript_level"
-# Phase 9A unit 3b: the honesty-pin UPGRADE the codec scorer enables. The
-# attack_rung flips transcript_level -> audio_level ONLY on rung-2+ records
-# (where a real audio channel + codec round-trip exists). rung-1 keeps the
-# byte-identical transcript_level stamp + the research_pinned phone_survival pin.
-ATTACK_RUNG_AUDIO = "audio_level"
+# Phase 9A unit 3b / Phase-12 12C rung-2: the honesty-pin UPGRADE the codec
+# scorer enables. The attack_rung flips transcript_level -> acoustic ONLY on
+# rung-2+ records (where a real audio channel + codec round-trip exists). rung-1
+# keeps the byte-identical transcript_level stamp + the research_pinned pin.
+# ``acoustic`` is the canonical Phase-12 token (V1_VOICE_ATTACK_RUNGS); the
+# legacy ``audio_level`` is kept as a backward-compatible alias only.
+ATTACK_RUNG_ACOUSTIC = "acoustic"
+ATTACK_RUNG_AUDIO = ATTACK_RUNG_ACOUSTIC  # back-compat alias (9A interim token)
 
 AUTHORIZATION_RELATIONSHIPS = ("owned", "authorized", "kit_local")
 _AUTHORIZATION_FIELDS = (
@@ -290,16 +301,23 @@ def run_voice_escalation_campaign(
     from . import _perturb
 
     op_list = list(operators)
-    # the rung wall: text-rung input only accepts text-rung operators
+    # the rung wall (Phase-12 12C): text-rung operators apply at every rung;
+    # acoustic operators apply ONLY at rung >= 2 (over the loopback PCM). At
+    # rung-1 an acoustic operator still raises — no acoustic claim before the
+    # audio channel exists (ARCH §2c, the honest-tiering rail).
     for op in op_list:
-        if op not in _perturb.TEXT_RUNG_OPERATORS:
-            # mirror the lane's own ValueError discipline (unit 2 §2.3)
-            if op not in _perturb.PERTURBATION_OPERATORS:
-                raise ValueError(f"unknown perturbation operator {op!r}")
-            raise ValueError(
-                f"perturbation operator {op!r} needs a real audio channel "
-                "(rung 2 loopback transport or above)"
-            )
+        if op not in _perturb.PERTURBATION_OPERATORS:
+            raise ValueError(f"unknown perturbation operator {op!r}")
+        if op in _perturb.TEXT_RUNG_OPERATORS:
+            continue
+        if op in _perturb.ACOUSTIC_RUNG_OPERATORS and rung >= 2:
+            continue
+        # an acoustic operator at rung-1 (or any operator not in either set)
+        # hits the rung wall — mirror the lane's own ValueError discipline.
+        raise ValueError(
+            f"perturbation operator {op!r} needs a real audio channel "
+            "(rung 2 loopback transport or above)"
+        )
 
     lane_runner = _resolve_lane_runner(lane)
     arc_turns = compile_arc_turns(scenario)
@@ -344,12 +362,13 @@ def run_voice_escalation_campaign(
     )
     hardening = simulator_hardening(transcript_events)
 
-    # 5. campaign stanza — Phase 9A unit 3b: the honesty-pin UPGRADE.
-    # At rung-1 the pin stays byte-identical {untested, research_pinned} and
-    # attack_rung stays transcript_level. At rung-2 (when the lane attached a
-    # computed channels.phone_survival via the codec round-trip), the campaign
-    # earns the computed object (tier: channel_simulated) and attack_rung flips
-    # to audio_level — but only by computation, never by relaxing the pin.
+    # 5. campaign stanza — Phase 9A unit 3b + Phase-12 12C rung-2: the honesty-pin
+    # UPGRADE. At rung-1 the pin stays byte-identical {untested, research_pinned}
+    # and attack_rung stays transcript_level. At rung-2 (when the lane attached a
+    # computed channels.phone_survival via the codec round-trip over the acoustic
+    # attack), the campaign earns the computed object (tier: channel_simulated)
+    # and attack_rung flips to the canonical ``acoustic`` — only by computation,
+    # never by relaxing the pin.
     computed_phone_survival = None
     if rung >= 2:
         channels = stressed_payload.get("channels")
@@ -361,7 +380,7 @@ def run_voice_escalation_campaign(
             ):
                 computed_phone_survival = dict(ps)
     attack_rung = (
-        ATTACK_RUNG_AUDIO if computed_phone_survival is not None else ATTACK_RUNG_TRANSCRIPT
+        ATTACK_RUNG_ACOUSTIC if computed_phone_survival is not None else ATTACK_RUNG_TRANSCRIPT
     )
     phone_survival = (
         computed_phone_survival

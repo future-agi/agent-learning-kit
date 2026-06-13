@@ -1790,7 +1790,12 @@ def _run_voice_ab_harness(
         _emit_voice_payload(payload, parsed)
         return 1
 
-    # rung-2 acoustic operators requested before Phase-9A loopback lands.
+    # rung-2 acoustic operators: now reachable (Phase-9A loopback + Phase-12 12C
+    # rung-2 acoustic operators landed). A manifest that puts acoustic operators
+    # in its signal space MUST declare attack_rung: "acoustic" (or "telephony")
+    # — an acoustic operator under the default transcript_level rung is still a
+    # voice_rung_unavailable error (no silent acoustic claim at the text rung).
+    requested_attack_rung = str(manifest.get("attack_rung") or "transcript_level")
     requested_ops = set()
     for space_key in ("signal_space",):
         space = manifest.get(space_key) or {}
@@ -1799,21 +1804,22 @@ def _run_voice_ab_harness(
     acoustic_requested = sorted(
         op for op in requested_ops if op in _VOICE_ACOUSTIC_OPERATORS
     )
-    if acoustic_requested:
+    if acoustic_requested and requested_attack_rung == "transcript_level":
         finding = {
             "type": "voice_rung_unavailable",
             "level": "error",
             "requested_rung": "acoustic",
             "requested_operators": acoustic_requested,
             "reason": (
-                "acoustic operators require the loopback audio transport "
-                "(Phase 9A); this kit version implements rung-1 transcript_level "
-                "only"
+                "acoustic operators ride the rung-2 loopback audio channel; this "
+                "manifest declares attack_rung=transcript_level, so an acoustic "
+                "operator in its signal space is a rung mismatch (no acoustic "
+                "claim at the text rung — ARCH §2c)"
             ),
             "remediation": (
-                "run the transcript_level form of this campaign now (operators: "
-                "homophone, code_switch, near_dup, asr_error); the acoustic rung "
-                "lands as an increment when Phase-9A loopback ships"
+                "declare attack_rung: \"acoustic\" to run the rung-2 acoustic "
+                "form over the loopback channel, OR use the transcript_level "
+                "operators (homophone, code_switch, near_dup, asr_error)"
             ),
         }
         payload = _voice_finding_payload(finding, exit_code=1)
@@ -1832,6 +1838,7 @@ def _run_voice_ab_harness(
             eval_budget_per_arm=int(manifest["eval_budget_per_arm"]),
             seeds=tuple(manifest.get("seeds") or (7, 11, 13)),
             voice_surfaces=tuple(manifest.get("voice_surfaces") or ()),
+            attack_rung=requested_attack_rung,
             quarantine_overrides=manifest.get("quarantine_overrides"),
         )
     except KeyError as exc:

@@ -7350,6 +7350,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not voice_redteam["fidelity_errors"]
             and not voice_redteam["pack_errors"]
             and not voice_redteam["authorization_errors"]
+            and not voice_redteam["rung2_errors"]  # Phase-12 12C rung-2 extension
         ),
         milestone="M4",  # red-team family — same milestone as
         # redteam_corpus_execution_readiness
@@ -12043,6 +12044,7 @@ def _release_voice_redteam_readiness_status(root: Path) -> dict[str, Any]:
     fidelity_errors: list[dict[str, Any]] = []
     pack_errors: list[dict[str, Any]] = []
     authorization_errors: list[dict[str, Any]] = []
+    rung2_errors: list[dict[str, Any]] = []  # Phase-12 12C rung-2 evidence extension
     result: dict[str, Any] = {}
 
     def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
@@ -12279,6 +12281,53 @@ def _release_voice_redteam_readiness_status(root: Path) -> dict[str, Any]:
         if auth.get("preflight_secret_free") is not True:
             err(authorization_errors, field="authorization.preflight_secret_free", expected=True, observed=auth.get("preflight_secret_free"))
 
+        # ---- Phase-12 12C rung-2 acoustic evidence extension (BBG §10) ----
+        # Audits the rung-2 acoustic operators over the Phase-9A loopback:
+        # operator determinism over the loopback, computed-phone_survival
+        # honesty (no survives/partial without a channel record), and attack_rung
+        # correctness (the canonical "acoustic" token). This EXTENDS #73 without
+        # loosening any rung-1 check (the BBG "own test + #73 evidence extension"
+        # rule); it does NOT grow EVIDENCE_CLASSES.
+        rung2 = _as_mapping(result.get("rung2"))
+        # the acoustic operator set is the closed rung-2 set + reverb_blend
+        if list(rung2.get("acoustic_operators") or []) != ["noise", "interference", "reverb_blend"]:
+            err(rung2_errors, field="rung2.acoustic_operators", expected=["noise", "interference", "reverb_blend"], observed=rung2.get("acoustic_operators"))
+        if rung2.get("reverb_blend_registered") is not True:
+            err(rung2_errors, field="rung2.reverb_blend_registered", expected=True, observed=rung2.get("reverb_blend_registered"))
+        # determinism over the loopback (same seed → byte-identical channels)
+        if rung2.get("operator_deterministic_over_loopback") is not True:
+            err(rung2_errors, field="rung2.operator_deterministic_over_loopback", expected=True, observed=rung2.get("operator_deterministic_over_loopback"))
+        # the acoustic attack genuinely changes the channel signal
+        if rung2.get("attack_changes_channel") is not True:
+            err(rung2_errors, field="rung2.attack_changes_channel", expected=True, observed=rung2.get("attack_changes_channel"))
+        # computed phone_survival honesty (channel_simulated + 3 evidence fields;
+        # the clean-PCM opt-out carries none) — the P12-D2 channel-proof rule.
+        if rung2.get("computed_phone_survival_honest") is not True:
+            err(rung2_errors, field="rung2.computed_phone_survival_honest", expected=True, observed=rung2.get("computed_phone_survival_honest"))
+        ps2 = _as_mapping(rung2.get("phone_survival"))
+        if ps2.get("tier") != "channel_simulated":
+            err(rung2_errors, field="rung2.phone_survival.tier", expected="channel_simulated", observed=ps2.get("tier"))
+        if ps2.get("status") not in V1_VOICE_PHONE_SURVIVAL_STATUSES:
+            err(rung2_errors, field="rung2.phone_survival.status", expected=V1_VOICE_PHONE_SURVIVAL_STATUSES, observed=ps2.get("status"))
+        # the applied acoustic operator records ride the channels block
+        if rung2.get("applied_records_complete") is not True:
+            err(rung2_errors, field="rung2.applied_records_complete", expected=True, observed=rung2.get("applied_records_complete"))
+        # the rung wall runs in BOTH directions
+        if rung2.get("acoustic_text_op_raises") is not True:
+            err(rung2_errors, field="rung2.acoustic_text_op_raises", expected=True, observed=rung2.get("acoustic_text_op_raises"))
+        if rung2.get("text_acoustic_op_raises") is not True:
+            err(rung2_errors, field="rung2.text_acoustic_op_raises", expected=True, observed=rung2.get("text_acoustic_op_raises"))
+        # byte-parallel across both lanes
+        if rung2.get("byte_parallel_lanes") is not True:
+            err(rung2_errors, field="rung2.byte_parallel_lanes", expected=True, observed=rung2.get("byte_parallel_lanes"))
+        # attack_rung correctness — the canonical V1_VOICE_ATTACK_RUNGS token
+        if rung2.get("attack_rung") != "acoustic" or "acoustic" not in V1_VOICE_ATTACK_RUNGS:
+            err(rung2_errors, field="rung2.attack_rung", expected="acoustic", observed=rung2.get("attack_rung"))
+        if rung2.get("attack_rung_canonical") is not True:
+            err(rung2_errors, field="rung2.attack_rung_canonical", expected=True, observed=rung2.get("attack_rung_canonical"))
+        if rung2.get("fidelity_tier") != "deterministic_loopback":
+            err(rung2_errors, field="rung2.fidelity_tier", expected="deterministic_loopback", observed=rung2.get("fidelity_tier"))
+
     return {
         "kind": "agent-learning.voice-redteam-readiness.v1",
         "required_files": list(V1_VOICE_REDTEAM_FILES),
@@ -12297,6 +12346,7 @@ def _release_voice_redteam_readiness_status(root: Path) -> dict[str, Any]:
         "fixture_count": _count_voice_fixtures(root),
         "ab_arm_count": len(V1_VOICE_REDTEAM_AB_ARMS),
         "scanned_attack_rows": corpus_row_count,
+        "voice_acoustic_operators": ["noise", "interference", "reverb_blend"],
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "corpus_errors": corpus_errors,
@@ -12306,6 +12356,7 @@ def _release_voice_redteam_readiness_status(root: Path) -> dict[str, Any]:
         "fidelity_errors": fidelity_errors,
         "pack_errors": pack_errors,
         "authorization_errors": authorization_errors,
+        "rung2_errors": rung2_errors,
     }
 
 

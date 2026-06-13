@@ -488,6 +488,23 @@ def _text_rung_operators() -> tuple[str, ...]:
     return tuple(live._perturb.TEXT_RUNG_OPERATORS)
 
 
+def _acoustic_rung_operators() -> tuple[str, ...]:
+    """Lazy lookup of the live._perturb acoustic (rung-2) operator tuple via the
+    sanctioned facade idiom (Phase-12 12C rung-2). The acoustic operators apply
+    to the loopback PCM channel; a composed search that declares
+    ``attack_rung="acoustic"`` may put them in its signal space."""
+
+    from agent_learning import live  # facade: imports nothing framework-side
+
+    return tuple(live._perturb.ACOUSTIC_RUNG_OPERATORS)
+
+
+# the canonical Phase-12 attack-rung vocabulary the composed search stamps;
+# byte-equal to trinity.V1_VOICE_ATTACK_RUNGS, re-derived here so redteam never
+# imports trinity at module top.
+VOICE_REDTEAM_ATTACK_RUNGS = ("transcript_level", "acoustic", "telephony")
+
+
 def _validate_voice_search_space(space: Mapping[str, Sequence[Any]]) -> dict[str, list[Any]]:
     """Re-implement the Phase-4 finite/non-empty value-list contract here
     (we bypass the whole-agent facade — BUILD-GUIDE §3.1)."""
@@ -517,6 +534,7 @@ def build_composed_voice_attack_search_manifest(
     eval_budget: int,
     voice_surfaces: Sequence[str] = (),
     arm: str = "composed",
+    attack_rung: str = "transcript_level",
     evaluation_config: Optional[Mapping[str, Any]] = None,
     threshold: float = 0.9,
     simulation_engine: str = "local_text",
@@ -540,6 +558,11 @@ def build_composed_voice_attack_search_manifest(
     if arm not in VOICE_REDTEAM_AB_ARMS:
         raise ValueError(
             f"arm {arm!r} must be one of {VOICE_REDTEAM_AB_ARMS}"
+        )
+    if attack_rung not in VOICE_REDTEAM_ATTACK_RUNGS:
+        raise ValueError(
+            f"attack_rung {attack_rung!r} must be one of "
+            f"{VOICE_REDTEAM_ATTACK_RUNGS}"
         )
     if not isinstance(eval_budget, int) or isinstance(eval_budget, bool):
         raise ValueError("eval_budget is required and must be an integer")
@@ -595,13 +618,21 @@ def build_composed_voice_attack_search_manifest(
                 f"persona_space[{path!r}] must address temperament.* or "
                 "behavior_policy.* (the searchable persona layers)"
             )
-    # Signal-space operator values must be ⊆ the text-rung operator set.
-    text_ops = _text_rung_operators()
+    # Signal-space operator values must be ⊆ the rung-appropriate operator set.
+    # transcript_level → text-rung operators; acoustic (rung-2) → acoustic
+    # operators (Phase-12 12C rung-2, now that the loopback channel exists). The
+    # telephony rung reuses the acoustic operator set (rung-3 is owner-keyed).
+    if attack_rung == "transcript_level":
+        allowed_ops = _text_rung_operators()
+        op_set_label = "TEXT_RUNG_OPERATORS"
+    else:  # acoustic | telephony
+        allowed_ops = _acoustic_rung_operators()
+        op_set_label = "ACOUSTIC_RUNG_OPERATORS"
     for op in signal_space.get("operator", []):
-        if op not in text_ops:
+        if op not in allowed_ops:
             raise ValueError(
-                f"signal_space operator {op!r} must be ⊆ TEXT_RUNG_OPERATORS "
-                f"{text_ops}"
+                f"signal_space operator {op!r} must be ⊆ {op_set_label} "
+                f"{allowed_ops} for attack_rung={attack_rung!r}"
             )
 
     base_agent: dict[str, Any] = {
@@ -646,7 +677,7 @@ def build_composed_voice_attack_search_manifest(
             "composed_arm": arm,
             "eval_budget": int(eval_budget),
             "voice_surfaces": voice_surface_list,
-            "attack_rung": "transcript_level",
+            "attack_rung": attack_rung,
             "ranking_source": "evaluation_suite",
         },
     )
@@ -826,6 +857,7 @@ def run_composed_voice_attack_ab(
     eval_budget_per_arm: int,
     seeds: Sequence[int] = (7, 11, 13),
     voice_surfaces: Sequence[str] = (),
+    attack_rung: str = "transcript_level",
     quarantine_overrides: Optional[Mapping[str, int]] = None,
     output_dir: "str | Path | None" = None,
 ) -> dict[str, Any]:
@@ -867,6 +899,7 @@ def run_composed_voice_attack_ab(
             eval_budget=eval_budget_per_arm,
             voice_surfaces=voice_surfaces,
             arm=arm,
+            attack_rung=attack_rung,
         )
         arm_manifests[arm] = manifest
 
@@ -983,7 +1016,7 @@ def run_composed_voice_attack_ab(
     payload = copy.deepcopy(arm_manifests["composed"])
     payload["kind"] = AGENT_LEARNING_OPTIMIZATION_KIND
     payload["channel"] = "voice"
-    payload["attack_rung"] = "transcript_level"
+    payload["attack_rung"] = attack_rung
     payload["status"] = status
     payload["exit_code"] = exit_code
     payload["ab_harness"] = ab_harness

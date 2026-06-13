@@ -22,10 +22,18 @@ PERTURBATION_OPERATORS = (
     "homophone",
     "code_switch",
     "near_dup",
+    "reverb_blend",
 )
 # Operators applicable to text-rung input (rung 1: TranscriptionFrames /
 # scripted user text). Acoustic operators need a real audio channel (rung 2+).
 TEXT_RUNG_OPERATORS = ("asr_error", "homophone", "code_switch", "near_dup")
+# Acoustic operators applied to the rung-2 loopback PCM channel (Phase-12 12C
+# rung-2 / ARCH §2c). They activate ONLY when the lane runs at rung-2 and hands
+# ``_perturb`` a real PCM ``np.ndarray``; at text-rung they raise exactly as the
+# pre-existing ``noise``/``interference`` did. ``reverb_blend`` is the operator
+# the Phase-12 BBG deferred (the AudioHijack reverberation-hiding insight, used
+# DEFENSIVELY as a test payload against an agent the user is authorized to test).
+ACOUSTIC_RUNG_OPERATORS = ("noise", "interference", "reverb_blend")
 
 _VOWELS = "aeiou"
 
@@ -279,12 +287,28 @@ def perturbations_stanza(
 # the framework hears it) -----------------------------------------------------
 
 
+def _require_pcm_acoustic(pcm: Any, *, where: str) -> np.ndarray:
+    """Type-guard the input as numpy PCM; a text/str/bytes input raises the
+    rung-wall ValueError (the same discipline ``_codec._require_pcm`` enforces —
+    an acoustic operator over a transcript is a contract error)."""
+
+    if isinstance(pcm, (str, bytes)):
+        raise ValueError(
+            f"{where} needs a real audio channel (rung 2 loopback transport or "
+            "above); a text/transcript input is a contract error"
+        )
+    arr = np.asarray(pcm, dtype=float)
+    if arr.ndim != 1:
+        arr = arr.reshape(-1)
+    return arr
+
+
 def mix_noise(
     pcm: np.ndarray, *, snr_db: float = 20.0, seed: int = 0
 ) -> np.ndarray:
     """Mix seeded gaussian noise into a PCM stream at the given SNR (dB)."""
 
-    samples = np.asarray(pcm, dtype=float)
+    samples = _require_pcm_acoustic(pcm, where="mix_noise")
     if samples.size == 0:
         return samples
     signal_power = float((samples**2).mean())
@@ -304,8 +328,8 @@ def mix_interference(
 ) -> np.ndarray:
     """Overlay a competing-speaker waveform at the given relative level."""
 
-    samples = np.asarray(pcm, dtype=float)
-    competing = np.asarray(interference, dtype=float)
+    samples = _require_pcm_acoustic(pcm, where="mix_interference")
+    competing = _require_pcm_acoustic(interference, where="mix_interference")
     if samples.size == 0 or competing.size == 0:
         return samples
     if competing.size < samples.size:
@@ -318,3 +342,108 @@ def mix_interference(
         return samples
     target_rms = signal_rms * (10.0 ** (level_db / 20.0))
     return samples + competing * (target_rms / competing_rms)
+
+
+def apply_reverb_blend(
+    pcm: np.ndarray,
+    *,
+    decay: float = 0.4,
+    delay_ms: float = 60.0,
+    taps: int = 4,
+    sample_rate: int = 24000,
+    seed: int = 0,
+) -> np.ndarray:
+    """Reverberation-blended payload operator (Phase-12 12C rung-2 deferred,
+    ARCH §2c — the AudioHijack reverberation-hiding insight, used DEFENSIVELY as
+    a test payload). Convolves the PCM with a seeded multi-tap exponential-decay
+    impulse response (a synthetic room reverb), then mixes the wet signal back at
+    ``decay`` so the original waveform stays present. Deterministic under the
+    seed (``np.random.default_rng(seed)`` jitters the tap gains reproducibly);
+    raises at text-rung exactly like ``mix_noise``/``mix_interference``."""
+
+    samples = _require_pcm_acoustic(pcm, where="apply_reverb_blend")
+    if samples.size == 0 or decay <= 0 or taps < 1:
+        return samples.astype(np.float32, copy=False)
+    rng = np.random.default_rng(seed)
+    delay_samples = max(int(sample_rate * delay_ms / 1000.0), 1)
+    ir_len = delay_samples * int(taps) + 1
+    impulse = np.zeros(ir_len, dtype=float)
+    impulse[0] = 1.0  # the dry direct path
+    for tap in range(1, int(taps) + 1):
+        position = min(tap * delay_samples, ir_len - 1)
+        # exponential decay per tap, jittered reproducibly by the seed
+        gain = float(decay**tap) * (0.85 + 0.3 * float(rng.random()))
+        impulse[position] += gain
+    wet = np.convolve(samples, impulse, mode="full")[: samples.size]
+    return wet.astype(np.float32, copy=False)
+
+
+def apply_acoustic_perturbations(
+    pcm: np.ndarray,
+    operators: Sequence[str],
+    *,
+    seed: int = 0,
+    interference: np.ndarray | None = None,
+    snr_db: float = 20.0,
+    interference_level_db: float = -10.0,
+    reverb_decay: float = 0.4,
+    sample_rate: int = 24000,
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Apply rung-2 acoustic operators to a real PCM channel (Phase-12 12C
+    rung-2 / ARCH §2c). The sibling of ``apply_text_perturbations`` for the audio
+    rung: it walks the operator list, applies each acoustic operator to the PCM
+    in registry order, and returns the perturbed PCM plus the applied-operator
+    records for the ``live_lane.perturbations`` stanza (the paired-clean
+    discipline is identical to the text rung). Text-rung operators raise here —
+    the rung wall runs in BOTH directions (a homophone swap over a waveform is a
+    contract error just as ``mix_noise`` over a transcript is).
+
+    Deterministic under ``seed``: every stochastic element keys on
+    ``np.random.default_rng(seed)`` so a re-run produces a BYTE-IDENTICAL PCM and
+    the same records — the determinism the rung-2 gate re-asserts over the
+    loopback."""
+
+    samples = _require_pcm_acoustic(pcm, where="apply_acoustic_perturbations")
+    for operator in operators:
+        if operator not in PERTURBATION_OPERATORS:
+            raise ValueError(
+                f"unknown perturbation operator {operator!r}; "
+                f"expected one of {PERTURBATION_OPERATORS}"
+            )
+        if operator not in ACOUSTIC_RUNG_OPERATORS:
+            raise ValueError(
+                f"perturbation operator {operator!r} is a text-rung operator; "
+                f"only {ACOUSTIC_RUNG_OPERATORS} apply to the rung-2 PCM channel"
+            )
+    applied: list[dict[str, Any]] = []
+    out = samples
+    if "noise" in operators:
+        out = mix_noise(out, snr_db=snr_db, seed=seed)
+        applied.append({"operator": "noise", "snr_db": snr_db, "seed": seed})
+    if "interference" in operators:
+        # a seeded synthetic competing speaker when the caller supplies none, so
+        # the operator is self-contained and reproducible on the loopback.
+        competing = interference
+        if competing is None:
+            rng = np.random.default_rng(seed + 104729)
+            t = np.arange(max(out.size, 1), dtype=float) / float(sample_rate)
+            competing = (
+                0.5 * np.sin(2.0 * np.pi * 180.0 * t)
+                + 0.05 * rng.standard_normal(max(out.size, 1))
+            )
+        out = mix_interference(out, competing, level_db=interference_level_db)
+        applied.append(
+            {
+                "operator": "interference",
+                "level_db": interference_level_db,
+                "seed": seed,
+            }
+        )
+    if "reverb_blend" in operators:
+        out = apply_reverb_blend(
+            out, decay=reverb_decay, sample_rate=sample_rate, seed=seed
+        )
+        applied.append(
+            {"operator": "reverb_blend", "decay": reverb_decay, "seed": seed}
+        )
+    return out.astype(np.float32, copy=False), applied

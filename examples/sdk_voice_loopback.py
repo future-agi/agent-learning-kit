@@ -141,11 +141,11 @@ def _rung2_evidence() -> dict[str, Any]:
 
     from agent_learning.live import livekit_lane, pipecat_lane
 
-    lk_channels, lk_tier = livekit_lane._rung2_loopback_channels(
+    lk_channels, lk_tier, _ = livekit_lane._rung2_loopback_channels(
         _TURNS, loopback={"user_wav": _user_wav(), "agent_wav": _agent_wav()},
         codec_profile=_PROFILE, seed=_SEED,
     )
-    pc_channels, pc_tier = pipecat_lane._rung2_loopback_channels(
+    pc_channels, pc_tier, _ = pipecat_lane._rung2_loopback_channels(
         _TURNS, loopback={"user_wav": _user_wav(), "agent_wav": _agent_wav()},
         codec_profile=_PROFILE, seed=_SEED,
     )
@@ -157,7 +157,7 @@ def _rung2_evidence() -> dict[str, Any]:
         "channels": lk_channels,
     }
     # codec_profile="none" opt-out: a channels block but NO phone_survival
-    none_channels, _ = livekit_lane._rung2_loopback_channels(
+    none_channels, _, _ = livekit_lane._rung2_loopback_channels(
         _TURNS, loopback={"codec_profile": "none"}, codec_profile="none", seed=_SEED,
     )
     return {
