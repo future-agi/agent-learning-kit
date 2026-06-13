@@ -312,6 +312,8 @@ V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
     "examples/sdk_evaluation_hook_optimization.py": "evaluation_hook_readiness",
     "examples/sdk_evaluation_hook_probe_optimization.py": "evaluation_hook_probe_readiness",
     "examples/sdk_external_http_agent_optimization.py": "external_agent_adapter_readiness",
+    "examples/sdk_image_improvement.py": "image_loop_readiness",
+    "examples/sdk_image_loop.py": "image_loop_readiness",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py": "protocol_adapter_readiness",
     "examples/sdk_framework_adapter_agent_control_plane.py": "framework_adapter_probe_readiness",
     "examples/sdk_framework_adapter_auto_discovery_optimization.py": "framework_adapter_probe_readiness",
@@ -471,6 +473,11 @@ V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
     # uses it (BBG §6.5: "must not collide with existing licensed/unlicensed
     # phrases — verify against the dict at build time").
     r"\b(?:codec[- ]survival|audio[- ]loopback)\b": "voice_loopback_readiness",
+    # Phase 9B-A9: new image-capability wording licensed only while
+    # image_loop_readiness is green. Scoped to the genuinely-NEW 9B phrases
+    # (image-improvement-loop / perception-bypass(-guard) / image-eval-as-loss);
+    # verified collision-free vs the existing docs at build time.
+    r"\b(?:image[- ]improvement[- ]loop|perception[- ]bypass(?:[- ]guard)?|image[- ]eval[- ]as[- ]loss)\b": "image_loop_readiness",
     # Phase 11B-A6: new certification/coverage wording licensed only while
     # framework_adapter_preset_certification_readiness is green. Scoped to the
     # genuinely-NEW 11B phrases (verified collision-free against existing docs).
@@ -2430,6 +2437,48 @@ V1_VOICE_LOSS_NON_TIMING_QUALITY_TERMS = ("task_success", "tool_argument_correct
 V1_VOICE_PHONE_SURVIVAL_RUNG1 = {"status": "untested", "tier": "research_pinned"}
 # byte-equal to live.voice_redteam.PHONE_SURVIVAL_RUNG1 — cross-pinned by a unit
 # test, never imported by trinity (the GUNA_AXES cross-pin pattern).
+
+# === Phase 9B: image / multimodal improvement loop (closed sets, gate-pinned) ===
+# All are MIRRORS of the image_loop.py / image_perturb.py canon, cross-pinned by
+# a unit test (the GUNA_AXES pattern — trinity.py never imports the modules so
+# the gate runs even if they are broken).
+V1_IMAGE_LOOP_GATE_FIXTURE_DIR = "examples/image_loop_fixture"
+# precedent: V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR = "examples/voice_loopback_fixture"
+V1_IMAGE_LOOP_FILES = (
+    "examples/sdk_image_loop.py",
+    "examples/sdk_image_improvement.py",
+)
+V1_IMAGE_LOOP_GATE_FIXTURE_FILES = (
+    "examples/image_loop_fixture/chart_synthetic.png",
+    "examples/image_loop_fixture/chart.json",
+    "examples/image_loop_fixture/document_rendered.png",
+    "examples/image_loop_fixture/ocr.json",
+    "examples/image_loop_fixture/vqa_scene.png",
+    "examples/image_loop_fixture/vqa.json",
+    "examples/image_loop_fixture/counterfactual_pair/a.png",
+    "examples/image_loop_fixture/counterfactual_pair/b.png",
+    "examples/image_loop_fixture/counterfactual_pair/cf.json",
+    "examples/image_loop_fixture/prior_answerable/sentinels.json",
+    "examples/image_loop_fixture/expected/loop_trajectory.json",
+    "examples/image_loop_fixture/expected/deterministic_anchors.json",
+    "examples/image_loop_fixture/ab/toy_space.json",
+)
+V1_IMAGE_LOSS_TERM_REFS = (
+    "task_success", "ocr_accuracy", "chart_accuracy", "artifact_grounding",
+    "instruction_adherence", "tool_argument_correctness",
+)   # byte-equal to image_loop.V1_IMAGE_LOSS_TERM_REFS (cross-pinned by a unit test)
+V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS = (
+    "task_success", "ocr_accuracy", "chart_accuracy", "artifact_grounding",
+)
+V1_IMAGE_LOSS_JUDGE_TERMS = ("instruction_adherence",)
+V1_IMAGE_GENERATION_ANCHOR_TERMS = ("element_presence",)
+V1_IMAGE_GENERATION_JUDGE_TERMS = ("generation_alignment", "generation_quality")
+V1_IMAGE_FAILURE_SUBLAYERS = ("preprocessing", "perception", "reasoning", "tool_grounding")
+V1_IMAGE_PERTURBATION_OPERATORS = ("blur", "jpeg_compress", "resolution_drop", "occlusion")
+V1_IMAGE_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
+# a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
+# frozen EVIDENCE_CLASSES 4-tuple _contract.py:18 is unchanged). Analogue of
+# V1_VOICE_FIDELITY_TIERS.
 
 # === Phase 13D (gate M2/M3) closed vocabularies =============================
 # Mirrors of the contract/loss/practice canon. The status fns byte-compare these
@@ -7876,6 +7925,28 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         # voice_redteam_readiness / redteam_corpus_execution_readiness
         evidence=voice_loopback,
     )
+    # --- Phase 9B gate (M4 modality-loop family) ---------------------------
+    # Registered AFTER voice_loopback_readiness (the modality-loop family) and
+    # DIRECTLY BEFORE docs_executability (which stays last). ARCH-9B §2.5 / 9B-A5
+    # — count-agnostic, by-name insertion; closed set 77 -> 78.
+    image_loop = _release_image_loop_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="image_loop_readiness",
+        passed=(
+            not image_loop["missing_files"]
+            and not image_loop["loop_determinism_errors"]
+            and not image_loop["deterministic_loss_anchoring_errors"]
+            and not image_loop["image_loss_errors"]
+            and not image_loop["perception_guard_errors"]
+            and not image_loop["eval_wiring_errors"]
+            and not image_loop["evidence_class_errors"]
+            and not image_loop["ab_capstone_errors"]
+        ),
+        milestone="M4",  # modality-loop family — same milestone as
+        # voice_loopback_readiness
+        evidence=image_loop,
+    )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
     docs_executability = _release_docs_executability_status(root, checks)
@@ -8515,6 +8586,15 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "voice_codec_profiles": list(V1_VOICE_CODEC_PROFILES),
         "voice_failure_sublayers": list(V1_VOICE_FAILURE_SUBLAYERS),
         "voice_loss_term_refs": list(V1_VOICE_LOSS_TERM_REFS),
+        # Phase 9B (image / multimodal loop) payload mirrors (unit 5.5)
+        "image_loss_term_refs": list(V1_IMAGE_LOSS_TERM_REFS),
+        "image_loss_deterministic_anchor_terms": list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "image_loss_judge_terms": list(V1_IMAGE_LOSS_JUDGE_TERMS),
+        "image_generation_anchor_terms": list(V1_IMAGE_GENERATION_ANCHOR_TERMS),
+        "image_generation_judge_terms": list(V1_IMAGE_GENERATION_JUDGE_TERMS),
+        "image_failure_sublayers": list(V1_IMAGE_FAILURE_SUBLAYERS),
+        "image_perturbation_operators": list(V1_IMAGE_PERTURBATION_OPERATORS),
+        "image_fidelity_tiers": list(V1_IMAGE_FIDELITY_TIERS),
         "required_redteam_readiness_certification_files": list(
             V1_REDTEAM_READINESS_CERTIFICATION_FILES
         ),
@@ -13100,6 +13180,209 @@ def _release_voice_loopback_readiness_status(root: Path) -> dict[str, Any]:
         "evidence_class_errors": evidence_class_errors,
         "phone_survival_errors": phone_survival_errors,
         "rung_honesty_errors": rung_honesty_errors,
+    }
+
+
+def _release_image_loop_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate (M4) — image / multimodal loop readiness (Phase 9B, ARCH-9B §2.5/§2.6).
+
+    Exec-loads ``examples/sdk_image_loop.py`` + ``sdk_image_improvement.py`` in a
+    tempdir (no network, no env keys, no lanes — entirely on the committed
+    ``examples/image_loop_fixture/`` fixtures) and audits their evidence into
+    EIGHT error arrays. The ``image_fidelity_overclaim`` token (9B-D6) fires
+    inside ``evidence_class_errors`` for any ``deterministic_fixture`` artifact
+    carrying ``live_lane`` (the §2.6 binding correction). ``passed`` = all eight
+    empty."""
+
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *V1_IMAGE_LOOP_FILES,
+            V1_IMAGE_LOOP_GATE_FIXTURE_DIR,
+            *V1_IMAGE_LOOP_GATE_FIXTURE_FILES,
+        ],
+    )
+    loop_determinism_errors: list[dict[str, Any]] = []
+    deterministic_loss_anchoring_errors: list[dict[str, Any]] = []
+    image_loss_errors: list[dict[str, Any]] = []
+    perception_guard_errors: list[dict[str, Any]] = []
+    eval_wiring_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    ab_capstone_errors: list[dict[str, Any]] = []
+
+    loop: dict[str, Any] = {}
+    improvement: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        loop, lp_err = _exec_example_run(
+            root, "examples/sdk_image_loop.py", "agent_learning_release_image_loop"
+        )
+        if lp_err is not None:
+            err(loop_determinism_errors, field="example.run", expected="executes", observed=lp_err)
+        improvement, imp_err = _exec_example_run(
+            root, "examples/sdk_image_improvement.py", "agent_learning_release_image_improvement"
+        )
+        if imp_err is not None:
+            err(image_loss_errors, field="example.run", expected="executes", observed=imp_err)
+
+    if loop:
+        if loop.get("kind") != "agent-learning.image-loop.v1":
+            err(loop_determinism_errors, field="kind", expected="agent-learning.image-loop.v1", observed=loop.get("kind"))
+
+        # ---- constant mirrors (the gate pins them against the example) ----
+        for field, expected in (
+            ("fidelity_tiers", list(V1_IMAGE_FIDELITY_TIERS)),
+            ("loss_term_refs", list(V1_IMAGE_LOSS_TERM_REFS)),
+            ("deterministic_anchor_terms", list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS)),
+            ("judge_terms", list(V1_IMAGE_LOSS_JUDGE_TERMS)),
+            ("generation_anchor_terms", list(V1_IMAGE_GENERATION_ANCHOR_TERMS)),
+            ("generation_judge_terms", list(V1_IMAGE_GENERATION_JUDGE_TERMS)),
+            ("failure_sublayers", list(V1_IMAGE_FAILURE_SUBLAYERS)),
+            ("perturbation_operators", list(V1_IMAGE_PERTURBATION_OPERATORS)),
+        ):
+            if list(loop.get(field) or []) != expected:
+                err(loop_determinism_errors, field=f"mirror.{field}", expected=expected, observed=loop.get(field))
+
+        # ---- loop determinism (same seed ⇒ byte-identical) ----
+        det = _as_mapping(loop.get("loop_determinism"))
+        for key in (
+            "perturbation_raster_byte_identical", "perturbation_stanza_identical",
+            "env_reset_deterministic", "paired_clean_link",
+            "trajectory_matches_golden_seed",
+        ):
+            if det.get(key) is not True:
+                err(loop_determinism_errors, field=f"determinism.{key}", expected=True, observed=det.get(key))
+
+        # ---- deterministic loss anchoring (anchors reproducible under seed) ----
+        anchors = _as_mapping(loop.get("deterministic_anchors"))
+        if anchors.get("matches_golden") is not True:
+            err(deterministic_loss_anchoring_errors, field="anchors.matches_golden", expected=True, observed=anchors.get("matches_golden"))
+        if list(anchors.get("anchor_terms") or []) != list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS):
+            err(deterministic_loss_anchoring_errors, field="anchors.anchor_terms", expected=list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS), observed=anchors.get("anchor_terms"))
+        computed = _as_mapping(anchors.get("computed"))
+        for term in V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS:
+            if term not in computed:
+                err(deterministic_loss_anchoring_errors, field=f"anchors.computed.{term}", expected="present", observed="absent")
+
+        # ---- perception-bypass guard (sentinel + counterfactual control) ----
+        guard = _as_mapping(loop.get("perception_guard"))
+        if guard.get("sentinel_bypass_flagged") is not True:
+            err(perception_guard_errors, field="guard.sentinel_bypass_flagged", expected=True, observed=guard.get("sentinel_bypass_flagged"))
+        # the binding tripwire: the counterfactual control MUST drop the score
+        # for a genuinely-perceiving config.
+        if guard.get("counterfactual_drops_score_for_perceiving_config") is not True:
+            err(perception_guard_errors, field="guard.counterfactual_drops_score", expected=True, observed=guard.get("counterfactual_drops_score_for_perceiving_config"))
+        if guard.get("counterfactual_bypass_does_not_drop") is not True:
+            err(perception_guard_errors, field="guard.bypass_does_not_drop", expected=True, observed=guard.get("counterfactual_bypass_does_not_drop"))
+        if list(guard.get("perception_guard_kinds") or []) != ["perception_bypass", "perceptual_counterfactual"]:
+            err(perception_guard_errors, field="guard.kinds", expected=["perception_bypass", "perceptual_counterfactual"], observed=guard.get("perception_guard_kinds"))
+
+        # ---- eval wiring + R4 registration (image registered, vocab byte-stable) ----
+        wiring = _as_mapping(loop.get("eval_wiring"))
+        if wiring.get("uses_image_environment") is not True:
+            err(eval_wiring_errors, field="wiring.uses_image_environment", expected=True, observed=wiring.get("uses_image_environment"))
+        if wiring.get("image_registered_via_hook") is not True:
+            err(eval_wiring_errors, field="wiring.image_registered_via_hook", expected=True, observed=wiring.get("image_registered_via_hook"))
+        if wiring.get("frozen_vocab_byte_stable") is not True:
+            err(eval_wiring_errors, field="wiring.frozen_vocab_byte_stable", expected=True, observed=wiring.get("frozen_vocab_byte_stable"))
+        # the live registry assertion (image admissible WITHOUT widening the
+        # frozen tuple — the §2.5 critical honesty re-checked at gate time).
+        from fi.simulate.simulation import contract as _img_contract  # downward import (gate-only)
+        try:
+            from . import image_loop as _img_loop  # used only to register; gate stays robust if broken
+            _img_loop._ensure_image_world_registered()
+        except Exception as exc:  # noqa: BLE001
+            err(eval_wiring_errors, field="registration.import", expected="image_loop registers", observed=f"{type(exc).__name__}: {exc}")
+        if "image" not in _img_contract.resolved_world_kinds():
+            err(eval_wiring_errors, field="registry.image_resolved", expected="image in resolved_world_kinds", observed=False)
+        if "image" in _img_contract.SIMULATION_WORLD_KINDS:
+            err(eval_wiring_errors, field="registry.frozen_widened", expected="image NOT in SIMULATION_WORLD_KINDS", observed=True)
+
+        # ---- evidence-class honesty + the image_fidelity_overclaim token (§2.6) ----
+        clean = _as_mapping(loop.get("clean_artifact"))
+        if clean.get("evidence_class") == "live_lane":
+            evidence_class_errors.append({
+                "artifact": "clean_artifact",
+                "reason": (
+                    "image_fidelity_overclaim: a deterministic_fixture artifact stamped "
+                    "evidence_class=live_lane; a deterministic in-process fixture is "
+                    "local_gate/captured_fixture, never live_lane (9B-D6)"
+                ),
+            })
+        if clean.get("evidence_class") not in ("local_gate", "captured_fixture"):
+            err(evidence_class_errors, field="clean_artifact.evidence_class", expected="local_gate|captured_fixture", observed=clean.get("evidence_class"))
+        if clean.get("fidelity_tier") != "deterministic_fixture":
+            err(evidence_class_errors, field="clean_artifact.fidelity_tier", expected="deterministic_fixture", observed=clean.get("fidelity_tier"))
+        # the frozen 4-tuple is byte-stable (no new evidence class via this gate)
+        from .live import _contract as _live_contract  # downward import (gate-only)
+        if tuple(_live_contract.EVIDENCE_CLASSES) != ("local_gate", "live_lane", "live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="evidence_classes.frozen", expected=("local_gate", "live_lane", "live_stressed", "captured_fixture"), observed=tuple(_live_contract.EVIDENCE_CLASSES))
+        # the constructed overclaim negatives MUST be catchable — the example
+        # hand-builds them; the gate verifies the discipline catches each.
+        negatives = _as_mapping(loop.get("negatives"))
+        neg_live = _as_mapping(negatives.get("deterministic_claims_live_lane"))
+        if not (neg_live.get("fidelity_tier") == "deterministic_fixture" and neg_live.get("evidence_class") == "live_lane"):
+            err(evidence_class_errors, field="negatives.deterministic_claims_live_lane", expected="constructed deterministic_fixture+live_lane overclaim", observed=neg_live)
+        neg_keyed = _as_mapping(negatives.get("keyed_without_credential"))
+        if not (neg_keyed.get("fidelity_tier") == "keyed_live_model" and neg_keyed.get("credentialed") is False):
+            err(evidence_class_errors, field="negatives.keyed_without_credential", expected="keyed_live_model without credential", observed=neg_keyed)
+
+    if improvement:
+        if improvement.get("kind") != "agent-learning.image-improvement.v1":
+            err(image_loss_errors, field="improvement.kind", expected="agent-learning.image-improvement.v1", observed=improvement.get("kind"))
+        if improvement.get("multi_objective_compiles") is not True:
+            err(image_loss_errors, field="improvement.multi_objective", expected=True, observed=improvement.get("multi_objective_compiles"))
+        if improvement.get("judge_only_rejected") is not True:
+            err(image_loss_errors, field="improvement.judge_only_rejected", expected=True, observed=improvement.get("judge_only_rejected"))
+        if improvement.get("single_term_rejected") is not True:
+            err(image_loss_errors, field="improvement.single_term_rejected", expected=True, observed=improvement.get("single_term_rejected"))
+        if improvement.get("search_space_is_whole_agent") is not True:
+            err(image_loss_errors, field="improvement.whole_agent_search_space", expected=True, observed=improvement.get("search_space_is_whole_agent"))
+        if improvement.get("world_kind") != "image":
+            err(eval_wiring_errors, field="improvement.world_kind", expected="image", observed=improvement.get("world_kind"))
+        if improvement.get("task_mode") != "understanding":
+            err(eval_wiring_errors, field="improvement.task_mode", expected="understanding", observed=improvement.get("task_mode"))
+        # the image_sublayer attribution is in the closed set (9B §2.3)
+        for cell, sub in _as_mapping(improvement.get("image_sublayers")).items():
+            if sub not in V1_IMAGE_FAILURE_SUBLAYERS:
+                err(image_loss_errors, field=f"improvement.image_sublayer.{cell}", expected=V1_IMAGE_FAILURE_SUBLAYERS, observed=sub)
+        # ---- the no-loop A/B capstone (loop improves, canary holds) ----
+        if improvement.get("ab_equal_budget") is not True:
+            err(ab_capstone_errors, field="improvement.ab_equal_budget", expected=True, observed=improvement.get("ab_equal_budget"))
+        if improvement.get("ab_loop_improves") is not True:
+            err(ab_capstone_errors, field="improvement.ab_loop_improves", expected=True, observed=improvement.get("ab_loop_improves"))
+        if improvement.get("ab_canary_holds") is not True:
+            err(ab_capstone_errors, field="improvement.ab_canary_holds", expected=True, observed=improvement.get("ab_canary_holds"))
+
+    return {
+        "kind": "agent-learning.image-loop-readiness.v1",
+        "required_files": list(V1_IMAGE_LOOP_FILES),
+        "fixture_dir": V1_IMAGE_LOOP_GATE_FIXTURE_DIR,
+        "image_fidelity_tiers": list(V1_IMAGE_FIDELITY_TIERS),
+        "image_loss_term_refs": list(V1_IMAGE_LOSS_TERM_REFS),
+        "image_loss_deterministic_anchor_terms": list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "image_loss_judge_terms": list(V1_IMAGE_LOSS_JUDGE_TERMS),
+        "image_generation_anchor_terms": list(V1_IMAGE_GENERATION_ANCHOR_TERMS),
+        "image_generation_judge_terms": list(V1_IMAGE_GENERATION_JUDGE_TERMS),
+        "image_failure_sublayers": list(V1_IMAGE_FAILURE_SUBLAYERS),
+        "image_perturbation_operators": list(V1_IMAGE_PERTURBATION_OPERATORS),
+        "fixture_count": sum(
+            1 for _ in (root / V1_IMAGE_LOOP_GATE_FIXTURE_DIR).rglob("*")
+            if (root / V1_IMAGE_LOOP_GATE_FIXTURE_DIR).is_dir() and _.is_file()
+        ),
+        "image_loss_term_count": len(V1_IMAGE_LOSS_TERM_REFS),
+        "perturbation_operator_count": len(V1_IMAGE_PERTURBATION_OPERATORS),
+        "missing_files": missing_files,
+        "loop_determinism_errors": loop_determinism_errors,
+        "deterministic_loss_anchoring_errors": deterministic_loss_anchoring_errors,
+        "image_loss_errors": image_loss_errors,
+        "perception_guard_errors": perception_guard_errors,
+        "eval_wiring_errors": eval_wiring_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "ab_capstone_errors": ab_capstone_errors,
     }
 
 

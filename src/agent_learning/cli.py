@@ -4767,6 +4767,19 @@ def _practice(args: Sequence[str]) -> int:
              "total metered budget, seeded, offline) and emit REAL retention numbers. "
              "Without --run, the contract-validation harness runs (outcome-free).",
     )
+    # Phase 9B: the image / multimodal loop front door (ARCH-9B §2.7). No new
+    # engine — it builds an image practice-loop manifest and renders the
+    # deterministic image metrics. --task-mode selects the loss profile;
+    # generation is keyed opt-in (refuses loudly without the judge key).
+    p_image = sub.add_parser("image")
+    p_image.add_argument("manifest")
+    p_image.add_argument("--output", "-o", default=None)
+    p_image.add_argument("--quiet", action="store_true")
+    p_image.add_argument(
+        "--task-mode", dest="task_mode", default="understanding",
+        choices=["understanding", "generation"],
+        help="understanding (deterministic, day-one) | generation (keyed opt-in)",
+    )
     parsed = parser.parse_args(list(args))
 
     if parsed.subcommand == "run":
@@ -4856,7 +4869,110 @@ def _practice(args: Sequence[str]) -> int:
                 parsed,
             )
         return _emit_contract_payload({"status": "ran", "exit_code": 0, "ab_harness": result}, parsed)
+
+    if parsed.subcommand == "image":
+        return _practice_image(parsed)
     return 1
+
+
+# Phase 9B CLI findings vocabulary (closed set; loud in CLI / silent-skip in
+# pytest). ARCH-9B §2.7 / §6.5.
+_IMAGE_CLI_FINDINGS = (
+    "image_fixture_missing",
+    "image_judge_key_unavailable",
+    "image_mode_unavailable",
+)
+
+
+def _practice_image(parsed: Any) -> int:
+    """The image / multimodal loop CLI front door (Phase 9B). Builds an image
+    practice-loop manifest from the supplied manifest file and renders the
+    deterministic image metrics. understanding mode is credential-free; generation
+    mode refuses loudly without a judge key (never a fake number)."""
+    from agent_learning import image_loop
+
+    manifest_path = Path(parsed.manifest)
+    if not manifest_path.is_file():
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "image_fixture_missing", "level": "error",
+                    "reason": f"image manifest not found at {manifest_path}",
+                    "remediation": "pass an existing image practice-loop manifest",
+                }],
+            },
+            parsed,
+        )
+    manifest = _load_structured_file(manifest_path)
+
+    task_mode = str(getattr(parsed, "task_mode", "understanding"))
+    # generation is a keyed opt-in lane — refuse loudly without the judge key
+    # (exit 0 + warning + withheld value; the deterministic floor still runs).
+    if task_mode == "generation":
+        import os as _os
+        if not (_os.environ.get("AGENT_LEARNING_IMAGE_JUDGE_KEY") or _os.environ.get("OPENAI_API_KEY")):
+            return _emit_contract_payload(
+                {
+                    "status": "withheld", "exit_code": 0,
+                    "task_mode": "generation",
+                    "findings": [{
+                        "type": "image_judge_key_unavailable", "level": "warning",
+                        "reason": (
+                            "generation mode requires a judge key (the judge-anchored "
+                            "loss terms call a model); withheld -- never a fake number"
+                        ),
+                        "remediation": "set AGENT_LEARNING_IMAGE_JUDGE_KEY (or OPENAI_API_KEY)",
+                    }],
+                    "deterministic_floor": "element_presence (the keyed-free generation anchor)",
+                },
+                parsed,
+            )
+
+    try:
+        objective = manifest.get("objective") or (
+            manifest.get("simulation", {}).get("inline", {}).get("objective")
+        )
+        built = image_loop.build_image_practice_loop_manifest(
+            name=str(manifest.get("name") or "image-loop"),
+            base_agent=manifest.get("base_agent") or {"model": "gpt-4o"},
+            search_space=manifest.get("search_space") or {"agent.model": ["gpt-4o"]},
+            objective=objective or {},
+            eval_budget=int(manifest.get("eval_budget", 4)),
+            seed=int(manifest.get("seed", 1142)),
+            task_mode=task_mode,
+        )
+    except image_loop.ImageLossCompositionError as exc:
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "image_mode_unavailable", "level": "error",
+                    "reason": str(exc).splitlines()[0],
+                    "remediation": "declare a multi-objective loss with >= 1 deterministic anchor",
+                }],
+            },
+            parsed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _emit_contract_payload(
+            {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+            parsed,
+        )
+
+    # the deterministic image-metric render — NEVER a judge score on the
+    # credential-free path (only anchors + guard outcome + fidelity marker).
+    render = {
+        "world_kind": built["practice"]["simulation"]["inline"]["world"]["kind"],
+        "task_mode": task_mode,
+        "deterministic_anchor_terms": list(image_loop.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "fidelity_tier": "deterministic_fixture",
+        "eval_budget": built["practice"]["eval_budget"],
+        "search_space_paths": sorted(built["practice"]["search_space"]),
+    }
+    return _emit_contract_payload(
+        {"status": "ran", "exit_code": 0, "image_render": render}, parsed
+    )
 
 
 def _persona(args: Sequence[str]) -> int:

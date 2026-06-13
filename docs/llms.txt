@@ -20,6 +20,7 @@
 
 ## Simulate
 - [Your First Simulation Run](docs/simulate/first-run.md): twin=examples/sdk_agent_integration_simulation.py kind=agent-learning.run.v1
+- [Image loop: the deterministic multimodal substrate, credential-free](docs/simulate/image-loop.md): twin=examples/sdk_image_loop.py kind=agent-learning.run.v1
 - [Memory: simulate the layer that persists between sessions](docs/simulate/memory.md): twin=examples/sdk_framework_adapter_memory_trace.py kind=agent-learning.run.v1
 - [Multi-Agent: rooms, handoffs, and coordination evidence](docs/simulate/multi-agent.md): twin=examples/sdk_multi_agent_room_probe_optimization.py kind=agent-learning.run.v1
 - [Multimodal Image: simulate grounding, not just looking](docs/simulate/multimodal-image.md): twin=examples/sdk_framework_adapter_browser_cua_trace.py kind=agent-learning.run.v1
@@ -39,6 +40,7 @@
 - [Capability-Profile Freezing: the frozen rows a winner must not break](docs/optimize/capability-profile-freezing.md): twin=examples/sdk_capability_freeze_regression.py kind=agent-learning.optimization.v1
 - [Eval-Suite Optimization](docs/optimize/eval-suite-optimization.md): twin=examples/sdk_evaluation_hook_probe_optimization.py kind=agent-learning.eval-optimization.v1
 - [Optimizer Governance: the steward's veto](docs/optimize/governance.md): twin=examples/sdk_optimizer_governance_optimization.py kind=agent-learning.optimization.v1
+- [Image improvement loop: the 13D Practice Loop on image](docs/optimize/image-improvement.md): twin=examples/sdk_image_improvement.py kind=agent-learning.practice-report.v1
 - [Memory Targets: optimizing what the agent retains](docs/optimize/memory-targets.md): twin=examples/sdk_memory_target_optimization.py kind=agent-learning.optimization.v1
 - [Multi-Agent Targets: optimizing the room, not the agent](docs/optimize/multi-agent-targets.md): twin=examples/sdk_multi_agent_target_optimization.py kind=agent-learning.optimization.v1
 - [The Optimization Lifecycle](docs/optimize/optimization-lifecycle.md): twin=examples/sdk_task_world_optimization.py kind=agent-learning.optimization.v1

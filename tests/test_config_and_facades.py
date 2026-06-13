@@ -18505,6 +18505,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "simulation_contract_readiness",
         "practice_loop_readiness",
         "voice_loopback_readiness",
+        "image_loop_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -19073,6 +19074,75 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         ]
         == "voice_loopback_readiness"
     )
+    # --- Phase 9B (image / multimodal loop) gate (unit 5/5.5) --------------
+    image_loop = checks["image_loop_readiness"]["evidence"]
+    assert image_loop["kind"] == "agent-learning.image-loop-readiness.v1"
+    assert checks["image_loop_readiness"]["milestone"] == "M4"
+    # frozen-canon mirrors (mirror == module/image_loop canon cross-pin):
+    assert image_loop["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
+    assert image_loop["image_loss_term_refs"] == list(trinity.V1_IMAGE_LOSS_TERM_REFS)
+    assert image_loop["image_loss_deterministic_anchor_terms"] == list(
+        trinity.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert image_loop["image_loss_judge_terms"] == list(trinity.V1_IMAGE_LOSS_JUDGE_TERMS)
+    assert image_loop["image_generation_anchor_terms"] == list(
+        trinity.V1_IMAGE_GENERATION_ANCHOR_TERMS
+    )
+    assert image_loop["image_generation_judge_terms"] == list(
+        trinity.V1_IMAGE_GENERATION_JUDGE_TERMS
+    )
+    assert image_loop["image_failure_sublayers"] == list(trinity.V1_IMAGE_FAILURE_SUBLAYERS)
+    assert image_loop["image_perturbation_operators"] == list(
+        trinity.V1_IMAGE_PERTURBATION_OPERATORS
+    )
+    # the eight arrays:
+    assert image_loop["missing_files"] == []
+    assert image_loop["loop_determinism_errors"] == []
+    assert image_loop["deterministic_loss_anchoring_errors"] == []
+    assert image_loop["image_loss_errors"] == []
+    assert image_loop["perception_guard_errors"] == []
+    assert image_loop["eval_wiring_errors"] == []
+    assert image_loop["evidence_class_errors"] == []
+    assert image_loop["ab_capstone_errors"] == []
+    # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
+    assert tuple(_live_contract.EVIDENCE_CLASSES) == (
+        "local_gate", "live_lane", "live_stressed", "captured_fixture"
+    )
+    # cross-pin: trinity mirrors == the image_loop / image_perturb canon
+    # (GUNA_AXES pattern — trinity never imports the modules)
+    from agent_learning import image_loop as _image_loop
+    from agent_learning import image_perturb as _image_perturb
+    assert tuple(trinity.V1_IMAGE_LOSS_TERM_REFS) == _image_loop.V1_IMAGE_LOSS_TERM_REFS
+    assert tuple(trinity.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS) == (
+        _image_loop.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert tuple(trinity.V1_IMAGE_LOSS_JUDGE_TERMS) == _image_loop.V1_IMAGE_LOSS_JUDGE_TERMS
+    assert tuple(trinity.V1_IMAGE_GENERATION_ANCHOR_TERMS) == (
+        _image_loop.V1_IMAGE_GENERATION_ANCHOR_TERMS
+    )
+    assert tuple(trinity.V1_IMAGE_GENERATION_JUDGE_TERMS) == (
+        _image_loop.V1_IMAGE_GENERATION_JUDGE_TERMS
+    )
+    assert tuple(trinity.V1_IMAGE_FAILURE_SUBLAYERS) == _image_loop.V1_IMAGE_FAILURE_SUBLAYERS
+    assert tuple(trinity.V1_IMAGE_FIDELITY_TIERS) == _image_loop.V1_IMAGE_FIDELITY_TIERS
+    assert tuple(trinity.V1_IMAGE_PERTURBATION_OPERATORS) == (
+        _image_perturb.V1_IMAGE_PERTURBATION_OPERATORS
+    )
+    # the new image claims-lint row is registered (unit 5.5)
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:image[- ]improvement[- ]loop|perception[- ]bypass(?:[- ]guard)?|"
+            r"image[- ]eval[- ]as[- ]loss)\b"
+        ]
+        == "image_loop_readiness"
+    )
+    # payload mirrors (release_status) carry the image constants
+    assert payload["image_loss_term_refs"] == list(trinity.V1_IMAGE_LOSS_TERM_REFS)
+    assert payload["image_failure_sublayers"] == list(trinity.V1_IMAGE_FAILURE_SUBLAYERS)
+    assert payload["image_perturbation_operators"] == list(
+        trinity.V1_IMAGE_PERTURBATION_OPERATORS
+    )
+    assert payload["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
