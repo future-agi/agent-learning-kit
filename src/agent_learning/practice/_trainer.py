@@ -24,6 +24,7 @@ from ._contract import (
     BUDGET_PLAN,
     DEFAULT_INNER_OPERATOR_BACKEND,
     DEFAULT_MAX_ROUNDS,
+    PRACTICE_ABLATIONS,
     REVIEW_RATIO,
     SCAFFOLD_FADE_DEFAULT,
     ZPD_BAND,
@@ -90,6 +91,28 @@ def run_practice_loop(
     frozen_rows = list(practice.get("frozen_rows") or [])
     search_space = dict(practice.get("search_space") or manifest.get("search_space") or {})
 
+    # --- ablation knobs (13D-5 capstone; additive, default = full loop) -----
+    # Real config flags that change behaviour, never labels. Unknown tokens are
+    # a contract error (the experiment must not silently no-op an ablation).
+    ablations = tuple(practice.get("ablations") or ())
+    for ablation in ablations:
+        if ablation not in PRACTICE_ABLATIONS:
+            raise PracticeRefusal(
+                f"unknown ablation {ablation!r}; must be one of {PRACTICE_ABLATIONS}"
+            )
+    a1_no_zpd = "a1_no_zpd" in ablations
+    a2_no_spacing = "a2_no_spacing" in ablations
+    a3_no_consolidation = "a3_no_consolidation" in ablations
+    a4_no_calibration = "a4_no_calibration" in ablations
+    # A4 needs the learned-gate; the loop reports per-cell stop signals so an
+    # external driver (the experiment engine) can stop a learned cell early.
+    learned_cells: set = set()
+    # Equal-total-budget discipline (synthesis §5 / AD-I): every ZPD repeat is a
+    # scored evaluation and MUST charge the meter. Opt-in (default off) so the
+    # gate/determinism-fixture path stays byte-identical; the capstone experiment
+    # turns it on so the practice arm meters the same currency as the search arms.
+    meter_drill_repeats = bool(practice.get("meter_drill_repeats", False))
+
     meter = BudgetMeter(eval_budget, budget_plan=budget_plan)
     if store is None:
         store_knob = dict(practice.get("store") or {})
@@ -115,27 +138,46 @@ def run_practice_loop(
             parent_report_hash = _hash(report)
             # DIAGNOSE
             deficits = _diagnose.diagnose(report, search_space=search_space)
-            # DRILL (interleaved with due reviews between promotions)
-            due = _schedule.due_reviews(store.active_records(), round_no)
-            review_slots = int(len(deficits["deficits"]) * review_ratio)
-            for review_rec in due[:review_slots]:
-                meter.charge("review", 1)
-                review_pass = all(replay_row(r) for r in review_rec.get("deck") or [])
-                event = "review_pass" if review_pass else "review_fail"
-                store.update_record(_schedule.transition(review_rec, event, round_no))
+            # DRILL (interleaved with due reviews between promotions).
+            # A2 no-spacing: NO standing between-promotion reviews (the deck
+            # only ever replays at the promotion sweep — replay-only-at-promotion).
+            if not a2_no_spacing:
+                due = _schedule.due_reviews(store.active_records(), round_no)
+                review_slots = int(len(deficits["deficits"]) * review_ratio)
+                for review_rec in due[:review_slots]:
+                    meter.charge("review", 1)
+                    review_pass = all(replay_row(r) for r in review_rec.get("deck") or [])
+                    event = "review_pass" if review_pass else "review_fail"
+                    store.update_record(_schedule.transition(review_rec, event, round_no))
 
             drill_records: List[dict] = []
             update_records: List[dict] = []
             for deficit in deficits["deficits"]:
+                # A4 no-calibration: fixed-k, never stop a learned cell early —
+                # so learned cells are NOT pruned and keep consuming drill budget.
+                if not a4_no_calibration and _loss._cell_key(deficit.get("cell") or {}) in learned_cells:
+                    continue
+                # charge the ZPD repeats to the meter (opt-in, AD-I) BEFORE the
+                # drill runs — k repeats per drill are k scored evaluations.
+                if meter_drill_repeats:
+                    meter.charge("drill", k)
                 drill = _drill.drill(
                     deficit, _drill_simulation(simulation, deficit), seed=seed, round_no=round_no,
                     repeat_scorer=repeat_scorer, fade_intensities=fade, k=k,
                     icc_floor=icc_floor, band=band,
                 )
                 drill_records.append(drill)
-                # unstable drill ⇒ quarantined, zero update budget (UI-UX E6).
-                if drill["zpd_measurement"]["verdict"] == "unstable":
+                # A1 no-ZPD: drill is NOT ZPD-filtered — an unstable/out-of-band
+                # drill is still promoted to UPDATE (the full loop quarantines it).
+                if not a1_no_zpd and drill["zpd_measurement"]["verdict"] == "unstable":
                     continue
+                # CALIBRATE (A4 disables): mark a cell learned when its
+                # unscaffolded pass-rate clears the band ceiling at stable ICC.
+                if not a4_no_calibration:
+                    zpd = drill["zpd_measurement"]
+                    if (zpd["unscaffolded_pass_rate"] >= float(band[1])
+                            and zpd["icc"] >= icc_floor):
+                        learned_cells.add(_loss._cell_key(deficit.get("cell") or {}))
                 # UPDATE (the D7 promotion sweep)
                 upd = _update.update(
                     deficit, allowed_layer=deficit.get("harness_layer", "execution"),
@@ -145,8 +187,11 @@ def run_practice_loop(
                     meter=meter, operator_backend=operator_backend,
                 )
                 update_records.append(upd)
-                # CONSOLIDATE (admit a lesson; cap ⇒ cap_deferred)
-                if upd["promotion_sweep"]["all_closed"]:
+                # CONSOLIDATE (admit a lesson; cap ⇒ cap_deferred).
+                # A3 no-consolidation: skip the consolidate phase entirely —
+                # lessons stay episodic-in-the-run and are NEVER admitted to the
+                # store, so there is no spaced deck to protect against drift.
+                if not a3_no_consolidation and upd["promotion_sweep"]["all_closed"]:
                     rec = _store.build_record(
                         lesson={"kind": "config_patch", "payload": {}, "applies_to_paths": deficit.get("search_paths") or []},
                         source_justification=upd.get("selected_candidate", {}).get("justification", {}) if upd.get("selected_candidate") else {},
@@ -172,6 +217,8 @@ def run_practice_loop(
         "objective_version": (objective or {}).get("version"),
         "stop_reason": stop_reason,
         "rounds_completed": len(rounds),
+        "ablations": list(ablations),
+        "learned_cell_count": len(learned_cells),
         "budget_ledger": meter.ledger(),
         "rounds": rounds,
         # headline — AgentCL stability/plasticity/generalization, never best-found.

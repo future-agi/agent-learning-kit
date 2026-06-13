@@ -53,6 +53,13 @@ STORE_STATUSES = ("active", "retired")
 RETIREMENT_REASONS = ("repeated_failure", "obsolete")
 LESSON_KINDS = ("instruction_block", "config_patch", "skill")
 
+# --- 13D-5 capstone ablation knobs (additive; the experiment path only) -----
+# Real trainer config flags that change run_practice_loop behaviour (never
+# labels): A1 disables ZPD filtering, A2 disables standing spaced reviews
+# (replay only at promotion), A3 skips the consolidate phase entirely, A4
+# disables the calibration learned-gate (fixed-k, never stop early).
+PRACTICE_ABLATIONS = ("a1_no_zpd", "a2_no_spacing", "a3_no_consolidation", "a4_no_calibration")
+
 # --- RU-1 defaults ---------------------------------------------------------
 ZPD_BAND = (0.2, 0.7)
 REVIEW_RATIO = 0.25

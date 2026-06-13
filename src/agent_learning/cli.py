@@ -4700,6 +4700,12 @@ def _practice(args: Sequence[str]) -> int:
     p_ab = sub.add_parser("ab")
     p_ab.add_argument("manifest_dir")
     p_ab.add_argument("--output", "-o", default=None)
+    p_ab.add_argument(
+        "--run", action="store_true",
+        help="EXECUTE the capstone experiment (all arms + A1-A4 ablations at equal "
+             "total metered budget, seeded, offline) and emit REAL retention numbers. "
+             "Without --run, the contract-validation harness runs (outcome-free).",
+    )
     parsed = parser.parse_args(list(args))
 
     if parsed.subcommand == "run":
@@ -4765,7 +4771,20 @@ def _practice(args: Sequence[str]) -> int:
         return 0
 
     if parsed.subcommand == "ab":
-        # the capstone subcommand (Unit 22 owns arms + artifact).
+        # the capstone subcommand. Default (no --run) = the contract-validation
+        # harness (Unit 22, outcome-free — the gate path). --run = the experiment
+        # engine (Unit 23) which actually runs arms and emits real retention.
+        if parsed.run:
+            from agent_learning.practice import _experiment
+            try:
+                result = _experiment.run_experiment(Path(parsed.manifest_dir))
+            except Exception as exc:
+                return _emit_contract_payload(
+                    {"status": "error", "exit_code": 1,
+                     "findings": [{"type": "experiment_error", "level": "error", "reason": str(exc).splitlines()[0]}]},
+                    parsed,
+                )
+            return _emit_contract_payload({"status": "ran", "exit_code": 0, "experiment": result["experiment"]}, parsed)
         from agent_learning.practice import _capstone
         try:
             result = _capstone.run_ab(Path(parsed.manifest_dir))
