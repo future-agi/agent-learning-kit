@@ -38,6 +38,50 @@ SCRIPTED_REPLY = (
 )
 
 
+def _gate_evidence(dataset: dict, agent: dict, result: dict) -> dict[str, Any]:
+    """The evidence the release gate (#80) audits — all computed credential-free
+    on the fixture lane: determinism (re-run identical), guard presence on every
+    task, the overclaim tripwire (a typed-only task forced with a live evidence
+    class MUST be flagged), and world-kind coverage."""
+
+    # determinism: a second fixture-lane run yields identical per-task scores.
+    result2 = tasks.run_benchmark(dataset, agent, evidence_class="captured_fixture")
+    scores1 = {r["task_id"]: r["score"] for r in result["per_task"]}
+    scores2 = {r["task_id"]: r["score"] for r in result2["per_task"]}
+
+    # guard presence: every shipped task carries declared Goodhart guards.
+    all_guards = all(
+        t["objective"]["guards"]["min_guard_count"] >= 1
+        and (t["objective"]["guards"]["sentinel_rows"] or t["objective"]["guards"]["canary_evals"])
+        for t in dataset["tasks"]
+    )
+
+    # overclaim tripwire: re-run requesting a LIVE evidence class; the typed-only
+    # task(s) MUST be flagged overclaim, the executable ones MUST NOT.
+    live = tasks.run_benchmark(dataset, agent, evidence_class="live_lane")
+    by_id = {r["task_id"]: r for r in live["per_task"]}
+    typed_only_ids = [t["id"] for t in dataset["tasks"] if t["execution_class"] in ("typed_only", "fixture")]
+    executable_ids = [t["id"] for t in dataset["tasks"] if t["execution_class"] == "executable"]
+    typed_only_flagged = bool(typed_only_ids) and all(by_id[i]["overclaim"] for i in typed_only_ids)
+    executable_not_flagged = all(not by_id[i]["overclaim"] for i in executable_ids)
+
+    world_kinds = list(tasks.task_world_kinds(dataset))
+    return {
+        "dataset_version": dataset["version"],
+        "determinism": {"scores_identical_across_runs": scores1 == scores2},
+        "guard_presence": {"all_tasks_have_guards": all_guards},
+        "overclaim_tripwire": {
+            "typed_only_flagged_under_live": typed_only_flagged,
+            "executable_not_flagged_under_live": executable_not_flagged,
+            "fixture_lane_honest": result["aggregate"]["honesty"]["any_overclaim"] is False,
+        },
+        "coverage": {
+            "world_kinds": world_kinds,
+            "spans_executable": {"conversation", "tool_api"} <= set(world_kinds),
+        },
+    }
+
+
 def run(output_path: str | Path | None = None, *, agent: dict | None = None) -> dict[str, Any]:
     dataset = tasks.load_task_dataset(DATASET_PATH)
     agent = agent or {"type": "scripted", "content": SCRIPTED_REPLY}
@@ -52,6 +96,7 @@ def run(output_path: str | Path | None = None, *, agent: dict | None = None) -> 
         "coverage": dataset["coverage"],
         "aggregate": result["aggregate"],
         "per_task": result["per_task"],
+        "gate_evidence": _gate_evidence(dataset, agent, result),
     }
     if output_path is not None:
         out = Path(output_path).expanduser()

@@ -18507,6 +18507,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "voice_loopback_readiness",
         "image_loop_readiness",
         "cua_loop_readiness",
+        "task_dataset_benchmark_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())

@@ -2511,6 +2511,22 @@ V1_IMAGE_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
 # frozen EVIDENCE_CLASSES 4-tuple _contract.py:18 is unchanged). Analogue of
 # V1_VOICE_FIDELITY_TIERS.
 
+# === Beat-HUD B3: task-dataset benchmark gate (#80) — closed sets, gate-pinned ===
+# The gate exec-loads examples/sdk_task_benchmark.py (credential-free, fixture
+# lane) and audits its gate_evidence block. The shipped dataset is BYTE-PINNED by
+# its content-address (changing any task changes the version → the gate fails
+# until the pin is updated — the world_kinds/kinds.json discipline, inline).
+V1_TASK_BENCHMARK_FILES = (
+    "examples/sdk_task_benchmark.py",
+    "examples/task_datasets/support_starter.json",
+)
+V1_TASK_BENCHMARK_DATASET_PINNED_VERSION = (
+    "sha256:32ca02111e88873c0efc2e8f9a181f303b1196e61ec9870f824f5181f910a9d0"
+)
+# the shipped dataset MUST span at least these EXECUTABLE world kinds (the v1
+# executable substrate; mirror of contract.EXECUTABLE_WORLD_KINDS_V1).
+V1_TASK_BENCHMARK_REQUIRED_WORLD_KINDS = ("conversation", "tool_api")
+
 # === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
 # All are MIRRORS of the cua_loop.py canon, cross-pinned by a unit test (the
 # GUNA_AXES pattern — trinity.py never imports cua_loop so the gate runs even if it
@@ -8049,6 +8065,26 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M4",  # modality-loop family — same milestone as
         # voice_loopback_readiness AND image_loop_readiness
         evidence=cua_loop,
+    )
+    # --- Beat-HUD B3 gate (#80, M4) — task-dataset benchmark readiness --------
+    # Registered AFTER the modality-loop family and DIRECTLY BEFORE
+    # docs_executability (which stays last). Count-agnostic, by-name insertion;
+    # closed set 79 -> 80.
+    task_benchmark = _release_task_dataset_benchmark_status(root)
+    _append_release_check(
+        checks,
+        check_id="task_dataset_benchmark_readiness",
+        passed=(
+            not task_benchmark["missing_files"]
+            and not task_benchmark["dataset_compile_errors"]
+            and not task_benchmark["determinism_errors"]
+            and not task_benchmark["guard_presence_errors"]
+            and not task_benchmark["overclaim_errors"]
+            and not task_benchmark["coverage_errors"]
+            and not task_benchmark["world_kind_errors"]
+        ),
+        milestone="M4",  # benchmark surface rides the modality-loop milestone
+        evidence=task_benchmark,
     )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
@@ -13779,6 +13815,116 @@ def _release_cua_loop_readiness_status(root: Path) -> dict[str, Any]:
         "eval_wiring_errors": eval_wiring_errors,
         "evidence_class_errors": evidence_class_errors,
         "ab_capstone_errors": ab_capstone_errors,
+    }
+
+
+def _release_task_dataset_benchmark_status(root: Path) -> dict[str, Any]:
+    """Gate #80 (M4) — task-dataset benchmark readiness (beat-HUD B3).
+
+    Exec-loads ``examples/sdk_task_benchmark.py`` in a tempdir (no network, no
+    env keys — entirely on the committed ``examples/task_datasets/
+    support_starter.json``) and audits its ``gate_evidence`` block into SIX error
+    arrays. ``passed`` = all six empty:
+
+      * dataset_compile_errors — the example ran, the dataset compiled, and its
+        content-address matches the BYTE-PIN (changing any task changes the
+        version → this fires until the pin is updated);
+      * determinism_errors — the fixture lane is byte-identical across re-runs;
+      * guard_presence_errors — every shipped task declares Goodhart guards
+        (the DESCOPED tripwire: presence, not yet a live reward-hack detector);
+      * overclaim_errors — a typed-only task forced with a live evidence class is
+        FLAGGED overclaim, an executable one is NOT, and the fixture lane is
+        honest (no fixture result labeled live — the kit's honesty moat);
+      * coverage_errors — the shipped dataset spans the executable world kinds;
+      * world_kind_errors — every task world.kind is a resolved kind (never
+        widening the frozen tuple)."""
+
+    missing_files = _missing_relative_paths(root, list(V1_TASK_BENCHMARK_FILES))
+    dataset_compile_errors: list[dict[str, Any]] = []
+    determinism_errors: list[dict[str, Any]] = []
+    guard_presence_errors: list[dict[str, Any]] = []
+    overclaim_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    world_kind_errors: list[dict[str, Any]] = []
+
+    artifact: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        artifact, run_err = _exec_example_run(
+            root, "examples/sdk_task_benchmark.py", "agent_learning_release_task_benchmark"
+        )
+        if run_err is not None:
+            err(dataset_compile_errors, field="example.run", expected="executes", observed=run_err)
+
+    if artifact:
+        if artifact.get("kind") != "agent-learning.task-benchmark-example.v1":
+            err(dataset_compile_errors, field="kind",
+                expected="agent-learning.task-benchmark-example.v1", observed=artifact.get("kind"))
+
+        evidence = _as_mapping(artifact.get("gate_evidence"))
+
+        # ---- byte-pin: the shipped dataset content-address is pinned ----
+        observed_version = str(evidence.get("dataset_version") or artifact.get("dataset_version") or "")
+        if observed_version != V1_TASK_BENCHMARK_DATASET_PINNED_VERSION:
+            err(dataset_compile_errors, field="dataset_version.byte_pin",
+                expected=V1_TASK_BENCHMARK_DATASET_PINNED_VERSION, observed=observed_version)
+
+        # ---- determinism (fixture lane byte-identical across re-runs) ----
+        det = _as_mapping(evidence.get("determinism"))
+        if det.get("scores_identical_across_runs") is not True:
+            err(determinism_errors, field="determinism.scores_identical_across_runs",
+                expected=True, observed=det.get("scores_identical_across_runs"))
+
+        # ---- guard presence (DESCOPED tripwire: declared, not yet detected) ----
+        guards = _as_mapping(evidence.get("guard_presence"))
+        if guards.get("all_tasks_have_guards") is not True:
+            err(guard_presence_errors, field="guard_presence.all_tasks_have_guards",
+                expected=True, observed=guards.get("all_tasks_have_guards"))
+
+        # ---- overclaim tripwire (the honesty moat) ----
+        oc = _as_mapping(evidence.get("overclaim_tripwire"))
+        if oc.get("typed_only_flagged_under_live") is not True:
+            err(overclaim_errors, field="overclaim.typed_only_flagged_under_live",
+                expected=True, observed=oc.get("typed_only_flagged_under_live"))
+        if oc.get("executable_not_flagged_under_live") is not True:
+            err(overclaim_errors, field="overclaim.executable_not_flagged_under_live",
+                expected=True, observed=oc.get("executable_not_flagged_under_live"))
+        if oc.get("fixture_lane_honest") is not True:
+            err(overclaim_errors, field="overclaim.fixture_lane_honest",
+                expected=True, observed=oc.get("fixture_lane_honest"))
+
+        # ---- coverage (spans the executable world kinds) ----
+        cov = _as_mapping(evidence.get("coverage"))
+        if cov.get("spans_executable") is not True:
+            err(coverage_errors, field="coverage.spans_executable",
+                expected=True, observed=cov.get("spans_executable"))
+        observed_kinds = list(cov.get("world_kinds") or [])
+        for required in V1_TASK_BENCHMARK_REQUIRED_WORLD_KINDS:
+            if required not in observed_kinds:
+                err(coverage_errors, field=f"coverage.world_kinds.{required}",
+                    expected="present", observed=observed_kinds)
+
+        # ---- world.kind resolution (no widening of the frozen tuple) ----
+        from fi.simulate.simulation import contract as _tb_contract  # downward import (gate-only)
+
+        resolved = set(_tb_contract.resolved_world_kinds())
+        for kind in observed_kinds:
+            if kind not in resolved:
+                err(world_kind_errors, field=f"world_kind.{kind}",
+                    expected="resolved", observed="unresolved")
+
+    return {
+        "kind": "agent-learning.task-dataset-benchmark-readiness.v1",
+        "missing_files": missing_files,
+        "dataset_compile_errors": dataset_compile_errors,
+        "determinism_errors": determinism_errors,
+        "guard_presence_errors": guard_presence_errors,
+        "overclaim_errors": overclaim_errors,
+        "coverage_errors": coverage_errors,
+        "world_kind_errors": world_kind_errors,
     }
 
 
