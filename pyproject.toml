@@ -148,4 +148,5 @@ markers = [
   "live_mcp: real MCP server-process lane (AGENT_LEARNING_LIVE_MCP=1)",
   "live_a2a: real A2A peer lane (AGENT_LEARNING_LIVE_A2A=1)",
   "live_credentialed: rungs that need real provider credentials (AGENT_LEARNING_LIVE_CREDENTIALED=1 AND creds present)",
+  "integration: exercises the real simulation engine end-to-end (credential-free; slower than unit tests)",
 ]

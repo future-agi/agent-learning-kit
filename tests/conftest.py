@@ -21,7 +21,12 @@ def _isolated_run_ledger():
     if os.environ.get("AGENT_LEARNING_LEDGER_PATH"):
         yield
         return
-    with tempfile.TemporaryDirectory(prefix="agent-learning-test-ledger-") as tmp:
+    # ignore_cleanup_errors: a real engine run writes ledger rows concurrently,
+    # which can leave the dir "not empty" at teardown on some platforms — the
+    # isolation goal (keep rows out of the dev's real ledger) is met regardless.
+    with tempfile.TemporaryDirectory(
+        prefix="agent-learning-test-ledger-", ignore_cleanup_errors=True
+    ) as tmp:
         os.environ["AGENT_LEARNING_LEDGER_PATH"] = tmp
         try:
             yield

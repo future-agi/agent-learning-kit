@@ -284,3 +284,202 @@ def task_world_kinds(dataset: Mapping[str, Any]) -> Sequence[str]:
     """Convenience: the sorted set of world kinds a (compiled) dataset spans."""
 
     return sorted({task["world"]["kind"] for task in (dataset.get("tasks") or [])})
+
+
+# ===========================================================================
+# B2 — the benchmark runner (run an agent across a dataset, honest scoring).
+# ===========================================================================
+AGENT_LEARNING_BENCHMARK_RESULT_KIND = "agent-learning.benchmark-result.v1"
+
+# the closed evidence-class set is OWNED by live/_contract (frozen 4-tuple); the
+# runner never invents one. Non-live execution_classes may NEVER carry a live
+# evidence_class — that is the honesty rule the gate's overclaim tripwire checks.
+_NON_LIVE_EXECUTION_CLASSES = ("fixture", "typed_only")
+_LIVE_EVIDENCE_CLASSES = ("live_lane", "live_stressed")
+
+
+def _evidence_classes() -> tuple[str, ...]:
+    from .live._contract import EVIDENCE_CLASSES
+
+    return tuple(EVIDENCE_CLASSES)
+
+
+def _resolve_task_list(
+    dataset: Mapping[str, Any],
+    *,
+    split: str | None,
+    max_tasks: int | None,
+) -> list[dict]:
+    tasks_all = list(dataset.get("tasks") or [])
+    if split is not None:
+        ids = set((dataset.get("splits") or {}).get(split) or [])
+        if not ids:
+            raise TaskDatasetError(f"benchmark split {split!r} is empty or undefined")
+        tasks_all = [t for t in tasks_all if t.get("id") in ids]
+    tasks_all = sorted(tasks_all, key=lambda t: str(t.get("id")))  # deterministic order
+    if max_tasks is not None:
+        tasks_all = tasks_all[: int(max_tasks)]
+    return tasks_all
+
+
+def _score_from_result(result: Mapping[str, Any]) -> tuple[str, float, dict]:
+    """Extract (verdict, score, metric_averages) from a run result (the shape
+    proven by the execution spike: top-level status + summary.evaluation_*)."""
+
+    summary = result.get("summary") or {}
+    score = float(summary.get("evaluation_score") or 0.0)
+    passed = bool(summary.get("evaluation_passed"))
+    status = str(result.get("status") or "")
+    verdict = "pass" if (passed or status == "passed") else "fail"
+    metric_averages = dict(summary.get("metric_averages") or {})
+    return verdict, round(score, 6), metric_averages
+
+
+def run_benchmark(
+    dataset: Mapping[str, Any],
+    agent: Mapping[str, Any],
+    *,
+    split: str | None = None,
+    max_tasks: int | None = None,
+    seed: int = 42,
+    evidence_class: str = "captured_fixture",
+    runner: Any = None,
+) -> dict[str, Any]:
+    """Run one ``agent`` across a (compiled) TaskDataset and return a scored,
+    comparable result. Each per-task result is stamped with the task's HONEST
+    ``execution_class`` and the run's ``evidence_class`` — and a non-live
+    execution_class carrying a live evidence_class is flagged ``overclaim=True``
+    (never silently downgraded; the gate asserts none in the fixture lane).
+
+    The actual run goes through the EXISTING engine (``simulate.build_task_run_
+    manifest`` -> ``simulate.run_manifest``), proven feasible on conversation/
+    tool_api by the execution spike. ``runner`` is an injectable seam (a
+    callable ``manifest -> result``) for deterministic testing without the
+    engine; when ``None`` the real engine is used.
+    """
+
+    if evidence_class not in _evidence_classes():
+        raise TaskError(
+            f"evidence_class {evidence_class!r} not in {_evidence_classes()}"
+        )
+
+    task_list = _resolve_task_list(dataset, split=split, max_tasks=max_tasks)
+    if not task_list:
+        raise TaskDatasetError("benchmark resolved zero tasks to run")
+
+    per_task: list[dict[str, Any]] = []
+    for task in task_list:
+        verdict, score, metric_averages, run_error = _run_one_task(
+            task, agent, seed=seed, runner=runner
+        )
+        execution_class = str(task.get("execution_class") or "typed_only")
+        overclaim = (
+            execution_class in _NON_LIVE_EXECUTION_CLASSES
+            and evidence_class in _LIVE_EVIDENCE_CLASSES
+        )
+        row: dict[str, Any] = {
+            "task_id": str(task.get("id")),
+            "world_kind": str(task.get("world", {}).get("kind")),
+            "difficulty": str(task.get("difficulty")),
+            "verdict": verdict,
+            "score": score,
+            "execution_class": execution_class,
+            "evidence_class": evidence_class,
+            "overclaim": bool(overclaim),
+            "metric_averages": metric_averages,
+        }
+        if run_error is not None:
+            row["error"] = run_error
+        per_task.append(row)
+
+    aggregate = _aggregate(per_task, evidence_class)
+    return {
+        "kind": AGENT_LEARNING_BENCHMARK_RESULT_KIND,
+        "dataset_version": str(dataset.get("version") or ""),
+        "dataset_name": str(dataset.get("name") or ""),
+        "split": split,
+        "seed": int(seed),
+        "agent_kind": str(agent.get("type") or ""),
+        "per_task": per_task,
+        "aggregate": aggregate,
+    }
+
+
+def _run_one_task(
+    task: Mapping[str, Any],
+    agent: Mapping[str, Any],
+    *,
+    seed: int,
+    runner: Any,
+) -> tuple[str, float, dict, str | None]:
+    scenario = dict(task.get("scenario") or {})
+    verification = dict(task.get("verification") or {})
+    threshold = float(verification.get("threshold", 0.7))
+    try:
+        if runner is not None:
+            result = runner(task, agent)
+        else:
+            import asyncio
+
+            from . import simulate as _simulate
+
+            manifest = _simulate.build_task_run_manifest(
+                name=str(task.get("id")),
+                agent=dict(agent),
+                scenario=scenario,
+                threshold=threshold,
+                simulation_engine=str(
+                    (task.get("world", {}).get("spec") or {}).get("engine")
+                    or "local_text"
+                ),
+            )
+            # run_manifest is async; the benchmark runner is a synchronous
+            # top-level API, so drive the coroutine to completion here.
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                result = asyncio.run(_simulate.run_manifest(manifest))
+            else:  # pragma: no cover - benchmark is not called inside a loop
+                raise RuntimeError(
+                    "run_benchmark cannot run inside an active event loop; "
+                    "call it from synchronous code"
+                )
+        verdict, score, metric_averages = _score_from_result(result)
+        return verdict, score, metric_averages, None
+    except Exception as exc:  # noqa: BLE001 — a failed task scores void, never crashes the sweep
+        return "void", 0.0, {}, f"{type(exc).__name__}: {str(exc)[:160]}"
+
+
+def _aggregate(per_task: Sequence[Mapping[str, Any]], evidence_class: str) -> dict:
+    n = len(per_task)
+    passed = sum(1 for r in per_task if r["verdict"] == "pass")
+    mean_score = round(sum(float(r["score"]) for r in per_task) / n, 6) if n else 0.0
+
+    def _rollup(key: str) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for r in per_task:
+            bucket = out.setdefault(str(r[key]), {"count": 0, "passed": 0, "score_sum": 0.0})
+            bucket["count"] += 1
+            bucket["passed"] += 1 if r["verdict"] == "pass" else 0
+            bucket["score_sum"] += float(r["score"])
+        for bucket in out.values():
+            bucket["mean_score"] = round(bucket.pop("score_sum") / bucket["count"], 6)
+        return dict(sorted(out.items()))
+
+    any_live = any(r["evidence_class"] in _LIVE_EVIDENCE_CLASSES for r in per_task)
+    any_overclaim = any(r.get("overclaim") for r in per_task)
+    return {
+        "count": n,
+        "passed": passed,
+        "pass_rate": round(passed / n, 6) if n else 0.0,
+        "mean_score": mean_score,
+        "by_world_kind": _rollup("world_kind"),
+        "by_difficulty": _rollup("difficulty"),
+        "by_execution_class": _rollup("execution_class"),
+        "honesty": {
+            "evidence_class": evidence_class,
+            "fixture_only": not any_live,
+            "any_live": any_live,
+            "any_overclaim": any_overclaim,
+        },
+    }
