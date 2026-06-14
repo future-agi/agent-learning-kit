@@ -18732,9 +18732,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "/".join(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
     )
     assert profile_matrix_evidence["apply_plan_cell_refs"] == (
-        profile_matrix_evidence["whole_agent_cell_refs"]
+        profile_matrix_evidence["apply_plan_exporting_cell_refs"]
     )
-    assert len(profile_matrix_evidence["whole_agent_cell_refs"]) == 6
+    # Phase 9D renamed whole_agent_cell_refs -> apply_plan_exporting_cell_refs:
+    # 6 whole_agent + 7 modality cells (3 voice + 2 image + 2 cua) all export
+    # an apply plan (they ride build_whole_agent_optimization_manifest).
+    assert len(profile_matrix_evidence["apply_plan_exporting_cell_refs"]) == 13
     assert profile_matrix_evidence["routing_row_count"] > 0
     assert profile_matrix_evidence["routing_checks_status"] == {
         name: True for name in trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
