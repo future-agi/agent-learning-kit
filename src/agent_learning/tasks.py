@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .loss import ObjectiveError, compile_objective
@@ -286,6 +287,14 @@ def task_world_kinds(dataset: Mapping[str, Any]) -> Sequence[str]:
     return sorted({task["world"]["kind"] for task in (dataset.get("tasks") or [])})
 
 
+def load_task_dataset(path: str | Path) -> dict[str, Any]:
+    """Load + compile a TaskDataset from a JSON file (the shipped out-of-the-box
+    datasets live under ``examples/task_datasets/``)."""
+
+    payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    return compile_task_dataset(payload)
+
+
 # ===========================================================================
 # B2 — the benchmark runner (run an agent across a dataset, honest scoring).
 # ===========================================================================
@@ -415,6 +424,16 @@ def _run_one_task(
     scenario = dict(task.get("scenario") or {})
     verification = dict(task.get("verification") or {})
     threshold = float(verification.get("threshold", 0.7))
+    # translate the task's verification + scenario row into a REAL evaluation
+    # config so the run is scored (not a hollow status='passed' with score 0.0).
+    row = (scenario.get("dataset") or [{}])[0] if scenario.get("dataset") else {}
+    task_description = str(row.get("situation") or task.get("title") or task.get("id"))
+    expected_result = str(row.get("outcome") or "")
+    success_criteria = [
+        str(c.get("value"))
+        for c in (verification.get("checks") or [])
+        if isinstance(c, Mapping) and c.get("value") is not None
+    ]
     try:
         if runner is not None:
             result = runner(task, agent)
@@ -427,6 +446,9 @@ def _run_one_task(
                 name=str(task.get("id")),
                 agent=dict(agent),
                 scenario=scenario,
+                task_description=task_description,
+                expected_result=expected_result or None,
+                success_criteria=success_criteria,
                 threshold=threshold,
                 simulation_engine=str(
                     (task.get("world", {}).get("spec") or {}).get("engine")
