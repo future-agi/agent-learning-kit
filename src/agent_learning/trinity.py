@@ -620,6 +620,18 @@ V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS = [    # ARCH §2f canon, byte-exact
     "workflow_trace",
     "orchestration_spans",
     "framework_method",
+    # Phase 9D: modality target-kinds (mirror of optimize.py; 9D-D2). Lockstep.
+    "voice_agent",
+    "image_agent",
+    "cua_agent",
+]
+# Phase 9D: the declared set of modality tokens (9D-D4). The gate's
+# modality-coverage clause asserts each one that is in the vocabulary has >=1
+# declared cell — the optimizer-target sibling of 13D A13 world-kind coverage.
+V1_OPTIMIZER_PROFILE_MATRIX_MODALITY_TARGET_KINDS = [
+    "voice_agent",
+    "image_agent",
+    "cua_agent",
 ]
 V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS = [        # ARCH §2f canon, byte-exact
     "gepa",
@@ -630,10 +642,11 @@ V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS = [        # ARCH §2f canon, byte-exact
     "regression_replay",
 ]
 V1_OPTIMIZER_PROFILE_MATRIX_CELLS = [
-    # P4-D2: the declared launch subset — 33 coordinates (27 new + 6 inherited
-    # workflow cells), per the ARCH §6 composition table. The gate asserts
-    # EXACTLY this set (no minimum-count floor); growing coverage is an edit
-    # to this constant + the example, deliberately visible in review.
+    # P4-D2: the declared launch subset — 40 coordinates (27 new + 6 inherited
+    # workflow cells + 7 Phase-9D modality cells), per the ARCH §6 composition
+    # table. The gate asserts EXACTLY this set (no minimum-count floor); growing
+    # coverage is an edit to this constant + the example, deliberately visible
+    # in review.
     ("langgraph", "workflow_trace", "society"),
     ("crewai", "workflow_trace", "society"),
     ("llamaindex", "workflow_trace", "society"),
@@ -667,6 +680,14 @@ V1_OPTIMIZER_PROFILE_MATRIX_CELLS = [
     ("pipecat", "orchestration_spans", "tpe"),
     ("langchain", "framework_method", "gepa"),
     ("langchain", "framework_method", "regression_replay"),
+    # Phase 9D modality cells (mirror of optimize.py; 9D-D3). Lockstep, byte-exact.
+    ("livekit", "voice_agent", "society"),
+    ("livekit", "voice_agent", "evolution_elo"),
+    ("livekit", "voice_agent", "tpe"),
+    ("llamaindex", "image_agent", "society"),
+    ("llamaindex", "image_agent", "evolution_elo"),
+    ("langgraph", "cua_agent", "society"),
+    ("langgraph", "cua_agent", "regression_replay"),
 ]
 V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS = [
     "framework",
@@ -11548,10 +11569,41 @@ def _release_optimizer_profile_matrix_status(root: Path) -> dict[str, Any]:
                 expected=sorted(declared_cell_refs),
                 observed=sorted(cells_by_ref),
             )
-        whole_agent_cell_refs = [
+        # Phase 9D modality-coverage clause (PRD-9D §4.3 / 9D-D4): the declared
+        # matrix MUST contain >=1 cell for each LANDED modality target-kind. The
+        # optimizer-target sibling of 13D A13 world-kind coverage. "Landed" keys
+        # off the declared cells themselves (Open Q5): a modality token is
+        # asserted iff it appears in the vocabulary AND has >=1 declared cell —
+        # automatically satisfied as each increment lands, and is what makes the
+        # cua deferral safe (no cua cells until 9C lands).
+        landed_modality_target_kinds = [
+            tk
+            for tk in V1_OPTIMIZER_PROFILE_MATRIX_MODALITY_TARGET_KINDS
+            if tk in V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+        ]
+        for token in landed_modality_target_kinds:
+            modality_cell_refs = [
+                cell_ref
+                for cell_ref in declared_cell_refs
+                if cell_ref.split("/")[1] == token
+            ]
+            if not modality_cell_refs:
+                append_error(
+                    optimization_errors,
+                    field="modality_coverage.cell_refs",
+                    expected=f">=1 declared cell for landed modality '{token}'",
+                    observed=modality_cell_refs,
+                )
+        # PRD-9D §4.7 (Open Q4 settled: generalize the filter, do not
+        # special-case). Apply-plan-exporting kinds = whole_agent + the modality
+        # kinds (all ride build_whole_agent_optimization_manifest, all export a
+        # full-config apply plan). Lockstep partner of the runtime export filter
+        # in optimize.py (_APPLY_PLAN_EXPORTING_TARGET_KINDS).
+        apply_plan_exporting_kinds = {"whole_agent", *landed_modality_target_kinds}
+        apply_plan_cell_refs = [
             cell_ref
             for cell_ref in declared_cell_refs
-            if cell_ref.split("/")[1] == "whole_agent"
+            if cell_ref.split("/")[1] in apply_plan_exporting_kinds
         ]
         for cell_ref in declared_cell_refs:
             cell = _as_mapping(cells_by_ref.get(cell_ref))
@@ -11669,11 +11721,11 @@ def _release_optimizer_profile_matrix_status(root: Path) -> dict[str, Any]:
             for plan in _as_list(result.get("apply_plans"))
             if isinstance(plan, Mapping)
         }
-        if sorted(apply_plans) != sorted(whole_agent_cell_refs):
+        if sorted(apply_plans) != sorted(apply_plan_cell_refs):
             append_error(
                 action_errors,
                 field="apply_plans.cell_refs",
-                expected=sorted(whole_agent_cell_refs),
+                expected=sorted(apply_plan_cell_refs),
                 observed=sorted(apply_plans),
             )
         for cell_ref, plan in sorted(apply_plans.items()):
@@ -11888,7 +11940,7 @@ def _release_optimizer_profile_matrix_status(root: Path) -> dict[str, Any]:
                 "cell_count": len(cells),
                 "passed_cell_count": summary.get("passed_cell_count"),
                 "cell_refs": sorted(cells_by_ref),
-                "whole_agent_cell_refs": sorted(whole_agent_cell_refs),
+                "apply_plan_exporting_cell_refs": sorted(apply_plan_cell_refs),
                 "apply_plan_cell_refs": sorted(apply_plans),
                 "routing_row_count": len(routing_rows),
                 "routing_checks_status": routing_checks_status,

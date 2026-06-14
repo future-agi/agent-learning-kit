@@ -30433,7 +30433,16 @@ def test_optimizer_profile_matrix_constants_mirror_facade():
     assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS == list(
         optimize.OPTIMIZER_PROFILE_MATRIX_CELLS
     )
-    assert len(trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS) == 33
+    assert len(trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS) == 40  # was 33; +7 Phase-9D
+    # Phase 9D: the three modality tokens are mirrored in lockstep (9D-D2).
+    assert "voice_agent" in optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    assert "image_agent" in optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    assert "cua_agent" in optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_MODALITY_TARGET_KINDS == [
+        "voice_agent",
+        "image_agent",
+        "cua_agent",
+    ]
     assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS == list(
         optimize.OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_AGGREGATE_KEYS
     )

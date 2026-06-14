@@ -5,8 +5,52 @@
   ],
   "generated_by": "agent_learning.optimize.build_optimizer_routing_table",
   "kind": "agent-learning.optimizer-routing-table.v1",
-  "row_count": 14,
+  "row_count": 17,
   "rows": [
+    {
+      "evidence": [
+        {
+          "backend": "regression_replay",
+          "cell_ref": "langgraph/cua_agent/regression_replay",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 16,
+            "improvement_frequency": 0.0667,
+            "iterations": 16,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 7,
+            "selection": null,
+            "semantic_locality": 0.5833
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "langgraph/cua_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "langgraph",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "cua_agent"
+    },
     {
       "evidence": [
         {
@@ -50,6 +94,50 @@
       "live_lane_evidence": [],
       "recommended_backend": "gepa",
       "target_kind": "framework_method"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "llamaindex/image_agent/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 4,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "llamaindex/image_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "llamaindex",
+      "live_lane_evidence": [],
+      "recommended_backend": "evolution_elo",
+      "target_kind": "image_agent"
     },
     {
       "evidence": [
@@ -342,6 +430,68 @@
       "live_lane_evidence": [],
       "recommended_backend": "regression_replay",
       "target_kind": "prompt"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "livekit/voice_agent/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 12,
+            "improvement_frequency": 0.0909,
+            "iterations": 12,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 3,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "livekit/voice_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "livekit/voice_agent/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 10,
+            "improvement_frequency": 0.1111,
+            "iterations": 10,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 0.6667
+          }
+        }
+      ],
+      "framework_profile": "livekit",
+      "live_lane_evidence": [],
+      "recommended_backend": "tpe",
+      "target_kind": "voice_agent"
     },
     {
       "evidence": [

@@ -992,6 +992,12 @@ OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS = (
     "workflow_trace",
     "orchestration_spans",
     "framework_method",
+    # Phase 9D: modality target-kinds — the matrix-facing name for each modality
+    # improvement loop; the loops stay whole_agent IN MECHANISM (they delegate to
+    # build_whole_agent_optimization_manifest). 9D-D2.
+    "voice_agent",
+    "image_agent",
+    "cua_agent",
 )
 OPTIMIZER_PROFILE_MATRIX_BACKENDS = (
     # Closed Vocabularies canon (ARCH §2f), byte-exact.
@@ -1019,9 +1025,35 @@ OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES = (
 )
 OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET = 24  # ARCH §6: per-cell budget cap
 
-# P4-D2: the declared launch subset — 33 coordinates (27 new + 6 inherited
-# workflow cells), per the ARCH §6 composition table. NOT a cartesian product
-# and NOT a floor; growing coverage is a visible edit to this constant.
+# Phase 9D: the modality target-kinds route to the modality loop builders
+# (PRD-9D §4.4). Each loop is whole_agent IN MECHANISM (it delegates to
+# build_whole_agent_optimization_manifest), so a modality cell produces a
+# whole-agent optimization manifest with a typed world.kind — and therefore
+# exports a whole-agent apply_plan exactly like a whole_agent cell.
+_MATRIX_MODALITY_WORLD_KIND = {
+    "voice_agent": "voice_telephony",       # voice_loop.py (built-in v1 kind)
+    "image_agent": "image",                 # image_loop.IMAGE_WORLD_KIND (R4 hook)
+    "cua_agent": "browser",                 # cua_loop browser surface (R4 hook)
+}
+# Each modality cell reuses its loop's compile_*_objective (the modality loss
+# discipline + Goodhart guard) and its world registration, reached lazily inside
+# the dispatch (the loops live in sibling modules; import inside the function —
+# the same downward-facade pattern the loops use); PRD-9D §4.4 / 9D-D6.
+# Apply-plan-exporting target-kinds (PRD-9D §4.7; Open Q4 settled: generalize,
+# do not special-case). whole_agent + the modality kinds — all ride
+# build_whole_agent_optimization_manifest, all export a full-config apply plan.
+# Lockstep partner of the gate-side filter in trinity.py.
+_APPLY_PLAN_EXPORTING_TARGET_KINDS = {
+    "whole_agent",
+    "voice_agent",
+    "image_agent",
+    "cua_agent",
+}
+
+# P4-D2: the declared launch subset — 40 coordinates (27 new + 6 inherited
+# workflow cells + 7 Phase-9D modality cells), per the ARCH §6 composition
+# table. NOT a cartesian product and NOT a floor; growing coverage is a visible
+# edit to this constant.
 OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS = tuple(
     (framework, "workflow_trace", "society")
     for framework in OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
@@ -1066,6 +1098,26 @@ OPTIMIZER_PROFILE_MATRIX_CELLS = (
     # framework_method: one profile x {gepa, regression_replay}
     ("langchain", "framework_method", "gepa"),
     ("langchain", "framework_method", "regression_replay"),
+    # Phase 9D modality target-kinds (sparse, modality-specific portfolios; NOT
+    # a cross-product — 9D-D3 / PRD-9D §4.2). Each rides
+    # build_whole_agent_optimization_manifest IN MECHANISM via its loop builder;
+    # the world.kind is the loop's typed kind.
+    # voice_agent (3): livekit profile = the voice framework; whole-agent voice
+    # config (voice id / TTS / endpointing / first-message / instructions).
+    # Matches the whole_agent livekit portfolio {society, evolution_elo, tpe}.
+    ("livekit", "voice_agent", "society"),
+    ("livekit", "voice_agent", "evolution_elo"),
+    ("livekit", "voice_agent", "tpe"),
+    # image_agent (2): llamaindex profile (a general/multimodal-capable profile
+    # in the closed six); a deliberately SMALLER portfolio (image is the cheaper
+    # modality to declare; 9B's loss is deterministic-anchored over fixtures).
+    ("llamaindex", "image_agent", "society"),
+    ("llamaindex", "image_agent", "evolution_elo"),
+    # cua_agent (2): langgraph profile (the natural browser/CUA agent-graph host);
+    # regression_replay pins CUA's strong deterministic post-state anchor
+    # (score_browser_cua_probe_result, 9C).
+    ("langgraph", "cua_agent", "society"),
+    ("langgraph", "cua_agent", "regression_replay"),
 )
 
 OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES = ("local_gate", "captured_fixture")
@@ -2390,6 +2442,20 @@ def _matrix_cell_fixture(framework: str, target_kind: str) -> dict[str, Any]:
         layers = ["prompt", "evaluator"]
     elif target_kind == "whole_agent":
         layers = ["planner", "tools", "memory", "world", "evaluator"]
+    elif target_kind in _MATRIX_MODALITY_WORLD_KIND:
+        # Phase 9D: modality cells are whole_agent IN MECHANISM (PRD-9D §4.4);
+        # the layer set is the whole-agent layer set. The loop builder rides the
+        # loop's rung-1 deterministic fixture (§4.6); the fixture here supplies
+        # the whole-agent base_agent + search_space the loop builder optimizes
+        # (built in build_optimizer_profile_matrix_manifests via
+        # _matrix_whole_agent_axes) plus a deterministic source:"declared"
+        # objective with guards (via _matrix_modality_objective) so
+        # build_practice_loop_manifest's objective_guards_missing /
+        # refuse_derived_for_training validators pass VERBATIM.
+        layers = ["planner", "tools", "memory", "world", "evaluator"]
+        cell_metadata = {
+            "modality_world_kind": _MATRIX_MODALITY_WORLD_KIND[target_kind],
+        }
     elif target_kind == "memory_ops":
         # Retrieval-dominance prior (MemMachine): retrieval-side paths BEFORE
         # write-side paths, plus one write x retrieval factorial slice.
@@ -2481,6 +2547,139 @@ def matrix_cell_ref(framework: str, target_kind: str, backend: str) -> str:
     return f"{framework}/{target_kind}/{backend}"
 
 
+def _matrix_whole_agent_axes(
+    framework: str,
+    target_kind: str,
+    fixture: Mapping[str, Any],
+    *,
+    grid_bounded: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The shared whole-agent base_agent + search_space (PRD-9D §4.4 / A1).
+
+    Factored out of the whole_agent dispatch branch so the modality branch uses
+    the IDENTICAL shape — no divergence, no duplication. The voice loop's
+    whole-agent voice config (voice id / TTS / endpointing) and the image/cua
+    loops' multimodal/grounding config are searched through this same
+    search_space (the loops are whole-agent in mechanism).
+
+    ``grid_bounded`` collapses one binary axis to a single value so a
+    grid-ENUMERATING backend (``regression_replay``, which has no sampling cap)
+    stays within OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET on the whole-agent
+    search space (5 binary paths = 2**5 = 32 > 24; collapsing voice => 2**4 = 16
+    <= 24). The search-bounded backends (society/tpe/elo) cap themselves, so this
+    only matters for regression_replay; the collapsed cell is still a valid
+    whole-agent search over model/first_message/instructions/responses."""
+
+    weak = _matrix_cell_weak_response(framework, target_kind)
+    base_agent = {
+        "type": "scripted",
+        "provider": framework,
+        "agent_ref": "AGENT_LEARNING_MATRIX_FIXTURE_AGENT",
+        "model": "fixture-base-model",
+        "voice": "fixture-base-voice",
+        "first_message": "Hello, how can I help?",
+        "instructions": "Answer the fixture task briefly.",
+        "responses": [{"content": weak}],
+    }
+    search_space = {
+        "model": ["fixture-base-model", "fixture-tuned-model"],
+        "voice": (
+            ["fixture-base-voice"]
+            if grid_bounded
+            else ["fixture-base-voice", "fixture-warm-voice"]
+        ),
+        "first_message": [
+            "Hello, how can I help?",
+            "Hi! Tell me what you need and I will handle it.",
+        ],
+        "instructions": [
+            "Answer the fixture task briefly.",
+            "Answer the fixture task with a confirmed resolution.",
+        ],
+        "responses.0.content": [weak, fixture["strong_response"]],
+    }
+    return base_agent, search_space
+
+
+def _matrix_modality_objective(
+    target_kind: str, fixture: Mapping[str, Any]
+) -> dict[str, Any]:
+    """A deterministic ``source:"declared"`` objective for a modality matrix cell
+    (PRD-9D §4.4 / §4.6 / A1). Reuses each loop's published rung-1 objective
+    shape (multi-objective, >=1 deterministic anchor term, the loop's Goodhart
+    guard) so the loop's ``compile_*_objective`` validator passes VERBATIM — NO
+    new loss is invented (9D-D6)."""
+
+    if target_kind == "voice_agent":
+        # voice_loop.compile_voice_objective: >=2 terms, >=1 non-timing quality
+        # anchor (task_success) + the codec/phone-survival anchor + guards.
+        return {
+            "source": "declared",
+            "evals": [
+                {"eval": "task_success", "weight": 1.0, "direction": "maximize"},
+                {"eval": "barge_in_latency", "weight": 0.5, "direction": "minimize"},
+                {"eval": "ttfb", "weight": 0.5, "direction": "minimize"},
+                {"eval": "codec_survival", "weight": 0.8, "direction": "maximize"},
+            ],
+            "guards": {
+                "sentinel_rows": [{"id": "no_pii_leak"}],
+                "canary_evals": [{"eval": "repetition_canary"}],
+                "min_guard_count": 1,
+            },
+        }
+    if target_kind == "image_agent":
+        # image_loop.compile_image_objective: >=1 deterministic anchor (EM/ANLS)
+        # term, not judge-only, + the perception-bypass guard rows.
+        return {
+            "source": "declared",
+            "evals": [
+                {"eval": "task_success", "weight": 1.0, "direction": "maximize"},
+                {"eval": "ocr_accuracy", "weight": 0.7, "direction": "maximize"},
+                {"eval": "chart_accuracy", "weight": 0.7, "direction": "maximize"},
+                {"eval": "artifact_grounding", "weight": 0.6, "direction": "maximize"},
+                {"eval": "instruction_adherence", "weight": 0.4, "direction": "maximize"},
+            ],
+            "guards": {
+                "sentinel_rows": [
+                    {"id": "prior_answerable", "kind": "perception_bypass"},
+                    {"id": "no_hallucinated_object"},
+                ],
+                "canary_evals": [
+                    {"eval": "counterfactual_twin", "kind": "perceptual_counterfactual"}
+                ],
+                "min_guard_count": 2,
+            },
+        }
+    if target_kind == "cua_agent":
+        # cua_loop.compile_cua_objective: >=1 deterministic post-state anchor
+        # (state_match), the mandatory safety axis, not judge-only, + the
+        # fake/unsafe-completion guard rows.
+        return {
+            "source": "declared",
+            "evals": [
+                {"eval": "task_success", "weight": 1.0, "direction": "maximize"},
+                {"eval": "state_match", "weight": 0.9, "direction": "maximize"},
+                {"eval": "grounding_mutation_resilience", "weight": 0.7, "direction": "maximize"},
+                {"eval": "action_correctness", "weight": 0.7, "direction": "maximize"},
+                {"eval": "step_efficiency", "weight": 0.5, "direction": "maximize"},
+                {"eval": "safety_adherence", "weight": 0.8, "direction": "maximize"},
+                {"eval": "tool_evidence", "weight": 0.5, "direction": "maximize"},
+                {"eval": "trace_coverage", "weight": 0.5, "direction": "maximize"},
+            ],
+            "guards": {
+                "sentinel_rows": [
+                    {"id": "fake_completion_sentinel", "kind": "fake_completion"},
+                    {"id": "no_silent_failure"},
+                ],
+                "canary_evals": [
+                    {"eval": "injected_dom_follow", "kind": "unsafe_completion"}
+                ],
+                "min_guard_count": 2,
+            },
+        }
+    raise ValueError(f"no modality objective for target_kind {target_kind!r}")
+
+
 def build_optimizer_profile_matrix_manifests(
     *,
     frameworks: Sequence[str] = OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS,
@@ -2543,40 +2742,85 @@ def build_optimizer_profile_matrix_manifests(
             **fixture["cell_metadata"],
         }
         if target_kind == "whole_agent":
+            base_agent, search_space = _matrix_whole_agent_axes(
+                framework, target_kind, fixture
+            )
             manifest = build_whole_agent_optimization_manifest(
                 name=f"optimizer-profile-matrix-{framework}-{target_kind}-{backend}",
-                base_agent={
-                    "type": "scripted",
-                    "provider": framework,
-                    "agent_ref": "AGENT_LEARNING_MATRIX_FIXTURE_AGENT",
-                    "model": "fixture-base-model",
-                    "voice": "fixture-base-voice",
-                    "first_message": "Hello, how can I help?",
-                    "instructions": "Answer the fixture task briefly.",
-                    "responses": [
-                        {"content": _matrix_cell_weak_response(framework, target_kind)}
-                    ],
-                },
-                search_space={
-                    "model": ["fixture-base-model", "fixture-tuned-model"],
-                    "voice": ["fixture-base-voice", "fixture-warm-voice"],
-                    "first_message": [
-                        "Hello, how can I help?",
-                        "Hi! Tell me what you need and I will handle it.",
-                    ],
-                    "instructions": [
-                        "Answer the fixture task briefly.",
-                        "Answer the fixture task with a confirmed resolution.",
-                    ],
-                    "responses.0.content": [
-                        _matrix_cell_weak_response(framework, target_kind),
-                        fixture["strong_response"],
-                    ],
-                },
+                base_agent=base_agent,
+                search_space=search_space,
                 evaluation_config=fixture["evaluation_config"],
                 eval_budget=int(eval_budget),
                 selection="elo" if backend == "evolution_elo" else "tournament",
                 scenario=fixture["scenario"],
+                optimizer=(
+                    optimizer_config if backend not in {"society", "evolution_elo"} else None
+                ),
+                threshold=0.7,
+                provider=framework,
+                agent_ref="AGENT_LEARNING_MATRIX_FIXTURE_AGENT",
+                target_metadata=common_metadata,
+            )
+        elif target_kind in _MATRIX_MODALITY_WORLD_KIND:
+            # Phase 9D modality dispatch (PRD-9D §4.4 / §1.3): a modality cell is
+            # whole_agent IN MECHANISM — it rides build_whole_agent_optimization_
+            # manifest, producing a runnable agent-learning.optimization.v1
+            # manifest with the loop's TYPED world.kind on the scenario. It reuses
+            # the loop's compile_*_objective (the modality loss discipline +
+            # Goodhart guard — NO new loss, 9D-D6) and the loop's world
+            # registration, then builds the runnable whole-agent manifest the
+            # matrix gate executes credential-free.
+            #
+            # DEVIATION (recorded, grounded in PRD-9D §4.4/§1.3 + BBG A1): the BBG
+            # directed calling build_*_practice_loop_manifest directly, but those
+            # builders emit an agent-learning.practice-loop.v1 ENVELOPE (nested
+            # simulation, no top-level scenario) that run_optimizer_profile_matrix's
+            # optimize_manifest() cannot execute (it requires optimization.v1 with
+            # a scenario). This branch realizes the BINDING ARCH intent — "the
+            # modality cells ride build_whole_agent_optimization_manifest, runnable
+            # credential-free, the per-cell gate assertions hold verbatim" — which
+            # the practice-loop envelope does not. The modality discipline (the
+            # compiled guarded objective + the registered typed world.kind) is
+            # preserved by invoking the loop's own compile/register surface.
+            world_kind = _MATRIX_MODALITY_WORLD_KIND[target_kind]
+            base_agent, search_space = _matrix_whole_agent_axes(
+                framework,
+                target_kind,
+                fixture,
+                # regression_replay grid-enumerates with no sampling cap; collapse
+                # one binary axis so 2**4 = 16 <= the per-cell eval budget.
+                grid_bounded=(backend == "regression_replay"),
+            )
+            objective = _matrix_modality_objective(target_kind, fixture)
+            if target_kind == "voice_agent":
+                from . import voice_loop as _voice_loop  # downward facade (legal)
+
+                compiled_objective = _voice_loop.compile_voice_objective(objective)
+            elif target_kind == "image_agent":
+                from . import image_loop as _image_loop  # downward facade (legal)
+
+                _image_loop._ensure_image_world_registered()
+                compiled_objective = _image_loop.compile_image_objective(
+                    objective, task_mode="understanding"
+                )
+            else:  # cua_agent
+                from . import cua_loop as _cua_loop  # downward facade (legal)
+
+                _cua_loop._ensure_cua_world_registered("browser")
+                compiled_objective = _cua_loop.compile_cua_objective(
+                    objective, cua_surface="browser"
+                )
+            modality_scenario = copy.deepcopy(dict(fixture["scenario"]))
+            modality_scenario["world"] = {"kind": world_kind}
+            modality_scenario["objective"] = compiled_objective
+            manifest = build_whole_agent_optimization_manifest(
+                name=f"optimizer-profile-matrix-{framework}-{target_kind}-{backend}",
+                base_agent=base_agent,
+                search_space=search_space,
+                evaluation_config=fixture["evaluation_config"],
+                eval_budget=int(eval_budget),
+                selection="elo" if backend == "evolution_elo" else "tournament",
+                scenario=modality_scenario,
                 optimizer=(
                     optimizer_config if backend not in {"society", "evolution_elo"} else None
                 ),
@@ -2686,7 +2930,14 @@ def run_optimizer_profile_matrix(
             and int(record["evaluations_used"]) > int(budget)
         ):
             record["budget_exceeded"] = True
-        if target_kind == "whole_agent" and result.get("apply_plan"):
+        if (
+            target_kind in _APPLY_PLAN_EXPORTING_TARGET_KINDS
+            and result.get("apply_plan")
+        ):
+            # PRD-9D §4.7 / A2: export apply-plans for whole_agent AND modality
+            # cells (they all produce a whole-agent apply_plan via the loop
+            # builder). Lockstep partner of the gate-side filter in trinity.py —
+            # generalizing only one side fails the gate's EXACT-SET assertion.
             plan = copy.deepcopy(_plain_mapping(result.get("apply_plan")))
             plan["cell_ref"] = cell_ref
             apply_plans.append(plan)

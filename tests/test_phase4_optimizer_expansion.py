@@ -643,17 +643,17 @@ def test_replay_rejects_out_of_setting_wins_and_security_trades() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_matrix_declares_exactly_33_cells_with_required_coverage() -> None:
+def test_matrix_declares_exactly_40_cells_with_required_coverage() -> None:
     cells = optimize.OPTIMIZER_PROFILE_MATRIX_CELLS
-    assert len(cells) == 33
-    assert len(set(cells)) == 33
+    assert len(cells) == 40  # was 33; +7 Phase-9D modality cells
+    assert len(set(cells)) == 40
     assert len(optimize.OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS) == 6
     new_cells = [
         cell
         for cell in cells
         if cell not in set(optimize.OPTIMIZER_PROFILE_MATRIX_INHERITED_CELLS)
     ]
-    assert len(new_cells) == 27
+    assert len(new_cells) == 34  # was 27; +7 Phase-9D modality cells
     # Coverage rules (ARCH §6): every target kind >= 2 backends; every backend
     # >= 2 cells; every framework profile >= 1 Phase-4 (new) cell.
     by_kind: dict[str, set[str]] = {}
