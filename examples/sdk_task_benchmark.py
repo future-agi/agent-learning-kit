@@ -105,11 +105,12 @@ def run(output_path: str | Path | None = None, *, agent: dict | None = None) -> 
             json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
             encoding="utf-8",
         )
-    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    # NOTE: never print inside run() — the release gate exec-loads this and the
+    # release-check CLI asserts empty stdout. Printing is __main__-only.
     return payload
 
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     destination = args[0] if args else None
-    run(destination)
+    print(json.dumps(run(destination), indent=2, sort_keys=True, default=str))
