@@ -592,3 +592,106 @@ def _aggregate(per_task: Sequence[Mapping[str, Any]], evidence_class: str) -> di
             "any_overclaim": any_overclaim,
         },
     }
+
+
+# ===========================================================================
+# RSI loop — close the loop: dataset -> optimize -> verify on HELD-OUT.
+# ===========================================================================
+AGENT_LEARNING_RSI_REPORT_KIND = "agent-learning.rsi-report.v1"
+
+
+def _apply_candidate(base_agent: Mapping[str, Any], assignment: Mapping[str, Any]) -> dict:
+    """Materialize one agent config from the base + a search-space assignment.
+    Keys may be dotted ``agent.<field>`` (the kit's whole-agent convention) or a
+    bare field; both write onto the agent dict."""
+
+    agent = dict(base_agent)
+    for path, value in assignment.items():
+        field = str(path).split(".", 1)[1] if str(path).startswith("agent.") else str(path)
+        agent[field] = value
+    return agent
+
+
+def _candidate_grid(search_space: Mapping[str, Sequence[Any]], *, cap: int) -> list[dict]:
+    """Cartesian product of the (finite) search space, deterministically ordered,
+    capped at ``cap`` candidates (logged when truncated)."""
+
+    import itertools
+
+    keys = sorted(search_space)
+    value_lists = [list(search_space[k]) for k in keys]
+    grid = [dict(zip(keys, combo)) for combo in itertools.product(*value_lists)]
+    return grid[: max(1, int(cap))]
+
+
+def optimize_against_dataset(
+    dataset: Mapping[str, Any],
+    base_agent: Mapping[str, Any],
+    search_space: Mapping[str, Sequence[Any]],
+    *,
+    train_split: str = "train",
+    test_split: str = "test",
+    max_candidates: int = 16,
+    seed: int = 42,
+    evidence_class: str = "captured_fixture",
+    runner: Any = None,
+) -> dict[str, Any]:
+    """Close the RSI loop: search agent configs, score each on the TRAIN split via
+    the (objective-anchored, discriminating) ``run_benchmark``, pick the winner,
+    then VERIFY it beats the baseline on the HELD-OUT TEST split.
+
+    The held-out check is the honest RSI guard (the advisor's bar): report lift on
+    tasks the optimizer never optimized against, never the metric it climbed. If
+    the dataset has no ``splits``, train==test is used and ``held_out`` is False
+    (a non-generalization-proving run, flagged as such — no overclaim)."""
+
+    splits = dataset.get("splits") or {}
+    has_split = bool(splits.get(train_split)) and bool(splits.get(test_split))
+    train = train_split if has_split else None
+    test = test_split if has_split else None
+
+    def _score(agent: Mapping[str, Any], split: str | None) -> dict:
+        return run_benchmark(
+            dataset, agent, split=split, seed=seed,
+            evidence_class=evidence_class, runner=runner,
+        )["aggregate"]
+
+    candidates = _candidate_grid(search_space, cap=max_candidates)
+    truncated = len(_candidate_grid(search_space, cap=10**9)) > len(candidates)
+
+    leaderboard: list[dict[str, Any]] = []
+    for idx, assignment in enumerate(candidates):
+        agent = _apply_candidate(base_agent, assignment)
+        train_agg = _score(agent, train)
+        leaderboard.append({
+            "candidate_index": idx,
+            "assignment": assignment,
+            "train_mean_score": train_agg["mean_score"],
+            "train_pass_rate": train_agg["pass_rate"],
+        })
+    leaderboard.sort(key=lambda r: (-r["train_mean_score"], r["candidate_index"]))
+    winner = leaderboard[0]
+    winner_agent = _apply_candidate(base_agent, winner["assignment"])
+
+    # held-out verification: winner vs baseline (the base_agent) on TEST
+    baseline_test = _score(base_agent, test)
+    winner_test = _score(winner_agent, test)
+    lift = round(winner_test["mean_score"] - baseline_test["mean_score"], 6)
+
+    return {
+        "kind": AGENT_LEARNING_RSI_REPORT_KIND,
+        "dataset_version": str(dataset.get("version") or ""),
+        "candidates_evaluated": len(candidates),
+        "candidates_truncated": truncated,
+        "leaderboard": leaderboard,
+        "winner": {"assignment": winner["assignment"],
+                   "train_mean_score": winner["train_mean_score"]},
+        "held_out": {
+            "verified": bool(has_split),                    # a real held-out split existed
+            "test_split": test_split if has_split else "(train==test; not held-out)",
+            "baseline_mean_score": baseline_test["mean_score"],
+            "winner_mean_score": winner_test["mean_score"],
+            "lift": lift,
+            "improved": lift > 0,
+        },
+    }
