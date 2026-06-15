@@ -331,17 +331,100 @@ def _resolve_task_list(
     return tasks_all
 
 
-def _score_from_result(result: Mapping[str, Any]) -> tuple[str, float, dict]:
-    """Extract (verdict, score, metric_averages) from a run result (the shape
-    proven by the execution spike: top-level status + summary.evaluation_*)."""
+# Canonical eval-ref -> engine-metric resolver (the ONE source of truth so the
+# benchmark score (B2), the detector (B6), and the objective (B1) all read the
+# SAME signal). The objective declares eval refs (e.g. "task_success"); the
+# engine reports metric names (e.g. "task_completion"). Exact match wins; this
+# only fills known gaps.
+METRIC_ALIASES = {
+    "task_success": "task_completion",
+    "artifact_grounding": "source_grounding",
+    "tool_argument_correctness": "tool_argument_schema",
+}
+
+
+def resolve_metric(metrics: Mapping[str, Any], eval_ref: str) -> float | None:
+    """Resolve an objective eval-ref to its value in the engine metric averages,
+    via exact match then the known alias map. Returns None if unresolved."""
+
+    if eval_ref in metrics:
+        try:
+            return float(metrics[eval_ref])
+        except (TypeError, ValueError):
+            return None
+    alias = METRIC_ALIASES.get(eval_ref)
+    if alias and alias in metrics:
+        try:
+            return float(metrics[alias])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def objective_score(metrics: Mapping[str, Any], objective: Mapping[str, Any]) -> dict[str, Any]:
+    """Weighted mean over the objective's DECLARED terms, each resolved to a real
+    engine metric. THIS is the benchmark/RSI fitness signal — NOT the engine's
+    all-metrics mean (`evaluation_score`), which pins ~30/38 metrics at 1.0 and
+    has near-zero dynamic range (a terrible agent and a good one both ~0.95). By
+    scoring only the task's declared terms, a bad agent's failing anchor actually
+    drops the score. Returns {score, terms_resolved, terms_total, per_term}."""
+
+    terms = [t for t in (objective.get("evals") or []) if isinstance(t, Mapping) and t.get("eval")]
+    per_term: dict[str, dict[str, Any]] = {}
+    num = 0.0
+    den = 0.0
+    for term in terms:
+        ref = str(term["eval"])
+        weight = float(term.get("weight", 1.0))
+        val = resolve_metric(metrics, ref)
+        per_term[ref] = {"weight": weight, "value": val, "anchor": bool(term.get("anchor"))}
+        if val is not None and weight > 0:
+            num += weight * val
+            den += weight
+    resolved = sum(1 for v in per_term.values() if v["value"] is not None)
+    score = (num / den) if den > 0 else None
+    return {
+        "score": round(score, 6) if score is not None else None,
+        "terms_resolved": resolved,
+        "terms_total": len(terms),
+        "per_term": per_term,
+    }
+
+
+def _score_from_result(
+    result: Mapping[str, Any],
+    *,
+    objective: Mapping[str, Any] | None = None,
+    threshold: float = 0.5,
+) -> tuple[str, float, dict, dict]:
+    """Extract (verdict, score, metric_averages, scoring) from a run result.
+
+    The headline ``score`` is the OBJECTIVE score (weighted mean over the task's
+    declared terms) when the objective resolves >=1 term — the signal with real
+    dynamic range. It falls back to the engine ``evaluation_score`` only when no
+    declared term maps to a metric. ``verdict`` is pass iff score >= threshold."""
 
     summary = result.get("summary") or {}
-    score = float(summary.get("evaluation_score") or 0.0)
-    passed = bool(summary.get("evaluation_passed"))
-    status = str(result.get("status") or "")
-    verdict = "pass" if (passed or status == "passed") else "fail"
     metric_averages = dict(summary.get("metric_averages") or {})
-    return verdict, round(score, 6), metric_averages
+    raw_eval = float(summary.get("evaluation_score") or 0.0)
+
+    obj = objective_score(metric_averages, objective or {})
+    if obj["score"] is not None:
+        score = float(obj["score"])
+        basis = "objective"
+    else:
+        score = raw_eval
+        basis = "evaluation_score_fallback"
+    verdict = "pass" if score >= threshold else "fail"
+    scoring = {
+        "basis": basis,
+        "raw_evaluation_score": round(raw_eval, 6),
+        "threshold": threshold,
+        "terms_resolved": obj["terms_resolved"],
+        "terms_total": obj["terms_total"],
+        "per_term": obj["per_term"],
+    }
+    return verdict, round(score, 6), metric_averages, scoring
 
 
 def run_benchmark(
@@ -378,7 +461,7 @@ def run_benchmark(
 
     per_task: list[dict[str, Any]] = []
     for task in task_list:
-        verdict, score, metric_averages, run_error = _run_one_task(
+        verdict, score, metric_averages, scoring, run_error = _run_one_task(
             task, agent, seed=seed, runner=runner
         )
         execution_class = str(task.get("execution_class") or "typed_only")
@@ -396,6 +479,7 @@ def run_benchmark(
             "evidence_class": evidence_class,
             "overclaim": bool(overclaim),
             "metric_averages": metric_averages,
+            "scoring": scoring,
         }
         if run_error is not None:
             row["error"] = run_error
@@ -420,10 +504,11 @@ def _run_one_task(
     *,
     seed: int,
     runner: Any,
-) -> tuple[str, float, dict, str | None]:
+) -> tuple[str, float, dict, dict, str | None]:
     scenario = dict(task.get("scenario") or {})
     verification = dict(task.get("verification") or {})
     threshold = float(verification.get("threshold", 0.7))
+    objective = dict(task.get("objective") or {})
     # translate the task's verification + scenario row into a REAL evaluation
     # config so the run is scored (not a hollow status='passed' with score 0.0).
     row = (scenario.get("dataset") or [{}])[0] if scenario.get("dataset") else {}
@@ -466,10 +551,12 @@ def _run_one_task(
                     "run_benchmark cannot run inside an active event loop; "
                     "call it from synchronous code"
                 )
-        verdict, score, metric_averages = _score_from_result(result)
-        return verdict, score, metric_averages, None
+        verdict, score, metric_averages, scoring = _score_from_result(
+            result, objective=objective, threshold=threshold
+        )
+        return verdict, score, metric_averages, scoring, None
     except Exception as exc:  # noqa: BLE001 — a failed task scores void, never crashes the sweep
-        return "void", 0.0, {}, f"{type(exc).__name__}: {str(exc)[:160]}"
+        return "void", 0.0, {}, {}, f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
 def _aggregate(per_task: Sequence[Mapping[str, Any]], evidence_class: str) -> dict:

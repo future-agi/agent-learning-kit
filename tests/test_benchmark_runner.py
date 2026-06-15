@@ -184,3 +184,58 @@ def test_run_benchmark_real_engine_scripted() -> None:
     assert row["verdict"] in ("pass", "fail")  # a terminal score came back
     assert isinstance(row["score"], float)
     assert res["aggregate"]["honesty"]["any_overclaim"] is False
+
+
+# --- objective-anchored scoring: the unit signal (no engine) ----------------
+def test_objective_score_reads_declared_terms_not_all_metrics() -> None:
+    # 38-metric engine output with ~all pinned at 1.0 + the real anchor low.
+    metrics = {f"m{i}": 1.0 for i in range(36)}
+    metrics["task_completion"] = 0.2  # the declared anchor (via task_success alias)
+    obj = {"evals": [{"eval": "task_success", "weight": 1.0, "anchor": True}]}
+    s = tasks.objective_score(metrics, obj)
+    assert s["score"] == 0.2  # reads the anchor, NOT the ~0.97 all-metrics mean
+    assert s["terms_resolved"] == 1
+
+
+def test_objective_score_weighted_mean() -> None:
+    metrics = {"task_completion": 0.8, "goal_progress": 0.4}
+    obj = {"evals": [
+        {"eval": "task_success", "weight": 1.0, "anchor": True},
+        {"eval": "goal_progress", "weight": 1.0, "anchor": True},
+    ]}
+    assert tasks.objective_score(metrics, obj)["score"] == 0.6  # (0.8+0.4)/2
+
+
+def test_objective_score_falls_back_when_unresolved() -> None:
+    obj = {"evals": [{"eval": "totally_unknown_metric", "weight": 1.0}]}
+    s = tasks.objective_score({"task_completion": 0.9}, obj)
+    assert s["score"] is None and s["terms_resolved"] == 0
+
+
+# --- THE eval-reality regression guard (the advisor's discriminating check) --
+@pytest.mark.integration
+def test_eval_discriminates_good_from_terrible_agent() -> None:
+    """A hollow eval (all-metrics mean) scored a terrible agent ~0.92 == a good
+    one ~0.96. The objective-anchored score MUST give real dynamic range: the
+    terrible agent fails and scores well below the good one. Guards RSI fitness."""
+    task = _task("refund", "conversation", "easy")
+    task["objective"]["evals"] = [
+        {"eval": "task_success", "weight": 1.0, "anchor": True},
+        {"eval": "goal_progress", "weight": 0.6, "anchor": True},
+    ]
+    task["scenario"]["dataset"] = [{
+        "persona": {"name": "D"},
+        "situation": "Where is the refund policy and what is the window?",
+        "outcome": "States the refund policy location and a 30-day window.",
+    }]
+    task["verification"] = {"checks": [{"type": "contains", "value": "policy"}], "threshold": 0.5}
+    ds = tasks.compile_task_dataset({"name": "disc", "tasks": [task]})
+
+    def run(content):  # noqa: ANN001
+        return tasks.run_benchmark(ds, {"type": "scripted", "content": content})["per_task"][0]
+
+    good = run("Our refund policy is at /help/refunds; refunds within 30 days of purchase.")
+    bad = run("no")
+    assert good["score"] > bad["score"] + 0.2, (good["score"], bad["score"])  # real range
+    assert bad["verdict"] == "fail"          # a terrible agent must NOT pass
+    assert good["scoring"]["basis"] == "objective"

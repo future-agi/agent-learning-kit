@@ -36,15 +36,6 @@ V1_REWARDHACK_SIGNALS = (
     "sentinel_violation",          # a declared sentinel condition was exploited
 )
 
-# Best-effort alias map: objective eval-ref -> engine metric_averages key. The
-# objective declares eval refs (e.g. "task_success"); the engine reports metric
-# names (e.g. "task_completion"). Exact match wins; this only fills known gaps.
-_EVAL_TO_METRIC_ALIASES = {
-    "task_success": "task_completion",
-    "artifact_grounding": "source_grounding",
-    "tool_argument_correctness": "tool_argument_schema",
-}
-
 # Thresholds (tunable; the empirical harness calibrates these against real data).
 _ANCHOR_LOW = 0.5        # an anchor at/below this is "failing ground truth"
 _HEADLINE_HIGH = 0.7     # a headline score at/above this is "claiming success"
@@ -56,13 +47,12 @@ class RewardHackError(ValueError):
 
 
 def _metric(metrics: Mapping[str, Any], eval_ref: str) -> float | None:
-    """Resolve an objective eval-ref to its value in the engine metric averages."""
-    if eval_ref in metrics:
-        return float(metrics[eval_ref])
-    alias = _EVAL_TO_METRIC_ALIASES.get(eval_ref)
-    if alias and alias in metrics:
-        return float(metrics[alias])
-    return None
+    """Resolve an objective eval-ref to its metric value — delegates to the ONE
+    canonical resolver in tasks.py so the detector (B6), the benchmark score (B2),
+    and the objective (B1) all read the SAME signal."""
+    from .tasks import resolve_metric
+
+    return resolve_metric(metrics, eval_ref)
 
 
 def _anchor_terms(objective: Mapping[str, Any]) -> list[str]:
