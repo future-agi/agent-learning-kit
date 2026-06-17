@@ -942,6 +942,8 @@ def _build_agent_callback(agent: Mapping[str, Any], base_dir: Path) -> Callable[
         return _build_websocket_agent_callback(agent)
     if agent_type in {"llm", "prompt", "instructions"}:
         return _build_llm_agent_callback(agent)
+    if agent_type in {"llm_tool_calling", "tool_calling", "react", "llm_agent", "llm_tools"}:
+        return _build_llm_tool_calling_agent_callback(agent)
     raise ManifestError(f"unsupported agent.type: {agent_type}")
 
 
@@ -977,6 +979,117 @@ def _build_llm_agent_callback(agent: Mapping[str, Any]) -> Callable[..., Any]:
         return AgentResponse(content=str(content))
 
     return llm_agent
+
+
+def _to_openai_tools(raw_tools: Any) -> list[dict[str, Any]]:
+    """Normalize env tool specs (``{name,description,parameters}`` OR the OpenAI
+    ``{type:function,function:{...}}`` shape) into the function-calling format."""
+    out: list[dict[str, Any]] = []
+    for spec in list(raw_tools or []):
+        if not isinstance(spec, Mapping):
+            continue
+        if spec.get("type") == "function" and isinstance(spec.get("function"), Mapping):
+            out.append(dict(spec))
+            continue
+        name = str(spec.get("name") or "")
+        if not name:
+            continue
+        out.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": str(spec.get("description") or f"Tool {name}."),
+                "parameters": dict(spec.get("parameters") or {"type": "object", "properties": {}}),
+            },
+        })
+    return out
+
+
+def _build_llm_tool_calling_agent_callback(agent: Mapping[str, Any]) -> Callable[..., Any]:
+    """Model-driven TOOL-CALLING agent: a real agentic loop where the MODEL decides
+    whether to call the environment's tools (function-calling). The engine executes
+    the returned tool_calls against the env (mock or real), feeds results back, and
+    re-invokes until the model answers or max_turns — the canonical agent-takes-
+    actions loop (HUD's premise, here credential-free + multi-modal + tool-mocked).
+
+    Distinct from ``agent.type=llm`` (single completion, ignores tools). Uses raw
+    ``litellm.completion`` (not ``get_completion``) so the model's ``tool_calls``
+    survive. Candidate unit for whole-agent optimization: ``instructions`` + ``model``.
+    """
+    instructions = str(agent.get("instructions") or agent.get("system_prompt") or "")
+    if not instructions:
+        raise ManifestError("agent.type=llm_tool_calling requires agent.instructions")
+    model = str(agent.get("model") or "gpt-4o-mini")
+    credentials = dict(agent.get("credentials") or {})
+
+    def _normalize_history(history: list) -> list[dict[str, Any]]:
+        """Convert the engine's internal tool_call shape ({id,name,arguments}) into
+        the OpenAI function-calling shape the provider requires when history is
+        re-sent ({id,type:function,function:{name,arguments:<json str>}})."""
+        import json as _json
+
+        out: list[dict[str, Any]] = []
+        for msg in history:
+            if not isinstance(msg, Mapping):
+                continue
+            m = dict(msg)
+            tcs = m.get("tool_calls")
+            if tcs:
+                norm = []
+                for tc in tcs:
+                    if not isinstance(tc, Mapping):
+                        continue
+                    fn = tc.get("function") if isinstance(tc.get("function"), Mapping) else {}
+                    name = tc.get("name") or fn.get("name") or ""
+                    args = tc.get("arguments", fn.get("arguments", {}))
+                    args_str = args if isinstance(args, str) else _json.dumps(args or {})
+                    norm.append({
+                        "id": tc.get("id") or tc.get("tool_call_id") or f"call_{len(norm)}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": args_str},
+                    })
+                m["tool_calls"] = norm
+                m.setdefault("content", m.get("content") or "")
+            out.append(m)
+        return out
+
+    def llm_tool_agent(input: Any) -> AgentResponse:
+        import json as _json
+
+        import litellm
+
+        history = _normalize_history(list(getattr(input, "messages", None) or []))
+        messages = [{"role": "system", "content": instructions}, *history]
+        tools = _to_openai_tools(getattr(input, "tools", None))
+
+        litellm.drop_params = True
+        kwargs: dict[str, Any] = {**credentials}
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        response = litellm.completion(model=model, messages=messages, **kwargs)
+        message = response.choices[0].message
+        content = message.content or ""
+
+        tool_calls: list[dict[str, Any]] = []
+        for tc in (getattr(message, "tool_calls", None) or []):
+            fn = getattr(tc, "function", None)
+            if fn is None:
+                continue
+            raw_args = getattr(fn, "arguments", "") or "{}"
+            try:
+                arguments = _json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            except (ValueError, TypeError):
+                arguments = {"_raw": str(raw_args)}
+            tool_calls.append({
+                "id": getattr(tc, "id", None) or f"call_{len(tool_calls)}",
+                "name": getattr(fn, "name", "") or "",
+                "arguments": arguments,
+            })
+
+        return AgentResponse(content=str(content), tool_calls=tool_calls or None)
+
+    return llm_tool_agent
 
 
 def _build_http_agent_callback(
