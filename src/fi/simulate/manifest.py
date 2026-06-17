@@ -832,6 +832,23 @@ def build_manifest_optimization_problem(
             score = float(evidence_evaluation.score)
         else:
             score = float(getattr(evaluation, "score", 1.0 if evaluation is None else 0.0))
+            # bug #2: when the manifest DECLARES an anchor objective, score the
+            # candidate on it (real dynamic range) instead of the all-metrics-mean
+            # evaluation score. Scoped: no declared-anchor objective -> unchanged.
+            from fi.opt.integrations.simulate import _score_from_value
+
+            eval_plain = cli._to_plain(evaluation) if evaluation is not None else {}
+            objective = (
+                candidate_manifest.get("objective")
+                or ((candidate_manifest.get("simulation") or {}).get("inline") or {}).get("objective")
+                or (candidate_manifest.get("evaluation") or {}).get("objective")
+            )
+            anchored = _score_from_value({
+                "objective": objective,
+                "summary": (eval_plain.get("summary") if isinstance(eval_plain, Mapping) else {}) or {},
+            })
+            if anchored is not None:
+                score = float(anchored)
         metadata = {
             "agent_report_evaluation": (
                 cli._to_plain(evaluation) if evaluation is not None else None

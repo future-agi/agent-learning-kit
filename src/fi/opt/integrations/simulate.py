@@ -708,7 +708,60 @@ def _candidate_evaluation_from_value(
     )
 
 
+def _declared_anchor_objective(value: Any) -> Optional[Mapping[str, Any]]:
+    """Return a REAL declared objective (with ``evals`` carrying >=1 ``anchor``
+    term) if the candidate value carries one — searched in the manifest/result
+    locations only. NEVER synthesized from config (that over-reaches and regresses
+    structural/hook manifests). Bug #2: only opted-in declared-anchor objectives
+    get objective-anchored scoring; everything else keeps the engine score."""
+    from fi.opt._objective_scoring import has_declared_anchor_objective
+
+    if not isinstance(value, Mapping):
+        return None
+    candidates = [
+        value.get("objective"),
+        (value.get("evaluation") or {}).get("objective") if isinstance(value.get("evaluation"), Mapping) else None,
+        ((value.get("simulation") or {}).get("inline") or {}).get("objective")
+        if isinstance(value.get("simulation"), Mapping) else None,
+        (value.get("scenario") or {}).get("objective") if isinstance(value.get("scenario"), Mapping) else None,
+    ]
+    for obj in candidates:
+        if has_declared_anchor_objective(obj):
+            return obj
+    return None
+
+
+def _candidate_metric_averages(value: Any) -> Optional[Mapping[str, Any]]:
+    if not isinstance(value, Mapping):
+        return None
+    if isinstance(value.get("metric_averages"), Mapping):
+        return value["metric_averages"]
+    summary = value.get("summary")
+    if isinstance(summary, Mapping) and isinstance(summary.get("metric_averages"), Mapping):
+        return summary["metric_averages"]
+    return None
+
+
+def _objective_anchored_score(value: Any) -> Optional[float]:
+    """Bug #2: score a candidate on its DECLARED anchor objective (real dynamic
+    range) instead of the all-metrics-mean ``evaluation_score``. Returns None
+    unless BOTH a declared-anchor objective and metric_averages are present, so
+    legacy/structural manifests fall through to the existing score unchanged."""
+    objective = _declared_anchor_objective(value)
+    if objective is None:
+        return None
+    metrics = _candidate_metric_averages(value)
+    if not metrics:
+        return None
+    from fi.opt._objective_scoring import objective_score
+
+    return _coerce_score(objective_score(metrics, objective).get("score"))
+
+
 def _score_from_value(value: Any) -> Optional[float]:
+    anchored = _objective_anchored_score(value)
+    if anchored is not None:
+        return anchored
     direct = _coerce_score(value)
     if direct is not None:
         return direct

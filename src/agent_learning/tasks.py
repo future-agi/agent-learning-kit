@@ -339,64 +339,15 @@ def _resolve_task_list(
     return tasks_all
 
 
-# Canonical eval-ref -> engine-metric resolver (the ONE source of truth so the
-# benchmark score (B2), the detector (B6), and the objective (B1) all read the
-# SAME signal). The objective declares eval refs (e.g. "task_success"); the
-# engine reports metric names (e.g. "task_completion"). Exact match wins; this
-# only fills known gaps.
-METRIC_ALIASES = {
-    "task_success": "task_completion",
-    "artifact_grounding": "source_grounding",
-    "tool_argument_correctness": "tool_argument_schema",
-}
-
-
-def resolve_metric(metrics: Mapping[str, Any], eval_ref: str) -> float | None:
-    """Resolve an objective eval-ref to its value in the engine metric averages,
-    via exact match then the known alias map. Returns None if unresolved."""
-
-    if eval_ref in metrics:
-        try:
-            return float(metrics[eval_ref])
-        except (TypeError, ValueError):
-            return None
-    alias = METRIC_ALIASES.get(eval_ref)
-    if alias and alias in metrics:
-        try:
-            return float(metrics[alias])
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
-def objective_score(metrics: Mapping[str, Any], objective: Mapping[str, Any]) -> dict[str, Any]:
-    """Weighted mean over the objective's DECLARED terms, each resolved to a real
-    engine metric. THIS is the benchmark/RSI fitness signal — NOT the engine's
-    all-metrics mean (`evaluation_score`), which pins ~30/38 metrics at 1.0 and
-    has near-zero dynamic range (a terrible agent and a good one both ~0.95). By
-    scoring only the task's declared terms, a bad agent's failing anchor actually
-    drops the score. Returns {score, terms_resolved, terms_total, per_term}."""
-
-    terms = [t for t in (objective.get("evals") or []) if isinstance(t, Mapping) and t.get("eval")]
-    per_term: dict[str, dict[str, Any]] = {}
-    num = 0.0
-    den = 0.0
-    for term in terms:
-        ref = str(term["eval"])
-        weight = float(term.get("weight", 1.0))
-        val = resolve_metric(metrics, ref)
-        per_term[ref] = {"weight": weight, "value": val, "anchor": bool(term.get("anchor"))}
-        if val is not None and weight > 0:
-            num += weight * val
-            den += weight
-    resolved = sum(1 for v in per_term.values() if v["value"] is not None)
-    score = (num / den) if den > 0 else None
-    return {
-        "score": round(score, 6) if score is not None else None,
-        "terms_resolved": resolved,
-        "terms_total": len(terms),
-        "per_term": per_term,
-    }
+# Canonical objective-anchored scoring lives in ``fi`` (the engine) so the
+# optimizer integration can use it WITHOUT importing agent_learning (the
+# vendored_engine_boundary). Re-exported here so B1/B2/B6 call sites are unchanged.
+from fi.opt._objective_scoring import (  # noqa: E402,F401
+    METRIC_ALIASES,
+    has_declared_anchor_objective,
+    objective_score,
+    resolve_metric,
+)
 
 
 def _score_from_result(
