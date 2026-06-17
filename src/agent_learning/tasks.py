@@ -209,6 +209,14 @@ def compile_task(payload: Mapping[str, Any]) -> dict:
         compiled["goal"] = dict(raw["goal"])
     if raw.get("verification") is not None:
         compiled["verification"] = dict(raw["verification"])
+    # environments: mock-tool / world env specs the runner wires into the manifest
+    # so a TOOL-USING task (mock_tools + a tool-calling agent) runs through the
+    # benchmark/RSI loop, not just direct simulate.
+    if raw.get("environments"):
+        envs = raw["environments"]
+        if not isinstance(envs, Sequence) or isinstance(envs, (str, bytes)):
+            raise TaskError("task.environments must be a list of env specs")
+        compiled["environments"] = [dict(e) for e in envs if isinstance(e, Mapping)]
     compiled["version"] = _content_hash(
         {k: v for k, v in compiled.items() if k != "version"}
     )
@@ -535,6 +543,9 @@ def _run_one_task(
                 expected_result=expected_result or None,
                 success_criteria=success_criteria,
                 threshold=threshold,
+                environments=list(task.get("environments") or ()),
+                auto_execute_tools=True,
+                max_turns=int((task.get("world", {}).get("spec") or {}).get("max_turns", 1)),
                 simulation_engine=str(
                     (task.get("world", {}).get("spec") or {}).get("engine")
                     or "local_text"

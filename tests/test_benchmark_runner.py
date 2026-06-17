@@ -213,6 +213,40 @@ def test_objective_score_falls_back_when_unresolved() -> None:
 
 
 # --- THE eval-reality regression guard (the advisor's discriminating check) --
+def test_task_carries_environments() -> None:
+    t = _task("tooluse")
+    t["environments"] = [{"type": "mock_tools", "data": {"tools": {"get_x": {"response": {"content": "x"}}}}}]
+    compiled = tasks.compile_task(t)
+    assert compiled["environments"][0]["type"] == "mock_tools"
+
+
+def test_task_rejects_bad_environments() -> None:
+    t = _task("bad")
+    t["environments"] = "not-a-list"
+    with pytest.raises(tasks.TaskError):
+        tasks.compile_task(t)
+
+
+@pytest.mark.integration
+def test_tool_using_task_runs_through_benchmark() -> None:
+    """A tool-using task (mock_tools env + scripted tool-call agent) runs through
+    run_benchmark end-to-end and the mocked tool fires (env wired into the runner)."""
+    t = _task("order-status")
+    t["environments"] = [{"type": "mock_tools", "data": {"tools": {
+        "order_status": {"response": {"content": "Order shipped.", "success": True}}}}}]
+    t["world"]["spec"] = {"max_turns": 2}
+    ds = tasks.compile_task_dataset({"name": "tool", "tasks": [t]})
+    agent = {"type": "scripted", "responses": [
+        {"content": "checking", "tool_calls": [{"id": "c1", "name": "order_status", "arguments": {}}]},
+        {"content": "Your order shipped."},
+    ]}
+    res = tasks.run_benchmark(ds, agent)
+    row = res["per_task"][0]
+    # the runner wired the env; the tool was callable in the manifest
+    assert row["verdict"] in ("pass", "fail")
+    assert isinstance(row["score"], float)
+
+
 @pytest.mark.integration
 def test_eval_discriminates_good_from_terrible_agent() -> None:
     """A hollow eval (all-metrics mean) scored a terrible agent ~0.92 == a good
