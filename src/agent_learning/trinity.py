@@ -2521,7 +2521,7 @@ V1_TASK_BENCHMARK_FILES = (
     "examples/task_datasets/support_starter.json",
 )
 V1_TASK_BENCHMARK_DATASET_PINNED_VERSION = (
-    "sha256:32ca02111e88873c0efc2e8f9a181f303b1196e61ec9870f824f5181f910a9d0"
+    "sha256:19704fd51ba0c34267e73f6db66aff9ddd5f777c51b029258ccd87604522c2c4"
 )
 # the shipped dataset MUST span at least these EXECUTABLE world kinds (the v1
 # executable substrate; mirror of contract.EXECUTABLE_WORLD_KINDS_V1).

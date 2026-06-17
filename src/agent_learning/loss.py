@@ -78,14 +78,20 @@ def compile_objective(payload: Mapping[str, Any]) -> dict:
         scope = str(term.get("scope", "run"))
         if scope not in TERM_SCOPES:
             raise ObjectiveError(f"objective.evals[{index}].scope not in {TERM_SCOPES}")
-        terms.append({
+        compiled_term = {
             "eval": str(eval_ref),
             "weight": round(weight, 6),
             "direction": direction,
             "threshold": round(float(term.get("threshold", 0.7)), 6),
             "scope": scope,
             "cells": list(term.get("cells") or []),
-        })
+        }
+        # preserve the deterministic ground-truth ANCHOR marker through
+        # compilation — it is load-bearing downstream (reward-hack detector +
+        # task anchor-coverage), not just an authoring hint.
+        if term.get("anchor") is True:
+            compiled_term["anchor"] = True
+        terms.append(compiled_term)
 
     aggregation = dict(raw.get("aggregation") or {})
     mode = aggregation.get("mode", "obligation_cells")
