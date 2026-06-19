@@ -44,8 +44,8 @@ def _task(tid: str) -> dict:
 
 def _ds() -> dict:
     return tasks.compile_task_dataset({
-        "name": f"{FW}-live", "tasks": [_task("tr"), _task("te"), _task("rg")],
-        "splits": {"train": ["tr"], "test": ["te"], "regression": ["rg"]}})
+        "name": f"{FW}-live", "tasks": [_task("tr1"),_task("tr2"),_task("te1"),_task("te2"),_task("rg1"),_task("rg2")],
+        "splits": {"train": ["tr1","tr2"], "test": ["te1","te2"], "regression": ["rg1","rg2"]}})
 
 
 def main(fw: str) -> int:

@@ -35,7 +35,7 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
     def _work() -> dict[str, Any]:
         from pydantic_ai import Agent
 
-        agent = Agent(model)
+        agent = Agent(model, model_settings={"temperature": 0.0})
         if with_tool:
             @agent.tool_plain
             def order_status(order_id: str = "") -> str:
@@ -75,7 +75,7 @@ def run_agent(agent_input):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
     def _work():
         from pydantic_ai import Agent
-        result = Agent("openai:gpt-4o-mini").run_sync(q)  # BUG: no tool registered
+        result = Agent("openai:gpt-4o-mini", model_settings={"temperature":0.0}).run_sync(q)  # BUG: no tool registered
         return {"content": str(result.output or ""), "tool_calls": []}
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_work).result()
@@ -90,7 +90,7 @@ def run_agent(agent_input):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
     def _work():
         from pydantic_ai import Agent
-        agent = Agent("openai:gpt-4o-mini")
+        agent = Agent("openai:gpt-4o-mini", model_settings={"temperature":0.0})
         @agent.tool_plain
         def order_status(order_id: str = "") -> str:
             "Look up an order's status by id."
