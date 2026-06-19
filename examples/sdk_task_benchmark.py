@@ -45,7 +45,9 @@ def _gate_evidence(dataset: dict, agent: dict, result: dict) -> dict[str, Any]:
     class MUST be flagged), and world-kind coverage."""
 
     # determinism: a second fixture-lane run yields identical per-task scores.
-    result2 = tasks.run_benchmark(dataset, agent, evidence_class="captured_fixture")
+    result2 = tasks.run_benchmark(
+        dataset, agent, evidence_class="captured_fixture", emit_telemetry=False
+    )
     scores1 = {r["task_id"]: r["score"] for r in result["per_task"]}
     scores2 = {r["task_id"]: r["score"] for r in result2["per_task"]}
 
@@ -58,7 +60,9 @@ def _gate_evidence(dataset: dict, agent: dict, result: dict) -> dict[str, Any]:
 
     # overclaim tripwire: re-run requesting a LIVE evidence class; the typed-only
     # task(s) MUST be flagged overclaim, the executable ones MUST NOT.
-    live = tasks.run_benchmark(dataset, agent, evidence_class="live_lane")
+    live = tasks.run_benchmark(
+        dataset, agent, evidence_class="live_lane", emit_telemetry=False
+    )
     by_id = {r["task_id"]: r for r in live["per_task"]}
     typed_only_ids = [t["id"] for t in dataset["tasks"] if t["execution_class"] in ("typed_only", "fixture")]
     executable_ids = [t["id"] for t in dataset["tasks"] if t["execution_class"] == "executable"]
