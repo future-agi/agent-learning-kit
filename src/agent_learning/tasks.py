@@ -657,3 +657,73 @@ def optimize_against_dataset(
             "improved": lift > 0,
         },
     }
+
+
+# ===========================================================================
+# #2 — real cell_scorer for the 13D practice loop (replaces the all-pass no-op).
+# ===========================================================================
+def make_cell_scorer(
+    *,
+    agent: Mapping[str, Any],
+    objective: Mapping[str, Any],
+    scenario: Mapping[str, Any] | None = None,
+    environments: Sequence[Mapping[str, Any]] = (),
+    threshold: float = 0.5,
+    evidence_class: str = "captured_fixture",
+    runner: Any = None,
+) -> Any:
+    """Build a REAL ``cell_scorer`` for ``practice.run_practice_loop`` that runs the
+    agent per cell and scores via ``objective_score`` (engine ``metric_averages`` →
+    the ``{scalar, verdict, evidence_class}`` shape the loop consumes).
+
+    Replaces the loop's all-pass no-op default (``scalar 1.0, verdict pass``) so the
+    13D practice loop — assess/diagnose/spaced-regression-replay/consolidate —
+    measures REAL fitness instead of accepting everything (audit gap #2). Joins
+    diagnose-from-trace + no-forgetting (13D) with the discriminating objective
+    score. ``runner`` is an injectable seam for deterministic tests."""
+
+    def cell_scorer(cell: Mapping[str, Any]) -> dict[str, Any]:
+        sc = dict(scenario or {})
+        # the cell's persona overrides the scenario's row when present, so distinct
+        # obligation cells exercise distinct conditions (not one fixed run).
+        if cell.get("persona") and sc.get("dataset"):
+            row0 = dict((sc["dataset"] or [{}])[0])
+            row0["persona"] = {"name": str(cell["persona"])[:24]}
+            sc = {**sc, "dataset": [row0]}
+        if runner is not None:
+            result = runner(cell, agent)
+        else:
+            import asyncio
+
+            from . import simulate as _sim
+
+            row = (sc.get("dataset") or [{}])[0] if sc.get("dataset") else {}
+            manifest = _sim.build_task_run_manifest(
+                name=str(cell.get("intent") or "cell"),
+                agent=dict(agent),
+                scenario=sc or None,
+                task_description=str(row.get("situation") or cell.get("intent") or "task"),
+                expected_result=str(row.get("outcome") or "") or None,
+                environments=list(environments),
+                auto_execute_tools=True,
+                threshold=threshold,
+            )
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                result = asyncio.run(_sim.run_manifest(manifest))
+            else:  # pragma: no cover
+                raise RuntimeError("make_cell_scorer cannot run inside an event loop")
+
+        metrics = (result.get("summary") or {}).get("metric_averages") or {}
+        s = objective_score(metrics, objective).get("score")
+        scalar = float(s) if s is not None else 0.0
+        return {
+            "eval": "agent_report",
+            "scalar": round(scalar, 6),
+            "verdict": "pass" if scalar >= threshold else "fail",
+            "evidence_class": evidence_class,
+            "metric_averages": metrics,
+        }
+
+    return cell_scorer
