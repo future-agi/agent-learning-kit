@@ -30,19 +30,25 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
         from autogen_ext.models.openai import OpenAIChatCompletionClient
 
         recorded: list[dict[str, Any]] = []
-        client = OpenAIChatCompletionClient(model=model, temperature=0.0)
-        tools = []
-        if with_tool:
-            def order_status(order_id: str = "") -> str:
-                """Look up an order's status by id."""
-                recorded.append({"id": f"c{len(recorded)}", "name": "order_status",
-                                 "arguments": {"order_id": order_id}})
-                return _CANNED
-            tools = [order_status]
 
-        agent = AssistantAgent("support", model_client=client, tools=tools,
-                               reflect_on_tool_use=True)
-        result = asyncio.run(agent.run(task=question))
+        async def _arun() -> Any:
+            # close the client INSIDE the loop (else "Event loop is closed" at teardown)
+            client = OpenAIChatCompletionClient(model=model, temperature=0.0)
+            tools = []
+            if with_tool:
+                def order_status(order_id: str = "") -> str:
+                    """Look up an order's status by id."""
+                    recorded.append({"id": f"c{len(recorded)}", "name": "order_status",
+                                     "arguments": {"order_id": order_id}})
+                    return _CANNED
+                tools = [order_status]
+            agent = AssistantAgent("support", model_client=client, tools=tools,
+                                   reflect_on_tool_use=True)
+            res = await agent.run(task=question)
+            await client.close()
+            return res
+
+        result = asyncio.run(_arun())
         content = ""
         for msg in reversed(getattr(result, "messages", None) or []):
             c = getattr(msg, "content", None)
@@ -74,9 +80,11 @@ def run_agent(agent_input):
     def _work():
         from autogen_agentchat.agents import AssistantAgent
         from autogen_ext.models.openai import OpenAIChatCompletionClient
-        client = OpenAIChatCompletionClient(model="gpt-4o-mini", temperature=0.0)
-        agent = AssistantAgent("support", model_client=client, tools=[])  # BUG: no tools
-        result = asyncio.run(agent.run(task=q))
+        async def _arun():
+            client = OpenAIChatCompletionClient(model="gpt-4o-mini", temperature=0.0)
+            agent = AssistantAgent("support", model_client=client, tools=[])  # BUG: no tools
+            res = await agent.run(task=q); await client.close(); return res
+        result = asyncio.run(_arun())
         content = ""
         for msg in reversed(getattr(result, "messages", None) or []):
             c = getattr(msg, "content", None)
@@ -96,13 +104,15 @@ def run_agent(agent_input):
         from autogen_agentchat.agents import AssistantAgent
         from autogen_ext.models.openai import OpenAIChatCompletionClient
         recorded = []
-        def order_status(order_id: str = "") -> str:
-            "Look up an order's status by id."
-            recorded.append({"id":"c%d"%len(recorded),"name":"order_status","arguments":{"order_id":order_id}})
-            return "Order 4821: shipped, arriving Tuesday."
-        client = OpenAIChatCompletionClient(model="gpt-4o-mini", temperature=0.0)
-        agent = AssistantAgent("support", model_client=client, tools=[order_status], reflect_on_tool_use=True)
-        result = asyncio.run(agent.run(task=q))
+        async def _arun():
+            client = OpenAIChatCompletionClient(model="gpt-4o-mini", temperature=0.0)
+            def order_status(order_id: str = "") -> str:
+                "Look up an order's status by id."
+                recorded.append({"id":"c%d"%len(recorded),"name":"order_status","arguments":{"order_id":order_id}})
+                return "Order 4821: shipped, arriving Tuesday."
+            agent = AssistantAgent("support", model_client=client, tools=[order_status], reflect_on_tool_use=True)
+            res = await agent.run(task=q); await client.close(); return res
+        result = asyncio.run(_arun())
         content = ""
         for msg in reversed(getattr(result, "messages", None) or []):
             c = getattr(msg, "content", None)

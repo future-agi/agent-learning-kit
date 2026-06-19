@@ -1,7 +1,9 @@
-"""A REAL LlamaIndex agent (FunctionAgent) driven by the kit (part-1).
+"""A REAL CrewAI agent driven by the kit (part-1).
 
-Autonomous async framework: worker thread + asyncio.run, the tool records its own
-invocation, temperature 0. The seeded bug gives the agent NO tools.
+CrewAI doesn't surface tool calls in its result, so the tool RECORDS ITS OWN
+invocation into a closure list (a real signal — the tool genuinely ran). Worker
+thread for CrewAI's internal loops, LLM temperature 0, real tool returning the
+order status. The seeded bug gives the agent NO tools.
 """
 
 from __future__ import annotations
@@ -20,18 +22,18 @@ def _user_text(agent_input: Any) -> str:
 
 
 def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, Any]:
-    import asyncio
     import concurrent.futures
 
     question = _user_text(agent_input)
 
     def _work() -> dict[str, Any]:
-        from llama_index.core.agent.workflow import FunctionAgent
-        from llama_index.llms.openai import OpenAI
+        from crewai import LLM, Agent, Crew, Task
+        from crewai.tools import tool
 
         recorded: list[dict[str, Any]] = []
         tools = []
         if with_tool:
+            @tool("order_status")
             def order_status(order_id: str = "") -> str:
                 """Look up an order's status by id."""
                 recorded.append({"id": f"c{len(recorded)}", "name": "order_status",
@@ -39,16 +41,12 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
                 return _CANNED
             tools = [order_status]
 
-        agent = FunctionAgent(tools=tools, llm=OpenAI(model=model, temperature=0.0),
-                              system_prompt="Help the customer; use tools when available.")
-
-        async def _arun() -> Any:
-            # agent.run must be CALLED inside a running loop (it returns a handler
-            # to await); calling it as asyncio.run's arg raised "no running event loop".
-            return await agent.run(question)
-
-        resp = asyncio.run(_arun())
-        return {"content": str(resp), "tool_calls": recorded}
+        agent = Agent(role="Support agent", goal="Answer the customer's order question",
+                      backstory="You help customers check orders.", tools=tools,
+                      llm=LLM(model=model, temperature=0.0), verbose=False)
+        task = Task(description=question, expected_output="The order's status.", agent=agent)
+        result = Crew(agents=[agent], tasks=[task], verbose=False).kickoff()
+        return {"content": str(result), "tool_calls": recorded}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_work).result()
@@ -66,41 +64,43 @@ def make_agent(model: str = MODEL, temperature: float = 0.0, bind_tools: bool = 
 
 BUGGY_SRC = '''
 def run_agent(agent_input):
-    import asyncio, concurrent.futures
+    import concurrent.futures
     q = "What is the status of order 4821?"
     for m in reversed(list(getattr(agent_input, "messages", None) or [])):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
     def _work():
-        from llama_index.core.agent.workflow import FunctionAgent
-        from llama_index.llms.openai import OpenAI
-        agent = FunctionAgent(tools=[], llm=OpenAI(model="gpt-4o-mini", temperature=0.0),
-                              system_prompt="Help the customer.")  # BUG: no tools
-        async def _arun(): return await agent.run(q)
-        resp = asyncio.run(_arun())
-        return {"content": str(resp), "tool_calls": []}
+        from crewai import Agent, Task, Crew, LLM
+        agent = Agent(role="Support agent", goal="Answer the order question",
+                      backstory="You help customers.", tools=[],  # BUG: no tools
+                      llm=LLM(model="gpt-4o-mini", temperature=0.0), verbose=False)
+        task = Task(description=q, expected_output="The order's status.", agent=agent)
+        result = Crew(agents=[agent], tasks=[task], verbose=False).kickoff()
+        return {"content": str(result), "tool_calls": []}
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_work).result()
 '''
 
 FIXED_SRC = '''
 def run_agent(agent_input):
-    import asyncio, concurrent.futures
+    import concurrent.futures
     q = "What is the status of order 4821?"
     for m in reversed(list(getattr(agent_input, "messages", None) or [])):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
     def _work():
-        from llama_index.core.agent.workflow import FunctionAgent
-        from llama_index.llms.openai import OpenAI
+        from crewai import Agent, Task, Crew, LLM
+        from crewai.tools import tool
         recorded = []
+        @tool("order_status")
         def order_status(order_id: str = "") -> str:
             "Look up an order's status by id."
-            recorded.append({"id":"c%d"%len(recorded),"name":"order_status","arguments":{"order_id":order_id}})
+            recorded.append({"id": "c%d"%len(recorded), "name": "order_status", "arguments": {"order_id": order_id}})
             return "Order 4821: shipped, arriving Tuesday."
-        agent = FunctionAgent(tools=[order_status], llm=OpenAI(model="gpt-4o-mini", temperature=0.0),
-                              system_prompt="Help the customer; use tools.")
-        async def _arun(): return await agent.run(q)
-        resp = asyncio.run(_arun())
-        return {"content": str(resp), "tool_calls": recorded}
+        agent = Agent(role="Support agent", goal="Answer the order question",
+                      backstory="You help customers.", tools=[order_status],
+                      llm=LLM(model="gpt-4o-mini", temperature=0.0), verbose=False)
+        task = Task(description=q, expected_output="The order's status.", agent=agent)
+        result = Crew(agents=[agent], tasks=[task], verbose=False).kickoff()
+        return {"content": str(result), "tool_calls": recorded}
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_work).result()
 '''

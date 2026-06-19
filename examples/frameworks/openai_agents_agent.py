@@ -51,7 +51,7 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
                 return _CANNED
             tools = [order_status]
 
-        agent = Agent(name="support", instructions="Help the user; use tools when available.",
+        agent = Agent(name="support", instructions="You are an order-support agent. Use the order_status tool to look up the order, then give the customer a clear, complete answer stating the order id and its status.",
                       model=model, tools=tools, model_settings=ModelSettings(temperature=0.0))
         result = Runner.run_sync(agent, question)
         # tool-records-itself (clean signal) with new_items as a fallback.

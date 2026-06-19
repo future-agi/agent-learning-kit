@@ -156,18 +156,52 @@ def make_agent(model: str = MODEL, temperature: float = 0.0, bind_tools: bool = 
     return _run
 
 
-def run_agent_buggy(agent_input: Any) -> dict[str, Any]:
-    """Seeded bug (code-RSI lane): ignores the available tools and fabricates an
-    answer with a live LLM — never calls the tool. The fix is to bind + call it
-    (i.e. ``run_agent``). Same forgets-the-tool pattern proven in-kit, ported to
-    LangChain idiom."""
+# --- code-RSI lane: self-contained buggy -> fixed source (the loop rewrites the
+#     agent's ACTUAL source). BUGGY forgets to bind/call the tool; FIXED binds it. ---
+BUGGY_SRC = '''
+def run_agent(agent_input):
     from langchain_openai import ChatOpenAI
-
-    messages = _to_lc_messages(getattr(agent_input, "messages", None))
-    if not messages:
-        messages = _to_lc_messages([{"role": "user", "content": "Help the user."}])
-    # BUG: never binds the tools -> the model cannot call them, so it makes
-    # something up instead of looking it up.
-    llm = ChatOpenAI(model=MODEL, temperature=0)
-    ai = llm.invoke(messages)
+    from langchain_core.messages import HumanMessage
+    msgs = []
+    for m in (getattr(agent_input, "messages", None) or []):
+        c = m.get("content") if hasattr(m, "get") else str(m)
+        if c:
+            msgs.append(HumanMessage(content=str(c)))
+    if not msgs:
+        msgs = [HumanMessage(content="Help the user.")]
+    ai = ChatOpenAI(model="gpt-4o-mini", temperature=0).invoke(msgs)  # BUG: tools never bound
     return {"content": str(getattr(ai, "content", "") or ""), "tool_calls": []}
+'''
+
+FIXED_SRC = '''
+def run_agent(agent_input):
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage
+    raw = list(getattr(agent_input, "tools", None) or [])
+    tools = []
+    for spec in raw:
+        if not hasattr(spec, "get"):
+            continue
+        if spec.get("type") == "function" and spec.get("function"):
+            tools.append(dict(spec)); continue
+        name = spec.get("name")
+        if name:
+            tools.append({"type": "function", "function": {"name": name,
+                "description": spec.get("description") or name,
+                "parameters": spec.get("parameters") or {"type": "object", "properties": {}}}})
+    msgs = []
+    for m in (getattr(agent_input, "messages", None) or []):
+        c = m.get("content") if hasattr(m, "get") else str(m)
+        if c:
+            msgs.append(HumanMessage(content=str(c)))
+    if not msgs:
+        msgs = [HumanMessage(content="Help the user.")]
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    if tools:
+        llm = llm.bind_tools(tools)
+    ai = llm.invoke(msgs)
+    tcs = [{"id": tc.get("id") or ("c%d" % i), "name": tc.get("name") or "",
+            "arguments": tc.get("args") or {}}
+           for i, tc in enumerate(getattr(ai, "tool_calls", None) or [])]
+    return {"content": str(getattr(ai, "content", "") or ""), "tool_calls": tcs}
+'''
