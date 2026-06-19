@@ -394,6 +394,7 @@ def run_benchmark(
     max_tasks: int | None = None,
     seed: int = 42,
     evidence_class: str = "captured_fixture",
+    detect_reward_hacks: bool = False,
     runner: Any = None,
 ) -> dict[str, Any]:
     """Run one ``agent`` across a (compiled) TaskDataset and return a scored,
@@ -420,7 +421,7 @@ def run_benchmark(
 
     per_task: list[dict[str, Any]] = []
     for task in task_list:
-        verdict, score, metric_averages, scoring, run_error = _run_one_task(
+        verdict, score, metric_averages, scoring, tool_calls, run_error = _run_one_task(
             task, agent, seed=seed, runner=runner
         )
         execution_class = str(task.get("execution_class") or "typed_only")
@@ -438,8 +439,24 @@ def run_benchmark(
             "evidence_class": evidence_class,
             "overclaim": bool(overclaim),
             "metric_averages": metric_averages,
+            "tool_calls": list(tool_calls or []),
             "scoring": scoring,
         }
+        # #3: auto-wire the reward-hack detector — a candidate that GAMES the
+        # scorer (e.g. claims completion with zero tool calls on a tool-anchored
+        # objective) is FAILED even if objective_score passed (the deterministic
+        # anti-gaming anchor objective_score alone misses, e.g. vacuous
+        # tool_selection_accuracy=1.0 for an agent that never called a tool).
+        if detect_reward_hacks and verdict == "pass":
+            from . import rewardhack as _rh
+
+            traj = {"metric_averages": metric_averages, "tool_calls": list(tool_calls or []),
+                    "score": score}
+            verdict_obj = _rh.score_trajectory(traj, objective=task.get("objective") or {})
+            if verdict_obj["hacked"]:
+                row["verdict"] = "fail"
+                row["rewardhack"] = verdict_obj
+                row["score"] = 0.0
         if run_error is not None:
             row["error"] = run_error
         per_task.append(row)
@@ -516,9 +533,23 @@ def _run_one_task(
         verdict, score, metric_averages, scoring = _score_from_result(
             result, objective=objective, threshold=threshold
         )
-        return verdict, score, metric_averages, scoring, None
+        return verdict, score, metric_averages, scoring, _result_tool_calls(result), None
     except Exception as exc:  # noqa: BLE001 — a failed task scores void, never crashes the sweep
-        return "void", 0.0, {}, {}, f"{type(exc).__name__}: {str(exc)[:160]}"
+        return "void", 0.0, {}, {}, [], f"{type(exc).__name__}: {str(exc)[:160]}"
+
+
+def _result_tool_calls(result: Mapping[str, Any]) -> list:
+    """Extract the agent's tool_calls from a run result (needed by the reward-hack
+    detector to measure effort). Shape-tolerant across the runner seam."""
+    if not isinstance(result, Mapping):
+        return []
+    direct = result.get("tool_calls")
+    if isinstance(direct, list):
+        return direct
+    results = (result.get("report") or {}).get("results") if isinstance(result.get("report"), Mapping) else None
+    if isinstance(results, list) and results and isinstance(results[0], Mapping):
+        return list(results[0].get("tool_calls") or [])
+    return []
 
 
 def _aggregate(per_task: Sequence[Mapping[str, Any]], evidence_class: str) -> dict:
