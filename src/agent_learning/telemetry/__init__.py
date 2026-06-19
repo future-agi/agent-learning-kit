@@ -30,6 +30,10 @@ from ._contract import (  # noqa: F401 — package canon re-exports
     PHASES,
     RELEASE_ADMISSIBLE_EVIDENCE_CLASSES,
     ROW_FIELDS,
+    SYNC_MODE_AUTO,
+    SYNC_MODE_ENV,
+    SYNC_MODE_LOCAL,
+    SYNC_MODES,
     SYNC_STATES,
     TELEMETRY_ENV,
     TELEMETRY_OFF_VALUE,
@@ -40,6 +44,7 @@ from ._contract import (  # noqa: F401 — package canon re-exports
     VERDICTS,
     kill_switch_on,
     ledger_dir,
+    sync_mode,
 )
 from ._ledger import RunLedger  # noqa: F401
 from ._queue import TelemetryQueue, global_queue  # noqa: F401
@@ -50,6 +55,13 @@ from ._row import (  # noqa: F401
     content_admissible,
     declared_required_env,
 )
+from ._run import (  # noqa: F401
+    RunRecorder,
+    RunSummary,
+    emit_run,
+    run_telemetry,
+)
+from ._url import build_dashboard_url  # noqa: F401
 
 __all__ = [
     "AGENT_LEARNING_RUN_KIND",
@@ -65,6 +77,12 @@ __all__ = [
     "RELEASE_ADMISSIBLE_EVIDENCE_CLASSES",
     "ROW_FIELDS",
     "RunLedger",
+    "RunRecorder",
+    "RunSummary",
+    "SYNC_MODE_AUTO",
+    "SYNC_MODE_ENV",
+    "SYNC_MODE_LOCAL",
+    "SYNC_MODES",
     "SYNC_STATES",
     "TELEMETRY_ENV",
     "TELEMETRY_OFF_VALUE",
@@ -74,15 +92,19 @@ __all__ = [
     "TelemetryQueue",
     "UNREADABLE_LINE_SCHEMA",
     "VERDICTS",
+    "build_dashboard_url",
     "build_ledger_row",
     "canonical_row_address",
     "canonical_row_bytes",
     "content_admissible",
     "declared_required_env",
+    "emit_run",
     "flush",
     "kill_switch_on",
     "ledger_dir",
     "record_run",
+    "run_telemetry",
+    "sync_mode",
 ]
 
 

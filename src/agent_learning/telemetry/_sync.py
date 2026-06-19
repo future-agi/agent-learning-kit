@@ -20,12 +20,7 @@ import os
 from typing import Any, Mapping
 
 from ..config import DEFAULT_API_URL, AgentLearningConfig
-from ._contract import (
-    FI_KIT_PHASE_ATTR,
-    FI_KIT_RUN_ID_ATTR,
-    FI_KIT_WORLD_ATTR,
-    kill_switch_on,
-)
+from ._contract import kill_switch_on
 from ._ledger import RunLedger
 from ._row import canonical_row_address
 
@@ -157,42 +152,35 @@ def sync_run(
         # Degrade-to-local (R§3.5): the row stays unsynced, the cursor
         # unmoved; a later `runs sync --queued` resumes idempotently.
         return {"status": "deferred", "reason": reason, "sent": False}
-    try:
-        # Lazy: the ONLY place the telemetry package touches a network-capable
-        # import, and only after the kill switch + key + admission gates.
-        from fi_instrumentation import register
-        from fi_instrumentation.fi_types import ProjectType
-        from fi_instrumentation.otel import Transport
+    # Emit via the export-result-aware emitter (Phase 14): the OTLP HTTP exporter
+    # SWALLOWS export failures (it returns SpanExportResult.FAILURE without
+    # raising), so the old register(...) path reported `synced` while a 401'd span
+    # never landed. `keyed_emit` reports `synced` only on an OBSERVED export
+    # success — anything else degrades to local with the cursor UNMOVED (R§3.5).
+    from . import _emit  # lazy: network-capable import after every gate
 
-        provider = register(
-            project_name=SYNC_PROJECT_NAME,
-            project_type=ProjectType.EXPERIMENT,
-            transport=Transport.HTTP,
-            headers={
-                "X-Api-Key": config.api_key,
-                "X-Secret-Key": config.secret_key,
-            },
-            batch=False,
-            verbose=False,
-            set_global_tracer_provider=False,
-        )
-        tracer = provider.get_tracer("agent_learning.telemetry")
-        with tracer.start_as_current_span(SYNC_SPAN_NAME) as span:
-            span.set_attribute(FI_KIT_RUN_ID_ATTR, run_id)
-            span.set_attribute(FI_KIT_PHASE_ATTR, str(row.get("phase") or ""))
-            if world:
-                span.set_attribute(FI_KIT_WORLD_ATTR, str(world))
-            span.set_attribute(
-                LEDGER_ROW_ATTR,
-                json.dumps(
-                    payload, sort_keys=True, separators=(",", ":"), default=str
-                ),
+    emit = _emit.keyed_emit(
+        span_name=SYNC_SPAN_NAME,
+        root_attrs={
+            LEDGER_ROW_ATTR: json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), default=str
             )
-        provider.shutdown()
-    except BaseException as exc:  # noqa: BLE001 — degrade-to-local (R§3.5)
+        },
+        project_name=SYNC_PROJECT_NAME,
+        headers={
+            "X-Api-Key": config.api_key,
+            "X-Secret-Key": config.secret_key,
+        },
+        run_id=run_id,
+        phase=str(row.get("phase") or ""),
+        world=world,
+    )
+    if emit["status"] != "synced":
+        # export rejected (e.g. 401) or transport failure → cursor unmoved; a
+        # later `runs sync --queued` resumes idempotently (R§3.5).
         return {
-            "status": "deferred",
-            "reason": f"{type(exc).__name__}: {exc}",
+            "status": emit["status"],
+            "reason": emit.get("reason"),
             "sent": False,
         }
     store.write_cursor(run_id, channel)

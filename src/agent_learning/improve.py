@@ -58,9 +58,11 @@ def _score_split(
     # tool calls on a tool-anchored objective) is FAILED — the deterministic
     # anti-gaming anchor the objective alone misses. This is what makes the
     # no-tool bug detectable and prevents the loop accepting a reward-hacking patch.
+    # emit_telemetry=False: the RSI loop emits ONE run (in improve_agent_code),
+    # not one per split-score across rounds (Phase 14).
     res = run_benchmark(dataset, agent, split=split, seed=seed,
                         evidence_class="captured_fixture", detect_reward_hacks=True,
-                        runner=runner)
+                        runner=runner, emit_telemetry=False)
     return res["aggregate"], res["per_task"]
 
 
@@ -88,6 +90,8 @@ def improve_agent_code(
     threshold: float = 0.5,
     seed: int = 42,
     runner: Any = None,
+    emit_telemetry: bool = True,
+    project_name: str | None = None,
 ) -> dict[str, Any]:
     """Run the code-level RSI loop on ``source_text`` (a module defining ``symbol``)
     against ``dataset`` (needs ``train``/``test`` splits; ``regression`` optional).
@@ -180,7 +184,7 @@ def improve_agent_code(
             })
             cur, cur_text, train_agg, train_per = cand, new_text, cand_train, cand_train_per
 
-        return {
+        report = {
             "kind": AGENT_LEARNING_CODE_RSI_REPORT_KIND,
             "fixed": accepted_text is not None,
             "accepted_source": accepted_text,
@@ -191,6 +195,36 @@ def improve_agent_code(
             ),
             "rounds": rounds,
         }
+        if emit_telemetry:
+            # ONE dashboard run for the whole code-RSI loop: root + per-round spans
+            # (P14). Side-channel; never alters the report.
+            from .telemetry import emit_run
+
+            lift = round(report["held_out_final"] - report["held_out_baseline"], 6)
+            summary = emit_run(
+                kind="code-rsi",
+                name=symbol,
+                metrics={
+                    "fixed": report["fixed"],
+                    "held_out_baseline": report["held_out_baseline"],
+                    "held_out_final": report["held_out_final"],
+                    "held_out_lift": lift,
+                    "regression_held": report["regression_held"],
+                },
+                verdict="pass" if report["fixed"] and lift > 0 else "fail",
+                children=[
+                    (
+                        f"round:{r['round']}",
+                        {"status": r.get("status"),
+                         "held_out_lift": r.get("held_out_lift"),
+                         "regression_ok": r.get("regression_ok")},
+                    )
+                    for r in rounds
+                ],
+                project_name=project_name,
+            )
+            report["telemetry"] = summary.as_dict()
+        return report
 
 
 def propose_patch_via_llm(model: str = "gpt-4o-mini") -> PatchProposer:

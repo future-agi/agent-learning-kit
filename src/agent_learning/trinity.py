@@ -859,8 +859,17 @@ V1_TELEMETRY_LOCAL_PATH_MODULES = [
     "src/agent_learning/_schema.py",  # hosts the emission hook
 ]
 V1_TELEMETRY_SYNC_MODULE = (
-    "src/agent_learning/telemetry/_sync.py"  # the ONLY sanctioned network home
+    "src/agent_learning/telemetry/_sync.py"  # the original sanctioned network home
 )
+# Sanctioned network homes (Phase 14 adds the W&B-cloud emit + URL resolver).
+# Each MUST keep its network-capable imports lazy (in-function), after the kill
+# switch + key gates — the gate enforces lazy-ness on every home below, exactly
+# as it did for _sync alone. The no-key path remains zero-emission.
+V1_TELEMETRY_NETWORK_HOME_MODULES = [
+    "src/agent_learning/telemetry/_sync.py",
+    "src/agent_learning/telemetry/_emit.py",  # export-result-aware OTLP emit (P14)
+    "src/agent_learning/telemetry/_url.py",   # dashboard URL resolve (P14)
+]
 
 # --- ledger disk layout (ARCH §2a) ------------------------------------------
 V1_TELEMETRY_LEDGER_HOME_ENV = "AGENT_LEARNING_HOME"
@@ -10987,6 +10996,7 @@ def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
     identity_errors: list[dict[str, Any]] = []
     scanned_module_count = 0
     sync_module = V1_TELEMETRY_SYNC_MODULE
+    network_home_modules = set(V1_TELEMETRY_NETWORK_HOME_MODULES)
     telemetry_prefix = "src/agent_learning/telemetry/"
     local_path_modules = set(V1_TELEMETRY_LOCAL_PATH_MODULES)
     # The gate module itself declares the denylist (these literal hostnames)
@@ -11038,7 +11048,7 @@ def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
                 relative in local_path_modules
                 or (
                     relative.startswith(telemetry_prefix)
-                    and relative != sync_module
+                    and relative not in network_home_modules
                 )
             )
             for node in ast.walk(tree):
@@ -11087,7 +11097,7 @@ def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
                             }
                         )
                     elif (
-                        relative == sync_module
+                        relative in network_home_modules
                         and id(node) not in lazy_node_ids
                     ):
                         network_emission_errors.append(
@@ -11100,8 +11110,8 @@ def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
                                     "(after the kill-switch + key gates)"
                                 ),
                                 "observed": (
-                                    "module-scope network import in the "
-                                    "sync module"
+                                    "module-scope network import in a "
+                                    "sanctioned network-home module"
                                 ),
                             }
                         )

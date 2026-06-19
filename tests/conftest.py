@@ -17,6 +17,25 @@ import pytest
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _offline_telemetry_mode():
+    """Phase 14: pin the W&B-style sync mode to ``local`` for the whole suite so
+    NO test or gate subprocess makes a surprise network emit, even if the dev's
+    env has FI keys exported (the P8 "stray key" concern). Set via ``os.environ``
+    (not monkeypatch) so spawned lane subprocesses inherit it. Tests that exercise
+    the keyed/auto path set ``AGENT_LEARNING_SYNC=auto`` themselves via monkeypatch.
+    """
+
+    prior = os.environ.get("AGENT_LEARNING_SYNC")
+    if prior is None:
+        os.environ["AGENT_LEARNING_SYNC"] = "local"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("AGENT_LEARNING_SYNC", None)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _isolated_run_ledger():
     if os.environ.get("AGENT_LEARNING_LEDGER_PATH"):
         yield

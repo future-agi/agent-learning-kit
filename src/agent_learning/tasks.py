@@ -396,6 +396,8 @@ def run_benchmark(
     evidence_class: str = "captured_fixture",
     detect_reward_hacks: bool = False,
     runner: Any = None,
+    emit_telemetry: bool = True,
+    project_name: str | None = None,
 ) -> dict[str, Any]:
     """Run one ``agent`` across a (compiled) TaskDataset and return a scored,
     comparable result. Each per-task result is stamped with the task's HONEST
@@ -462,7 +464,7 @@ def run_benchmark(
         per_task.append(row)
 
     aggregate = _aggregate(per_task, evidence_class)
-    return {
+    result = {
         "kind": AGENT_LEARNING_BENCHMARK_RESULT_KIND,
         "dataset_version": str(dataset.get("version") or ""),
         "dataset_name": str(dataset.get("name") or ""),
@@ -472,6 +474,36 @@ def run_benchmark(
         "per_task": per_task,
         "aggregate": aggregate,
     }
+    if emit_telemetry:
+        # W&B/promptfoo dashboard wiring (Phase 14): one run -> root + per-task
+        # spans + a dashboard URL when keyed (mode=auto), else a local log. A
+        # side-channel — never alters the returned scores.
+        from .telemetry import emit_run
+
+        summary = emit_run(
+            kind="benchmark",
+            name=result["dataset_name"] or "benchmark",
+            metrics={
+                "n_tasks": aggregate.get("count", 0),
+                "pass_rate": aggregate.get("pass_rate", 0.0),
+                "mean_score": aggregate.get("mean_score", 0.0),
+            },
+            verdict="pass" if aggregate.get("pass_rate", 0.0) >= 0.5 else "fail",
+            children=[
+                (
+                    f"task:{r['task_id']}",
+                    {
+                        "verdict": r.get("verdict"),
+                        "score": r.get("score"),
+                        "world_kind": r.get("world_kind"),
+                    },
+                )
+                for r in per_task
+            ],
+            project_name=project_name,
+        )
+        result["telemetry"] = summary.as_dict()
+    return result
 
 
 def _run_one_task(
@@ -628,6 +660,8 @@ def optimize_against_dataset(
     seed: int = 42,
     evidence_class: str = "captured_fixture",
     runner: Any = None,
+    emit_telemetry: bool = True,
+    project_name: str | None = None,
 ) -> dict[str, Any]:
     """Close the RSI loop: search agent configs, score each on the TRAIN split via
     the (objective-anchored, discriminating) ``run_benchmark``, pick the winner,
@@ -644,9 +678,11 @@ def optimize_against_dataset(
     test = test_split if has_split else None
 
     def _score(agent: Mapping[str, Any], split: str | None) -> dict:
+        # emit_telemetry=False: the optimizer emits ONE run for the whole search
+        # (below), not one per candidate benchmark (Phase 14).
         return run_benchmark(
             dataset, agent, split=split, seed=seed,
-            evidence_class=evidence_class, runner=runner,
+            evidence_class=evidence_class, runner=runner, emit_telemetry=False,
         )["aggregate"]
 
     candidates = _candidate_grid(search_space, cap=max_candidates)
@@ -671,7 +707,7 @@ def optimize_against_dataset(
     winner_test = _score(winner_agent, test)
     lift = round(winner_test["mean_score"] - baseline_test["mean_score"], 6)
 
-    return {
+    result = {
         "kind": AGENT_LEARNING_RSI_REPORT_KIND,
         "dataset_version": str(dataset.get("version") or ""),
         "candidates_evaluated": len(candidates),
@@ -688,6 +724,32 @@ def optimize_against_dataset(
             "improved": lift > 0,
         },
     }
+    if emit_telemetry:
+        # ONE dashboard run for the whole search: root + per-candidate spans (P14).
+        from .telemetry import emit_run
+
+        summary = emit_run(
+            kind="optimize",
+            name=str(dataset.get("name") or "optimize"),
+            metrics={
+                "candidates": len(candidates),
+                "winner_train_score": winner["train_mean_score"],
+                "held_out_lift": lift,
+                "improved": lift > 0,
+            },
+            verdict="pass" if lift > 0 else "fail",
+            children=[
+                (
+                    f"candidate:{row['candidate_index']}",
+                    {"train_mean_score": row["train_mean_score"],
+                     "train_pass_rate": row["train_pass_rate"]},
+                )
+                for row in leaderboard
+            ],
+            project_name=project_name,
+        )
+        result["telemetry"] = summary.as_dict()
+    return result
 
 
 # ===========================================================================

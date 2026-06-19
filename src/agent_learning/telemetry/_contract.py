@@ -36,6 +36,17 @@ SEMCONV_VERSION_ENV = "OTEL_SEMCONV_STABILITY_OPT_IN"
 TELEMETRY_ENV = "AGENT_LEARNING_TELEMETRY"
 TELEMETRY_OFF_VALUE = "off"
 
+# --- sync mode (Phase 14, W&B `WANDB_MODE` analogue) -------------------------
+# Reconciles the user's "keys present -> dashboard" (W&B-online) intent with the
+# P8 doctrine that emission must NOT auto-sync in release/CI flows. ``auto``
+# (default) emits when keys resolve; ``local`` queues locally + explicit
+# ``runs sync`` only. The kill switch overrides both. The test/gate harness
+# pins ``local`` so no internal flow makes a surprise network call.
+SYNC_MODE_ENV = "AGENT_LEARNING_SYNC"
+SYNC_MODE_AUTO = "auto"
+SYNC_MODE_LOCAL = "local"
+SYNC_MODES = (SYNC_MODE_AUTO, SYNC_MODE_LOCAL)
+
 # --- ledger disk layout (ARCH §2a / Decision 9; MF5) -------------------------
 LEDGER_HOME_ENV = "AGENT_LEARNING_HOME"
 LEDGER_PATH_ENV = "AGENT_LEARNING_LEDGER_PATH"  # overrides the DIRECTORY
@@ -92,6 +103,17 @@ FI_KIT_WORLD_ATTR = "fi.kit.world"
 
 # --- sync states the viewer renders (UI-UX §1.1 SYNCED column) ---------------
 SYNC_STATES = ("local", "metadata", "metadata+content", "queued", "off")
+
+
+def sync_mode() -> str:
+    """The W&B-style telemetry mode (Phase 14). ``off`` when the kill switch is
+    set (it binds everything, P8-D6); otherwise ``AGENT_LEARNING_SYNC`` —
+    ``auto`` (default: emit when keys resolve) or ``local`` (queue only)."""
+
+    if kill_switch_on():
+        return TELEMETRY_OFF_VALUE
+    value = os.environ.get(SYNC_MODE_ENV, "").strip().lower()
+    return value if value in SYNC_MODES else SYNC_MODE_AUTO
 
 
 def kill_switch_on() -> bool:
