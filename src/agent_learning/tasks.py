@@ -662,6 +662,7 @@ def optimize_against_dataset(
     runner: Any = None,
     emit_telemetry: bool = True,
     project_name: str | None = None,
+    detect_reward_hacks: bool = False,
 ) -> dict[str, Any]:
     """Close the RSI loop: search agent configs, score each on the TRAIN split via
     the (objective-anchored, discriminating) ``run_benchmark``, pick the winner,
@@ -680,9 +681,14 @@ def optimize_against_dataset(
     def _score(agent: Mapping[str, Any], split: str | None) -> dict:
         # emit_telemetry=False: the optimizer emits ONE run for the whole search
         # (below), not one per candidate benchmark (Phase 14).
+        # detect_reward_hacks: when on, a candidate that GAMES a declared anchor
+        # (e.g. claims completion with zero tool calls on a tool-anchored
+        # objective) is FAILED — an optimizer that climbs a gameable metric is the
+        # textbook reward-hacking failure, so honest config search opts in.
         return run_benchmark(
             dataset, agent, split=split, seed=seed,
             evidence_class=evidence_class, runner=runner, emit_telemetry=False,
+            detect_reward_hacks=detect_reward_hacks,
         )["aggregate"]
 
     candidates = _candidate_grid(search_space, cap=max_candidates)
