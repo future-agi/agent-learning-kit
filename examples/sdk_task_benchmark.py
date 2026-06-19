@@ -85,7 +85,11 @@ def _gate_evidence(dataset: dict, agent: dict, result: dict) -> dict[str, Any]:
 def run(output_path: str | Path | None = None, *, agent: dict | None = None) -> dict[str, Any]:
     dataset = tasks.load_task_dataset(DATASET_PATH)
     agent = agent or {"type": "scripted", "content": SCRIPTED_REPLY}
-    result = tasks.run_benchmark(dataset, agent, evidence_class="captured_fixture")
+    # emit_telemetry=False: this is the release-gate fixture entry — keep it a pure,
+    # side-channel-free deterministic run (no ledger write / stderr line during gates).
+    result = tasks.run_benchmark(
+        dataset, agent, evidence_class="captured_fixture", emit_telemetry=False
+    )
 
     payload: dict[str, Any] = {
         "kind": OUTPUT_KIND,

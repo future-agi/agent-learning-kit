@@ -4292,6 +4292,13 @@ def _release_check(args: Sequence[str] = ()) -> int:
     )
     parsed = parser.parse_args(list(args))
 
+    # Phase 14: release-check is a gate/CI flow, not a user run — pin the W&B-style
+    # sync mode to `local` so no gate (or gate-spawned example subprocess, which
+    # inherits this env) makes a surprise dashboard emit, even with FI keys in the
+    # environment (P8 doctrine: release flows never auto-sync). An explicit
+    # AGENT_LEARNING_SYNC already set by the operator still wins (setdefault).
+    os.environ.setdefault("AGENT_LEARNING_SYNC", "local")
+
     from agent_learning import trinity
 
     payload = trinity.release_status(project_root=parsed.project_root)
