@@ -40,16 +40,22 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
                                  "arguments": {"order_id": order_id}})
                 return _CANNED
 
-        agent = ChatCompletionAgent(
-            service=OpenAIChatCompletion(ai_model_id=model),
-            name="support",
-            instructions="You are an order-support agent. Use the order_status function to "
-                         "look up the order, then give a clear, complete answer.",
-            plugins=[OrderPlugin()] if with_tool else [],
-        )
-
         async def _arun() -> Any:
-            return await agent.get_response(messages=question)
+            # create AND close the SK service/client INSIDE the loop (else the
+            # underlying AsyncOpenAI httpx client finalizes after asyncio.run
+            # returns -> "RuntimeError: Event loop is closed").
+            service = OpenAIChatCompletion(ai_model_id=model)
+            agent = ChatCompletionAgent(
+                service=service,
+                name="support",
+                instructions="You are an order-support agent. Use the order_status function to "
+                             "look up the order, then give a clear, complete answer.",
+                plugins=[OrderPlugin()] if with_tool else [],
+            )
+            try:
+                return await agent.get_response(messages=question)
+            finally:
+                await service.client.close()
 
         resp = asyncio.run(_arun())
         content = getattr(getattr(resp, "message", None), "content", None) or str(resp)
@@ -85,9 +91,12 @@ def run_agent(agent_input):
     def _work():
         from semantic_kernel.agents import ChatCompletionAgent
         from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
-        agent = ChatCompletionAgent(service=OpenAIChatCompletion(ai_model_id="gpt-4o-mini"),
-            name="support", instructions="Help the customer.", plugins=[])  # BUG: no plugins
-        async def _a(): return await agent.get_response(messages=q)
+        async def _a():
+            svc = OpenAIChatCompletion(ai_model_id="gpt-4o-mini")  # create+close inside loop
+            agent = ChatCompletionAgent(service=svc,
+                name="support", instructions="Help the customer.", plugins=[])  # BUG: no plugins
+            try: return await agent.get_response(messages=q)
+            finally: await svc.client.close()
         resp = asyncio.run(_a())
         content = getattr(getattr(resp,"message",None),"content",None) or str(resp)
         return {"content": str(content or ""), "tool_calls": []}
@@ -111,9 +120,12 @@ def run_agent(agent_input):
             def order_status(self, order_id: str = "") -> str:
                 recorded.append({"id":"c%d"%len(recorded),"name":"order_status","arguments":{"order_id":order_id}})
                 return "Order 4821: shipped, arriving Tuesday."
-        agent = ChatCompletionAgent(service=OpenAIChatCompletion(ai_model_id="gpt-4o-mini"),
-            name="support", instructions="Help the customer; use order_status.", plugins=[OrderPlugin()])
-        async def _a(): return await agent.get_response(messages=q)
+        async def _a():
+            svc = OpenAIChatCompletion(ai_model_id="gpt-4o-mini")  # create+close inside loop
+            agent = ChatCompletionAgent(service=svc,
+                name="support", instructions="Help the customer; use order_status.", plugins=[OrderPlugin()])
+            try: return await agent.get_response(messages=q)
+            finally: await svc.client.close()
         resp = asyncio.run(_a())
         content = getattr(getattr(resp,"message",None),"content",None) or str(resp)
         return {"content": str(content or ""), "tool_calls": recorded}

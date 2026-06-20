@@ -10,6 +10,10 @@ from typing import Any
 
 MODEL = "gpt-4o-mini"
 _CANNED = "Order 4821: shipped, arriving Tuesday."
+_DIRECTIVE = (
+    "You are an order-support agent. You MUST call the order_status tool to look up "
+    "the order, then state the order id and its status. Do not ask for clarification."
+)
 
 
 def _user_text(agent_input: Any) -> str:
@@ -43,7 +47,7 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
             tools = [order_status]
 
         agent = ToolCallingAgent(tools=tools, model=LiteLLMModel(model_id=model, temperature=0.0))
-        answer = agent.run(question)
+        answer = agent.run(f"{_DIRECTIVE}\n\n{question}")
         return {"content": str(answer or ""), "tool_calls": recorded}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -80,6 +84,8 @@ def run_agent(agent_input):
     q = "What is the status of order 4821?"
     for m in reversed(list(getattr(agent_input, "messages", None) or [])):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
+    directive = ("You are an order-support agent. You MUST call the order_status tool to look up "
+                 "the order, then state the order id and its status. Do not ask for clarification.")
     def _work():
         from smolagents import ToolCallingAgent, LiteLLMModel, tool
         recorded = []
@@ -93,7 +99,7 @@ def run_agent(agent_input):
             recorded.append({"id":"c%d"%len(recorded),"name":"order_status","arguments":{"order_id":order_id}})
             return "Order 4821: shipped, arriving Tuesday."
         agent = ToolCallingAgent(tools=[order_status], model=LiteLLMModel(model_id="gpt-4o-mini", temperature=0.0))
-        return {"content": str(agent.run(q) or ""), "tool_calls": recorded}
+        return {"content": str(agent.run(directive + "\\n\\n" + q) or ""), "tool_calls": recorded}
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_work).result()
 '''

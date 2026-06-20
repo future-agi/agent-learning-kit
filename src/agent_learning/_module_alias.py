@@ -22,6 +22,21 @@ class LazyModuleAlias(types.ModuleType):
         return importlib.import_module(self.__dict__["_target_name"])
 
     def __getattr__(self, name: str) -> object:
+        if name.startswith("__") and name.endswith("__"):
+            # Resolve dunders from the target so importable engines still expose
+            # ``__file__``/``__module__`` (the vendored-boundary tests assert
+            # ``Path(module.__file__)`` lives under ``src/fi``). But a guarded
+            # OPTIONAL target (e.g. the LiveKit engine, whose top-level import
+            # raises when the SDK is absent) must NOT let that ImportError escape
+            # a mere dunder probe: ``inspect.getmodule`` — reached via DSPy's
+            # ``Module.__getattribute__`` -> ``inspect.stack()`` on every attribute
+            # access — does ``hasattr(module, "__file__")`` over every object in
+            # ``sys.modules``; answer the honest "no such dunder" (AttributeError)
+            # instead of letting a should-be-``False`` ``hasattr`` raise.
+            try:
+                return getattr(self._target(), name)
+            except ImportError:
+                raise AttributeError(name) from None
         return getattr(self._target(), name)
 
     def __dir__(self) -> list[str]:
