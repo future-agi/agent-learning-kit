@@ -3,11 +3,11 @@ across providers (openai/anthropic/groq/xai) via litellm. Proves the loop runs
 THROUGH any provider. eval/sim per provider (opt/code-RSI are provider-agnostic,
 proven on openai). Emits to CH."""
 from __future__ import annotations
-import json, sys
+import json
+import sys
 from dotenv import load_dotenv
 load_dotenv("/Users/nikhilpareek/Documents/futureAGI/code/core/future-agi/futureagi/.env", override=False)
 from agent_learning import tasks  # noqa: E402
-import examples.frameworks.acme_thirdparty_agent as acme  # noqa: E402
 
 PROVIDERS = [
     ("openai", "gpt-4o-mini"),
