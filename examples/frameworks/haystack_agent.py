@@ -46,7 +46,6 @@ def _surface_tool_calls(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, Any]:
     import concurrent.futures
-    from typing import Annotated
 
     question = _user_text(agent_input)
 
@@ -55,7 +54,7 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
         tools = []
         if with_tool:
             @tool
-            def order_status(order_id: Annotated[str, "The order id to look up"] = "") -> str:
+            def order_status(order_id: str = "") -> str:
                 """Look up an order's status by id."""
                 recorded.append({"id": f"c{len(recorded)}", "name": "order_status",
                                  "arguments": {"order_id": order_id}})
@@ -114,7 +113,6 @@ def run_agent(agent_input):
 FIXED_SRC = '''
 def run_agent(agent_input):
     import concurrent.futures
-    from typing import Annotated
     q = "What is the status of order 4821?"
     for m in reversed(list(getattr(agent_input, "messages", None) or [])):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
@@ -125,7 +123,7 @@ def run_agent(agent_input):
         from haystack.tools import tool
         recorded = []
         @tool
-        def order_status(order_id: Annotated[str, "The order id to look up"] = "") -> str:
+        def order_status(order_id: str = "") -> str:
             "Look up an order's status by id."
             recorded.append({"id": "c%d"%len(recorded), "name": "order_status", "arguments": {"order_id": order_id}})
             return "Order 4821: shipped, arriving Tuesday."
