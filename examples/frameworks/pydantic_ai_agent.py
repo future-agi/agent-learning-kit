@@ -35,7 +35,10 @@ def _run(agent_input: Any, *, with_tool: bool, model: str = MODEL) -> dict[str, 
     def _work() -> dict[str, Any]:
         from pydantic_ai import Agent
 
-        agent = Agent(model, model_settings={"temperature": 0.0})
+        agent = Agent(model, model_settings={"temperature": 0.0},
+                      system_prompt="You are an order-support agent. Use the order_status tool to "
+                                    "look up the order, then give a clear, complete answer stating "
+                                    "the order id and its status.")
         if with_tool:
             @agent.tool_plain
             def order_status(order_id: str = "") -> str:
@@ -90,7 +93,8 @@ def run_agent(agent_input):
         if isinstance(m, dict) and m.get("content"): q = str(m["content"]); break
     def _work():
         from pydantic_ai import Agent
-        agent = Agent("openai:gpt-4o-mini", model_settings={"temperature":0.0})
+        agent = Agent("openai:gpt-4o-mini", model_settings={"temperature":0.0},
+                      system_prompt="You are an order-support agent. Use order_status to look up the order, then state the order id and its status.")
         @agent.tool_plain
         def order_status(order_id: str = "") -> str:
             "Look up an order's status by id."
