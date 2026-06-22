@@ -64,6 +64,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _action_optimize(args[1:])
     if command == "run":
         return _run(args[1:])
+    if command in {"bench", "benchmark"}:
+        return _bench(args[1:])
     if command == "eval":
         return _eval(args[1:])
     if command in {"eval-artifact", "eval-report"}:
@@ -815,6 +817,110 @@ def _run(args: Sequence[str]) -> int:
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
+
+
+def _bench(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn bench",
+        description=(
+            "Run a benchmark suite against an agent through the unified harness "
+            "(push / artifact_in / pull control modes; any modality)."
+        ),
+    )
+    parser.add_argument("suite", help="Path to a bench suite / task dataset JSON.")
+    agent_group = parser.add_mutually_exclusive_group()
+    agent_group.add_argument(
+        "--agent",
+        help='Agent spec as a JSON object, e.g. \'{"type":"scripted","content":"..."}\'.',
+    )
+    agent_group.add_argument(
+        "--agent-file", help="Path to a JSON file holding the agent spec."
+    )
+    parser.add_argument(
+        "--mode",
+        default="push",
+        choices=["push", "artifact_in", "pull"],
+        help="Control mode (default: push).",
+    )
+    parser.add_argument("--split", default=None, help="Dataset split (e.g. train/test).")
+    parser.add_argument("--max-tasks", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--evidence-class", default="captured_fixture")
+    parser.add_argument(
+        "--no-reward-hack-detection",
+        action="store_true",
+        help="Disable the reward-hack detector (on by default).",
+    )
+    parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        help="Disable the local/dashboard run telemetry side-channel.",
+    )
+    parser.add_argument("-o", "--output", default=None)
+    parser.add_argument("--quiet", action="store_true")
+    parsed = parser.parse_args(list(args))
+
+    try:
+        bench = _bench_module()
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn bench", exc)
+
+    agent: dict[str, Any]
+    if parsed.agent_file:
+        try:
+            agent = json.loads(Path(parsed.agent_file).expanduser().read_text("utf-8"))
+        except Exception as exc:
+            print(f"agent-learn bench: --agent-file: {exc}", file=sys.stderr)
+            return 1
+    elif parsed.agent:
+        try:
+            agent = json.loads(parsed.agent)
+        except Exception as exc:
+            print(f"agent-learn bench: --agent must be valid JSON: {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(
+            "agent-learn bench: an agent is required (--agent JSON or --agent-file PATH)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        payload = bench.run_bench(
+            Path(parsed.suite).expanduser(),
+            agent,
+            control_mode=parsed.mode,
+            split=parsed.split,
+            max_tasks=parsed.max_tasks,
+            seed=parsed.seed,
+            evidence_class=parsed.evidence_class,
+            detect_reward_hacks=not parsed.no_reward_hack_detection,
+            emit_telemetry=not parsed.no_telemetry,
+        )
+    except NotImplementedError as exc:
+        print(f"agent-learn bench: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"agent-learn bench: {exc}", file=sys.stderr)
+        return 1
+
+    if parsed.output is not None:
+        out = Path(parsed.output).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        if not parsed.quiet:
+            print(f"wrote {out}")
+    elif not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    # A bench run that completed exits 0 (scores are reported, not a pass gate).
+    return 0
+
+
+def _bench_module() -> Any:
+    return importlib.import_module("agent_learning.bench")
 
 
 # --- live-lane front door (Phase 3 §6 — opt-in lanes; PRD §4.1 CLI bullet) ---
@@ -6139,7 +6245,7 @@ def _help(error: Optional[str] = None) -> int:
             "replay, report, compare, baseline, promote-to-regression, shrink, "
             "optimize-eval, optimize-suite, suite, capabilities, actions, "
             "action-run, action-optimize, trust, redteam-corpus, release-proof, "
-            "eval-cli, init, persona, scenario, runs"
+            "eval-cli, init, persona, scenario, runs, bench"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

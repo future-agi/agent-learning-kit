@@ -14,6 +14,7 @@ except PackageNotFoundError:  # pragma: no cover - source tree without install
 
 _SUBMODULES = {
     "actions",
+    "bench",
     "capabilities",
     "evals",
     "optimize",
@@ -41,6 +42,7 @@ __all__ = [
     "AgentLearningConfig",
     "__version__",
     "actions",
+    "bench",
     "capabilities",
     "configure",
     "current_config",
