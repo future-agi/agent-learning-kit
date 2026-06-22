@@ -36142,8 +36142,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
     source_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {}
     source = "examples/sdk_framework_adapter_websocket_transport.py"
-    research_doc = (
-    )
+    research_doc = "internal-docs/framework-websocket-transport-readiness-research.md"
     release_key = "release-check-framework-websocket-transport-key"
 
     def append_error(
@@ -36853,8 +36852,7 @@ def _release_framework_adapter_matrix_optimization_status(
     source_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {}
     source = "examples/sdk_framework_adapter_matrix_optimization.py"
-    research_doc = (
-    )
+    research_doc = "internal-docs/framework-adapter-matrix-optimization-readiness-research.md"
 
     def append_error(
         bucket: list[dict[str, Any]],
