@@ -188,7 +188,7 @@ TypeScript SDK source under `typescript/agent-learning-kit/src`. The
 `simulate-sdk` and `agent-opt` engine code is included under `src/fi/simulate`
 and `src/fi/opt`. See [LIBRARIES.md](LIBRARIES.md) for the complete source map.
 The ai-evaluation source inventory used by `agent-learn release-check` lives at
-[`internal-docs/ai-evaluation-source-inventory.json`](internal-docs/ai-evaluation-source-inventory.json).
+the ai-evaluation source inventory (maintained in the internal-docs repo).
 
 ## Repository Map
 
@@ -202,8 +202,6 @@ The ai-evaluation source inventory used by `agent-learn release-check` lives at
 - [`docs/index.md`](docs/index.md): full documentation index.
 - [`ROADMAP.md`](ROADMAP.md): public v1 roadmap and post-v1 extensions.
 - [`LIBRARIES.md`](LIBRARIES.md): source map for the consolidated engines.
-- [`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md): executable v1 gate map.
-- [`internal-docs/`](internal-docs): handover, research, and release notes.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): local development and PR workflow.
 - [`SECURITY.md`](SECURITY.md): vulnerability reporting policy.
 - [`LICENSE`](LICENSE): Apache-2.0 license.

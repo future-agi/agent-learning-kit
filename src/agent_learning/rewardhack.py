@@ -1,6 +1,6 @@
-"""Reward-hack DETECTOR (beat-HUD B6) — the net-new capability HUD lacks.
+"""Reward-hack DETECTOR — flags trajectories that game the declared objective.
 
-The verified competitive finding (BEAT-HUD-RECONCILE §B.1): the kit's Goodhart
+The design finding behind it: the kit's Goodhart
 guards are DECLARATIVE schema + aggregation, not detection — `compile_objective`
 checks guards are PRESENT, `_guard_outcomes` echoes a PRE-SUPPLIED `tripped`
 boolean, `verdict_row` never recomputes. Nothing in the kit, given a trajectory,

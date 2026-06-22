@@ -1,4 +1,4 @@
-"""First-class Task + TaskDataset — the benchmark surface (beat-HUD B1).
+"""First-class Task + TaskDataset — the benchmark surface.
 
 A Task is a THIN COMPOSITION over models that already exist and are content-
 addressed (no new invention — empirically validated by spike):

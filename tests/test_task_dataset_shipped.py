@@ -1,4 +1,4 @@
-"""Beat-HUD B4 — the shipped out-of-the-box task dataset + example runner.
+"""The shipped out-of-the-box task dataset + example runner.
 
 Pins that the shipped ``support_starter`` dataset compiles (every task carries a
 deterministic anchor + Goodhart guards), spans the executable worlds plus a

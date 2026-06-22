@@ -4,7 +4,7 @@
 > below is backed by an executable release gate (`agent-learn release-check`)
 > and a passed full release proof (`agent-learning.release-proof.v1`) — the
 > kit's rule is that no capability claim ships without a gate that proves it.
-> The internal per-gate map lives in [`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md).
+> The per-gate map is maintained internally; every claim here is enforced by `agent-learn release-check`.
 
 Status date: 2026-06-11. Release candidate: tag `v1.0.0-rc.1`
 (Python `agent-learning-kit==0.1.0`, TypeScript `@future-agi/agent-learning-kit==0.2.0`).

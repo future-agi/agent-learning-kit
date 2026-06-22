@@ -1,4 +1,4 @@
-"""Beat-HUD B7 — RewardHackBench: the anti-gaming benchmark HUD doesn't cover.
+"""RewardHackBench: the anti-gaming benchmark.
 
 Credential-free guards: the shipped dataset compiles, every task is tool-anchored
 + carries its mock-tool env, and the detector discriminates an honest (tool-using)

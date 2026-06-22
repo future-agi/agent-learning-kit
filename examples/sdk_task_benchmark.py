@@ -1,4 +1,4 @@
-"""Out-of-the-box task benchmark — credential-free, deterministic (beat-HUD B4).
+"""Out-of-the-box task benchmark — credential-free, deterministic.
 
 Loads the shipped ``support_starter`` task dataset, compiles it (every task's
 objective must carry a deterministic anchor + Goodhart guards, or compilation

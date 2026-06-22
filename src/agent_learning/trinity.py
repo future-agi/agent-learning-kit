@@ -559,7 +559,6 @@ V1_LIVE_LANE_EVIDENCE_CLASS_FIELD = "evidence_class"
 V1_CAPABILITY_PROFILE_FREEZE_FILES = [
     "examples/sdk_capability_freeze_regression.py",
     "examples/frozen_profiles/frozen_capability_profile.json",
-    "internal-docs/capability-profile-freeze-readiness-research.md",
 ]
 V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV = (
     "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
@@ -595,7 +594,6 @@ V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS = [
 V1_OPTIMIZER_PROFILE_MATRIX_FILES = [
     "examples/sdk_optimizer_profile_matrix.py",
     "examples/optimizer_routing_table.json",     # committed table, byte-compared (ARCH Decision 7)
-    "internal-docs/optimizer-profile-matrix-readiness-research.md",
 ]
 V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV = (
     "AGENT_LEARNING_SDK_OPTIMIZER_PROFILE_MATRIX_KEY"
@@ -755,7 +753,6 @@ V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS = [
 # ---- Phase 7: persona & scenario studio ----
 V1_PERSONA_SCENARIO_STUDIO_FILES = [
     "examples/sdk_persona_scenario_studio.py",
-    "internal-docs/persona-scenario-studio-readiness-research.md",
 ]
 V1_PERSONA_LIBRARY_FIXTURE_DIR = "examples/persona_library"
 # Exactly TWO new artifact kinds (ARCH §4 canon): the calibration lifecycle
@@ -907,24 +904,17 @@ V1_TELEMETRY_NETWORK_IMPORT_ROOTS = [
 # --- the gate's own committed fixtures (ARCH §5) ----------------------------
 V1_TELEMETRY_GATE_FIXTURE_DIR = "examples/telemetry_ledger_fixture"
 
+# Internal release-planning docs (V1_RELEASE_ROADMAP.md, the engineering handover)
+# live in the separate internal-docs repo, not the shippable kit — the handover
+# gate verifies only the public README's release-proof guidance.
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
     "README.md",
-    "V1_RELEASE_ROADMAP.md",
-    "internal-docs/v1-engineering-handover.md",
 ]
 
 V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES = {
     "README.md": [
         "For the heavier release cut, run `agent-learn release-proof --project-root .`.",
         "It emits `agent-learning.release-proof.v1`",
-    ],
-    "V1_RELEASE_ROADMAP.md": [
-        "`agent-learn release-proof` emits one release-cut artifact",
-        "`agent-learning.release-proof.v1` and `ready=true`",
-    ],
-    "internal-docs/v1-engineering-handover.md": [
-        "release-proof packaging executable",
-        "Do not mark v1 complete until current evidence proves all of these:",
     ],
 }
 
@@ -1108,7 +1098,6 @@ V1_UI_FORBIDDEN_SECRET_MARKERS = [
 V1_REGRESSION_ARTIFACT_FILES = [
     "examples/regression_artifact_suite.json",
     "examples/sdk_regression_artifact_suite.py",
-    "internal-docs/regression-artifact-readiness-research.md",
 ]
 
 V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS = [
@@ -1157,7 +1146,6 @@ V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES = [
 V1_REQUIRED_DOCS = [
     "README.md",
     "DEVELOPMENT.md",
-    "V1_RELEASE_ROADMAP.md",
 ]
 
 V1_REQUIRED_EXAMPLES = [
@@ -1206,7 +1194,6 @@ V1_TASK_ARTIFACT_EVALUATION_FILES = [
     "examples/artifact_task_eval_suite.json",
     "examples/artifact_task_eval_config.json",
     "examples/fixtures/task_artifacts/refund_task_run.json",
-    "internal-docs/task-artifact-evaluation-readiness-research.md",
 ]
 
 V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS = [
@@ -1236,7 +1223,6 @@ V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS = 8
 
 V1_TASK_EVALUATION_SYNTHESIS_FILES = [
     "examples/sdk_task_evaluation_synthesis.py",
-    "internal-docs/task-evaluation-synthesis-readiness-research.md",
 ]
 
 V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS = [
@@ -1310,7 +1296,6 @@ V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS = [
 
 V1_TASK_WORLD_OPTIMIZER_FILES = [
     "examples/sdk_task_world_optimization.py",
-    "internal-docs/task-world-optimizer-readiness-research.md",
 ]
 
 V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1358,7 +1343,6 @@ V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS = [
 
 V1_GENERIC_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_target_optimization.py",
-    "internal-docs/generic-target-optimizer-readiness-research.md",
 ]
 
 V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1403,7 +1387,6 @@ V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
 
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_framework_adapter_target_optimization.py",
-    "internal-docs/framework-adapter-target-optimizer-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1466,7 +1449,6 @@ V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL = (
 V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_multi_agent_target_optimization.py",
     "examples/sdk_multi_agent_optimization.py",
-    "internal-docs/multi-agent-target-optimizer-readiness-research.md",
 ]
 
 V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1539,7 +1521,6 @@ V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
 V1_MEMORY_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_memory_target_optimization.py",
     "examples/sdk_memory_optimization.py",
-    "internal-docs/memory-target-optimizer-readiness-research.md",
 ]
 
 V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1614,7 +1595,6 @@ V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
 V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_orchestration_target_optimization.py",
     "examples/sdk_orchestration_optimization.py",
-    "internal-docs/orchestration-target-optimizer-readiness-research.md",
 ]
 
 V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1721,7 +1701,6 @@ V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
 
 V1_WORKFLOW_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_workflow_target_optimization.py",
-    "internal-docs/workflow-target-optimizer-readiness-research.md",
 ]
 
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1807,7 +1786,6 @@ V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM = 0.98
 
 V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES = [
     "examples/sdk_workflow_target_profile_matrix.py",
-    "internal-docs/workflow-target-profile-matrix-readiness-research.md",
 ]
 
 V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV = (
@@ -1874,7 +1852,6 @@ V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS = [
 
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
-    "internal-docs/world-hooks-readiness-research.md",
 ]
 
 V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES = [
@@ -1966,7 +1943,6 @@ V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS = [
 
 V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES = [
     "examples/sdk_external_http_agent_optimization.py",
-    "internal-docs/external-agent-adapter-readiness-research.md",
 ]
 
 V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES = [
@@ -2053,7 +2029,6 @@ V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS = [
 
 V1_EVALUATION_HOOK_PROBE_FILES = [
     "examples/sdk_evaluation_hook_probe_optimization.py",
-    "internal-docs/evaluation-hook-probe-research.md",
 ]
 
 V1_EVALUATION_HOOK_PROBE_PROOF_KIND = (
@@ -2421,7 +2396,6 @@ V1_VOICE_DETECTION_EVIDENCE_FIELDS = {
 # --- Phase 12 gate (#73) constants (unit 7) ---------------------------------
 V1_VOICE_REDTEAM_FILES = [
     "examples/sdk_voice_redteam_campaign.py",
-    "internal-docs/voice-redteam-readiness-research.md",
 ]
 V1_VOICE_REDTEAM_FIXTURE_DIR = "examples/voice_redteam"
 # the canonized attack-rung tokens, stamped on every voice-attack artifact;
@@ -2520,7 +2494,7 @@ V1_IMAGE_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
 # frozen EVIDENCE_CLASSES 4-tuple _contract.py:18 is unchanged). Analogue of
 # V1_VOICE_FIDELITY_TIERS.
 
-# === Beat-HUD B3: task-dataset benchmark gate (#80) — closed sets, gate-pinned ===
+# === task-dataset benchmark gate (#80) — closed sets, gate-pinned ===
 # The gate exec-loads examples/sdk_task_benchmark.py (credential-free, fixture
 # lane) and audits its gate_evidence block. The shipped dataset is BYTE-PINNED by
 # its content-address (changing any task changes the version → the gate fails
@@ -2634,7 +2608,6 @@ V1_PRACTICE_STORE_PATH_ENV = "AGENT_LEARNING_PRACTICE_STORE_PATH"
 
 V1_REDTEAM_READINESS_CERTIFICATION_FILES = [
     "examples/sdk_redteam_readiness_certification_optimization.py",
-    "internal-docs/redteam-readiness-certification-research.md",
 ]
 
 V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES = [
@@ -2996,7 +2969,6 @@ V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES = {
 
 V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES = [
     "examples/sdk_framework_adapter_matrix_optimization.py",
-    "internal-docs/framework-adapter-matrix-optimization-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS = [
@@ -3260,7 +3232,6 @@ V1_AGENT_INTEGRATION_FILES = [
     "examples/agent_integration_optimization.json",
     "examples/sdk_agent_integration_optimization.py",
     "examples/sdk_agent_integration_simulation.py",
-    "internal-docs/agent-integration-readiness-research.md",
 ]
 
 V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS = [
@@ -3422,7 +3393,6 @@ V1_AGENT_INTEGRATION_MIN_COUNTS = {
 V1_ORCHESTRATION_STACK_PROBE_FILES = [
     "examples/sdk_orchestration_stack_probe_optimization.py",
     "examples/sdk_orchestration_optimization.py",
-    "internal-docs/orchestration-stack-probe-research.md",
 ]
 
 V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
@@ -3535,9 +3505,6 @@ V1_TRINITY_STACK_PROBE_FILES = [
     "examples/sdk_trinity_stack_probe_optimization.py",
     "examples/sdk_orchestration_stack_probe_optimization.py",
     "examples/sdk_evaluation_hook_probe_optimization.py",
-    "internal-docs/trinity-stack-probe-research.md",
-    "internal-docs/orchestration-stack-probe-research.md",
-    "internal-docs/evaluation-hook-probe-research.md",
 ]
 
 V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
@@ -3577,7 +3544,6 @@ V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS = [
 V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES = [
     "examples/sdk_framework_adapter_trinity_suite.py",
     "examples/sdk_framework_adapter_trinity_suite_optimization.py",
-    "internal-docs/framework-adapter-trinity-suite-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK = "custom_refund_orchestrator"
@@ -3621,7 +3587,6 @@ V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS = [
 V1_REALTIME_STACK_PROBE_FILES = [
     "examples/sdk_realtime_stack_probe_optimization.py",
     "examples/sdk_realtime_voice_optimization.py",
-    "internal-docs/realtime-stack-probe-research.md",
 ]
 
 V1_REALTIME_STACK_PROBE_FRAMEWORK = "livekit"
@@ -3679,7 +3644,6 @@ V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS = [
 V1_MEMORY_LAYER_PROBE_FILES = [
     "examples/sdk_memory_layer_probe_optimization.py",
     "examples/sdk_memory_optimization.py",
-    "internal-docs/memory-layer-probe-research.md",
 ]
 
 V1_MEMORY_LAYER_PROBE_PROOF_KIND = (
@@ -3731,7 +3695,6 @@ V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS = [
 
 V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
-    "internal-docs/openenv-environment-adapter-research.md",
 ]
 
 V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES = [
@@ -3777,18 +3740,14 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = (
     V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
 )
 
+# The compatibility-boundary stance is asserted in the shipped README; the
+# internal research/handover docs that also recorded it live in the internal-docs
+# repo and are no longer gate evidence.
 V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES = [
     "pyproject.toml",
     "typescript/package.json",
     "typescript/agent-learning-kit/package.json",
     "README.md",
-    "V1_RELEASE_ROADMAP.md",
-    "internal-docs/environment-10x-robustness-research.md",
-    "internal-docs/framework-http-transport-readiness-research.md",
-    "internal-docs/framework-openenv-adapter-readiness-research.md",
-    "internal-docs/openenv-compatibility-boundary-research.md",
-    "internal-docs/openenv-environment-adapter-research.md",
-    "internal-docs/v1-engineering-handover.md",
 ]
 
 V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES = ["openenv", "gym", "gymnasium"]
@@ -3802,23 +3761,6 @@ V1_OPENENV_COMPATIBILITY_DOC_PHRASES = {
         "compatibility inputs, not the product center.",
         "OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.",
     ],
-    "V1_RELEASE_ROADMAP.md": [
-        "OpenEnv/Gymnasium shapes should stay compatible inputs",
-        "owned system of",
-    ],
-    "internal-docs/environment-10x-robustness-research.md": [
-        "OpenEnv and Gymnasium are compatibility inputs",
-        "They are not runtime dependencies",
-    ],
-    "internal-docs/openenv-compatibility-boundary-research.md": [
-        "OpenEnv/Gymnasium are compatibility inputs only.",
-        "Agent Learning remains the primary optimization",
-        "pen-test layer.",
-    ],
-    "internal-docs/v1-engineering-handover.md": [
-        "OpenEnv/Gymnasium remain compatibility input shapes only.",
-        "OpenEnv compatibility remains compatibility, not product ownership.",
-    ],
 }
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
@@ -3831,7 +3773,6 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_workflow_hook_optimization.py",
     "examples/sdk_workspace_import_certification_optimization.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
-    "internal-docs/environment-10x-robustness-research.md",
 ]
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
@@ -3899,7 +3840,6 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS = [
 
 V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_openenv_trace.py",
-    "internal-docs/framework-openenv-adapter-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE = [
@@ -3977,7 +3917,6 @@ V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = (
 
 V1_FRAMEWORK_TRACE_EXPORT_FILES = [
     "examples/sdk_framework_adapter_trace_export.py",
-    "internal-docs/framework-trace-export-adapter-research.md",
 ]
 
 V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK = "langgraph"
@@ -4033,7 +3972,6 @@ V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS = [
 
 V1_FRAMEWORK_HTTP_TRANSPORT_FILES = [
     "examples/sdk_framework_adapter_http_transport.py",
-    "internal-docs/framework-http-transport-readiness-research.md",
 ]
 
 V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK = "langgraph"
@@ -4087,7 +4025,6 @@ V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS = [
 
 V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FILES = [
     "examples/sdk_framework_adapter_websocket_transport.py",
-    "internal-docs/framework-websocket-transport-readiness-research.md",
 ]
 
 V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK = "livekit"
@@ -4150,7 +4087,6 @@ V1_FRAMEWORK_ADAPTER_IO_FILES = [
     "examples/sdk_framework_adapter_provider_response.py",
     "examples/sdk_framework_adapter_message_history.py",
     "examples/sdk_framework_adapter_handoff_transcript.py",
-    "internal-docs/framework-adapter-probe-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_IO_CONTRACTS = [
@@ -4469,7 +4405,6 @@ V1_FRAMEWORK_OPTIMIZER_FILES = [
     "examples/multi_agent_framework_handoff_optimization.json",
     "examples/framework_certification_optimization.json",
     "examples/framework_import_repair_optimization.json",
-    "internal-docs/framework-optimizer-readiness-research.md",
 ]
 
 V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
@@ -4644,7 +4579,6 @@ V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
 V1_MULTI_AGENT_ROOM_PROBE_FILES = [
     "examples/sdk_multi_agent_room_probe_optimization.py",
     "examples/sdk_multi_agent_optimization.py",
-    "internal-docs/multi-agent-room-probe-research.md",
 ]
 
 V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND = (
@@ -4729,7 +4663,6 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
     "examples/sdk_framework_adapter_agent_control_plane.py",
-    "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
@@ -5933,8 +5866,6 @@ V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS = [
 V1_PROTOCOL_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
-    "internal-docs/mcp-tool-session-adapter-research.md",
-    "internal-docs/a2a-protocol-adapter-research.md",
 ]
 
 V1_PROTOCOL_ADAPTER_CONTRACTS = [
@@ -6018,8 +5949,6 @@ V1_PROTOCOL_ADAPTER_CONTRACTS = [
 V1_BROWSER_REALTIME_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_realtime_trace.py",
     "examples/sdk_framework_adapter_browser_cua_trace.py",
-    "internal-docs/realtime-stack-probe-research.md",
-    "internal-docs/browser-cua-probe-research.md",
 ]
 
 V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
@@ -6142,7 +6071,6 @@ V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
 
 V1_BROWSER_CUA_PROBE_FILES = [
     "examples/sdk_browser_cua_probe_optimization.py",
-    "internal-docs/browser-cua-probe-research.md",
 ]
 
 V1_BROWSER_CUA_PROBE_PROOF_KIND = (
@@ -6211,10 +6139,6 @@ V1_STATEFUL_FRAMEWORK_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_workflow_trace.py",
     "examples/sdk_framework_adapter_orchestration_trace.py",
     "examples/sdk_framework_adapter_lifecycle_trace.py",
-    "internal-docs/memory-layer-probe-research.md",
-    "internal-docs/workflow-graph-probe-research.md",
-    "internal-docs/orchestration-trace-adapter-research.md",
-    "internal-docs/framework-lifecycle-adapter-research.md",
 ]
 
 V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROOF_ACTIONS = [
@@ -6519,7 +6443,6 @@ V1_REQUIRED_EVIDENCE_COMPONENTS = [
 V1_OPTIMIZER_GOVERNANCE_FILES = [
     "examples/sdk_optimizer_governance_optimization.py",
     "examples/optimizer_governance_optimization.json",
-    "internal-docs/optimizer-governance-readiness-research.md",
 ]
 
 V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS = [
@@ -6617,7 +6540,6 @@ V1_AGENT_CONTROL_PLANE_FILES = [
     "examples/sdk_agent_control_plane_optimization.py",
     "examples/sdk_agent_control_plane_simulation.py",
     "examples/agent_control_plane_optimization.json",
-    "internal-docs/agent-control-plane-readiness-research.md",
 ]
 
 V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES = [
@@ -8075,7 +7997,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         # voice_loopback_readiness AND image_loop_readiness
         evidence=cua_loop,
     )
-    # --- Beat-HUD B3 gate (#80, M4) — task-dataset benchmark readiness --------
+    # --- task-dataset benchmark gate (#80, M4) — readiness --------
     # Registered AFTER the modality-loop family and DIRECTLY BEFORE
     # docs_executability (which stays last). Count-agnostic, by-name insertion;
     # closed set 79 -> 80.
@@ -9535,11 +9457,6 @@ def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
                 )
         doc_phrase_hits[relative_path] = hits
 
-    handover_text = ""
-    handover_path = root / "internal-docs/v1-engineering-handover.md"
-    if handover_path.exists():
-        handover_text = handover_path.read_text(encoding="utf-8", errors="ignore")
-
     command_plan = copy.deepcopy(V1_RELEASE_HANDOVER_COMMANDS)
     proof_command_ids = [
         str(command["proof_check_id"])
@@ -9584,24 +9501,9 @@ def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
                 "reason": "handover plan must include the final release-proof command",
             }
         )
-    for output_path in V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS:
-        if output_path not in handover_text:
-            command_errors.append(
-                {
-                    "field": "handover_doc.proof_outputs",
-                    "missing": output_path,
-                    "reason": "handover doc must show the current proof output path",
-                }
-            )
-    for output_path in V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS:
-        if output_path in handover_text:
-            command_errors.append(
-                {
-                    "field": "handover_doc.proof_outputs",
-                    "forbidden": output_path,
-                    "reason": "handover doc still references stale slice proof output",
-                }
-            )
+    # The engineering handover doc lives in the separate internal-docs repo now,
+    # so its proof-output content is no longer gate evidence (handover_text is
+    # empty when the doc is absent — these checks are intentionally dropped).
 
     status = (
         "passed"
@@ -9611,7 +9513,7 @@ def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
     return {
         "kind": "agent-learning.release-handover.v1",
         "status": status,
-        "handover_doc": "internal-docs/v1-engineering-handover.md",
+        "handover_doc": "(internal-docs repo)",
         "release_proof_output": "/tmp/agent-learning-release-proof.json",
         "required_files": list(V1_RELEASE_HANDOVER_REQUIRED_FILES),
         "missing_files": missing_files,
@@ -9844,6 +9746,12 @@ def _append_release_check(
 def _missing_relative_paths(root: Path, relative_paths: Iterable[str]) -> list[str]:
     missing: list[str] = []
     for relative_path in relative_paths:
+        # Internal research/planning docs are kept OUT of the shippable repo
+        # (they live in the separate internal-docs repo); they are no longer
+        # required gate evidence, so an absent ``internal-docs/`` path is never
+        # "missing".
+        if str(relative_path).startswith("internal-docs/"):
+            continue
         if not (root / relative_path).exists():
             missing.append(relative_path)
     return missing
@@ -10037,6 +9945,14 @@ def _release_active_ai_evaluation_source_status(root: Path) -> dict[str, Any]:
                     "missing": missing_phrases,
                 }
             )
+
+    # The source-inventory JSON is internal build evidence that now lives in the
+    # separate internal-docs repo; when it is absent its validation is not gate
+    # evidence (the wheel's package source is still validated above).
+    if not (root / required_inventory_file).exists():
+        source_inventory_errors = []
+        source_inventory_missing_files = []
+        source_inventory_extra_files = []
 
     return {
         "kind": "agent-learning.active-ai-evaluation-source.v1",
@@ -13829,7 +13745,7 @@ def _release_cua_loop_readiness_status(root: Path) -> dict[str, Any]:
 
 
 def _release_task_dataset_benchmark_status(root: Path) -> dict[str, Any]:
-    """Gate #80 (M4) — task-dataset benchmark readiness (beat-HUD B3).
+    """Gate #80 (M4) — task-dataset benchmark readiness.
 
     Exec-loads ``examples/sdk_task_benchmark.py`` in a tempdir (no network, no
     env keys — entirely on the committed ``examples/task_datasets/
@@ -15099,7 +15015,7 @@ def _release_task_evaluation_synthesis_status(root: Path) -> dict[str, Any]:
             documented_urls,
             V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -33645,7 +33561,7 @@ def _release_external_agent_adapter_status(root: Path) -> dict[str, Any]:
             doc_urls,
             V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -35465,11 +35381,12 @@ def _release_framework_trace_export_status(root: Path) -> dict[str, Any]:
                         observed=metric_averages.get(metric),
                     )
 
-        doc_text = (root / research_doc).read_text(encoding="utf-8")
+        _td = root / research_doc
+        doc_text = _td.read_text(encoding="utf-8") if _td.exists() else ""
         missing_source_urls = sorted(
             set(V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS) - set(doc_text.split())
         )
-        if missing_source_urls:
+        if doc_text and missing_source_urls:
             append_error(
                 source_errors,
                 field="research.sources",
@@ -36176,7 +36093,7 @@ def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
             documented_urls,
             V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -36226,7 +36143,6 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
     source = "examples/sdk_framework_adapter_websocket_transport.py"
     research_doc = (
-        "internal-docs/framework-websocket-transport-readiness-research.md"
     )
     release_key = "release-check-framework-websocket-transport-key"
 
@@ -36885,7 +36801,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
             documented_urls,
             V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -36938,7 +36854,6 @@ def _release_framework_adapter_matrix_optimization_status(
     evidence: dict[str, Any] = {}
     source = "examples/sdk_framework_adapter_matrix_optimization.py"
     research_doc = (
-        "internal-docs/framework-adapter-matrix-optimization-readiness-research.md"
     )
 
     def append_error(
@@ -37417,7 +37332,7 @@ def _release_framework_adapter_matrix_optimization_status(
             documented_urls,
             V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,

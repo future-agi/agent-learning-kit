@@ -1,4 +1,4 @@
-"""Beat-HUD B2 — benchmark runner tests.
+"""Benchmark runner tests.
 
 Deterministic unit tests via the injectable ``runner`` seam (no engine), plus ONE
 real end-to-end run through the existing engine on the credential-free scripted

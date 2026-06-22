@@ -1,4 +1,4 @@
-"""Beat-HUD B6 — reward-hack detector MECHANICS tests.
+"""Reward-hack detector MECHANICS tests.
 
 These prove each SIGNAL fires (and stays silent) on synthetic trajectories — i.e.
 the detector mechanics. They are NOT the empirical claim: catch-rate on

@@ -294,7 +294,6 @@ def _mini_repo(tmp_path: Path) -> Path:
 
     root = tmp_path / "repo"
     (root / "examples/voice_redteam").mkdir(parents=True)
-    (root / "internal-docs").mkdir(parents=True)
     import shutil
 
     shutil.copytree(FIXTURES, root / "examples/voice_redteam", dirs_exist_ok=True)
@@ -306,10 +305,9 @@ def _mini_repo(tmp_path: Path) -> Path:
         PROJECT_ROOT / "examples/redteam_corpus.json",
         root / "examples/redteam_corpus.json",
     )
-    shutil.copy(
-        PROJECT_ROOT / "internal-docs/voice-redteam-readiness-research.md",
-        root / "internal-docs/voice-redteam-readiness-research.md",
-    )
+    # The voice-redteam research doc lives in the separate internal-docs repo and
+    # is no longer required gate evidence (the gate's source-url check reads the
+    # committed corpus JSON, not the doc), so the mini-repo doesn't stage it.
     return root
 
 

@@ -1,4 +1,4 @@
-"""Beat-HUD RSI loop — close the loop: dataset -> optimize -> verify HELD-OUT.
+"""RSI loop — close the loop: dataset -> optimize -> verify HELD-OUT.
 
 The honest RSI guard (advisor's bar): the optimizer's winner must beat the
 baseline on tasks it NEVER optimized against (the held-out test split), measured

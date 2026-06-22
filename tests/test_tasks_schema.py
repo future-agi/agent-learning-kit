@@ -1,4 +1,4 @@
-"""Beat-HUD B1 — Task + TaskDataset schema tests.
+"""Task + TaskDataset schema tests.
 
 The Task is a thin composition over existing typed/content-addressed models; the
 Goodhart guard is reused VERBATIM from loss.compile_objective. These tests pin:

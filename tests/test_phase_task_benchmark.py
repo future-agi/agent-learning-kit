@@ -1,4 +1,4 @@
-"""Beat-HUD B3 — gate #80 task_dataset_benchmark_readiness tests.
+"""Gate #80 task_dataset_benchmark_readiness tests.
 
 Pins the gate clean on the real shipped example/dataset, that the new check is
 registered (count-agnostic, by name) with milestone M4, the dataset byte-pin
