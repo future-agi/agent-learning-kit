@@ -98,9 +98,12 @@ def test_load_bench_suite_accepts_path_and_mapping() -> None:
 
 
 def test_staged_modes_raise_clearly() -> None:
-    for mode in ("artifact_in", "pull"):
-        with pytest.raises(NotImplementedError):
-            _run(control_mode=mode)
+    # pull is not implemented yet; artifact_in on a *task dataset* is a usage
+    # error (it requires a coding bench suite) -> BenchError, not NotImplemented.
+    with pytest.raises(NotImplementedError):
+        _run(control_mode="pull")
+    with pytest.raises(bench.BenchError):
+        _run(control_mode="artifact_in")
 
 
 def test_unknown_mode_raises_bench_error() -> None:

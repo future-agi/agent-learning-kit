@@ -29,7 +29,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from . import tasks
+from .. import tasks
 
 BENCH_RESULT_KIND = "agent-learning.bench-result.v1"
 
@@ -143,11 +143,89 @@ def _to_bench_result(result: Mapping[str, Any], *, control_mode: str) -> dict[st
     return out
 
 
+def _read_suite_obj(
+    suite: Mapping[str, Any] | str | Path,
+) -> tuple[dict[str, Any], Path | None]:
+    if isinstance(suite, (str, Path)):
+        path = Path(suite).expanduser()
+        return json.loads(path.read_text("utf-8")), path
+    if isinstance(suite, Mapping):
+        return dict(suite), None
+    raise BenchError(
+        f"suite must be a path or a mapping, got {type(suite).__name__!r}"
+    )
+
+
+def _coding_aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    n = len(rows)
+    passed = sum(1 for r in rows if r["verdict"] == "pass")
+    voids = sum(1 for r in rows if r["verdict"] == "void")
+    scalars = [
+        r["result"]["scalar"]
+        for r in rows
+        if r["result"].get("scalar") is not None
+    ]
+    return {
+        "count": n,
+        "passed": passed,
+        "void": voids,
+        "pass_rate": round(passed / n, 6) if n else 0.0,
+        "mean_score": round(sum(scalars) / len(scalars), 6) if scalars else 0.0,
+        "by_modality": {"coding": {"count": n, "passed": passed}},
+    }
+
+
+def _assemble(
+    rows: list[dict[str, Any]],
+    *,
+    control_mode: str,
+    name: str | None,
+    version: str | None,
+    emit_telemetry: bool,
+    project_name: str | None,
+) -> dict[str, Any]:
+    aggregate = _coding_aggregate(rows)
+    out: dict[str, Any] = {
+        "kind": BENCH_RESULT_KIND,
+        "control_mode": control_mode,
+        "dataset_name": name,
+        "dataset_version": version,
+        "modalities": sorted({r["modality"] for r in rows}),
+        "per_task": rows,
+        "aggregate": aggregate,
+    }
+    if emit_telemetry:
+        from ..telemetry import emit_run
+
+        summary = emit_run(
+            kind="bench",
+            name=name or "bench",
+            metrics={
+                "n_tasks": aggregate["count"],
+                "pass_rate": aggregate["pass_rate"],
+                "mean_score": aggregate["mean_score"],
+            },
+            verdict="pass" if aggregate["pass_rate"] >= 0.5 else "fail",
+            children=[
+                (
+                    f"task:{r['task_id']}",
+                    {"verdict": r.get("verdict"), "score": r["result"].get("scalar")},
+                )
+                for r in rows
+            ],
+            project_name=project_name,
+        )
+        out["telemetry"] = summary.as_dict()
+    return out
+
+
 def run_bench(
     suite: Mapping[str, Any] | str | Path,
-    agent: Mapping[str, Any],
+    agent: Mapping[str, Any] | None = None,
     *,
     control_mode: str = "push",
+    submission: Mapping[str, str] | None = None,
+    sandbox: str = "subprocess",
     split: str | None = None,
     max_tasks: int | None = None,
     seed: int = 42,
@@ -157,50 +235,85 @@ def run_bench(
     emit_telemetry: bool = True,
     project_name: str | None = None,
 ) -> dict[str, Any]:
-    """Run ``agent`` across a bench ``suite`` and return a unified bench result.
+    """Run a bench ``suite`` and return a unified ``agent-learning.bench-result.v1``.
 
     ``control_mode``:
-      * ``push`` (default) delegates to :func:`tasks.run_benchmark` — the harness
-        drives the agent through a world. Live today for text / tool worlds.
-      * ``artifact_in`` scores a submitted artifact with no live agent (15B).
-      * ``pull`` runs an agent-driven reset/step loop over a live env (15D).
+      * ``push`` (default) — the harness drives ``agent`` through a world;
+        delegates to :func:`tasks.run_benchmark` (live today for text / tool).
+      * ``artifact_in`` — score a ``submission`` (``{task_id: candidate}``) against
+        each task's held-out oracle, no live agent. Requires a coding bench suite
+        (``agent-learning.bench-suite.v1``). ``sandbox`` selects the executor:
+        ``subprocess`` (default) or ``docker`` (15E, hardened isolation).
+      * ``pull`` — agent-driven reset/step loop over a live environment (15D).
 
-    The returned payload is ``agent-learning.bench-result.v1``: per-task rows each
-    carrying the unified ``result`` plus the preserved honesty fields, an
-    ``aggregate`` block, and the set of ``modalities`` exercised.
+    Per-task rows carry the unified ``result`` plus the preserved honesty fields
+    (``execution_class`` / ``evidence_class`` / ``overclaim``).
     """
 
     if control_mode not in CONTROL_MODES:
         raise BenchError(
             f"unknown control_mode {control_mode!r}; expected one of {CONTROL_MODES}"
         )
-    compiled = load_bench_suite(suite)
 
-    if control_mode == "push":
-        result = tasks.run_benchmark(
-            compiled,
-            agent,
-            split=split,
-            max_tasks=max_tasks,
-            seed=seed,
+    obj, path = _read_suite_obj(suite)
+
+    from . import _coding
+
+    if _coding.is_bench_suite(obj):
+        coding_suite = _coding.load_coding_suite(obj)
+        if control_mode != "artifact_in":
+            raise BenchError(
+                f"coding bench suites currently run under control_mode='artifact_in', "
+                f"not {control_mode!r}"
+            )
+        if submission is None:
+            raise BenchError(
+                "artifact_in requires submission={task_id: candidate_source}"
+            )
+        rows = _coding.run_coding_artifact_in(
+            coding_suite,
+            submission,
+            sandbox=sandbox,
             evidence_class=evidence_class,
-            detect_reward_hacks=detect_reward_hacks,
-            runner=runner,
+            max_tasks=max_tasks,
+        )
+        return _assemble(
+            rows,
+            control_mode="artifact_in",
+            name=str(coding_suite.get("name") or ""),
+            version=str(coding_suite.get("version") or ""),
             emit_telemetry=emit_telemetry,
             project_name=project_name,
         )
-        return _to_bench_result(result, control_mode="push")
 
+    # --- task-dataset suites (text / tool worlds) ---
     if control_mode == "artifact_in":
-        raise NotImplementedError(
-            "control_mode='artifact_in' (submit-and-score, no live agent) lands in "
-            "bench step 15B"
+        raise BenchError(
+            "artifact_in currently requires a coding bench suite "
+            "(agent-learning.bench-suite.v1)"
         )
-    # control_mode == "pull"
-    raise NotImplementedError(
-        "control_mode='pull' (agent-driven reset/step over a live environment) "
-        "lands in bench step 15D"
+    if control_mode == "pull":
+        raise NotImplementedError(
+            "control_mode='pull' (agent-driven reset/step over a live environment) "
+            "lands in bench step 15D"
+        )
+    # control_mode == "push"
+    if agent is None:
+        raise BenchError("push mode requires an agent")
+    compiled = tasks.load_task_dataset(path) if path is not None else tasks.compile_task_dataset(obj)
+    result = tasks.run_benchmark(
+        compiled,
+        agent,
+        split=split,
+        max_tasks=max_tasks,
+        seed=seed,
+        evidence_class=evidence_class,
+        detect_reward_hacks=detect_reward_hacks,
+        runner=runner,
+        emit_telemetry=emit_telemetry,
+        project_name=project_name,
     )
+    return _to_bench_result(result, control_mode="push")
 
 
 def run_bench_file(

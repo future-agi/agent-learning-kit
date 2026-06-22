@@ -842,6 +842,21 @@ def _bench(args: Sequence[str]) -> int:
         choices=["push", "artifact_in", "pull"],
         help="Control mode (default: push).",
     )
+    parser.add_argument(
+        "--submission-file",
+        help="artifact_in: JSON file mapping task_id -> candidate source.",
+    )
+    parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="artifact_in: score the suite's own reference solutions (self-check).",
+    )
+    parser.add_argument(
+        "--sandbox",
+        default="subprocess",
+        choices=["subprocess", "docker"],
+        help="artifact_in code sandbox (default: subprocess).",
+    )
     parser.add_argument("--split", default=None, help="Dataset split (e.g. train/test).")
     parser.add_argument("--max-tasks", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
@@ -865,7 +880,9 @@ def _bench(args: Sequence[str]) -> int:
     except Exception as exc:
         return _vendored_import_failed("agent-learn bench", exc)
 
-    agent: dict[str, Any]
+    suite_path = Path(parsed.suite).expanduser()
+
+    agent: dict[str, Any] | None = None
     if parsed.agent_file:
         try:
             agent = json.loads(Path(parsed.agent_file).expanduser().read_text("utf-8"))
@@ -878,7 +895,34 @@ def _bench(args: Sequence[str]) -> int:
         except Exception as exc:
             print(f"agent-learn bench: --agent must be valid JSON: {exc}", file=sys.stderr)
             return 1
-    else:
+
+    submission: dict[str, str] | None = None
+    if parsed.mode == "artifact_in":
+        if parsed.reference:
+            try:
+                from agent_learning.bench import _coding
+
+                submission = _coding.reference_submission(
+                    _coding.load_coding_suite(suite_path)
+                )
+            except Exception as exc:
+                print(f"agent-learn bench: --reference: {exc}", file=sys.stderr)
+                return 1
+        elif parsed.submission_file:
+            try:
+                submission = json.loads(
+                    Path(parsed.submission_file).expanduser().read_text("utf-8")
+                )
+            except Exception as exc:
+                print(f"agent-learn bench: --submission-file: {exc}", file=sys.stderr)
+                return 1
+        else:
+            print(
+                "agent-learn bench: artifact_in needs --submission-file PATH or --reference",
+                file=sys.stderr,
+            )
+            return 1
+    elif agent is None:
         print(
             "agent-learn bench: an agent is required (--agent JSON or --agent-file PATH)",
             file=sys.stderr,
@@ -887,9 +931,11 @@ def _bench(args: Sequence[str]) -> int:
 
     try:
         payload = bench.run_bench(
-            Path(parsed.suite).expanduser(),
+            suite_path,
             agent,
             control_mode=parsed.mode,
+            submission=submission,
+            sandbox=parsed.sandbox,
             split=parsed.split,
             max_tasks=parsed.max_tasks,
             seed=parsed.seed,

@@ -2510,6 +2510,18 @@ V1_TASK_BENCHMARK_DATASET_PINNED_VERSION = (
 # executable substrate; mirror of contract.EXECUTABLE_WORLD_KINDS_V1).
 V1_TASK_BENCHMARK_REQUIRED_WORLD_KINDS = ("conversation", "tool_api")
 
+# === Phase 15B: unified bench harness contract (artifact_in coding lane) ===
+# The shipped coding bench suite + its credential-free, Docker-free example
+# runner. The gate proves the code-tests verifier accepts the gold reference,
+# FAILS a broken candidate AND a fake-success no-op, is deterministic, keeps the
+# oracle held out of the candidate, and that every task declares anti-gaming
+# guards. No live agent and no Docker — the subprocess sandbox runs only trusted
+# shipped reference code.
+V1_BENCH_CONTRACT_FILES = (
+    "examples/coding_bench.py",
+    "examples/bench_suites/coding_starter.json",
+)
+
 # === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
 # All are MIRRORS of the cua_loop.py canon, cross-pinned by a unit test (the
 # GUNA_AXES pattern — trinity.py never imports cua_loop so the gate runs even if it
@@ -8016,6 +8028,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         milestone="M4",  # benchmark surface rides the modality-loop milestone
         evidence=task_benchmark,
+    )
+    # Bench harness contract (15B): the unified harness's coding artifact_in lane.
+    # Count-agnostic, by-name insertion DIRECTLY BEFORE docs_executability.
+    bench_contract = _release_bench_contract_status(root)
+    _append_release_check(
+        checks,
+        check_id="bench_contract_readiness",
+        passed=(
+            not bench_contract["missing_files"]
+            and not bench_contract["suite_errors"]
+            and not bench_contract["reference_pass_errors"]
+            and not bench_contract["discrimination_errors"]
+            and not bench_contract["determinism_errors"]
+            and not bench_contract["oracle_held_out_errors"]
+            and not bench_contract["guard_errors"]
+        ),
+        milestone="M4",
+        evidence=bench_contract,
     )
     # Registered last by design: the docs gate admits backing objects against
     # the accumulated same-run check verdicts above.
@@ -13851,6 +13881,97 @@ def _release_task_dataset_benchmark_status(root: Path) -> dict[str, Any]:
         "overclaim_errors": overclaim_errors,
         "coverage_errors": coverage_errors,
         "world_kind_errors": world_kind_errors,
+    }
+
+
+def _release_bench_contract_status(root: Path) -> dict[str, Any]:
+    """Gate (M4) — unified bench-harness contract (artifact_in coding lane).
+
+    Exec-loads ``examples/coding_bench.py`` in a tempdir (no network, no env keys,
+    no Docker — entirely on the committed ``examples/bench_suites/
+    coding_starter.json`` via a scrubbed-subprocess code-tests verifier) and
+    audits its ``gate_evidence`` into SIX error arrays. ``passed`` = all empty:
+
+      * suite_errors — the example ran and emitted the expected kind;
+      * reference_pass_errors — the held-out oracle ACCEPTS every gold reference
+        solution (the verifier is not vacuously failing);
+      * discrimination_errors — a deliberately-broken candidate AND a fake-success
+        no-op are FAILED (a gate/verifier that cannot fail is worthless);
+      * determinism_errors — re-runs are byte-identical on scores;
+      * oracle_held_out_errors — the check oracle is NOT embedded in the candidate
+        (the agent never sees the tests it is graded by);
+      * guard_errors — every shipped task declares anti-gaming guards, and no
+        executable row is ever mislabeled overclaim (the honesty moat)."""
+
+    missing_files = _missing_relative_paths(root, list(V1_BENCH_CONTRACT_FILES))
+    suite_errors: list[dict[str, Any]] = []
+    reference_pass_errors: list[dict[str, Any]] = []
+    discrimination_errors: list[dict[str, Any]] = []
+    determinism_errors: list[dict[str, Any]] = []
+    oracle_held_out_errors: list[dict[str, Any]] = []
+    guard_errors: list[dict[str, Any]] = []
+
+    artifact: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        artifact, run_err = _exec_example_run(
+            root, "examples/coding_bench.py", "agent_learning_release_bench_contract"
+        )
+        if run_err is not None:
+            err(suite_errors, field="example.run", expected="executes", observed=run_err)
+
+    if artifact:
+        if artifact.get("kind") != "agent-learning.coding-benchmark-example.v1":
+            err(suite_errors, field="kind",
+                expected="agent-learning.coding-benchmark-example.v1",
+                observed=artifact.get("kind"))
+
+        evidence = _as_mapping(artifact.get("gate_evidence"))
+
+        ref = _as_mapping(evidence.get("reference_pass"))
+        if ref.get("all_reference_solutions_pass") is not True:
+            err(reference_pass_errors, field="reference_pass.all_reference_solutions_pass",
+                expected=True, observed=ref.get("all_reference_solutions_pass"))
+
+        disc = _as_mapping(evidence.get("discrimination"))
+        if disc.get("broken_candidate_fails") is not True:
+            err(discrimination_errors, field="discrimination.broken_candidate_fails",
+                expected=True, observed=disc.get("broken_candidate_fails"))
+        if disc.get("fake_success_noop_fails") is not True:
+            err(discrimination_errors, field="discrimination.fake_success_noop_fails",
+                expected=True, observed=disc.get("fake_success_noop_fails"))
+
+        det = _as_mapping(evidence.get("determinism"))
+        if det.get("scores_identical_across_runs") is not True:
+            err(determinism_errors, field="determinism.scores_identical_across_runs",
+                expected=True, observed=det.get("scores_identical_across_runs"))
+
+        oho = _as_mapping(evidence.get("oracle_held_out"))
+        if oho.get("checks_not_in_reference") is not True:
+            err(oracle_held_out_errors, field="oracle_held_out.checks_not_in_reference",
+                expected=True, observed=oho.get("checks_not_in_reference"))
+
+        guards = _as_mapping(evidence.get("guard_presence"))
+        if guards.get("all_tasks_have_guards") is not True:
+            err(guard_errors, field="guard_presence.all_tasks_have_guards",
+                expected=True, observed=guards.get("all_tasks_have_guards"))
+        honesty = _as_mapping(evidence.get("honesty"))
+        if honesty.get("no_executable_overclaim") is not True:
+            err(guard_errors, field="honesty.no_executable_overclaim",
+                expected=True, observed=honesty.get("no_executable_overclaim"))
+
+    return {
+        "kind": "agent-learning.bench-contract-readiness.v1",
+        "missing_files": missing_files,
+        "suite_errors": suite_errors,
+        "reference_pass_errors": reference_pass_errors,
+        "discrimination_errors": discrimination_errors,
+        "determinism_errors": determinism_errors,
+        "oracle_held_out_errors": oracle_held_out_errors,
+        "guard_errors": guard_errors,
     }
 
 

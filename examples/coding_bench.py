@@ -1,0 +1,137 @@
+"""Out-of-the-box coding benchmark — credential-free, deterministic, no Docker.
+
+Loads the shipped ``coding_starter`` bench suite and scores it in ``artifact_in``
+mode (submit-and-score; no live agent) through the unified bench harness. The
+held-out check oracle for each task is executed against the candidate code in a
+scrubbed subprocess sandbox with a hard timeout.
+
+This is the release-gate entry for the bench contract (a coding benchmark you can
+run anywhere with zero setup). It prints a scored, honest result and an audited
+``gate_evidence`` block proving the verifier (a) accepts the gold reference
+solutions, (b) FAILS a deliberately-broken candidate and a fake-success no-op
+(a gate that cannot fail is worthless), (c) is deterministic, (d) keeps the
+oracle held out of the candidate, and (e) every task declares anti-gaming guards.
+
+For untrusted agent output, run the same suite with ``sandbox='docker'`` (the
+hardened lane); the subprocess sandbox here only ever runs the trusted shipped
+reference code.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from agent_learning import bench
+from agent_learning.bench import _coding
+
+SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
+OUTPUT_KIND = "agent-learning.coding-benchmark-example.v1"
+
+# A fake-success no-op: claims completion, defines no entrypoint. The held-out
+# oracle MUST fail this (reward-hack resistance by construction).
+_NOOP_CANDIDATE = "print('All tasks completed successfully!')\n"
+
+
+def _gate_evidence(suite: dict) -> dict[str, Any]:
+    ref = _coding.reference_submission(suite)
+
+    # (a) reference solutions all pass — the verifier accepts the gold.
+    ref_run = bench.run_bench(
+        SUITE_PATH, control_mode="artifact_in", submission=ref,
+        evidence_class="local_gate", emit_telemetry=False,
+    )
+    reference_all_pass = all(r["verdict"] == "pass" for r in ref_run["per_task"])
+
+    # (b) discrimination — a broken candidate AND a fake-success no-op must FAIL.
+    broken = dict(ref)
+    first_id = str(suite["tasks"][0]["id"])
+    broken[first_id] = "def _wrong():\n    return None\n"  # entrypoint missing
+    broken_run = bench.run_bench(
+        SUITE_PATH, control_mode="artifact_in", submission=broken,
+        evidence_class="local_gate", emit_telemetry=False,
+    )
+    broken_failed = any(
+        r["task_id"] == first_id and r["verdict"] == "fail" for r in broken_run["per_task"]
+    )
+    noop_sub = {tid: _NOOP_CANDIDATE for tid in ref}
+    noop_run = bench.run_bench(
+        SUITE_PATH, control_mode="artifact_in", submission=noop_sub,
+        evidence_class="local_gate", emit_telemetry=False,
+    )
+    noop_all_failed = all(r["verdict"] == "fail" for r in noop_run["per_task"])
+
+    # (c) determinism — two reference runs are byte-identical on scores.
+    ref_run2 = bench.run_bench(
+        SUITE_PATH, control_mode="artifact_in", submission=ref,
+        evidence_class="local_gate", emit_telemetry=False,
+    )
+    s1 = {r["task_id"]: r["result"]["scalar"] for r in ref_run["per_task"]}
+    s2 = {r["task_id"]: r["result"]["scalar"] for r in ref_run2["per_task"]}
+
+    # (d) oracle held out — each task's checks code is NOT embedded in its
+    # reference solution (the candidate cannot see the oracle).
+    oracle_held_out = all(
+        str(t["checks"]) not in str(t["reference_solution"]) for t in suite["tasks"]
+    )
+
+    # (e) guard presence — every task declares anti-gaming guards.
+    all_guards = all(
+        int((t.get("guards") or {}).get("min_guard_count", 0)) >= 1
+        for t in suite["tasks"]
+    )
+
+    # honesty — executable rows are never flagged overclaim.
+    no_overclaim = all(r["overclaim"] is False for r in ref_run["per_task"])
+
+    return {
+        "suite_version": str(suite.get("version") or ""),
+        "reference_pass": {"all_reference_solutions_pass": reference_all_pass},
+        "discrimination": {
+            "broken_candidate_fails": broken_failed,
+            "fake_success_noop_fails": noop_all_failed,
+        },
+        "determinism": {"scores_identical_across_runs": s1 == s2},
+        "oracle_held_out": {"checks_not_in_reference": oracle_held_out},
+        "guard_presence": {"all_tasks_have_guards": all_guards},
+        "honesty": {"no_executable_overclaim": no_overclaim},
+        "coverage": {"modalities": ref_run["modalities"], "task_count": len(suite["tasks"])},
+    }
+
+
+def run(output_path: str | Path | None = None) -> dict[str, Any]:
+    suite = _coding.load_coding_suite(SUITE_PATH)
+    ref = _coding.reference_submission(suite)
+    # emit_telemetry=False: release-gate fixture entry — no ledger/stderr during gates.
+    result = bench.run_bench(
+        SUITE_PATH, control_mode="artifact_in", submission=ref,
+        evidence_class="local_gate", emit_telemetry=False,
+    )
+    payload: dict[str, Any] = {
+        "kind": OUTPUT_KIND,
+        "status": "passed",
+        "exit_code": 0,
+        "suite_name": result["dataset_name"],
+        "suite_version": result["dataset_version"],
+        "aggregate": result["aggregate"],
+        "per_task": result["per_task"],
+        "gate_evidence": _gate_evidence(suite),
+    }
+    if output_path is not None:
+        out = Path(output_path).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+    # NOTE: never print inside run() — the release gate exec-loads this and the
+    # release-check CLI asserts empty stdout. Printing is __main__-only.
+    return payload
+
+
+if __name__ == "__main__":
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    destination = args[0] if args else None
+    print(json.dumps(run(destination), indent=2, sort_keys=True, default=str))

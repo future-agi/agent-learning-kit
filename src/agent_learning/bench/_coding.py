@@ -1,0 +1,163 @@
+"""Coding-modality bench suite + the artifact-in runner.
+
+A coding suite is a bench-native shape (``agent-learning.bench-suite.v1``): each
+task carries an ``instruction``, a held-out ``checks`` oracle (executed against
+the candidate, never imported by it), a ``reference_solution`` (the gold, used by
+the release gate to prove the verifier accepts a correct answer), and optional
+``guards``. This is deliberately distinct from the objective-anchored task
+dataset: coding's verdict is "do the held-out tests pass", not a weighted-metric
+mean. The two unify at the Result level, not the suite level — exactly the shape
+the prior-art survey found (task specs are modality-specific; the Task<->Verifier
+coupling and the unified Result are the invariant).
+
+``artifact_in`` control mode scores a *submitted artifact* (candidate code) with
+no live agent — the analogue of patch-scoring harnesses. The agent that produced
+the artifact is out of scope here; only the held-out oracle decides the verdict.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
+from ._codeexec import run_code_tests
+
+BENCH_SUITE_KIND = "agent-learning.bench-suite.v1"
+
+_REQUIRED_TASK_FIELDS = ("id", "instruction", "checks", "reference_solution")
+
+
+class CodingSuiteError(ValueError):
+    """Raised for a malformed coding bench suite."""
+
+
+def is_bench_suite(obj: Any) -> bool:
+    return isinstance(obj, Mapping) and obj.get("kind") == BENCH_SUITE_KIND
+
+
+def load_coding_suite(obj: Mapping[str, Any] | str | Path) -> dict[str, Any]:
+    """Load + validate a coding bench suite (from a path or an in-memory mapping)."""
+
+    if isinstance(obj, (str, Path)):
+        obj = json.loads(Path(obj).expanduser().read_text("utf-8"))
+    if not is_bench_suite(obj):
+        raise CodingSuiteError(f"not a {BENCH_SUITE_KIND} suite")
+    tasks = obj.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise CodingSuiteError("coding suite has no tasks")
+    seen: set[str] = set()
+    for i, task in enumerate(tasks):
+        if not isinstance(task, Mapping):
+            raise CodingSuiteError(f"task #{i} is not an object")
+        for field in _REQUIRED_TASK_FIELDS:
+            if not task.get(field):
+                raise CodingSuiteError(f"task #{i} missing required field {field!r}")
+        tid = str(task["id"])
+        if tid in seen:
+            raise CodingSuiteError(f"duplicate task id {tid!r}")
+        seen.add(tid)
+        # Every task must declare at least one guard against reward hacking; the
+        # held-out oracle is the primary defence, but the suite must say so.
+        guards = task.get("guards") or {}
+        if int(guards.get("min_guard_count", 0)) < 1:
+            raise CodingSuiteError(
+                f"task {tid!r} must declare guards.min_guard_count >= 1 "
+                "(the held-out-oracle anti-gaming contract)"
+            )
+    return dict(obj)
+
+
+def _coding_row(
+    task: Mapping[str, Any],
+    verdict_obj: Mapping[str, Any],
+    *,
+    evidence_class: str,
+    sandbox: str,
+) -> dict[str, Any]:
+    result = dict(verdict_obj["result"])
+    scalar = result.get("scalar")
+    # TB-style: a coding task is resolved only if EVERY held-out check passes.
+    verdict = "pass" if scalar is not None and float(scalar) >= 1.0 else "fail"
+    return {
+        "task_id": str(task["id"]),
+        "modality": "coding",
+        "world_kind": "code_exec",
+        "control_mode": "artifact_in",
+        "result": result,
+        "verdict": verdict,
+        # The candidate code really executed; honest execution_class is executable.
+        "execution_class": "executable",
+        "evidence_class": evidence_class,
+        # executable + any evidence class is never an overclaim (it really ran).
+        "overclaim": False,
+        "sandbox": sandbox,
+        "raw": verdict_obj.get("raw", {}),
+    }
+
+
+def _void_row(task: Mapping[str, Any], reason: str, *, evidence_class: str) -> dict[str, Any]:
+    return {
+        "task_id": str(task["id"]),
+        "modality": "coding",
+        "world_kind": "code_exec",
+        "control_mode": "artifact_in",
+        "result": {
+            "scalar": None,
+            "components": {},
+            "pass_fail": {},
+            "explanation": reason,
+        },
+        "verdict": "void",
+        "execution_class": "executable",
+        "evidence_class": evidence_class,
+        "overclaim": False,
+        "error": reason,
+    }
+
+
+def run_coding_artifact_in(
+    suite: Mapping[str, Any],
+    submission: Mapping[str, str],
+    *,
+    sandbox: str = "subprocess",
+    evidence_class: str = "captured_fixture",
+    max_tasks: int | None = None,
+    default_timeout_s: float = 10.0,
+) -> list[dict[str, Any]]:
+    """Score each task's submitted artifact against its held-out oracle.
+
+    ``submission`` maps ``task_id -> candidate source``. A task with no submission
+    is recorded ``void`` (never silently passed). Pass ``submission`` mapping each
+    id to its ``reference_solution`` to verify the suite itself (what the gate
+    does).
+    """
+
+    language = str(suite.get("language", "python"))
+    rows: list[dict[str, Any]] = []
+    tasks = suite["tasks"]
+    if max_tasks is not None:
+        tasks = tasks[: max(0, int(max_tasks))]
+    for task in tasks:
+        tid = str(task["id"])
+        candidate = submission.get(tid)
+        if candidate is None:
+            rows.append(_void_row(task, "no submission provided", evidence_class=evidence_class))
+            continue
+        verdict_obj = run_code_tests(
+            str(candidate),
+            str(task["checks"]),
+            language=language,
+            timeout_s=float(task.get("timeout_s", default_timeout_s)),
+            sandbox=sandbox,
+        )
+        rows.append(
+            _coding_row(task, verdict_obj, evidence_class=evidence_class, sandbox=sandbox)
+        )
+    return rows
+
+
+def reference_submission(suite: Mapping[str, Any]) -> dict[str, str]:
+    """The gold submission: every task id -> its ``reference_solution``."""
+
+    return {str(t["id"]): str(t["reference_solution"]) for t in suite["tasks"]}
