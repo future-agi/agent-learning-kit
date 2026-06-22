@@ -15,7 +15,7 @@ from typing import Any
 
 
 def run_agent(agent_input: Any) -> dict:
-    tools = list(getattr(agent_input, "tools", None) or [])  # available env tools
+    _tools = list(getattr(agent_input, "tools", None) or [])  # available env tools (ignored — the bug)
     new_message = getattr(agent_input, "new_message", None) or {}
     _user = str(new_message.get("content") or "")
     # BUG: fabricates a confident answer WITHOUT calling any tool, even though
