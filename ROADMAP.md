@@ -6,7 +6,7 @@
 > kit's rule is that no capability claim ships without a gate that proves it.
 > The per-gate map is maintained internally; every claim here is enforced by `agent-learn release-check`.
 
-Status date: 2026-06-11. Release candidate: tag `v1.0.0-rc.1`
+Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
 (Python `agent-learning-kit==0.1.0`, TypeScript `@future-agi/agent-learning-kit==0.2.0`).
 
 ---
@@ -22,9 +22,10 @@ Status date: 2026-06-11. Release candidate: tag `v1.0.0-rc.1`
 - One key: `AGENT_LEARNING_API_KEY` (with `FUTURE_AGI_API_KEY` / `FI_API_KEY`
   aliases). Fully offline by default — no credential is required for any
   local workflow, golden path, or release gate.
-- 70 executable release gates behind `agent-learn release-check`; the heavier
-  `agent-learn release-proof` runs gates + full test suites + package builds
-  and emits a verifiable proof artifact.
+- A suite of executable release gates behind `agent-learn release-check` (run
+  the command for the authoritative count); the heavier `agent-learn
+  release-proof` runs gates + full test suites + package builds and emits a
+  verifiable proof artifact.
 
 ### Evaluation (evaluate any task)
 
@@ -103,9 +104,27 @@ Status date: 2026-06-11. Release candidate: tag `v1.0.0-rc.1`
   on roles, structured pañca-avayava proposal justifications, fallacy-class
   (hetvābhāsa) rejection records, pooled diagnosis ledger, full audit trail.
 
+### Run telemetry & dashboard (Weights & Biases / promptfoo–style)
+
+- Every workflow — `run_benchmark`, `optimize_against_dataset`,
+  `improve_agent_code` — records a run summary locally by default: a
+  deterministic ledger plus a one-line stderr digest, with **zero credentials
+  required**.
+- When an API key is present and sync is enabled (`AGENT_LEARNING_SYNC=auto`,
+  the default), the same run additionally emits a trace to the Future AGI
+  dashboard and prints a deep-link URL to that run; with no key — or
+  `AGENT_LEARNING_SYNC=local` — it stays fully local. No workflow ever blocks
+  on the network.
+- Honest sync reporting: a run is reported `synced` only on an *observed*
+  successful export; auth/transport failures surface as `export_failed`
+  instead of a false success.
+- The `telemetry_boundary` gate enforces the contract on every release check:
+  local-default, payload redaction, evidence-class honesty, and no unsolicited
+  network emission or stdout side-channel during gated runs.
+
 ### Developer experience
 
-- 70 born-executable docs pages across 8 tracks: every page opens with a
+- Born-executable docs pages across every track: each page opens with a
   YAML-frontmatter "manifest twin" backed by a CI-executed example; the
   `docs_executability` gate re-verifies backing, claims, and the generated
   `docs/llms.txt` machine index on every release check — docs cannot rot.
@@ -113,6 +132,12 @@ Status date: 2026-06-11. Release candidate: tag `v1.0.0-rc.1`
   `optimize`, `all`) reach a first replayable artifact in ≤3 commands,
   offline, with machine-checkable postconditions and doctor mappings in every
   scaffold README.
+- Bring-your-own framework examples (`examples/frameworks/`): runnable
+  end-to-end loops (evaluate → simulate → optimize → code-level self-improve)
+  for 16 agent frameworks plus a synthetic third-party agent, with a
+  bring-your-own guide. These run live against your own provider keys and are
+  examples — not release prerequisites; the certified credential-free adapter
+  surface is the gated one above.
 - Packaging hygiene: the sdist ships only source, tests, examples, docs, and
   standard release files — enforced by gate; `pip install -e .` from source
   today, PyPI/npm at launch.
@@ -161,7 +186,7 @@ Status date: 2026-06-11. Release candidate: tag `v1.0.0-rc.1`
 ## How to verify any claim on this page
 
 ```bash
-uv run agent-learn release-check --project-root .   # all 70 gates
+uv run agent-learn release-check --project-root .   # every release gate
 uv run agent-learn release-proof --project-root . \
   --output /tmp/proof.json --quiet                  # full proof artifact
 ```
