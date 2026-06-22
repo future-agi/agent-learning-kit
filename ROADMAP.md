@@ -104,6 +104,27 @@ Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
   on roles, structured pañca-avayava proposal justifications, fallacy-class
   (hetvābhāsa) rejection records, pooled diagnosis ledger, full audit trail.
 
+### Benchmark harness (run a benchmark against any agent, any modality)
+
+- One harness surface — `agent_learning.bench.run_bench(...)` / `agent-learn
+  bench` — over a fixed **Task↔Verifier** contract with a pluggable Environment
+  and Agent-adapter, emitting a unified `Result` (`scalar` / `components` /
+  `pass_fail` / `explanation`) every modality projects into.
+- Three control modes: **push** (the harness drives the agent through a world —
+  text / tool today), **artifact-in** (score a submitted artifact against a
+  held-out oracle, no live agent), and **pull** (agent-driven reset/step over a
+  live environment — staged).
+- Coding benchmark lane: a shipped coding suite scored against held-out check
+  oracles, with two sandboxes — a credential-free **subprocess** lane (the
+  default; the release gate runs it on trusted reference code, no Docker) and a
+  hardened, opt-in **Docker** lane for untrusted agent output (`--network none`,
+  read-only rootfs, non-root, CPU/memory/PID caps, per-task ephemeral
+  containers, hard timeout).
+- Trustworthy by construction: the oracle is held out of the candidate; a
+  fake-success no-op fails; results are deterministic; Docker runs are stamped
+  `evidence_class=live_lane` (never mislabeled a fixture). Enforced by the
+  `bench_contract_readiness` gate, whose every failure mode is itself tested.
+
 ### Run telemetry & dashboard (Weights & Biases / promptfoo–style)
 
 - Every workflow — `run_benchmark`, `optimize_against_dataset`,
@@ -148,6 +169,11 @@ Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
 
 ### Near term (current program)
 
+- **Benchmark harness extensions** — the **pull** control mode (lift the OpenEnv
+  replay adapter to a live agent-driven `reset/step` driver), a voice benchmark
+  suite exercising the unified contract end-to-end, and a live-agent-in-container
+  coding step (the inject-tests-after-the-agent-finishes topology). The push /
+  artifact-in modes and the coding lane (subprocess + Docker) are implemented.
 - **Voice lane rungs 2–3** — loopback real-transport audio (WebRTC/WS over
   localhost) and real telephony/SIP for the LiveKit/Pipecat lanes, with
   dual-channel barge-in/overlap evidence. Rung 1 (virtual-clock simulated
