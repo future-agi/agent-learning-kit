@@ -134,6 +134,11 @@ def run_coding_artifact_in(
     """
 
     language = str(suite.get("language", "python"))
+    # Honesty: a Docker run executes untrusted candidate code under real
+    # isolation -> that is a genuine LIVE event, never a fixture/local class.
+    # Force at least live_lane (honor an explicit live_stressed); never downgrade.
+    if sandbox == "docker" and evidence_class not in ("live_lane", "live_stressed"):
+        evidence_class = "live_lane"
     rows: list[dict[str, Any]] = []
     tasks = suite["tasks"]
     if max_tasks is not None:
