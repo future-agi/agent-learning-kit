@@ -12,6 +12,13 @@
 
 ## Eval
 - [Artifact evals](docs/eval/artifact-evals.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.artifact-evaluation.v1
+- [Coding benchmark: score candidate code against a held-out oracle](docs/eval/benchmark-coding.md): twin=examples/bench_coding_quickstart.py kind=none
+- [Command-graded benchmark: a held-out grader runs after the candidate is killed](docs/eval/benchmark-command-graded.md): twin=examples/bench_command_graded.py kind=none
+- [Benchmark harness: one Task↔Verifier contract, three control modes, one Result](docs/eval/benchmark-overview.md): twin=examples/bench_overview.py kind=none
+- [Pull / RL benchmark: the agent drives a live environment via reset/step](docs/eval/benchmark-pull-rl.md): twin=examples/bench_pull_rl.py kind=none
+- [Bench sandboxes: where candidate code actually runs](docs/eval/benchmark-sandboxes.md): twin=examples/bench_sandboxes.py kind=none
+- [Voice benchmark: score a voice episode on a temporal contract](docs/eval/benchmark-voice.md): twin=examples/bench_voice.py kind=none
+- [Write a bench suite: author your own coding tasks with a held-out oracle](docs/eval/benchmark-write-a-suite.md): twin=examples/bench_custom_suite.py kind=none
 - [Eval hooks](docs/eval/eval-hooks.md): twin=examples/sdk_evaluation_hook_optimization.py kind=agent-learning.optimization.v1
 - [Eval suites](docs/eval/eval-suites.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
 - [Evaluate any task](docs/eval/evaluate-any-task.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
@@ -114,6 +121,7 @@
 ## Prove
 - [Account sync: keyed, explicit, metadata by default](docs/prove/account-sync.md): twin=examples/sdk_account_sync.py kind=agent-learning.run.v1
 - [Artifact Actions: every result knows its next step](docs/prove/actions.md): twin=examples/sdk_agent_integration_optimization.py kind=agent-learning.optimization.v1
+- [Benchmark in CI: gate a merge on an honest pass_rate](docs/prove/benchmark-in-ci.md): twin=examples/bench_ci_gate.py kind=none
 - [Capability Catalogs: pin what your pipeline assumes](docs/prove/capabilities.md): twin=examples/sdk_framework_adapter_capability_profiles.py kind=agent-learning.run.v1
 - [Observability: evidence that makes artifacts replayable](docs/prove/observability.md): twin=examples/sdk_framework_adapter_trace_export.py kind=agent-learning.optimization.v1
 - [Practice loop (search-backed): spaced regression replay that never weakens the veto](docs/prove/practice-loop.md): twin=examples/sdk_practice_loop.py kind=agent-learning.practice-loop.v1

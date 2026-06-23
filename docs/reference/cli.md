@@ -58,6 +58,7 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 | `release-proof` | `v1-proof` | cut the seven-check release proof | `agent-learning.release-proof.v1` |
 | `init` | — | scaffold manifests for a preset: `ci` (default), `run`, `redteam`, `optimize`, `all` | `agent-learning.init.v1` |
 | `run` | — | execute a run manifest (simulation; `--no-eval` skips attached evals) | `agent-learning.run.v1` |
+| `bench` | `benchmark` | run a benchmark suite through the unified harness (`--mode` push / artifact_in / pull; any modality) — see [benchmark-overview](../eval/benchmark-overview.md) | `agent-learning.bench-result.v1` |
 | `eval` | — | execute an eval suite | `agent-learning.eval.v1` |
 | `eval-artifact` | `eval-report` | evaluate an already-saved artifact | `agent-learning.artifact-evaluation.v1` |
 | `eval-task` | `eval-evidence`, `eval-task-evidence` | synthesize task evidence from task artifacts | `agent-learning.task-evidence.v1` |
@@ -78,6 +79,11 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 | `action-optimize` | `optimize-actions`, `actions-optimize` | optimize over the actions surface | `agent-learning.suite-optimization.v1` |
 | `trust` | `verify-trust`, `trust-cert`, `trust-certificate`, `certify` | verify a saved suite trust certificate for CI | (verification verdict) |
 | `capabilities` | `capability-catalog`, `caps` | print the capability catalog, optionally over saved artifacts | (catalog output) |
+| `persona` | — | persona studio: `create` / `validate` / `calibrate` / `admit` / `lint` / `list` / `import` / `pull` — see [persona-scenario-studio](../simulate/persona-scenario-studio.md) | per subcommand |
+| `scenario` | — | scenario studio: `synth` / `expand` / `coverage` / `list` | per subcommand |
+| `simulation` | — | simulation contract family: `lift` / `validate` — see [simulation-contract](../prove/simulation-contract.md) | `agent-learning.simulation.v1` |
+| `practice` | — | practice loop: `run` / `report` / `ladder` / `replay` / `ab` / `image` / `cua` — see [practice-loop](../prove/practice-loop.md) | per subcommand |
+| `runs` | `ledger` (hidden) | local run ledger: `list` / `show` / `verify` / `sync` / `forget` — see [run-ledger](../prove/run-ledger.md) | `agent-learning.ledger-row.v1` |
 | `simulate` | — | namespace passthrough to the regression-lifecycle subcommands | per subcommand |
 | `eval-cli` | `fi` | passthrough to the vendored evaluation CLI | per subcommand |
 
