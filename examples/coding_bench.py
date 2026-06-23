@@ -28,7 +28,24 @@ from agent_learning import bench
 
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
 COMMAND_SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_command_starter.json"
+PULL_SUITE_PATH = Path(__file__).parent / "bench_suites" / "pull_starter.json"
 OUTPUT_KIND = "agent-learning.coding-benchmark-example.v1"
+
+
+def _pull_evidence() -> dict[str, Any]:
+    """Evidence for the pull/RL lane: the reference policy solves every simulated
+    env, and a no-op policy fails them all (the lane discriminates)."""
+
+    ref = bench.run_bench(PULL_SUITE_PATH, {"type": "reference"}, control_mode="pull",
+                          evidence_class="local_gate", emit_telemetry=False)
+    noop = bench.run_bench(PULL_SUITE_PATH, {"type": "noop"}, control_mode="pull",
+                           evidence_class="local_gate", emit_telemetry=False)
+    return {
+        "reference_solves_all": all(r["verdict"] == "pass" for r in ref["per_task"]),
+        "noop_fails_all": all(r["verdict"] == "fail" for r in noop["per_task"]),
+        "envs": sorted({r["raw"].get("env_kind") for r in ref["per_task"]}),
+        "task_count": len(ref["per_task"]),
+    }
 
 # A fake-success no-op: claims completion, defines no entrypoint. The held-out
 # oracle MUST fail this (reward-hack resistance by construction).
@@ -135,6 +152,7 @@ def _gate_evidence(suite: dict[str, Any]) -> dict[str, Any]:
         "honesty": {"no_executable_overclaim": no_overclaim},
         "coverage": {"modalities": ref_run["modalities"], "task_count": len(suite["tasks"])},
         "command_graded": _command_graded_evidence(),
+        "pull": _pull_evidence(),
     }
 
 

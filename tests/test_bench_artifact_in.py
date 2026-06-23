@@ -143,6 +143,7 @@ def test_bench_contract_gate_clean() -> None:
         "oracle_held_out_errors",
         "guard_errors",
         "command_graded_errors",
+        "pull_errors",
     ):
         assert st[bucket] == [], f"{bucket}: {st[bucket]}"
 
@@ -160,6 +161,7 @@ def _good_artifact() -> dict:
             "command_graded": {
                 "reference_all_pass": True, "wrong_all_fail": True, "forge_all_fail": True,
             },
+            "pull": {"reference_solves_all": True, "noop_fails_all": True},
         },
     }
 
@@ -207,6 +209,11 @@ _BUCKET_FIRES = [
         "command_forge",
         lambda a: a["gate_evidence"]["command_graded"].update(forge_all_fail=False),
         "command_graded_errors",
+    ),
+    (
+        "pull_noop",
+        lambda a: a["gate_evidence"]["pull"].update(noop_fails_all=False),
+        "pull_errors",
     ),
 ]
 

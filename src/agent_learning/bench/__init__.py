@@ -185,6 +185,16 @@ def _coding_aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if r["result"].get("scalar") is not None
     ]
     evidence_classes = {r.get("evidence_class") for r in rows}
+
+    def _group(key: str) -> dict[str, dict[str, int]]:
+        out: dict[str, dict[str, int]] = {}
+        for r in rows:
+            g = out.setdefault(str(r.get(key)), {"count": 0, "passed": 0})
+            g["count"] += 1
+            if r["verdict"] == "pass":
+                g["passed"] += 1
+        return out
+
     return {
         "count": n,
         "passed": passed,
@@ -194,11 +204,10 @@ def _coding_aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         # (e.g. no Docker daemon) that voids every row does NOT read as "0% passed".
         "pass_rate": round(passed / scored, 6) if scored else 0.0,
         "mean_score": round(sum(scalars) / len(scalars), 6) if scalars else 0.0,
-        # symmetric with the push aggregate (degenerate for the single coding kind),
-        # plus the coding-only ``by_modality`` extra.
-        "by_world_kind": {"code_exec": {"count": n, "passed": passed}},
-        "by_execution_class": {"executable": {"count": n, "passed": passed}},
-        "by_modality": {"coding": {"count": n, "passed": passed}},
+        # derived from the actual rows (works for coding, pull/RL, any modality).
+        "by_world_kind": _group("world_kind"),
+        "by_execution_class": _group("execution_class"),
+        "by_modality": _group("modality"),
         # honesty rollup (same 4-key shape as the push aggregate). Not gate-read;
         # row-level honesty is the enforcement primitive.
         "honesty": {
@@ -254,6 +263,34 @@ def _assemble(
     return out
 
 
+def _pull_row(
+    task: Mapping[str, Any], verdict_obj: Mapping[str, Any], *, evidence_class: str
+) -> dict[str, Any]:
+    result = dict(verdict_obj["result"])
+    raw = verdict_obj.get("raw") or {}
+    if raw.get("infra_error"):  # unknown env / bad policy -> the lane never ran
+        return {
+            "task_id": str(task.get("id")), "modality": "rl", "world_kind": "env",
+            "control_mode": "pull", "result": result, "verdict": "void",
+            "execution_class": "executable", "evidence_class": evidence_class,
+            "overclaim": False, "error": result.get("explanation"), "raw": raw,
+        }
+    pf = result.get("pass_fail") or {}
+    verdict = "pass" if pf.get("goal_reached") else "fail"
+    return {
+        "task_id": str(task.get("id")),
+        "modality": "rl",
+        "world_kind": "env",
+        "control_mode": "pull",
+        "result": result,
+        "verdict": verdict,
+        "execution_class": "executable",
+        "evidence_class": evidence_class,
+        "overclaim": False,
+        "raw": raw,
+    }
+
+
 def run_bench(
     suite: Mapping[str, Any] | str | Path,
     agent: Mapping[str, Any] | None = None,
@@ -293,6 +330,32 @@ def run_bench(
     obj, path = _read_suite_obj(suite)
 
     from . import _coding
+
+    if _coding.is_bench_suite(obj) and str(obj.get("control")) == "pull":
+        # Pull / RL suite: the agent (a policy callable or {"type": reference|noop})
+        # drives a simulated environment via reset/step.
+        from . import _pull
+
+        if control_mode != "pull":
+            raise BenchError(
+                f"pull bench suites run under control_mode='pull', not {control_mode!r}"
+            )
+        if agent is None:
+            raise BenchError("pull mode requires an agent (a policy callable or spec)")
+        if evidence_class not in tasks._evidence_classes():
+            raise BenchError(f"unknown evidence_class {evidence_class!r}")
+        task_list = list(obj.get("tasks") or [])
+        if max_tasks is not None:
+            task_list = task_list[: max(0, int(max_tasks))]
+        rows = [
+            _pull_row(t, _pull.run_pull(t, agent), evidence_class=evidence_class)
+            for t in task_list
+        ]
+        return _assemble(
+            rows, control_mode="pull", name=str(obj.get("name") or ""),
+            version=str(obj.get("version") or ""), emit_telemetry=emit_telemetry,
+            project_name=project_name,
+        )
 
     if _coding.is_bench_suite(obj):
         coding_suite = _coding.load_coding_suite(obj)

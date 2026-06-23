@@ -2521,6 +2521,7 @@ V1_BENCH_CONTRACT_FILES = (
     "examples/coding_bench.py",
     "examples/bench_suites/coding_starter.json",
     "examples/bench_suites/coding_command_starter.json",
+    "examples/bench_suites/pull_starter.json",
 )
 
 # === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
@@ -8045,6 +8046,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not bench_contract["oracle_held_out_errors"]
             and not bench_contract["guard_errors"]
             and not bench_contract["command_graded_errors"]
+            and not bench_contract["pull_errors"]
         ),
         milestone="M4",
         evidence=bench_contract,
@@ -13913,6 +13915,7 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
     oracle_held_out_errors: list[dict[str, Any]] = []
     guard_errors: list[dict[str, Any]] = []
     command_graded_errors: list[dict[str, Any]] = []
+    pull_errors: list[dict[str, Any]] = []
 
     artifact: dict[str, Any] = {}
 
@@ -13976,6 +13979,14 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
                 err(command_graded_errors, field=f"command_graded.{field}",
                     expected=True, observed=cg.get(field))
 
+        # Pull / RL lane: the reference policy solves every simulated env and a
+        # no-op policy fails them all (the lane runs + discriminates).
+        pull = _as_mapping(evidence.get("pull"))
+        for field in ("reference_solves_all", "noop_fails_all"):
+            if pull.get(field) is not True:
+                err(pull_errors, field=f"pull.{field}",
+                    expected=True, observed=pull.get(field))
+
     return {
         "kind": "agent-learning.bench-contract-readiness.v1",
         "missing_files": missing_files,
@@ -13986,6 +13997,7 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
         "oracle_held_out_errors": oracle_held_out_errors,
         "guard_errors": guard_errors,
         "command_graded_errors": command_graded_errors,
+        "pull_errors": pull_errors,
     }
 
 
