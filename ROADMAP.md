@@ -110,19 +110,33 @@ Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
   bench` — over a fixed **Task↔Verifier** contract with a pluggable Environment
   and Agent-adapter, emitting a unified `Result` (`scalar` / `components` /
   `pass_fail` / `explanation`) every modality projects into.
-- Three control modes: **push** (the harness drives the agent through a world —
-  text / tool today), **artifact-in** (score a submitted artifact against a
-  held-out oracle, no live agent), and **pull** (agent-driven reset/step over a
-  live environment — staged).
-- Coding benchmark lane: a shipped coding suite scored against held-out check
-  oracles, with two sandboxes — a credential-free **subprocess** lane (the
-  default; the release gate runs it on trusted reference code, no Docker) and a
-  hardened, opt-in **Docker** lane for untrusted agent output (`--network none`,
-  read-only rootfs, non-root, CPU/memory/PID caps, per-task ephemeral
-  containers, hard timeout).
-- Trustworthy by construction: the oracle is held out of the candidate; a
-  fake-success no-op fails; results are deterministic; Docker runs are stamped
-  `evidence_class=live_lane` (never mislabeled a fixture). Enforced by the
+- Three control modes, all live: **push** (the harness drives the agent through a
+  world — text / tool), **artifact-in** (score a submitted artifact against a
+  held-out oracle, no live agent — coding + voice), and **pull** (the agent drives
+  a simulated environment via reset/step — RL/Gym/OpenEnv shape).
+- **Coding** — two tiers. A convenience `check_*` tier (trusted/accidental-gaming
+  only), and a hardened **command/artifact-graded** tier: the candidate produces
+  files/output, a HELD-OUT grader runs *after* (candidate processes killed) and
+  emits the verdict via its exit code + a grader-owned reward file — never parsed
+  from candidate stdout. This structurally defeats verdict-forgery and
+  oracle-reads, and is **multi-language** (Python, bash, … — the candidate and
+  grader are arbitrary commands). Two sandboxes: credential-free **subprocess**
+  (the gate runs it on trusted reference code, no Docker) and an opt-in hardened
+  **Docker** lane for untrusted output (`--network none`, read-only rootfs,
+  `--cap-drop ALL`, no-new-privileges, nosuid tmpfs, non-root, CPU/mem/PID caps,
+  per-task ephemeral containers, hard timeout).
+- **Pull / RL** — a deterministic, credential-free environment registry
+  (navigation, search) with a reference policy; the agent (a policy callable or
+  spec) steps it to a reward. A live external env server (HTTP step/reset) is the
+  same contract with a transport — deferred to owner infra.
+- **Voice** — a deterministic voice-episode verifier scoring a transcript on
+  latency, turn-taking, barge-in handling, and content (pass only if every
+  dimension meets its floor). Live audio/SIP/WebRTC + real WER capture is deferred
+  to owner infra and plugs in by producing the same transcript shape.
+- Trustworthy by construction: the oracle is held out; a fake-success no-op (or a
+  forged-stdout candidate) fails; results are deterministic; Docker runs are
+  stamped `evidence_class=live_lane` (never mislabeled a fixture); infra failures
+  (no Docker daemon) are honest `void`, never a 0% score. Enforced by the
   `bench_contract_readiness` gate, whose every failure mode is itself tested.
 
 ### Run telemetry & dashboard (Weights & Biases / promptfoo–style)
@@ -169,11 +183,12 @@ Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
 
 ### Near term (current program)
 
-- **Benchmark harness extensions** — the **pull** control mode (lift the OpenEnv
-  replay adapter to a live agent-driven `reset/step` driver), a voice benchmark
-  suite exercising the unified contract end-to-end, and a live-agent-in-container
-  coding step (the inject-tests-after-the-agent-finishes topology). The push /
-  artifact-in modes and the coding lane (subprocess + Docker) are implemented.
+- **Benchmark harness extensions** — push / artifact-in / pull modes, the
+  hardened multi-language coding lane (subprocess + Docker), the pull/RL env
+  registry, and the voice transcript verifier are all implemented + gated. What
+  remains: a born-executable docs/cookbook page for the harness; and the
+  owner-infra live tiers (a live external env server for pull, and live
+  audio/SIP/WebRTC + WER capture for voice) — both already contract-compatible.
 - **Voice lane rungs 2–3** — loopback real-transport audio (WebRTC/WS over
   localhost) and real telephony/SIP for the LiveKit/Pipecat lanes, with
   dual-channel barge-in/overlap evidence. Rung 1 (virtual-clock simulated
