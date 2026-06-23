@@ -127,7 +127,7 @@ row per task carrying the unified `result`, the `verdict`, and the honesty field
 | gate `passed: False` with `any_overclaim` | a non-live row was stamped a live `evidence_class` — drop to `local_gate` / `captured_fixture` for an offline run | `missing_public_modules` |
 | `pass_rate` is `1.0` but `scored` is below `count` | tasks went `void` (no submission, or the sandbox could not start) — they are excluded, not failed; check `void` and each row's `error` | `missing_public_modules` |
 | a candidate you expected to fail shows `verdict: pass` | the held-out oracle is too weak, or it was bypassed — read the task's `checks` and the row's `result.pass_fail` (every check must be `True` for a `pass`) | `missing_public_modules` |
-| `BenchError: artifact_in requires submission=...` | no `--submission-file` / `--reference` given, or a non-coding suite — `artifact_in` needs a coding bench suite | `missing_public_modules` |
+| `BenchError: artifact_in requires submission=...` | a coding suite was scored in `artifact_in` with no submission — pass `--reference` / `--submission-file` (CLI) or `submission={task_id: source}` (API). A non-coding suite raises a different `BenchError` (`artifact_in currently requires a coding bench suite`) | `missing_public_modules` |
 
 ## 5. Prove it / keep it
 

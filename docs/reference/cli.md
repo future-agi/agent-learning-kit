@@ -81,7 +81,7 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 | `capabilities` | `capability-catalog`, `caps` | print the capability catalog, optionally over saved artifacts | (catalog output) |
 | `persona` | — | persona studio: `create` / `validate` / `calibrate` / `admit` / `lint` / `list` / `import` / `pull` — see [persona-scenario-studio](../simulate/persona-scenario-studio.md) | per subcommand |
 | `scenario` | — | scenario studio: `synth` / `expand` / `coverage` / `list` | per subcommand |
-| `simulation` | — | simulation contract family: `lift` / `validate` — see [simulation-contract](../prove/simulation-contract.md) | `agent-learning.simulation.v1` |
+| `simulation` | — | simulation contract family: `lift` / `validate` / `run` — see [simulation-contract](../prove/simulation-contract.md) | `agent-learning.simulation.v1` |
 | `practice` | — | practice loop: `run` / `report` / `ladder` / `replay` / `ab` / `image` / `cua` — see [practice-loop](../prove/practice-loop.md) | per subcommand |
 | `runs` | `ledger` (hidden) | local run ledger: `list` / `show` / `verify` / `sync` / `forget` — see [run-ledger](../prove/run-ledger.md) | `agent-learning.ledger-row.v1` |
 | `simulate` | — | namespace passthrough to the regression-lifecycle subcommands | per subcommand |

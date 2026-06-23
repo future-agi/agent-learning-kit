@@ -26,9 +26,12 @@ opt_in_lane: false
 
 The unified bench harness scores a coding agent the way a real benchmark does:
 the agent produces candidate code, and a **held-out oracle** — a set of
-`check_*` functions that ship with the task, never importable by the
-candidate — decides the verdict. The candidate cannot read the oracle, so it
-cannot reflect the expected answers; it has to actually solve the task.
+`check_*` functions that ship with the task, executed by a harness-written
+runner and never imported by the candidate — decides the verdict. The candidate
+is not given the oracle, so it cannot simply reflect the expected answers; it
+has to actually solve the task. (The subprocess lane shares a tempdir with the
+candidate and so holds only against accidental gaming; run untrusted agent
+output under `sandbox="docker"` — see section 5.)
 
 A coding bench suite (`agent-learning.bench-suite.v1`) carries, per task, an
 `instruction`, the held-out `checks`, a gold `reference_solution`, and a
