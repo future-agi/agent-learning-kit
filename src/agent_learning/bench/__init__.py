@@ -332,7 +332,7 @@ def run_bench(
     agent: Mapping[str, Any] | None = None,
     *,
     control_mode: str = "push",
-    submission: Mapping[str, str] | None = None,
+    submission: Mapping[str, Any] | None = None,
     sandbox: str = "subprocess",
     split: str | None = None,
     max_tasks: int | None = None,

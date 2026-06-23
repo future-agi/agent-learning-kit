@@ -42,7 +42,7 @@ class ReachTargetEnv:
     policy is "step toward target".
     """
 
-    actions = ("left", "right", "stay")
+    actions: tuple[str, ...] = ("left", "right", "stay")
 
     def reset(self, spec: Mapping[str, Any]) -> tuple[dict, dict]:
         state = {
@@ -85,7 +85,7 @@ class GuessNumberEnv:
     Optimal policy = guess the midpoint. Action = the integer guess (as str).
     """
 
-    actions = ()  # continuous-ish (any int in range); reference uses midpoint
+    actions: tuple[str, ...] = ()  # any int in range; reference uses midpoint
 
     def reset(self, spec: Mapping[str, Any]) -> tuple[dict, dict]:
         low, high = int(spec.get("low", 1)), int(spec.get("high", 100))
@@ -128,8 +128,8 @@ class GuessNumberEnv:
 
 
 ENVIRONMENTS: dict[str, Callable[[], Environment]] = {
-    "reach_target": ReachTargetEnv,
-    "guess_number": GuessNumberEnv,
+    "reach_target": lambda: ReachTargetEnv(),
+    "guess_number": lambda: GuessNumberEnv(),
 }
 
 

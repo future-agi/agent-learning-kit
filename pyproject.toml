@@ -150,3 +150,13 @@ markers = [
   "live_credentialed: rungs that need real provider credentials (AGENT_LEARNING_LIVE_CREDENTIALED=1 AND creds present)",
   "integration: exercises the real simulation engine end-to-end (credential-free; slower than unit tests)",
 ]
+
+[tool.bandit]
+# This kit runs candidate/agent code BY DESIGN — the bench sandbox executors and
+# the live-lane runners invoke subprocess/docker as their core, reviewed mechanism
+# (always list-args, never shell=True). So the subprocess-family findings are
+# expected here, not defects; real isolation lives in the Docker lane (network
+# off, cap-drop ALL, no-new-privileges, read-only, non-root). Site-specific
+# exceptions carry inline `# nosec <ID> — <reason>`.
+skips = ["B404", "B603", "B607"]
+exclude_dirs = ["tests"]

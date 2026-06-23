@@ -122,7 +122,7 @@ def _build_docker_argv(
         "--cap-drop", "ALL",            # drop the bounding set (block setuid re-escalation)
         "--security-opt", "no-new-privileges",
         "--read-only",                   # rootfs read-only; only the tmpfs is writable
-        "--tmpfs", "/tmp:size=16m,nosuid",
+        "--tmpfs", "/tmp:size=16m,nosuid",  # nosec B108 — container-internal path, not a host temp
         "--entrypoint", "python",
         image,
         "-B", "-c", bootstrap,           # -B: no .pyc writes under the read-only fs
@@ -233,5 +233,5 @@ def run_code_tests_docker(
 def _force_kill(name: str) -> None:
     try:
         subprocess.run(["docker", "kill", name], capture_output=True, timeout=15)
-    except Exception:
+    except Exception:  # nosec B110 — best-effort cleanup; a kill failure must never propagate
         pass

@@ -58,10 +58,12 @@ def load_coding_suite(obj: Mapping[str, Any] | str | Path) -> dict[str, Any]:
     """Load + validate a coding bench suite (from a path or an in-memory mapping)."""
 
     if isinstance(obj, (str, Path)):
-        obj = json.loads(Path(obj).expanduser().read_text("utf-8"))
-    if not is_bench_suite(obj):
+        data: Mapping[str, Any] = json.loads(Path(obj).expanduser().read_text("utf-8"))
+    else:
+        data = obj
+    if not is_bench_suite(data):
         raise CodingSuiteError(f"not a {BENCH_SUITE_KIND} suite")
-    tasks = obj.get("tasks")
+    tasks = data.get("tasks")
     if not isinstance(tasks, list) or not tasks:
         raise CodingSuiteError("coding suite has no tasks")
     seen: set[str] = set()
@@ -86,7 +88,7 @@ def load_coding_suite(obj: Mapping[str, Any] | str | Path) -> dict[str, Any]:
                 f"task {tid!r} must declare guards.min_guard_count >= 1 "
                 "(the held-out-oracle anti-gaming contract)"
             )
-    return dict(obj)
+    return dict(data)
 
 
 def _coding_row(
