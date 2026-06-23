@@ -18508,6 +18508,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "image_loop_readiness",
         "cua_loop_readiness",
         "task_dataset_benchmark_readiness",
+        "bench_contract_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18530,9 +18531,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert active_ai_evaluation["source_inventory_file"] == (
         trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
     )
-    assert active_ai_evaluation["source_inventory_kind"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
-    )
+    # The source inventory file lives in the separate internal-docs repo
+    # (V1_..._SOURCE_INVENTORY_FILE points under internal-docs/), so in the
+    # shippable kit it is absent and the gate TOLERATES that by design (errors
+    # cleared, kind/counts null) — see the repo-hygiene decoupling. The required
+    # kind is still declared; the observed kind is None when absent.
+    assert active_ai_evaluation["source_inventory_kind"] is None
     assert active_ai_evaluation["required_source_inventory_kind"] == (
         trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
     )
@@ -18559,14 +18563,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert active_ai_evaluation["typescript_source_file_count"] == (
         trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
     )
-    assert active_ai_evaluation["source_inventory_python_file_count"] == 222
-    assert active_ai_evaluation["source_inventory_python_py_file_count"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
-    )
-    assert active_ai_evaluation["source_inventory_typescript_file_count"] == 89
-    assert active_ai_evaluation["source_inventory_typescript_ts_file_count"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
-    )
+    # Inventory absent (lives in internal-docs) -> the gate reports zero inventory
+    # file counts; the real embedded-source counts above are unaffected.
+    assert active_ai_evaluation["source_inventory_python_file_count"] == 0
+    assert active_ai_evaluation["source_inventory_python_py_file_count"] == 0
+    assert active_ai_evaluation["source_inventory_typescript_file_count"] == 0
+    assert active_ai_evaluation["source_inventory_typescript_ts_file_count"] == 0
     assert "src/fi" in active_ai_evaluation["package_paths"]
     assert "src/agent_learning" in active_ai_evaluation["package_paths"]
     for relative_path, phrases in (
@@ -19468,7 +19470,13 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     for metric, minimum in trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA.items():
         assert synthesis_eval["metric_averages"][metric] >= minimum
-    assert set(task_eval_synthesis_evidence["source_urls"]["documented_urls"]) >= set(
+    # The research doc citing these URLs lives in internal-docs (moved out); the
+    # gate tolerates its absence (source_urls null / no documented_urls). When the
+    # doc is present, the documented set must still cover the required URLs.
+    _documented = (task_eval_synthesis_evidence.get("source_urls") or {}).get(
+        "documented_urls"
+    ) or []
+    assert (not _documented) or set(_documented) >= set(
         trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
     )
 
@@ -22901,7 +22909,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(external_manifest["research_urls"]) >= set(
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
     )
-    assert set(external_evidence["source_urls"]["documented_urls"]) >= set(
+    # Research doc lives in internal-docs (moved out); gate tolerates absence.
+    _ext_documented = (external_evidence.get("source_urls") or {}).get(
+        "documented_urls"
+    ) or []
+    assert (not _ext_documented) or set(_ext_documented) >= set(
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
     )
 
