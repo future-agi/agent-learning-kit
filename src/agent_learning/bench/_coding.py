@@ -77,7 +77,7 @@ def _coding_row(
 ) -> dict[str, Any]:
     result = dict(verdict_obj["result"])
     scalar = result.get("scalar")
-    # TB-style: a coding task is resolved only if EVERY held-out check passes.
+    # All-or-nothing: a coding task is resolved only if EVERY held-out check passes.
     verdict = "pass" if scalar is not None and float(scalar) >= 1.0 else "fail"
     return {
         "task_id": str(task["id"]),
@@ -156,6 +156,14 @@ def run_coding_artifact_in(
             timeout_s=float(task.get("timeout_s", default_timeout_s)),
             sandbox=sandbox,
         )
+        # An infra/config failure (no Docker daemon, image pull failure, bad
+        # sandbox/language) means the lane never ran — record it as VOID, never as
+        # a real "fail". Conflating "the daemon was missing" with "the agent was
+        # wrong" would silently report a correct agent at 0%.
+        if (verdict_obj.get("raw") or {}).get("infra_error"):
+            reason = (verdict_obj.get("result") or {}).get("explanation") or "infrastructure error"
+            rows.append(_void_row(task, f"infra: {reason}", evidence_class=evidence_class))
+            continue
         rows.append(
             _coding_row(task, verdict_obj, evidence_class=evidence_class, sandbox=sandbox)
         )

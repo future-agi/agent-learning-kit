@@ -14,7 +14,7 @@ addressed (no new invention — empirically validated by spike):
     asserted above the substrate's truth: ``browser``/``computer_use``/
     ``code_exec``/``voice_telephony`` are TYPED-ONLY in v1 and can be at most
     ``typed_only``; only ``conversation``/``tool_api`` may be ``executable``.
-    This is the kit's honesty moat vs HUD: a typed-only task can NEVER masquerade
+    This is the kit's honesty moat: a typed-only task can NEVER masquerade
     as a live-executed one.
 
 Tasks and datasets are content-addressed (sha256 over the canonical payload minus

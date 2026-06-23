@@ -1,11 +1,10 @@
 """Docker code-exec lane — run held-out checks against untrusted candidate code
 in a per-task, network-isolated, resource-capped, ephemeral container.
 
-This is the hardened sibling of the subprocess verifier in ``_codeexec``. It is
-the right sandbox for **untrusted agent output**: the subprocess lane gives a
-timeout and a scrubbed env but is not a security boundary; this lane adds real
-isolation (no network, no host writes, capped CPU/memory/PIDs, killed + removed
-after the run).
+This is the harder-isolated sibling of the subprocess verifier in ``_codeexec``.
+For **untrusted agent output** it adds real OS-level isolation the subprocess lane
+cannot: no network, no host writes, dropped capabilities + no-new-privileges, a
+nosuid tmpfs, capped CPU/memory/PIDs, killed + removed after the run.
 
 Honesty: a Docker run of untrusted candidate code is a genuine **live** event,
 so :func:`agent_learning.bench._coding.run_coding_artifact_in` stamps these rows
@@ -17,12 +16,18 @@ subprocess lane on trusted shipped code so it works anywhere with no Docker. The
 import is lazy (only resolved when ``sandbox="docker"`` is requested), so the kit
 imports fine on a machine with no Docker.
 
-Oracle hold-out here is structural (the checks file is not part of the candidate
-source) — the same contract as the subprocess lane. The inject-tests-only-after-
-the-agent-finishes topology is reserved for a future live-agent-in-container step
-(where an agent process runs inside the container and could otherwise read the
-tests); for ``artifact_in`` the candidate is static code, so structural hold-out
-is sufficient.
+KNOWN LIMITATION (oracle hold-out): hold-out here is only *structural* — the
+checks file is not part of the candidate's source, but it is materialised into the
+same container the candidate runs in, and the candidate's module body executes
+(at import) before the ``check_*`` functions. A deliberately adversarial candidate
+could therefore read the checks file at runtime and reflect the expected values,
+or print a forged result line. This lane defends against *accidental* gaming
+(no-op / fake-success / wrong answer all fail) and gives strong OS isolation, but
+it is NOT yet a hardened defence against a candidate that actively attacks the
+harness protocol. Closing that requires process/UID separation of the oracle from
+the candidate (the inject-tests-only-after-the-agent-finishes topology), tracked
+as the live-agent-in-container step. Do not treat a passing score from an
+untrusted, adversarial candidate as authoritative until that lands.
 """
 
 from __future__ import annotations
@@ -93,6 +98,37 @@ def docker_available() -> bool:
     return proc.returncode == 0
 
 
+def _build_docker_argv(
+    name: str, image: str, memory: str, cpus: str, bootstrap: str
+) -> list[str]:
+    """Build the hardened ``docker run`` argv (pure; unit-testable without a daemon).
+
+    Defense-in-depth for the untrusted lane: no network, read-only rootfs, a
+    non-root user, ALL capabilities dropped (the bounding set too — uid 65534 only
+    clears effective/permitted, but the base image ships setuid-root binaries that
+    could otherwise re-escalate), no new privileges, a nosuid size-capped tmpfs as
+    the only writable surface, and PID/memory/CPU caps. Per-task, ephemeral
+    (``--rm``); args passed as a list (never a shell).
+    """
+
+    return [
+        "docker", "run", "--rm",
+        "--name", name,
+        "--network", "none",            # the real win the subprocess lane can't give
+        "--memory", memory,
+        "--cpus", cpus,
+        "--pids-limit", str(_DEFAULT_PIDS),
+        "--user", "65534:65534",        # nobody: no in-container root
+        "--cap-drop", "ALL",            # drop the bounding set (block setuid re-escalation)
+        "--security-opt", "no-new-privileges",
+        "--read-only",                   # rootfs read-only; only the tmpfs is writable
+        "--tmpfs", "/tmp:size=16m,nosuid",
+        "--entrypoint", "python",
+        image,
+        "-B", "-c", bootstrap,           # -B: no .pyc writes under the read-only fs
+    ]
+
+
 def run_code_tests_docker(
     candidate_code: str,
     checks_code: str,
@@ -114,22 +150,25 @@ def run_code_tests_docker(
     if language not in SUPPORTED_LANGUAGES:
         return _empty_result(
             f"unsupported language {language!r}; supported: {SUPPORTED_LANGUAGES}",
-            {"sandbox": "docker", "language": language},
+            {"sandbox": "docker", "language": language, "infra_error": True},
         )
     if not docker_available():
         return _empty_result(
             "docker unavailable (no daemon / not installed)",
-            {"sandbox": "docker", "language": language, "docker_available": False},
+            {"sandbox": "docker", "language": language,
+             "docker_available": False, "infra_error": True},
         )
 
     name = f"agent-learn-bench-{uuid.uuid4().hex[:12]}"
     raw: dict[str, Any] = {
         "sandbox": "docker",
-        "language": "python",
+        "language": language,
         "image": image,
         "network": "none",
         "memory": memory,
         "cpus": cpus,
+        "cap_drop": "all",
+        "no_new_privileges": True,
         "container": name,
         "timed_out": False,
         "exit_code": None,
@@ -139,20 +178,7 @@ def run_code_tests_docker(
         cand_b64=base64.b64encode(candidate_code.encode("utf-8")).decode("ascii"),
         checks_b64=base64.b64encode(checks_code.encode("utf-8")).decode("ascii"),
     )
-    argv = [
-        "docker", "run", "--rm",
-        "--name", name,
-        "--network", "none",            # the real win the subprocess lane can't give
-        "--memory", memory,
-        "--cpus", cpus,
-        "--pids-limit", str(_DEFAULT_PIDS),
-        "--user", "65534:65534",        # nobody: no in-container root
-        "--read-only",                   # rootfs read-only; only the tmpfs is writable
-        "--tmpfs", "/tmp:size=16m",
-        "--entrypoint", "python",
-        image,
-        "-B", "-c", bootstrap,           # -B: no .pyc writes under the read-only fs
-    ]
+    argv = _build_docker_argv(name, image, memory, cpus, bootstrap)
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, timeout=timeout_s + 20.0
@@ -170,6 +196,7 @@ def run_code_tests_docker(
 
     # A daemon/image error (e.g. image not pulled) is infra, not an agent fail.
     if proc.returncode not in (0, 1) and "{" not in (proc.stdout or ""):
+        raw["infra_error"] = True
         return _empty_result(
             f"docker run failed (exit {proc.returncode}): {_tail(proc.stderr, 300)}",
             raw,

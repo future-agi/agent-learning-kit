@@ -12,11 +12,16 @@ framework adapters + ``evals``/``rewardhack`` + the live-lane runner + telemetry
   / voice / ...) is a dimension, not a fork.
 * **Three control modes** —
     - ``push``         : the harness drives the agent (today's ``run_benchmark``);
-    - ``artifact_in``  : score a submitted artifact, no live agent (staged 15B);
+                         live for text / tool task datasets;
+    - ``artifact_in``  : score a submitted artifact, no live agent; live for coding
+                         bench suites (subprocess or opt-in Docker sandbox);
     - ``pull``         : the agent drives a live environment via reset/step
-                         (staged 15D).
+                         (staged; raises ``NotImplementedError`` until it lands).
+  Unsupported (suite, control_mode) combinations raise ``BenchError``.
 * **A unified ``Result``** ``{scalar, components, pass_fail, explanation}`` that
-  every modality's verdict projects into.
+  every modality's verdict projects into. ``pass_fail`` keys are modality-defined
+  (push -> ``{"verdict": bool}``; coding -> ``{check_name: bool}``; void -> ``{}``);
+  the portable cross-modality signal is the row-level ``verdict`` + ``result.scalar``.
 
 Honesty primitives are preserved verbatim: every per-task row keeps its
 ``execution_class`` / ``evidence_class`` and the overclaim tripwire, and the
@@ -31,14 +36,24 @@ from typing import Any, Mapping
 
 from .. import tasks
 
+# Re-exported coding-suite helpers (public): callers should use these, not the
+# private ``bench._coding`` module. Explicit ``as`` re-export marks them public
+# without an ``__all__`` (which would implicitly privatise run_bench /
+# run_bench_file / load_bench_suite / modality_for_world_kind / BenchError / ...).
+from ._coding import load_coding_suite as load_coding_suite
+from ._coding import reference_submission as reference_submission
+
 BENCH_RESULT_KIND = "agent-learning.bench-result.v1"
 
-#: The control modes a bench run can take. ``push`` is live today; the others are
-#: staged increments and raise a clear ``NotImplementedError`` until they land.
+#: The control modes a bench run can take. ``push`` (text/tool) and ``artifact_in``
+#: (coding suites) are live; ``pull`` is staged and raises ``NotImplementedError``.
 CONTROL_MODES = ("push", "artifact_in", "pull")
 
+#: Code sandboxes for the ``artifact_in`` coding lane.
+SANDBOXES = ("subprocess", "docker")
+
 #: World-kind -> coarse modality label. Kept deliberately small; new worlds map
-#: here as they become executable (e.g. ``code_exec`` -> ``coding`` in 15E).
+#: here as they become executable.
 _WORLD_KIND_MODALITY = {
     "conversation": "text",
     "tool_api": "tool",
@@ -156,22 +171,42 @@ def _read_suite_obj(
     )
 
 
+_LIVE_EVIDENCE_CLASSES = ("live_lane", "live_stressed")
+
+
 def _coding_aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(rows)
     passed = sum(1 for r in rows if r["verdict"] == "pass")
     voids = sum(1 for r in rows if r["verdict"] == "void")
+    scored = n - voids  # void rows (no submission / infra failure) never ran
     scalars = [
         r["result"]["scalar"]
         for r in rows
         if r["result"].get("scalar") is not None
     ]
+    evidence_classes = {r.get("evidence_class") for r in rows}
     return {
         "count": n,
         "passed": passed,
         "void": voids,
-        "pass_rate": round(passed / n, 6) if n else 0.0,
+        "scored": scored,
+        # pass_rate is over SCORED tasks, not all tasks — so an infra failure
+        # (e.g. no Docker daemon) that voids every row does NOT read as "0% passed".
+        "pass_rate": round(passed / scored, 6) if scored else 0.0,
         "mean_score": round(sum(scalars) / len(scalars), 6) if scalars else 0.0,
+        # symmetric with the push aggregate (degenerate for the single coding kind),
+        # plus the coding-only ``by_modality`` extra.
+        "by_world_kind": {"code_exec": {"count": n, "passed": passed}},
+        "by_execution_class": {"executable": {"count": n, "passed": passed}},
         "by_modality": {"coding": {"count": n, "passed": passed}},
+        # honesty rollup (same 4-key shape as the push aggregate). Not gate-read;
+        # row-level honesty is the enforcement primitive.
+        "honesty": {
+            "evidence_class": next(iter(evidence_classes)) if len(evidence_classes) == 1 else sorted(c for c in evidence_classes if c),
+            "fixture_only": all(r.get("evidence_class") not in _LIVE_EVIDENCE_CLASSES for r in rows),
+            "any_live": any(r.get("evidence_class") in _LIVE_EVIDENCE_CLASSES for r in rows),
+            "any_overclaim": any(bool(r.get("overclaim")) for r in rows),
+        },
     }
 
 
@@ -270,6 +305,15 @@ def run_bench(
             raise BenchError(
                 "artifact_in requires submission={task_id: candidate_source}"
             )
+        if sandbox not in SANDBOXES:
+            raise BenchError(
+                f"unknown sandbox {sandbox!r}; expected one of {SANDBOXES}"
+            )
+        if evidence_class not in tasks._evidence_classes():
+            raise BenchError(
+                f"unknown evidence_class {evidence_class!r}; expected one of "
+                f"{tuple(tasks._evidence_classes())}"
+            )
         rows = _coding.run_coding_artifact_in(
             coding_suite,
             submission,
@@ -318,12 +362,17 @@ def run_bench(
 
 def run_bench_file(
     suite_path: str | Path,
-    agent: Mapping[str, Any],
+    agent: Mapping[str, Any] | None = None,
     *,
     output_path: str | Path | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Convenience: :func:`run_bench` from a suite file, optionally writing JSON."""
+    """Convenience: :func:`run_bench` from a suite file, optionally writing JSON.
+
+    ``agent`` is optional, mirroring :func:`run_bench`: it is required for
+    ``push`` but unused for ``artifact_in`` (which takes ``submission=`` via
+    ``kwargs``).
+    """
 
     payload = run_bench(Path(suite_path), agent, **kwargs)
     if output_path is not None:

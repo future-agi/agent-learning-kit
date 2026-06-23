@@ -215,3 +215,123 @@ def test_bench_contract_gate_fires_on_run_error(monkeypatch) -> None:
     monkeypatch.setattr(trinity, "_exec_example_run", lambda *a, **k: ({}, "boom"))
     st = trinity._release_bench_contract_status(ROOT)
     assert st["suite_errors"]
+
+
+# --- review fixes: validation, infra-void, fatal paths, edge cases ---
+
+
+def test_run_bench_rejects_bad_sandbox_and_evidence_class() -> None:
+    suite = _coding.load_coding_suite(SUITE)
+    ref = _coding.reference_submission(suite)
+    with pytest.raises(bench.BenchError):
+        bench.run_bench(SUITE, control_mode="artifact_in", submission=ref,
+                        sandbox="vm", emit_telemetry=False)
+    with pytest.raises(bench.BenchError):
+        bench.run_bench(SUITE, control_mode="artifact_in", submission=ref,
+                        evidence_class="totally_made_up", emit_telemetry=False)
+
+
+def test_docker_unavailable_is_infra_void_not_fail(monkeypatch) -> None:
+    # BH-03/BH-13: a missing Docker daemon must VOID (lane never ran), never report
+    # a correct agent as 0% — and must never raise. Credential-free (monkeypatched).
+    import agent_learning.bench._docker as dk
+
+    monkeypatch.setattr(dk, "docker_available", lambda: False)
+    suite = _coding.load_coding_suite(SUITE)
+    ref = _coding.reference_submission(suite)
+    res = bench.run_bench(SUITE, control_mode="artifact_in", submission=ref,
+                          sandbox="docker", emit_telemetry=False)
+    assert all(r["verdict"] == "void" for r in res["per_task"])
+    assert res["aggregate"]["void"] == len(res["per_task"])
+    assert res["aggregate"]["scored"] == 0
+    # void rows carry the forced live_lane stamp (stamping precedes any run) + an error
+    for r in res["per_task"]:
+        assert r["evidence_class"] == "live_lane"
+        assert "infra" in (r.get("error") or "")
+
+
+def test_run_code_tests_docker_unavailable_returns_honest_failure(monkeypatch) -> None:
+    import agent_learning.bench._docker as dk
+
+    monkeypatch.setattr(dk, "docker_available", lambda: False)
+    r = run_code_tests("def f(x):\n    return x\n", _CHECKS, sandbox="docker")
+    assert r["result"]["scalar"] == 0.0
+    assert r["raw"].get("infra_error") is True
+    assert "docker unavailable" in r["result"]["explanation"]
+
+
+def test_docker_argv_has_hardening_flags() -> None:
+    # BH-04/BH-12: credential-free assertion of the isolation flags (a docker-gated
+    # test would never run on no-docker CI).
+    from agent_learning.bench._docker import _build_docker_argv
+
+    argv = _build_docker_argv("name", "img", "256m", "1.0", "print(1)")
+    for token in ("--network", "none", "--cap-drop", "ALL",
+                  "--security-opt", "no-new-privileges",
+                  "--read-only", "/tmp:size=16m,nosuid", "--user", "65534:65534"):
+        assert token in argv, f"missing {token!r}"
+
+
+def test_codeexec_fatal_paths() -> None:
+    # BH-06: honest-failure branches in the subprocess runner.
+    bad_import = "import does_not_exist_xyz\n"  # checks import a missing module
+    r = run_code_tests("x = 1\n", bad_import)
+    assert r["result"]["scalar"] == 0.0
+    assert "checks_import_failed" in r["result"]["explanation"]
+
+    no_checks = "import solution\nVALUE = 1\n"  # no check_* callables
+    r = run_code_tests("def f(x):\n    return x\n", no_checks)
+    assert r["result"]["scalar"] == 0.0
+    assert "no check_" in r["result"]["explanation"]
+
+    # candidate hard-exits at import -> runner emits nothing parseable (exit 0)
+    osexit = "import os\nos._exit(0)\n"
+    r = run_code_tests(osexit, _CHECKS)
+    assert r["result"]["scalar"] == 0.0
+    assert "no parseable result" in r["result"]["explanation"]
+
+
+def test_void_row_schema_and_edge_cases() -> None:
+    # BH-20 + BH-21: void-row shape, max_tasks clamp.
+    suite = _coding.load_coding_suite(SUITE)
+    ref = dict(_coding.reference_submission(suite))
+    first = suite["tasks"][0]["id"]
+    del ref[first]  # omit one submission -> void
+    res = bench.run_bench(SUITE, control_mode="artifact_in", submission=ref,
+                          emit_telemetry=False)
+    void = next(r for r in res["per_task"] if r["task_id"] == first)
+    assert void["verdict"] == "void"
+    assert void["result"]["scalar"] is None
+    assert void["result"]["components"] == {}
+    assert void["result"]["pass_fail"] == {}
+    assert "error" in void
+    assert "execution_class" in void and "evidence_class" in void
+
+    # max_tasks=0 -> empty, no ZeroDivision in aggregate
+    empty = bench.run_bench(SUITE, control_mode="artifact_in",
+                            submission=_coding.reference_submission(suite),
+                            max_tasks=0, emit_telemetry=False)
+    assert empty["per_task"] == []
+    assert empty["aggregate"]["count"] == 0
+    assert empty["aggregate"]["pass_rate"] == 0.0
+
+
+def test_per_task_timeout_override() -> None:
+    # BH-21(c): a task-level timeout_s overrides the default (subprocess, fast).
+    suite = {
+        "kind": _coding.BENCH_SUITE_KIND,
+        "name": "to",
+        "language": "python",
+        "tasks": [{
+            "id": "slow",
+            "instruction": "n/a",
+            "checks": "import solution\n\ndef check_x():\n    assert solution.f() == 1\n",
+            "reference_solution": "def f():\n    return 1\n",
+            "timeout_s": 1,
+            "guards": {"min_guard_count": 1},
+        }],
+    }
+    slow = "import time\ndef f():\n    time.sleep(30)\n    return 1\n"
+    rows = _coding.run_coding_artifact_in(suite, {"slow": slow})
+    assert rows[0]["verdict"] == "fail"
+    assert rows[0]["raw"]["timed_out"] is True

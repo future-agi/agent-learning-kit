@@ -7,8 +7,9 @@ control-mode dispatch, honesty-field passthrough) without any network or model.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import pytest
 
@@ -20,7 +21,9 @@ SUITE = ROOT / "examples" / "task_datasets" / "support_starter.json"
 _AGENT = {"type": "scripted", "content": "stub"}
 
 
-def _fake_runner(metric_averages: Mapping[str, float], eval_score: float = 0.8):
+def _fake_runner(
+    metric_averages: Mapping[str, float], eval_score: float = 0.8
+) -> Callable[[Mapping[str, Any], Mapping[str, Any]], dict]:
     def runner(_task: Mapping[str, Any], _agent: Mapping[str, Any]) -> dict:
         return {
             "summary": {

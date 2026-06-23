@@ -3,7 +3,7 @@
 `agent.type=llm_tool_calling` is the canonical agent-takes-actions loop: the MODEL
 decides whether to call the environment's tools (function-calling), the engine
 executes them (mock or real) and feeds results back. This is what makes the kit's
-env run REAL agents (HUD's premise), credential-free + multi-modal + tool-mocked.
+env run REAL agents, credential-free + multi-modal + tool-mocked.
 
 Unit tests (credential-free) pin the format conversions; the live end-to-end loop
 is key-gated (skips without OPENAI_API_KEY).

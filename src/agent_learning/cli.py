@@ -900,22 +900,28 @@ def _bench(args: Sequence[str]) -> int:
     if parsed.mode == "artifact_in":
         if parsed.reference:
             try:
-                from agent_learning.bench import _coding
-
-                submission = _coding.reference_submission(
-                    _coding.load_coding_suite(suite_path)
+                submission = bench.reference_submission(
+                    bench.load_coding_suite(suite_path)
                 )
             except Exception as exc:
                 print(f"agent-learn bench: --reference: {exc}", file=sys.stderr)
                 return 1
         elif parsed.submission_file:
             try:
-                submission = json.loads(
+                loaded = json.loads(
                     Path(parsed.submission_file).expanduser().read_text("utf-8")
                 )
             except Exception as exc:
                 print(f"agent-learn bench: --submission-file: {exc}", file=sys.stderr)
                 return 1
+            if not isinstance(loaded, dict):
+                print(
+                    "agent-learn bench: --submission-file must be a JSON object "
+                    "{task_id: source}",
+                    file=sys.stderr,
+                )
+                return 1
+            submission = {str(k): str(v) for k, v in loaded.items()}
         else:
             print(
                 "agent-learn bench: artifact_in needs --submission-file PATH or --reference",

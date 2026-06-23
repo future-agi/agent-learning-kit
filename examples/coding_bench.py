@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any
 
 from agent_learning import bench
-from agent_learning.bench import _coding
 
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
 OUTPUT_KIND = "agent-learning.coding-benchmark-example.v1"
@@ -35,8 +34,8 @@ OUTPUT_KIND = "agent-learning.coding-benchmark-example.v1"
 _NOOP_CANDIDATE = "print('All tasks completed successfully!')\n"
 
 
-def _gate_evidence(suite: dict) -> dict[str, Any]:
-    ref = _coding.reference_submission(suite)
+def _gate_evidence(suite: dict[str, Any]) -> dict[str, Any]:
+    ref = bench.reference_submission(suite)
 
     # (a) reference solutions all pass — the verifier accepts the gold.
     ref_run = bench.run_bench(
@@ -102,8 +101,8 @@ def _gate_evidence(suite: dict) -> dict[str, Any]:
 
 
 def run(output_path: str | Path | None = None) -> dict[str, Any]:
-    suite = _coding.load_coding_suite(SUITE_PATH)
-    ref = _coding.reference_submission(suite)
+    suite = bench.load_coding_suite(SUITE_PATH)
+    ref = bench.reference_submission(suite)
     # emit_telemetry=False: release-gate fixture entry — no ledger/stderr during gates.
     result = bench.run_bench(
         SUITE_PATH, control_mode="artifact_in", submission=ref,

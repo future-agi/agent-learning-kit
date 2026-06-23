@@ -1010,7 +1010,7 @@ def _build_llm_tool_calling_agent_callback(agent: Mapping[str, Any]) -> Callable
     whether to call the environment's tools (function-calling). The engine executes
     the returned tool_calls against the env (mock or real), feeds results back, and
     re-invokes until the model answers or max_turns — the canonical agent-takes-
-    actions loop (HUD's premise, here credential-free + multi-modal + tool-mocked).
+    actions loop, here credential-free + multi-modal + tool-mocked.
 
     Distinct from ``agent.type=llm`` (single completion, ignores tools). Uses raw
     ``litellm.completion`` (not ``get_completion``) so the model's ``tool_calls``

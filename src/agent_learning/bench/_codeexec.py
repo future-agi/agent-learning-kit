@@ -18,9 +18,20 @@ Sandboxes:
 
 The convention for a checks file: it defines one or more ``check_*`` callables
 that import the candidate module (``import solution``) and ``assert`` the
-expected behaviour. The harness discovers them, runs each in isolation, and
-reports per-check pass/fail — so a candidate that no-ops, prints fake success, or
-fails to define the entrypoint is failed deterministically.
+expected behaviour. The harness discovers them, runs each, and reports per-check
+pass/fail — so a candidate that no-ops, prints a fake "success" message, returns
+wrong answers, or fails to define the entrypoint is failed deterministically.
+
+THREAT-MODEL NOTE: the runner and the candidate share one process, so the
+deterministic-failure guarantee covers *accidental* gaming, not an *adversarial*
+candidate. A candidate that knows this runner's protocol could, during its import
+body (which runs before ``check_*``), print a forged ``{"results": ...}`` line and
+exit 0, or read the checks file to reflect expected values. Hardening that
+(process/UID separation of the oracle + an authenticated out-of-band verdict
+channel — the inject-tests-after-the-agent-finishes topology) is tracked separate
+work; until then do not treat a passing score from an untrusted adversarial
+candidate as authoritative. The release gate is unaffected: it runs only trusted
+shipped reference code.
 """
 
 from __future__ import annotations
@@ -105,11 +116,11 @@ def run_code_tests(
     if language not in SUPPORTED_LANGUAGES:
         return _empty_result(
             f"unsupported language {language!r}; supported: {SUPPORTED_LANGUAGES}",
-            {"sandbox": sandbox, "language": language},
+            {"sandbox": sandbox, "language": language, "infra_error": True},
         )
     if sandbox == "docker":
-        # The Docker lane lands in bench step 15E; never silently fall back to a
-        # weaker sandbox (that would mislabel isolation).
+        # The Docker lane is opt-in; never silently fall back to a weaker sandbox
+        # (that would mislabel isolation).
         from ._docker import run_code_tests_docker  # local import: optional lane
 
         return run_code_tests_docker(
@@ -118,7 +129,7 @@ def run_code_tests(
     if sandbox != "subprocess":
         return _empty_result(
             f"unknown sandbox {sandbox!r}; expected 'subprocess' or 'docker'",
-            {"sandbox": sandbox, "language": language},
+            {"sandbox": sandbox, "language": language, "infra_error": True},
         )
 
     return _run_subprocess(candidate_code, checks_code, timeout_s=timeout_s)
