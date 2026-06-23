@@ -29,7 +29,33 @@ from agent_learning import bench
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
 COMMAND_SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_command_starter.json"
 PULL_SUITE_PATH = Path(__file__).parent / "bench_suites" / "pull_starter.json"
+VOICE_SUITE_PATH = Path(__file__).parent / "bench_suites" / "voice_starter.json"
 OUTPUT_KIND = "agent-learning.coding-benchmark-example.v1"
+
+
+def _voice_evidence() -> dict[str, Any]:
+    """Evidence for the voice lane: the reference transcript passes every temporal
+    dimension, and a bad transcript (slow + talks over the caller + missing
+    content) fails — the deterministic verifier discriminates."""
+
+    suite = json.loads(VOICE_SUITE_PATH.read_text(encoding="utf-8"))
+    ref = {t["id"]: t["reference_dialogue"] for t in suite["tasks"]}
+    good = bench.run_bench(VOICE_SUITE_PATH, control_mode="artifact_in", submission=ref,
+                           evidence_class="local_gate", emit_telemetry=False)
+    bad_dialogue = [
+        {"speaker": "caller", "start_ms": 0, "end_ms": 1000, "text": "I want a refund"},
+        {"speaker": "agent", "start_ms": 5000, "end_ms": 6000, "text": "uh hello"},
+        {"speaker": "caller", "start_ms": 5500, "end_ms": 5800, "text": "stop"},
+    ]
+    bad = bench.run_bench(VOICE_SUITE_PATH, control_mode="artifact_in",
+                          submission={tid: bad_dialogue for tid in ref},
+                          evidence_class="local_gate", emit_telemetry=False)
+    return {
+        "reference_all_pass": all(r["verdict"] == "pass" for r in good["per_task"]),
+        "bad_all_fail": all(r["verdict"] == "fail" for r in bad["per_task"]),
+        "dimensions": sorted(good["per_task"][0]["result"]["components"].keys()),
+        "task_count": len(suite["tasks"]),
+    }
 
 
 def _pull_evidence() -> dict[str, Any]:
@@ -153,6 +179,7 @@ def _gate_evidence(suite: dict[str, Any]) -> dict[str, Any]:
         "coverage": {"modalities": ref_run["modalities"], "task_count": len(suite["tasks"])},
         "command_graded": _command_graded_evidence(),
         "pull": _pull_evidence(),
+        "voice": _voice_evidence(),
     }
 
 

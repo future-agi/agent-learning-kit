@@ -2522,6 +2522,7 @@ V1_BENCH_CONTRACT_FILES = (
     "examples/bench_suites/coding_starter.json",
     "examples/bench_suites/coding_command_starter.json",
     "examples/bench_suites/pull_starter.json",
+    "examples/bench_suites/voice_starter.json",
 )
 
 # === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
@@ -8047,6 +8048,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not bench_contract["guard_errors"]
             and not bench_contract["command_graded_errors"]
             and not bench_contract["pull_errors"]
+            and not bench_contract["voice_errors"]
         ),
         milestone="M4",
         evidence=bench_contract,
@@ -13916,6 +13918,7 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
     guard_errors: list[dict[str, Any]] = []
     command_graded_errors: list[dict[str, Any]] = []
     pull_errors: list[dict[str, Any]] = []
+    voice_errors: list[dict[str, Any]] = []
 
     artifact: dict[str, Any] = {}
 
@@ -13987,6 +13990,14 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
                 err(pull_errors, field=f"pull.{field}",
                     expected=True, observed=pull.get(field))
 
+        # Voice lane: the reference transcript passes every temporal dimension and
+        # a bad transcript (slow / talks over the caller / missing content) fails.
+        voice = _as_mapping(evidence.get("voice"))
+        for field in ("reference_all_pass", "bad_all_fail"):
+            if voice.get(field) is not True:
+                err(voice_errors, field=f"voice.{field}",
+                    expected=True, observed=voice.get(field))
+
     return {
         "kind": "agent-learning.bench-contract-readiness.v1",
         "missing_files": missing_files,
@@ -13998,6 +14009,7 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
         "guard_errors": guard_errors,
         "command_graded_errors": command_graded_errors,
         "pull_errors": pull_errors,
+        "voice_errors": voice_errors,
     }
 
 

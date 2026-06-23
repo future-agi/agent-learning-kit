@@ -291,6 +291,42 @@ def _pull_row(
     }
 
 
+def _voice_row(
+    task: Mapping[str, Any], verdict_obj: Mapping[str, Any], *, evidence_class: str
+) -> dict[str, Any]:
+    result = dict(verdict_obj["result"])
+    pf = result.get("pass_fail") or {}
+    verdict = "pass" if pf.get("voice") else "fail"
+    return {
+        "task_id": str(task.get("id")),
+        "modality": "voice",
+        "world_kind": "voice_telephony",
+        "control_mode": "artifact_in",
+        "result": result,
+        "verdict": verdict,
+        "execution_class": "executable",
+        "evidence_class": evidence_class,
+        "overclaim": False,
+        "raw": verdict_obj.get("raw", {}),
+    }
+
+
+def _voice_void_row(task: Mapping[str, Any], evidence_class: str) -> dict[str, Any]:
+    return {
+        "task_id": str(task.get("id")),
+        "modality": "voice",
+        "world_kind": "voice_telephony",
+        "control_mode": "artifact_in",
+        "result": {"scalar": None, "components": {}, "pass_fail": {},
+                   "explanation": "no transcript submitted"},
+        "verdict": "void",
+        "execution_class": "executable",
+        "evidence_class": evidence_class,
+        "overclaim": False,
+        "error": "no transcript submitted",
+    }
+
+
 def run_bench(
     suite: Mapping[str, Any] | str | Path,
     agent: Mapping[str, Any] | None = None,
@@ -353,6 +389,39 @@ def run_bench(
         ]
         return _assemble(
             rows, control_mode="pull", name=str(obj.get("name") or ""),
+            version=str(obj.get("version") or ""), emit_telemetry=emit_telemetry,
+            project_name=project_name,
+        )
+
+    if _coding.is_bench_suite(obj) and str(obj.get("control")) == "voice":
+        # Voice suite: submit-and-score a voice episode transcript (artifact_in
+        # semantics). submission = {task_id: dialogue}. Deterministic verifier.
+        from . import _voice
+
+        if control_mode != "artifact_in":
+            raise BenchError(
+                f"voice bench suites run under control_mode='artifact_in', not {control_mode!r}"
+            )
+        if submission is None:
+            raise BenchError("voice artifact_in requires submission={task_id: dialogue}")
+        if evidence_class not in tasks._evidence_classes():
+            raise BenchError(f"unknown evidence_class {evidence_class!r}")
+        task_list = list(obj.get("tasks") or [])
+        if max_tasks is not None:
+            task_list = task_list[: max(0, int(max_tasks))]
+        rows = []
+        for t in task_list:
+            tid = str(t.get("id"))
+            dialogue = submission.get(tid)
+            if dialogue is None:
+                rows.append(_voice_void_row(t, evidence_class))
+                continue
+            vo = _voice.score_voice_episode(
+                dialogue, budgets=t.get("budgets"), required_content=t.get("required_content"),
+            )
+            rows.append(_voice_row(t, vo, evidence_class=evidence_class))
+        return _assemble(
+            rows, control_mode="artifact_in", name=str(obj.get("name") or ""),
             version=str(obj.get("version") or ""), emit_telemetry=emit_telemetry,
             project_name=project_name,
         )
