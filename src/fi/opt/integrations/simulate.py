@@ -166,7 +166,9 @@ class SimulateManifestOptimizationProblem:
         optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
-        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        return _as_optimization_result(
+            self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        )
 
 
 ManifestOptimizationProblem = SimulateManifestOptimizationProblem
@@ -284,7 +286,9 @@ class SimulateEvalSuiteOptimizationProblem:
         optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
-        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        return _as_optimization_result(
+            self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        )
 
 
 EvalSuiteOptimizationProblem = SimulateEvalSuiteOptimizationProblem
@@ -414,7 +418,9 @@ class SimulateSuiteOptimizationProblem:
         optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
-        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        return _as_optimization_result(
+            self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+        )
 
 
 SuiteOptimizationProblem = SimulateSuiteOptimizationProblem
@@ -702,7 +708,60 @@ def _candidate_evaluation_from_value(
     )
 
 
+def _declared_anchor_objective(value: Any) -> Optional[Mapping[str, Any]]:
+    """Return a REAL declared objective (with ``evals`` carrying >=1 ``anchor``
+    term) if the candidate value carries one — searched in the manifest/result
+    locations only. NEVER synthesized from config (that over-reaches and regresses
+    structural/hook manifests). Bug #2: only opted-in declared-anchor objectives
+    get objective-anchored scoring; everything else keeps the engine score."""
+    from fi.opt._objective_scoring import has_declared_anchor_objective
+
+    if not isinstance(value, Mapping):
+        return None
+    candidates = [
+        value.get("objective"),
+        (value.get("evaluation") or {}).get("objective") if isinstance(value.get("evaluation"), Mapping) else None,
+        ((value.get("simulation") or {}).get("inline") or {}).get("objective")
+        if isinstance(value.get("simulation"), Mapping) else None,
+        (value.get("scenario") or {}).get("objective") if isinstance(value.get("scenario"), Mapping) else None,
+    ]
+    for obj in candidates:
+        if has_declared_anchor_objective(obj):
+            return obj
+    return None
+
+
+def _candidate_metric_averages(value: Any) -> Optional[Mapping[str, Any]]:
+    if not isinstance(value, Mapping):
+        return None
+    if isinstance(value.get("metric_averages"), Mapping):
+        return value["metric_averages"]
+    summary = value.get("summary")
+    if isinstance(summary, Mapping) and isinstance(summary.get("metric_averages"), Mapping):
+        return summary["metric_averages"]
+    return None
+
+
+def _objective_anchored_score(value: Any) -> Optional[float]:
+    """Bug #2: score a candidate on its DECLARED anchor objective (real dynamic
+    range) instead of the all-metrics-mean ``evaluation_score``. Returns None
+    unless BOTH a declared-anchor objective and metric_averages are present, so
+    legacy/structural manifests fall through to the existing score unchanged."""
+    objective = _declared_anchor_objective(value)
+    if objective is None:
+        return None
+    metrics = _candidate_metric_averages(value)
+    if not metrics:
+        return None
+    from fi.opt._objective_scoring import objective_score
+
+    return _coerce_score(objective_score(metrics, objective).get("score"))
+
+
 def _score_from_value(value: Any) -> Optional[float]:
+    anchored = _objective_anchored_score(value)
+    if anchored is not None:
+        return anchored
     direct = _coerce_score(value)
     if direct is not None:
         return direct
@@ -872,8 +931,29 @@ def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         "layer_path_bias",
         "mutation_library",
         "max_library_candidates",
+        # Phase 4 (extend-only): declared budgets, Elo selection knobs,
+        # two-chamber budgets, society ledger, strategy declaration, TPE trials.
+        "eval_budget",
+        "elo_k_factor",
+        "elo_initial_rating",
+        "samiti_budget",
+        "sabha_budget",
+        "society_ledger",
+        "search_strategy",
+        "n_trials",
+        # Phase 4 (extend-only): regression-replay backend inputs — a local
+        # AgentRegressionDataset (mapping coerced below) plus the delegated
+        # repair backend selector consumed by FutureAGIRegressionReplayOptimizer.
+        "dataset",
+        "optimizer",
     }
-    return {key: copy.deepcopy(config[key]) for key in allowed if key in config}
+    kwargs = {key: copy.deepcopy(config[key]) for key in allowed if key in config}
+    dataset = kwargs.get("dataset")
+    if isinstance(dataset, Mapping) and "cases" in dataset:
+        from ..observability import AgentRegressionDataset
+
+        kwargs["dataset"] = AgentRegressionDataset.model_validate(dict(dataset))
+    return kwargs
 
 
 def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
@@ -916,9 +996,42 @@ def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
         "multi_interaction_social_memory",
     }:
         return AgentSocialMemoryOptimizer
+    # Phase 4 (extend-only): additional target-contract backends for the
+    # optimizer profile matrix; legacy tokens above are untouched.
+    if normalized in {"council", "council_agent", "council_agent_optimizer"}:
+        from ..optimizers.council import CouncilAgentOptimizer
+
+        return CouncilAgentOptimizer
+    if normalized in {
+        "society_agent",
+        "society_agent_optimizer",
+        "role_graph_society",
+        "society_role_graph",
+    }:
+        from ..optimizers.council import SocietyAgentOptimizer
+
+        return SocietyAgentOptimizer
+    if normalized in {"tpe", "agent_tpe", "agent_tpe_optimizer"}:
+        from ..optimizers.agent_tpe import AgentTPEOptimizer
+
+        return AgentTPEOptimizer
+    if normalized in {"bandit", "agent_bandit", "agent_bandit_optimizer", "ucb"}:
+        from ..optimizers.agent_bandit import AgentBanditOptimizer
+
+        return AgentBanditOptimizer
+    if normalized in {
+        "regression_replay",
+        "futureagi_regression_replay",
+        "futureagi_replay",
+        "regression_replay_optimizer",
+    }:
+        from ..optimizers.futureagi_replay import FutureAGIRegressionReplayOptimizer
+
+        return FutureAGIRegressionReplayOptimizer
     raise ValueError(
         "optimization.optimizer.algorithm must be one of: agent, evolution, "
-        "social_memory"
+        "social_memory, council, society_role_graph, tpe, bandit, "
+        "regression_replay"
     )
 
 
@@ -927,7 +1040,47 @@ def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
         return "evolution"
     if optimizer_cls is AgentSocialMemoryOptimizer:
         return "social_memory"
+    name = getattr(optimizer_cls, "__name__", "")
+    if name == "CouncilAgentOptimizer":
+        return "council"
+    if name == "SocietyAgentOptimizer":
+        return "society_role_graph"
+    if name == "AgentTPEOptimizer":
+        return "tpe"
+    if name == "AgentBanditOptimizer":
+        return "bandit"
+    if name == "FutureAGIRegressionReplayOptimizer":
+        return "regression_replay"
     return "agent"
+
+
+def _as_optimization_result(result: Any) -> OptimizationResult:
+    """Coerce backend audit records onto the OptimizationResult contract.
+
+    Phase 4 (extend-only): ``FutureAGIRegressionReplayOptimizer`` returns an
+    ``AgentFeedbackOptimizationResult`` audit record wrapping the inner
+    ``reoptimization_result``; the manifest pipeline consumes the inner
+    result with the replay audit carried in its metadata. Every existing
+    backend already returns ``OptimizationResult`` and passes through.
+    """
+
+    inner = getattr(result, "reoptimization_result", None)
+    if inner is None:
+        return result
+    metadata = dict(getattr(inner, "metadata", {}) or {})
+    metadata.setdefault(
+        "regression_replay",
+        {
+            "optimizer": getattr(result, "optimizer", None),
+            "feedback_source": getattr(result, "feedback_source", None),
+            "baseline_score": getattr(result, "baseline_score", None),
+            "final_score": getattr(result, "final_score", None),
+            "improved": getattr(result, "improved", None),
+            "feedback_case_count": len(getattr(result, "feedback_cases", []) or []),
+        },
+    )
+    inner.metadata = metadata
+    return inner
 
 
 def _evidence_scorer_config(

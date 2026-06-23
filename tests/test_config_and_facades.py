@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
+import io
 import json
 import os
 import sys
+import tarfile
 import tomllib
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -7519,7 +7522,21 @@ def test_sdk_optimizer_governance_optimization_example_runs(
         "has_dependency_audit",
     ):
         assert trace_summary[flag] is True
-    assert trace_summary["governance_check_count"] == 6
+    for flag in (
+        "has_guna_axes",
+        "has_two_chamber",
+        "has_nyaya_justifications",
+        "has_hetvabhasa_rejections",
+        "has_nirnaya",
+        "has_staged_conditioning",
+        "has_layer_locality",
+        "has_declared_budget",
+        "has_external_ranking",
+    ):
+        assert trace_summary[flag] is True
+    # Phase 4: the governed trace is engine-built — 11 computed checks plus
+    # the 6 conditional society checks (explicit example checks dedupe in).
+    assert trace_summary["governance_check_count"] == 17
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
 
     target = manifest["optimization"]["target"]
@@ -7545,7 +7562,7 @@ def test_sdk_optimizer_governance_optimization_example_runs(
     assert governance_component["score"] == pytest.approx(1.0)
     assert governance_component["details"]["missing"] == []
     assert governance_component["details"]["best_role"] == "dharma_steward"
-    assert governance_component["details"]["summary"]["governance_check_count"] == 6
+    assert governance_component["details"]["summary"]["governance_check_count"] == 17
     assert governance_component["details"]["summary"]["governance_pass_rate"] == (
         pytest.approx(1.0)
     )
@@ -7593,14 +7610,22 @@ def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path)
     assert len(trace["proposals"]) == 5
     assert len(trace["rounds"]) == 3
     assert len(trace["diagnostics"]) == 2
-    assert {check["name"] for check in trace["governance"]["checks"]} == {
+    assert {
         "role_diversity",
         "mediator_review",
         "contract_gate",
         "rollback_check",
         "search_locality",
         "dependency_audit",
-    }
+        # Phase 4 society checks (conditional on producing metadata, all
+        # present in the engine-built governed trace):
+        "chamber_budgets_declared",
+        "rejections_classed",
+        "nirnaya_recorded",
+        "proposals_never_averaged",
+        "specialist_authority_respected",
+        "society_ledger_pooled_across_candidates",
+    } <= {check["name"] for check in trace["governance"]["checks"]}
     eval_config = manifest["evaluation"]["agent_report"]["config"]
     assert eval_config["required_tools"] == [
         "optimizer_trace_status",
@@ -7673,7 +7698,7 @@ def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path)
         "has_dependency_audit",
     ):
         assert trace_state["summary"][flag] is True
-    assert trace_state["summary"]["governance_check_count"] == 6
+    assert trace_state["summary"]["governance_check_count"] == 17
     assert trace_state["summary"]["governance_pass_rate"] == pytest.approx(1.0)
     event_names = {event["name"] for event in report_case["events"]}
     assert {
@@ -14826,6 +14851,7 @@ def test_sdk_redteam_readiness_certification_optimization_example_runs(
     assert verified_summary["ready_components"] == [
         "control_plane",
         "framework_import",
+        "persona_conditioning",
         "red_team_campaign",
         "trust_boundary",
         "workspace_run",
@@ -14864,13 +14890,14 @@ def test_sdk_redteam_readiness_certification_optimization_example_runs(
         "workspace_run_manifest",
         "framework_import_manifest",
         "red_team_campaign",
+        "persona_conditioned_campaign",
         "agent_trust_boundary_model",
         "agent_control_plane",
         "red_team_readiness",
     }
     readiness_summary = state["red_team_readiness"]["summary"]
     assert readiness_summary["blocking_gaps"] == []
-    assert readiness_summary["ready_component_count"] == 5
+    assert readiness_summary["ready_component_count"] == 6
 
     candidate = optimize.AgentCandidate.from_config(
         result["optimization"]["best_config"],
@@ -16937,6 +16964,130 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_typescript_sdk_files"] == (
         trinity.V1_TYPESCRIPT_SDK_REQUIRED_FILES
     )
+    assert payload["required_active_ai_evaluation_python_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
+    )
+    assert payload["required_active_ai_evaluation_typescript_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
+    )
+    assert payload["required_active_ai_evaluation_source_inventory_file"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+    )
+    assert payload["required_active_ai_evaluation_source_inventory_kind"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+    )
+    assert payload["required_active_ai_evaluation_doc_phrases"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+    )
+    assert payload["required_active_ai_evaluation_min_python_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert payload["required_active_ai_evaluation_min_typescript_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
+    assert payload["required_sdist_paths"] == trinity.V1_SDIST_REQUIRED_PATHS
+    assert payload["forbidden_sdist_paths"] == trinity.V1_SDIST_FORBIDDEN_PATHS
+    assert payload["allowed_wheel_top_level"] == trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
+    assert payload["required_docs_pages"] == trinity.V1_DOCS_REQUIRED_PAGES
+    assert payload["docs_allowed_artifact_kinds"] == (
+        trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS
+    )
+    assert payload["docs_claim_phrase_gates"] == (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES
+    )
+    assert payload["live_lane_env_flags"] == trinity.V1_LIVE_LANE_ENV_FLAGS
+    assert payload["live_lane_extra_packages"] == (
+        trinity.V1_LIVE_LANE_EXTRA_PACKAGES
+    )
+    assert payload["live_lane_evidence_classes"] == (
+        trinity.V1_LIVE_EVIDENCE_CLASSES
+    )
+    assert payload["required_capability_profile_freeze_row_fields"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+    )
+    assert payload["required_capability_profile_freeze_checks"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+    )
+    assert payload["required_optimizer_profile_matrix_target_kinds"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    )
+    assert payload["required_optimizer_profile_matrix_backends"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
+    )
+    assert payload["required_optimizer_profile_matrix_cells"] == [
+        list(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    ]
+    assert payload["required_whole_agent_contract_stages"] == (
+        trinity.V1_WHOLE_AGENT_CONTRACT_STAGES
+    )
+    assert payload["required_whole_agent_apply_plan_fields"] == (
+        trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
+    )
+    assert payload["required_optimizer_trajectory_profile_fields"] == (
+        trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+    )
+    assert payload["required_optimizer_routing_checks"] == (
+        trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+    )
+    # ---- Phase 7: persona & scenario studio payload mirrors ----
+    assert payload["required_persona_layers"] == trinity.V1_PERSONA_LAYERS
+    assert payload["required_persona_evidence_classes"] == (
+        trinity.V1_PERSONA_EVIDENCE_CLASSES
+    )
+    assert payload["required_persona_temperament_axes"] == (
+        trinity.V1_PERSONA_TEMPERAMENT_AXES
+    )
+    assert payload["required_persona_behavior_axes"] == (
+        trinity.V1_PERSONA_BEHAVIOR_AXES
+    )
+    assert payload["required_persona_behavior_realization_metrics"] == (
+        trinity.V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
+    )
+    assert payload["required_persona_fidelity_record_fields"] == (
+        trinity.V1_PERSONA_FIDELITY_RECORD_FIELDS
+    )
+    assert payload["required_persona_fidelity_verdicts"] == (
+        trinity.V1_PERSONA_FIDELITY_VERDICTS
+    )
+    assert payload["persona_fidelity_epidemic_rate"] == (
+        trinity.V1_PERSONA_FIDELITY_EPIDEMIC_RATE
+    )
+    assert payload["required_persona_fidelity_floors"] == (
+        trinity.V1_PERSONA_FIDELITY_FLOORS
+    )
+    assert payload["required_scenario_kinds"] == trinity.V1_SCENARIO_KINDS
+    assert payload["required_scenario_coverage_axes"] == (
+        trinity.V1_SCENARIO_COVERAGE_AXES
+    )
+    assert payload["required_persona_calibration_stages"] == (
+        trinity.V1_PERSONA_CALIBRATION_STAGES
+    )
+    assert payload["required_persona_calibration_probes"] == (
+        trinity.V1_PERSONA_CALIBRATION_PROBES
+    )
+    assert payload["required_persona_content_scan_results"] == (
+        trinity.V1_PERSONA_CONTENT_SCAN_RESULTS
+    )
+    assert payload["required_persona_bias_lint_checks"] == (
+        trinity.V1_PERSONA_BIAS_LINT_CHECKS
+    )
+    assert payload["required_persona_vendor_import_formats"] == (
+        trinity.V1_PERSONA_VENDOR_IMPORT_FORMATS
+    )
+    assert payload["required_persona_download_pin_fields"] == (
+        trinity.V1_PERSONA_DOWNLOAD_PIN_FIELDS
+    )
+    # ---- Phase 8: telemetry boundary payload mirrors ----
+    assert payload["telemetry_kill_switch_env"] == (
+        trinity.V1_TELEMETRY_KILL_SWITCH_ENV
+    )
+    assert payload["telemetry_scan_roots"] == trinity.V1_TELEMETRY_SCAN_ROOTS
+    assert payload["telemetry_forbidden_analytics_hosts"] == (
+        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+    )
+    assert payload["telemetry_evidence_classes"] == (
+        trinity.V1_TELEMETRY_EVIDENCE_CLASSES
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -17445,6 +17596,39 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_corpus_execution_channels"] == (
         trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
     )
+    # Phase 12 (voice red-team) payload mirrors (unit 7.5a)
+    assert payload["required_redteam_voice_surfaces"] == (
+        trinity.V1_REDTEAM_VOICE_SURFACES
+    )
+    assert payload["voice_attack_family_matrix"] == (
+        trinity.V1_VOICE_ATTACK_FAMILY_MATRIX
+    )
+    assert payload["voice_attack_maturity_levels"] == (
+        trinity.V1_VOICE_ATTACK_MATURITY_LEVELS
+    )
+    assert payload["voice_phone_survival_statuses"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_STATUSES
+    )
+    assert payload["voice_phone_survival_tiers"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_TIERS
+    )
+    assert payload["voice_attack_rungs"] == trinity.V1_VOICE_ATTACK_RUNGS
+    assert payload["voice_detection_evidence_fields"] == (
+        trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS
+    )
+    assert payload["voice_redteam_ab_arms"] == trinity.V1_VOICE_REDTEAM_AB_ARMS
+    assert payload["voice_redteam_ab_verdicts"] == (
+        trinity.V1_VOICE_REDTEAM_AB_VERDICTS
+    )
+    # Phase 9A (voice loopback / codec-survival) payload mirrors
+    assert payload["voice_fidelity_tiers"] == list(trinity.V1_VOICE_FIDELITY_TIERS)
+    assert payload["voice_codecs"] == list(trinity.V1_VOICE_CODECS)
+    assert payload["voice_packet_loss_models"] == list(
+        trinity.V1_VOICE_PACKET_LOSS_MODELS
+    )
+    assert payload["voice_codec_profiles"] == list(trinity.V1_VOICE_CODEC_PROFILES)
+    assert payload["voice_failure_sublayers"] == list(trinity.V1_VOICE_FAILURE_SUBLAYERS)
+    assert payload["voice_loss_term_refs"] == list(trinity.V1_VOICE_LOSS_TERM_REFS)
     assert payload["required_redteam_readiness_certification_files"] == (
         trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
     )
@@ -18247,6 +18431,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(checks) == {
         "single_public_boundary",
         "typescript_sdk_consolidation_boundary",
+        "active_ai_evaluation_source_embedded",
         "cli_command_surface",
         "release_docs_present",
         "v1_examples_present",
@@ -18295,6 +18480,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "multi_agent_room_probe_readiness",
         "framework_adapter_probe_readiness",
         "framework_adapter_io_readiness",
+        "framework_adapter_preset_certification_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "browser_cua_probe_readiness",
@@ -18308,6 +18494,21 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "trinity_stack_probe_readiness",
         "environment_10x_robustness",
         "package_metadata",
+        "package_distribution_hygiene",
+        "docs_executability",
+        "live_lane_boundary",
+        "optimizer_profile_matrix_readiness",
+        "capability_profile_freeze_readiness",
+        "persona_scenario_studio_readiness",
+        "telemetry_boundary",
+        "voice_redteam_readiness",
+        "simulation_contract_readiness",
+        "practice_loop_readiness",
+        "voice_loopback_readiness",
+        "image_loop_readiness",
+        "cua_loop_readiness",
+        "task_dataset_benchmark_readiness",
+        "bench_contract_readiness",
         "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -18317,6 +18518,722 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert typescript_boundary["metadata_errors"] == []
     assert typescript_boundary["forbidden_token_findings"] == []
     assert typescript_boundary["legacy_sibling_errors"] == []
+    active_ai_evaluation = checks["active_ai_evaluation_source_embedded"]["evidence"]
+    assert active_ai_evaluation["kind"] == (
+        "agent-learning.active-ai-evaluation-source.v1"
+    )
+    assert active_ai_evaluation["required_python_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
+    )
+    assert active_ai_evaluation["required_typescript_files"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
+    )
+    assert active_ai_evaluation["source_inventory_file"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+    )
+    # The source inventory file lives in the separate internal-docs repo
+    # (V1_..._SOURCE_INVENTORY_FILE points under internal-docs/), so in the
+    # shippable kit it is absent and the gate TOLERATES that by design (errors
+    # cleared, kind/counts null) — see the repo-hygiene decoupling. The required
+    # kind is still declared; the observed kind is None when absent.
+    assert active_ai_evaluation["source_inventory_kind"] is None
+    assert active_ai_evaluation["required_source_inventory_kind"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+    )
+    assert active_ai_evaluation["required_doc_phrases"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+    )
+    assert active_ai_evaluation["min_python_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert active_ai_evaluation["min_typescript_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
+    assert active_ai_evaluation["missing_files"] == []
+    assert active_ai_evaluation["package_errors"] == []
+    assert active_ai_evaluation["source_count_errors"] == []
+    assert active_ai_evaluation["source_inventory_errors"] == []
+    assert active_ai_evaluation["source_inventory_missing_files"] == []
+    assert active_ai_evaluation["source_inventory_extra_files"] == []
+    assert active_ai_evaluation["import_errors"] == []
+    assert active_ai_evaluation["doc_errors"] == []
+    assert active_ai_evaluation["python_source_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+    )
+    assert active_ai_evaluation["typescript_source_file_count"] == (
+        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    )
+    # Inventory absent (lives in internal-docs) -> the gate reports zero inventory
+    # file counts; the real embedded-source counts above are unaffected.
+    assert active_ai_evaluation["source_inventory_python_file_count"] == 0
+    assert active_ai_evaluation["source_inventory_python_py_file_count"] == 0
+    assert active_ai_evaluation["source_inventory_typescript_file_count"] == 0
+    assert active_ai_evaluation["source_inventory_typescript_ts_file_count"] == 0
+    assert "src/fi" in active_ai_evaluation["package_paths"]
+    assert "src/agent_learning" in active_ai_evaluation["package_paths"]
+    for relative_path, phrases in (
+        trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES.items()
+    ):
+        assert active_ai_evaluation["doc_phrase_hits"][relative_path] == phrases
+    distribution_hygiene = checks["package_distribution_hygiene"]["evidence"]
+    assert distribution_hygiene["kind"] == (
+        "agent-learning.package-distribution-hygiene.v1"
+    )
+    assert distribution_hygiene["verification_mode"] == "built_distributions"
+    assert distribution_hygiene["build_tool_available"] is True
+    assert distribution_hygiene["notes"] == []
+    assert distribution_hygiene["required_sdist_paths"] == (
+        trinity.V1_SDIST_REQUIRED_PATHS
+    )
+    assert distribution_hygiene["forbidden_sdist_paths"] == (
+        trinity.V1_SDIST_FORBIDDEN_PATHS
+    )
+    assert distribution_hygiene["allowed_wheel_top_level"] == (
+        trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
+    )
+    assert distribution_hygiene["sdist_only_include"] == (
+        trinity.V1_SDIST_ONLY_INCLUDE
+    )
+    assert distribution_hygiene["sdist_member_count"] > 0
+    assert distribution_hygiene["wheel_member_count"] > 0
+    assert distribution_hygiene["sdist_forbidden_members"] == []
+    assert distribution_hygiene["sdist_missing_required"] == []
+    assert distribution_hygiene["wheel_unexpected_members"] == []
+    assert distribution_hygiene["build_errors"] == []
+    assert distribution_hygiene["sdist_errors"] == []
+    assert distribution_hygiene["wheel_errors"] == []
+    assert distribution_hygiene["config_errors"] == []
+    docs_exec = checks["docs_executability"]["evidence"]
+    assert docs_exec["kind"] == "agent-learning.docs-executability.v1"
+    assert docs_exec["machine_index_file"] == trinity.V1_DOCS_MACHINE_INDEX_FILE
+    assert docs_exec["required_docs_pages"] == trinity.V1_DOCS_REQUIRED_PAGES
+    assert docs_exec["docs_allowed_artifact_kinds"] == (
+        trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS
+    )
+    assert docs_exec["docs_claim_phrase_gates"] == (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES
+    )
+    assert docs_exec["page_count"] >= trinity.V1_DOCS_MIN_PAGE_COUNT
+    assert docs_exec["index_regenerated_match"] is True
+    assert docs_exec["backing_covered_by_gate"] >= 1
+    assert docs_exec["admission_source_counts"] == {
+        "covered_by_gate": docs_exec["backing_covered_by_gate"],
+        "executed_fresh": docs_exec["backing_executed_fresh"],
+    }
+    for docs_page in docs_exec["pages"]:
+        if docs_page["backing"]:
+            assert set(docs_page["admission_sources"]) <= {
+                "covered_by_gate",
+                "executed_fresh",
+            }
+    assert docs_exec["metadata_errors"] == []
+    assert docs_exec["index_errors"] == []
+    assert docs_exec["coverage_errors"] == []
+    assert docs_exec["backing_errors"] == []
+    assert docs_exec["claims_errors"] == []
+    assert docs_exec["required_page_errors"] == []
+    assert set(trinity.V1_DOCS_BACKING_COVERAGE.values()) <= set(checks)
+    assert {
+        gate for gate in trinity.V1_DOCS_CLAIM_PHRASE_GATES.values() if gate
+    } <= set(checks)
+    live_lane = checks["live_lane_boundary"]["evidence"]
+    assert live_lane["kind"] == "agent-learning.live-lane-boundary.v1"
+    assert live_lane["lane_extra_packages"] == trinity.V1_LIVE_LANE_EXTRA_PACKAGES
+    assert live_lane["lane_modules"] == trinity.V1_LIVE_LANE_MODULES
+    assert live_lane["lane_env_flags"] == trinity.V1_LIVE_LANE_ENV_FLAGS
+    assert live_lane["evidence_classes"] == trinity.V1_LIVE_EVIDENCE_CLASSES
+    assert live_lane["release_admissible_classes"] == (
+        trinity.V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
+    )
+    assert live_lane["failure_layers"] == trinity.V1_LIVE_FAILURE_LAYERS
+    assert live_lane["guarded_import_files"] == (
+        trinity.V1_LIVE_LANE_GUARDED_IMPORT_FILES
+    )
+    assert live_lane["capture_dir"] == trinity.V1_LIVE_LANE_CAPTURE_DIR
+    assert live_lane["evidence_class_field"] == (
+        trinity.V1_LIVE_LANE_EVIDENCE_CLASS_FIELD
+    )
+    assert live_lane["scanned_module_count"] > 0
+    assert live_lane["scanned_artifact_count"] > 0
+    assert live_lane["lane_flags_set_in_release_env"] == []
+    assert live_lane["import_errors"] == []
+    assert live_lane["evidence_class_errors"] == []
+    assert live_lane["env_flag_errors"] == []
+    assert live_lane["redaction_errors"] == []
+    profile_matrix = checks["optimizer_profile_matrix_readiness"]["evidence"]
+    assert profile_matrix["kind"] == (
+        "agent-learning.optimizer-profile-matrix-readiness.v1"
+    )
+    assert profile_matrix["required_files"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FILES
+    )
+    assert profile_matrix["required_env"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV
+    )
+    assert profile_matrix["required_frameworks"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert profile_matrix["required_target_kinds"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    )
+    assert profile_matrix["required_backends"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
+    )
+    assert profile_matrix["required_cells"] == [
+        list(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    ]
+    assert profile_matrix["required_cell_fields"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS
+    )
+    assert profile_matrix["forbidden_aggregate_keys"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS
+    )
+    assert profile_matrix["required_memory_slices"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
+    )
+    assert profile_matrix["required_topology_prefixes"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+    )
+    assert profile_matrix["required_trajectory_profile_fields"] == (
+        trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+    )
+    assert profile_matrix["required_routing_checks"] == (
+        trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+    )
+    assert profile_matrix["required_apply_plan_fields"] == (
+        trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
+    )
+    assert profile_matrix["required_contract_stages"] == (
+        trinity.V1_WHOLE_AGENT_CONTRACT_STAGES
+    )
+    assert profile_matrix["routing_table_file"] == (
+        trinity.V1_OPTIMIZER_ROUTING_TABLE_FILE
+    )
+    assert profile_matrix["cell_eval_budget_max"] == (
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+    )
+    assert profile_matrix["missing_files"] == []
+    assert profile_matrix["execution_errors"] == []
+    assert profile_matrix["manifest_errors"] == []
+    assert profile_matrix["optimization_errors"] == []
+    assert profile_matrix["metric_errors"] == []
+    assert profile_matrix["runtime_errors"] == []
+    assert profile_matrix["report_errors"] == []
+    assert profile_matrix["action_errors"] == []
+    assert profile_matrix["security_errors"] == []
+    assert profile_matrix["aggregation_errors"] == []
+    assert profile_matrix["budget_errors"] == []
+    assert profile_matrix["routing_errors"] == []
+    profile_matrix_evidence = profile_matrix["evidence"]
+    assert profile_matrix_evidence["cell_count"] == len(
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert profile_matrix_evidence["passed_cell_count"] == len(
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert profile_matrix_evidence["cell_refs"] == sorted(
+        "/".join(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert profile_matrix_evidence["apply_plan_cell_refs"] == (
+        profile_matrix_evidence["apply_plan_exporting_cell_refs"]
+    )
+    # Phase 9D renamed whole_agent_cell_refs -> apply_plan_exporting_cell_refs:
+    # 6 whole_agent + 7 modality cells (3 voice + 2 image + 2 cua) all export
+    # an apply plan (they ride build_whole_agent_optimization_manifest).
+    assert len(profile_matrix_evidence["apply_plan_exporting_cell_refs"]) == 13
+    assert profile_matrix_evidence["routing_row_count"] > 0
+    assert profile_matrix_evidence["routing_checks_status"] == {
+        name: True for name in trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+    }
+    assert profile_matrix_evidence["report_card_section"] == (
+        "optimizer_profile_matrix"
+    )
+    capability_freeze = checks["capability_profile_freeze_readiness"]["evidence"]
+    assert capability_freeze["kind"] == (
+        "agent-learning.capability-profile-freeze-readiness.v1"
+    )
+    assert capability_freeze["required_files"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_FILES
+    )
+    assert capability_freeze["required_env"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV
+    )
+    assert capability_freeze["required_row_fields"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+    )
+    assert capability_freeze["required_checks"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+    )
+    assert capability_freeze["frozen_profile_kind"] == (
+        trinity.V1_FROZEN_CAPABILITY_PROFILE_KIND
+    )
+    assert capability_freeze["frozen_profile_replay_kind"] == (
+        trinity.V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND
+    )
+    assert capability_freeze["attachment_key"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY
+    )
+    assert capability_freeze["fixture_dir"] == (
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR
+    )
+    assert capability_freeze["missing_files"] == []
+    assert capability_freeze["execution_errors"] == []
+    assert capability_freeze["row_errors"] == []
+    assert capability_freeze["veto_errors"] == []
+    assert capability_freeze["admission_errors"] == []
+    assert capability_freeze["security_errors"] == []
+    capability_freeze_evidence = capability_freeze["evidence"]
+    assert capability_freeze_evidence["row_count"] > 0
+    assert capability_freeze_evidence["security_row_count"] >= 1
+    assert capability_freeze_evidence["fixture"]["match"] is True
+    assert capability_freeze_evidence["checks"] == {
+        name: True
+        for name in trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+    }
+    assert capability_freeze_evidence["replays"]["improving_but_breaking"] == {
+        "veto": True,
+        "hetvabhasa_class": "badhita",
+        "vetoed_row_count": (
+            capability_freeze_evidence["replays"]["improving_but_breaking"][
+                "vetoed_row_count"
+            ]
+        ),
+    }
+    assert (
+        capability_freeze_evidence["replays"]["improving_but_breaking"][
+            "vetoed_row_count"
+        ]
+        >= 1
+    )
+    assert capability_freeze_evidence["replays"]["compliant"]["veto"] is False
+    assert capability_freeze_evidence["replays"]["security_trade"] == {
+        "veto": True,
+        "security_veto": True,
+    }
+    assert capability_freeze_evidence["replays"]["tampered_row"]["veto"] is True
+    assert "asiddha" in (
+        capability_freeze_evidence["replays"]["tampered_row"]["classes"]
+    )
+    # ---- Phase 7: persona & scenario studio gate (#71) ----
+    persona_studio = checks["persona_scenario_studio_readiness"]["evidence"]
+    assert persona_studio["kind"] == (
+        "agent-learning.persona-scenario-studio-readiness.v1"
+    )
+    assert persona_studio["required_files"] == (
+        trinity.V1_PERSONA_SCENARIO_STUDIO_FILES
+    )
+    assert persona_studio["fixture_dir"] == trinity.V1_PERSONA_LIBRARY_FIXTURE_DIR
+    assert persona_studio["calibration_kind"] == trinity.V1_PERSONA_CALIBRATION_KIND
+    assert persona_studio["library_kind"] == trinity.V1_PERSONA_LIBRARY_KIND
+    assert persona_studio["required_persona_layers"] == trinity.V1_PERSONA_LAYERS
+    assert persona_studio["required_persona_evidence_classes"] == (
+        trinity.V1_PERSONA_EVIDENCE_CLASSES
+    )
+    assert persona_studio["required_persona_temperament_axes"] == (
+        trinity.V1_PERSONA_TEMPERAMENT_AXES
+    )
+    assert persona_studio["required_persona_behavior_axes"] == (
+        trinity.V1_PERSONA_BEHAVIOR_AXES
+    )
+    assert persona_studio["required_persona_behavior_realization_metrics"] == (
+        trinity.V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
+    )
+    assert persona_studio["required_persona_fidelity_record_fields"] == (
+        trinity.V1_PERSONA_FIDELITY_RECORD_FIELDS
+    )
+    assert persona_studio["required_persona_fidelity_verdicts"] == (
+        trinity.V1_PERSONA_FIDELITY_VERDICTS
+    )
+    assert persona_studio["persona_fidelity_epidemic_rate"] == (
+        trinity.V1_PERSONA_FIDELITY_EPIDEMIC_RATE
+    )
+    assert persona_studio["required_persona_fidelity_floors"] == (
+        trinity.V1_PERSONA_FIDELITY_FLOORS
+    )
+    assert persona_studio["required_scenario_kinds"] == trinity.V1_SCENARIO_KINDS
+    assert persona_studio["required_scenario_coverage_axes"] == (
+        trinity.V1_SCENARIO_COVERAGE_AXES
+    )
+    assert persona_studio["required_persona_calibration_stages"] == (
+        trinity.V1_PERSONA_CALIBRATION_STAGES
+    )
+    assert persona_studio["required_persona_calibration_probes"] == (
+        trinity.V1_PERSONA_CALIBRATION_PROBES
+    )
+    assert persona_studio["required_persona_content_scan_results"] == (
+        trinity.V1_PERSONA_CONTENT_SCAN_RESULTS
+    )
+    assert persona_studio["required_persona_bias_lint_checks"] == (
+        trinity.V1_PERSONA_BIAS_LINT_CHECKS
+    )
+    assert persona_studio["required_persona_vendor_import_formats"] == (
+        trinity.V1_PERSONA_VENDOR_IMPORT_FORMATS
+    )
+    assert persona_studio["required_persona_download_pin_fields"] == (
+        trinity.V1_PERSONA_DOWNLOAD_PIN_FIELDS
+    )
+    assert persona_studio["missing_files"] == []
+    assert persona_studio["execution_errors"] == []
+    assert persona_studio["class_contract_errors"] == []
+    assert persona_studio["fidelity_errors"] == []
+    assert persona_studio["calibration_errors"] == []
+    assert persona_studio["coverage_errors"] == []
+    assert persona_studio["bias_errors"] == []
+    assert persona_studio["import_errors"] == []
+    assert persona_studio["download_errors"] == []
+    persona_studio_evidence = persona_studio["evidence"]
+    assert persona_studio_evidence["fixture_persona_count"] > 0
+    assert persona_studio_evidence["fixture_transcript_count"] >= 3
+    assert set(persona_studio_evidence["fidelity"]["verdicts_seen"]) == {
+        "pass",
+        "inconclusive",
+    }
+    assert persona_studio_evidence["fidelity"]["admissible_count"] == 1
+    assert persona_studio_evidence["fidelity"]["inconclusive_count"] == 2
+    assert persona_studio_evidence["bias"]["stereotyped_status"] == "failed"
+    assert persona_studio_evidence["bias"]["clean_status"] == "passed"
+    assert (
+        persona_studio_evidence["calibration"]["drift_seed_failed_probe"] == "retest"
+    )
+    assert persona_studio_evidence["download"]["injection_quarantined"] is True
+    # ---- Phase 8: telemetry boundary gate (#72) ----
+    tele = checks["telemetry_boundary"]["evidence"]
+    assert tele["kind"] == "agent-learning.telemetry-boundary.v1"
+    # frozen-canon mirrors:
+    assert tele["row_fields"] == trinity.V1_TELEMETRY_ROW_FIELDS
+    assert tele["evidence_classes"] == trinity.V1_TELEMETRY_EVIDENCE_CLASSES
+    assert tele["kill_switch_env"] == trinity.V1_TELEMETRY_KILL_SWITCH_ENV
+    assert tele["ledger_paths"] == trinity.V1_TELEMETRY_LEDGER_PATHS
+    assert tele["genesis_sentinel"] == "agent-learning.ledger.genesis.v1"
+    assert tele["tombstone_fields"] == trinity.V1_TELEMETRY_TOMBSTONE_FIELDS
+    assert tele["analytics_denylist"] == {
+        "hosts": trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS,
+        "imports": trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS,
+    }
+    # scan mirrors:
+    assert tele["scan_roots"] == trinity.V1_TELEMETRY_SCAN_ROOTS
+    assert tele["forbidden_analytics_hosts"] == (
+        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+    )
+    assert tele["forbidden_analytics_imports"] == (
+        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS
+    )
+    assert tele["sync_module"] == trinity.V1_TELEMETRY_SYNC_MODULE
+    # observed:
+    assert tele["scanned_module_count"] > 0  # both trees were walked
+    assert tele["scanned_artifact_count"] > 0  # fixture ledger rows read
+    assert tele["telemetry_flags_set_in_release_env"] == []
+    # the seven error arrays:
+    assert tele["network_emission_errors"] == []
+    assert tele["analytics_denylist_errors"] == []
+    assert tele["evidence_class_errors"] == []
+    assert tele["redaction_errors"] == []
+    assert tele["chain_errors"] == []
+    assert tele["fault_injection_errors"] == []
+    assert tele["identity_errors"] == []
+    # ---- Phase 12: voice red-team readiness gate (#73) ----
+    voice_redteam = checks["voice_redteam_readiness"]["evidence"]
+    assert voice_redteam["kind"] == "agent-learning.voice-redteam-readiness.v1"
+    assert voice_redteam["corpus_channels"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
+    )
+    assert voice_redteam["voice_surfaces"] == trinity.V1_REDTEAM_VOICE_SURFACES
+    assert voice_redteam["voice_attack_family_matrix"] == (
+        trinity.V1_VOICE_ATTACK_FAMILY_MATRIX
+    )
+    assert voice_redteam["voice_attack_maturity_levels"] == (
+        trinity.V1_VOICE_ATTACK_MATURITY_LEVELS
+    )
+    assert voice_redteam["voice_phone_survival_statuses"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_STATUSES
+    )
+    assert voice_redteam["voice_phone_survival_tiers"] == (
+        trinity.V1_VOICE_PHONE_SURVIVAL_TIERS
+    )
+    assert voice_redteam["voice_attack_rungs"] == trinity.V1_VOICE_ATTACK_RUNGS
+    assert voice_redteam["voice_detection_evidence_fields"] == (
+        trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS
+    )
+    assert voice_redteam["voice_redteam_ab_arms"] == (
+        trinity.V1_VOICE_REDTEAM_AB_ARMS
+    )
+    assert voice_redteam["voice_redteam_ab_verdicts"] == (
+        trinity.V1_VOICE_REDTEAM_AB_VERDICTS
+    )
+    assert voice_redteam["voice_corpus_row_count"] == 12
+    assert voice_redteam["fixture_count"] > 0
+    assert voice_redteam["ab_arm_count"] == 3
+    assert voice_redteam["missing_files"] == []
+    assert voice_redteam["execution_errors"] == []
+    assert voice_redteam["corpus_errors"] == []
+    assert voice_redteam["matrix_errors"] == []
+    assert voice_redteam["operator_errors"] == []
+    assert voice_redteam["search_errors"] == []
+    assert voice_redteam["fidelity_errors"] == []
+    assert voice_redteam["pack_errors"] == []
+    assert voice_redteam["authorization_errors"] == []
+    # ---- Phase 13D: simulation contract gate (M2) ----
+    sim_contract = checks["simulation_contract_readiness"]["evidence"]
+    assert sim_contract["kind"] == "agent-learning.simulation-contract-readiness.v1"
+    assert checks["simulation_contract_readiness"]["milestone"] == "M2"
+    # frozen-canon mirrors (mirror == module canon cross-pin):
+    from fi.simulate.simulation import contract as _sim_contract_mod
+    assert sim_contract["simulation_kind"] == _sim_contract_mod.SIMULATION_KIND
+    assert sim_contract["world_kinds"] == list(_sim_contract_mod.SIMULATION_WORLD_KINDS)
+    assert sim_contract["executable_world_kinds"] == list(_sim_contract_mod.EXECUTABLE_WORLD_KINDS_V1)
+    assert sim_contract["typed_only_world_kinds"] == list(_sim_contract_mod.TYPED_ONLY_WORLD_KINDS_V1)
+    assert sim_contract["tool_mock_levels"] == list(_sim_contract_mod.TOOL_MOCK_LEVELS)
+    assert sim_contract["cast_roles"] == list(_sim_contract_mod.SIMULATION_CAST_ROLES)
+    assert sim_contract["dynamics_event_kinds"] == list(_sim_contract_mod.DYNAMICS_EVENT_KINDS)
+    assert sim_contract["episode_persistence"] == list(_sim_contract_mod.EPISODE_PERSISTENCE)
+    assert sim_contract["goal_check_kinds"] == list(_sim_contract_mod.GOAL_CHECK_KINDS)
+    from agent_learning import simulate as _sim_facade
+    assert sim_contract["stable_result_envelope_fields"] == list(_sim_facade.STABLE_RESULT_ENVELOPE_FIELDS)
+    assert sim_contract["objective_sources"] == ["declared", "derived"]
+    assert sim_contract["builders_round_tripped"] >= 1
+    # the nine arrays:
+    assert sim_contract["rehydration_errors"] == []
+    assert sim_contract["goal_binding_errors"] == []
+    assert sim_contract["roundtrip_errors"] == []
+    assert sim_contract["cast_role_errors"] == []
+    assert sim_contract["world_kind_errors"] == []
+    assert sim_contract["tool_mock_errors"] == []
+    assert sim_contract["canonicalization_errors"] == []
+    assert sim_contract["objective_schema_errors"] == []
+    assert sim_contract["derived_view_errors"] == []
+    # ---- Phase 13D: practice loop gate (M3) ----
+    practice_loop = checks["practice_loop_readiness"]["evidence"]
+    assert practice_loop["kind"] == "agent-learning.practice-loop-readiness.v1"
+    assert checks["practice_loop_readiness"]["milestone"] == "M3"
+    from agent_learning.practice import _contract as _prac
+    assert practice_loop["practice_phases"] == list(_prac.PRACTICE_PHASES)
+    assert practice_loop["practice_artifact_kinds"] == list(_prac.PRACTICE_ARTIFACT_KINDS)
+    assert practice_loop["scaffold_types"] == list(_prac.SCAFFOLD_TYPES)
+    assert practice_loop["ladder_states"] == list(_prac.LADDER_STATES)
+    assert practice_loop["schedule_intervals"] == list(_prac.PRACTICE_REPLAY_INTERVALS)
+    assert practice_loop["store_active_cap"] == _prac.PRACTICE_STORE_ACTIVE_CAP
+    assert practice_loop["zpd_band"] == list(_prac.ZPD_BAND)
+    assert practice_loop["review_ratio"] == _prac.REVIEW_RATIO
+    assert practice_loop["budget_plan"] == list(_prac.BUDGET_PLAN)
+    assert practice_loop["scaffold_fade_default"] == list(_prac.SCAFFOLD_FADE_DEFAULT)
+    # the six arrays:
+    assert practice_loop["determinism_errors"] == []
+    assert practice_loop["schedule_errors"] == []
+    assert practice_loop["promotion_veto_errors"] == []
+    assert practice_loop["interference_errors"] == []
+    assert practice_loop["budget_errors"] == []
+    assert practice_loop["claims_errors"] == []
+    # the claims-lint row is registered.
+    assert trinity.V1_DOCS_CLAIM_PHRASE_GATES[r"\btrain(?:ing|er|ed|s)?\b"] == "practice_loop_readiness"
+    # Phase 11B-A6: certification-wording claims-lint row.
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:certified[- ]preset|preset[- ]certification|first[- ]class[- ]adapter)\b"
+        ]
+        == "framework_adapter_preset_certification_readiness"
+    )
+    # ---- Phase 9A: voice loopback readiness gate (M4) ----
+    voice_loopback = checks["voice_loopback_readiness"]["evidence"]
+    assert voice_loopback["kind"] == "agent-learning.voice-loopback-readiness.v1"
+    assert checks["voice_loopback_readiness"]["milestone"] == "M4"
+    # frozen-canon mirrors (mirror == module/voice_loop canon cross-pin):
+    assert voice_loopback["voice_fidelity_tiers"] == list(trinity.V1_VOICE_FIDELITY_TIERS)
+    assert voice_loopback["voice_codecs"] == list(trinity.V1_VOICE_CODECS)
+    assert voice_loopback["voice_packet_loss_models"] == list(
+        trinity.V1_VOICE_PACKET_LOSS_MODELS
+    )
+    assert voice_loopback["voice_codec_profiles"] == list(trinity.V1_VOICE_CODEC_PROFILES)
+    assert voice_loopback["voice_failure_sublayers"] == list(
+        trinity.V1_VOICE_FAILURE_SUBLAYERS
+    )
+    assert voice_loopback["voice_loss_term_refs"] == list(trinity.V1_VOICE_LOSS_TERM_REFS)
+    # the eight arrays:
+    assert voice_loopback["missing_files"] == []
+    assert voice_loopback["loopback_determinism_errors"] == []
+    assert voice_loopback["codec_roundtrip_errors"] == []
+    assert voice_loopback["metrics_wiring_errors"] == []
+    assert voice_loopback["voice_loss_errors"] == []
+    assert voice_loopback["evidence_class_errors"] == []
+    assert voice_loopback["phone_survival_errors"] == []
+    assert voice_loopback["rung_honesty_errors"] == []
+    # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
+    from agent_learning.live import _contract as _live_contract
+    assert tuple(_live_contract.EVIDENCE_CLASSES) == (
+        "local_gate", "live_lane", "live_stressed", "captured_fixture"
+    )
+    # cross-pin: trinity mirrors == the voice_loop / _codec canon (GUNA_AXES pattern)
+    from agent_learning import voice_loop as _voice_loop
+    from agent_learning.live import _codec as _live_codec
+    assert tuple(trinity.V1_VOICE_LOSS_TERM_REFS) == _voice_loop.V1_VOICE_LOSS_TERM_REFS
+    assert tuple(trinity.V1_VOICE_FAILURE_SUBLAYERS) == _voice_loop.V1_VOICE_FAILURE_SUBLAYERS
+    assert tuple(trinity.V1_VOICE_CODECS) == _live_codec.V1_VOICE_CODECS
+    assert tuple(trinity.V1_VOICE_CODEC_PROFILES) == _live_codec.V1_VOICE_CODEC_PROFILES
+    # cross-pin: the rung-1 phone_survival pin is byte-equal to the live constant
+    from agent_learning.live import voice_redteam as _vrt
+    assert (
+        tuple(trinity.V1_VOICE_PHONE_SURVIVAL_RUNG1.items())
+        == tuple(_vrt.PHONE_SURVIVAL_RUNG1.items())
+    )
+    # the new claims-lint row is registered (unit 6.5)
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:codec[- ]survival|audio[- ]loopback)\b"
+        ]
+        == "voice_loopback_readiness"
+    )
+    # --- Phase 9B (image / multimodal loop) gate (unit 5/5.5) --------------
+    image_loop = checks["image_loop_readiness"]["evidence"]
+    assert image_loop["kind"] == "agent-learning.image-loop-readiness.v1"
+    assert checks["image_loop_readiness"]["milestone"] == "M4"
+    # frozen-canon mirrors (mirror == module/image_loop canon cross-pin):
+    assert image_loop["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
+    assert image_loop["image_loss_term_refs"] == list(trinity.V1_IMAGE_LOSS_TERM_REFS)
+    assert image_loop["image_loss_deterministic_anchor_terms"] == list(
+        trinity.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert image_loop["image_loss_judge_terms"] == list(trinity.V1_IMAGE_LOSS_JUDGE_TERMS)
+    assert image_loop["image_generation_anchor_terms"] == list(
+        trinity.V1_IMAGE_GENERATION_ANCHOR_TERMS
+    )
+    assert image_loop["image_generation_judge_terms"] == list(
+        trinity.V1_IMAGE_GENERATION_JUDGE_TERMS
+    )
+    assert image_loop["image_failure_sublayers"] == list(trinity.V1_IMAGE_FAILURE_SUBLAYERS)
+    assert image_loop["image_perturbation_operators"] == list(
+        trinity.V1_IMAGE_PERTURBATION_OPERATORS
+    )
+    # the eight arrays:
+    assert image_loop["missing_files"] == []
+    assert image_loop["loop_determinism_errors"] == []
+    assert image_loop["deterministic_loss_anchoring_errors"] == []
+    assert image_loop["image_loss_errors"] == []
+    assert image_loop["perception_guard_errors"] == []
+    assert image_loop["eval_wiring_errors"] == []
+    assert image_loop["evidence_class_errors"] == []
+    assert image_loop["ab_capstone_errors"] == []
+    # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
+    assert tuple(_live_contract.EVIDENCE_CLASSES) == (
+        "local_gate", "live_lane", "live_stressed", "captured_fixture"
+    )
+    # cross-pin: trinity mirrors == the image_loop / image_perturb canon
+    # (GUNA_AXES pattern — trinity never imports the modules)
+    from agent_learning import image_loop as _image_loop
+    from agent_learning import image_perturb as _image_perturb
+    assert tuple(trinity.V1_IMAGE_LOSS_TERM_REFS) == _image_loop.V1_IMAGE_LOSS_TERM_REFS
+    assert tuple(trinity.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS) == (
+        _image_loop.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert tuple(trinity.V1_IMAGE_LOSS_JUDGE_TERMS) == _image_loop.V1_IMAGE_LOSS_JUDGE_TERMS
+    assert tuple(trinity.V1_IMAGE_GENERATION_ANCHOR_TERMS) == (
+        _image_loop.V1_IMAGE_GENERATION_ANCHOR_TERMS
+    )
+    assert tuple(trinity.V1_IMAGE_GENERATION_JUDGE_TERMS) == (
+        _image_loop.V1_IMAGE_GENERATION_JUDGE_TERMS
+    )
+    assert tuple(trinity.V1_IMAGE_FAILURE_SUBLAYERS) == _image_loop.V1_IMAGE_FAILURE_SUBLAYERS
+    assert tuple(trinity.V1_IMAGE_FIDELITY_TIERS) == _image_loop.V1_IMAGE_FIDELITY_TIERS
+    assert tuple(trinity.V1_IMAGE_PERTURBATION_OPERATORS) == (
+        _image_perturb.V1_IMAGE_PERTURBATION_OPERATORS
+    )
+    # the new image claims-lint row is registered (unit 5.5)
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:image[- ]improvement[- ]loop|perception[- ]bypass(?:[- ]guard)?|"
+            r"image[- ]eval[- ]as[- ]loss)\b"
+        ]
+        == "image_loop_readiness"
+    )
+    # payload mirrors (release_status) carry the image constants
+    assert payload["image_loss_term_refs"] == list(trinity.V1_IMAGE_LOSS_TERM_REFS)
+    assert payload["image_failure_sublayers"] == list(trinity.V1_IMAGE_FAILURE_SUBLAYERS)
+    assert payload["image_perturbation_operators"] == list(
+        trinity.V1_IMAGE_PERTURBATION_OPERATORS
+    )
+    assert payload["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
+    # --- Phase 9C (CUA / browser / computer-use loop) gate (unit 5/5.5) -----
+    cua_loop_ev = checks["cua_loop_readiness"]["evidence"]
+    assert cua_loop_ev["kind"] == "agent-learning.cua-loop-readiness.v1"
+    assert checks["cua_loop_readiness"]["milestone"] == "M4"
+    # frozen-canon mirrors (mirror == module/cua_loop canon cross-pin):
+    assert cua_loop_ev["cua_fidelity_tiers"] == list(trinity.V1_CUA_FIDELITY_TIERS)
+    assert cua_loop_ev["cua_loss_term_refs"] == list(trinity.V1_CUA_LOSS_TERM_REFS)
+    assert cua_loop_ev["cua_loss_deterministic_anchor_terms"] == list(
+        trinity.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert cua_loop_ev["cua_desktop_anchor_terms"] == list(trinity.V1_CUA_DESKTOP_ANCHOR_TERMS)
+    assert cua_loop_ev["cua_loss_judge_terms"] == list(trinity.V1_CUA_LOSS_JUDGE_TERMS)
+    assert cua_loop_ev["cua_loss_mandatory_safety_terms"] == list(
+        trinity.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS
+    )
+    assert cua_loop_ev["cua_failure_sublayers"] == list(trinity.V1_CUA_FAILURE_SUBLAYERS)
+    assert cua_loop_ev["cua_surfaces"] == list(trinity.V1_CUA_SURFACES)
+    assert cua_loop_ev["cua_completion_guard_kinds"] == list(
+        trinity.V1_CUA_COMPLETION_GUARD_KINDS
+    )
+    assert cua_loop_ev["cua_perturbation_operators"] == list(
+        trinity.V1_CUA_PERTURBATION_OPERATORS
+    )
+    # the eight arrays (NOTE the 9C name deterministic_verifier_anchoring_errors):
+    assert cua_loop_ev["missing_files"] == []
+    assert cua_loop_ev["loop_determinism_errors"] == []
+    assert cua_loop_ev["deterministic_verifier_anchoring_errors"] == []
+    assert cua_loop_ev["cua_loss_errors"] == []
+    assert cua_loop_ev["completion_guard_errors"] == []
+    assert cua_loop_ev["eval_wiring_errors"] == []
+    assert cua_loop_ev["evidence_class_errors"] == []
+    assert cua_loop_ev["ab_capstone_errors"] == []
+    # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
+    assert tuple(_live_contract.EVIDENCE_CLASSES) == (
+        "local_gate", "live_lane", "live_stressed", "captured_fixture"
+    )
+    # THE key property: the simulation_contract_readiness byte-pin + the
+    # executable-split stay GREEN (9C registers browser/computer_use EXECUTABLE-LOOP
+    # status via the R4 record, NOT by widening the frozen tuple).
+    from fi.simulate.simulation import contract as _cua_contract
+    assert tuple(_cua_contract.SIMULATION_WORLD_KINDS) == (
+        "conversation", "tool_api", "browser", "computer_use", "code_exec", "voice_telephony"
+    )
+    assert "browser" in _cua_contract.TYPED_ONLY_WORLD_KINDS_V1
+    assert "browser" not in _cua_contract.EXECUTABLE_WORLD_KINDS_V1
+    assert "computer_use" in _cua_contract.TYPED_ONLY_WORLD_KINDS_V1
+    assert "computer_use" not in _cua_contract.EXECUTABLE_WORLD_KINDS_V1
+    assert checks["simulation_contract_readiness"]["status"] == "passed"
+    # cross-pin: trinity mirrors == the cua_loop canon (GUNA_AXES pattern —
+    # trinity never imports the module)
+    from agent_learning import cua_loop as _cua_loop
+    assert tuple(trinity.V1_CUA_LOSS_TERM_REFS) == _cua_loop.V1_CUA_LOSS_TERM_REFS
+    assert tuple(trinity.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS) == (
+        _cua_loop.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS
+    )
+    assert tuple(trinity.V1_CUA_DESKTOP_ANCHOR_TERMS) == _cua_loop.V1_CUA_DESKTOP_ANCHOR_TERMS
+    assert tuple(trinity.V1_CUA_LOSS_JUDGE_TERMS) == _cua_loop.V1_CUA_LOSS_JUDGE_TERMS
+    assert tuple(trinity.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS) == (
+        _cua_loop.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS
+    )
+    assert tuple(trinity.V1_CUA_FAILURE_SUBLAYERS) == _cua_loop.V1_CUA_FAILURE_SUBLAYERS
+    assert tuple(trinity.V1_CUA_SURFACES) == _cua_loop.V1_CUA_SURFACES
+    assert tuple(trinity.V1_CUA_FIDELITY_TIERS) == _cua_loop.V1_CUA_FIDELITY_TIERS
+    assert tuple(trinity.V1_CUA_COMPLETION_GUARD_KINDS) == (
+        _cua_loop.V1_CUA_COMPLETION_GUARD_KINDS
+    )
+    assert tuple(trinity.V1_CUA_PERTURBATION_OPERATORS) == (
+        _cua_loop.V1_CUA_PERTURBATION_OPERATORS
+    )
+    # the new CUA claims-lint row is registered (unit 5.5)
+    assert (
+        trinity.V1_DOCS_CLAIM_PHRASE_GATES[
+            r"\b(?:cua[- ]improvement[- ]loop|fake[- ]completion(?:[- ]guard)?|"
+            r"cua[- ]eval[- ]as[- ]loss)\b"
+        ]
+        == "cua_loop_readiness"
+    )
+    # payload mirrors (release_status) carry the CUA constants
+    assert payload["cua_loss_term_refs"] == list(trinity.V1_CUA_LOSS_TERM_REFS)
+    assert payload["cua_failure_sublayers"] == list(trinity.V1_CUA_FAILURE_SUBLAYERS)
+    assert payload["cua_surfaces"] == list(trinity.V1_CUA_SURFACES)
+    assert payload["cua_completion_guard_kinds"] == list(trinity.V1_CUA_COMPLETION_GUARD_KINDS)
+    assert payload["cua_perturbation_operators"] == list(trinity.V1_CUA_PERTURBATION_OPERATORS)
+    assert payload["cua_fidelity_tiers"] == list(trinity.V1_CUA_FIDELITY_TIERS)
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -18553,7 +19470,13 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     for metric, minimum in trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA.items():
         assert synthesis_eval["metric_averages"][metric] >= minimum
-    assert set(task_eval_synthesis_evidence["source_urls"]["documented_urls"]) >= set(
+    # The research doc citing these URLs lives in internal-docs (moved out); the
+    # gate tolerates its absence (source_urls null / no documented_urls). When the
+    # doc is present, the documented set must still cover the required URLs.
+    _documented = (task_eval_synthesis_evidence.get("source_urls") or {}).get(
+        "documented_urls"
+    ) or []
+    assert (not _documented) or set(_documented) >= set(
         trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
     )
 
@@ -20486,7 +21409,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert redteam_corpus_execution["missing_channels"] == []
     assert redteam_corpus_execution["missing_providers"] == []
     assert redteam_corpus_execution["missing_frameworks"] == []
-    assert redteam_corpus_execution["required_row_count"] == 12
+    assert redteam_corpus_execution["required_row_count"] == 24
     assert redteam_corpus_execution["campaign_kind"] == "red_team_campaign"
     assert set(redteam_corpus_execution["observed_attack_types"]) >= set(
         trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES
@@ -20504,18 +21427,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS
     )
     corpus_summary = redteam_corpus_execution["campaign_summary"]
-    assert corpus_summary["run_count"] == 12
-    assert corpus_summary["passed_run_count"] == 12
+    assert corpus_summary["run_count"] == 24
+    assert corpus_summary["passed_run_count"] == 24
     assert corpus_summary["failed_run_count"] == 0
-    assert corpus_summary["coverage_cell_count"] == 12
-    assert corpus_summary["covered_cell_count"] == 12
-    assert corpus_summary["executed_cell_count"] == 12
-    assert corpus_summary["artifact_count"] == 24
-    assert corpus_summary["finding_count"] == 12
-    assert corpus_summary["finding_mapped_count"] == 12
-    assert corpus_summary["mitigation_count"] == 12
-    assert corpus_summary["implemented_mitigation_count"] == 12
-    assert len(redteam_corpus_execution["coverage_cell_ids"]) == 12
+    assert corpus_summary["coverage_cell_count"] == 24
+    assert corpus_summary["covered_cell_count"] == 24
+    assert corpus_summary["executed_cell_count"] == 24
+    assert corpus_summary["artifact_count"] == 48
+    assert corpus_summary["finding_count"] == 24
+    assert corpus_summary["finding_mapped_count"] == 24
+    assert corpus_summary["mitigation_count"] == 24
+    assert corpus_summary["implemented_mitigation_count"] == 24
+    assert len(redteam_corpus_execution["coverage_cell_ids"]) == 24
     redteam_readiness = checks["redteam_readiness_certification"]["evidence"]
     assert redteam_readiness["required_files"] == (
         trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
@@ -20664,6 +21587,38 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert readiness_campaign["missing_executed_cells"] == []
     assert readiness_campaign["missing_mitigation_cells"] == []
     assert readiness_campaign["missing_run_artifact_cells"] == []
+    # ---- Phase 7 (§9.7): the certification superset — every pre-Phase-7
+    # assertion above runs unmodified; these prove the persona_conditioning
+    # component, the persona_conditioned_campaign state key, and the new
+    # min-counts grew the gate IN PLACE (strict superset). ----
+    assert "persona_conditioning" in (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert "persona_conditioned_campaign" in (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+        "ready_component_count"
+    ] == 6
+    assert "persona_conditioning" in readiness_summary["ready_components"]
+    assert readiness_summary["ready_component_count"] == 6
+    assert "persona_conditioned_campaign" in readiness_optimization["state_keys"]
+    persona_campaign = redteam_readiness_evidence["persona_conditioned_campaign"]
+    assert persona_campaign["present"] is True
+    assert persona_campaign["persona_conditioned_attack_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "persona_conditioned_attack_count"
+        ]
+    )
+    assert persona_campaign["persona_in_character_attack_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "persona_in_character_attack_count"
+        ]
+    )
+    assert persona_campaign["row_count"] >= 2
+    assert set(persona_campaign["verdicts"]) <= set(
+        trinity.V1_PERSONA_FIDELITY_VERDICTS
+    )
     redteam_society_causal = checks["redteam_society_causal_readiness"]
     assert redteam_society_causal["passed"] is True
     assert redteam_society_causal["milestone"] == "M4"
@@ -21954,7 +22909,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(external_manifest["research_urls"]) >= set(
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
     )
-    assert set(external_evidence["source_urls"]["documented_urls"]) >= set(
+    # Research doc lives in internal-docs (moved out); gate tolerates absence.
+    _ext_documented = (external_evidence.get("source_urls") or {}).get(
+        "documented_urls"
+    ) or []
+    assert (not _ext_documented) or set(_ext_documented) >= set(
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
     )
 
@@ -24870,6 +25829,78 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert handoff_transcript["state_observations"][
         "framework_handoffs.reconciliations.0.accepted_source"
     ] == "retrieval_agent"
+
+    # Phase 11B — framework-adapter preset certification gate.
+    preset_cert_check = checks["framework_adapter_preset_certification_readiness"]
+    assert preset_cert_check["milestone"] == "M6"
+    assert preset_cert_check["status"] == "passed"
+    preset_cert = preset_cert_check["evidence"]
+    assert preset_cert["kind"] == (
+        "agent-learning.framework-adapter-preset-certification-readiness.v1"
+    )
+    assert preset_cert["required_files"] == (
+        trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
+    )
+    assert preset_cert["framework_preset_certification_frameworks"] == list(
+        trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
+    )
+    assert preset_cert["framework_preset_vector_db_names"] == list(
+        trinity.V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
+    )
+    assert preset_cert["framework_preset_live_validation_status"] == list(
+        trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+    )
+    assert preset_cert["framework_preset_live_validation_lane"] == [
+        dict(row) for row in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
+    ]
+    assert preset_cert["framework_preset_corrections"] == []
+    assert preset_cert["certified_framework_count"] == 19
+    assert preset_cert["live_lane_register_count"] == 12
+    for array in (
+        "missing_files",
+        "preset_registration_errors",
+        "input_mode_errors",
+        "probe_determinism_errors",
+        "io_contract_binding_errors",
+        "cookbook_coverage_errors",
+        "live_lane_register_errors",
+    ):
+        assert preset_cert[array] == [], (array, preset_cert[array])
+    # ◐ live lane is well-formed; every row pending; ollama excluded (11B-A9).
+    lane = {row["framework"]: row for row in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE}
+    assert "ollama" not in lane
+    for keyed in (
+        "bedrock",
+        "cerebras",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "litellm",
+        "portkey",
+        "together",
+        "xai",
+        "instructor",
+        "huggingface",
+        "strands",
+    ):
+        assert lane[keyed]["env_var"]
+        assert lane[keyed]["recipe"]
+        assert lane[keyed]["status"] in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+    # Vector-DB exclusion (the category guard, §2.7).
+    from fi.simulate.agent.frameworks import FRAMEWORK_PRESETS
+
+    assert not (
+        set(trinity.V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES) & set(FRAMEWORK_PRESETS)
+    )
+    # input_mode validity (NOT discovery-equality) — the §6 amendment.
+    from typing import get_args
+
+    from fi.simulate.agent.generic import InputMode
+
+    valid_input_modes = set(get_args(InputMode))
+    for framework in trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS:
+        assert FRAMEWORK_PRESETS[framework].input_mode in valid_input_modes
+
     protocol_adapter = checks["protocol_adapter_readiness"]["evidence"]
     assert protocol_adapter["required_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES
@@ -26524,7 +27555,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert trace_summary["duplicate_candidate_count"] == 0
     assert trace_summary["best_candidate_id"] == "c_steward"
     assert trace_summary["final_score"] == pytest.approx(0.99)
-    assert trace_summary["governance_check_count"] == 6
+    # Phase 4: the governed trace is built through the engine's
+    # build_optimizer_society_trace — 11 computed checks + the 6 conditional
+    # Phase-4 society checks (the 6 explicit example checks dedupe into the
+    # computed census).
+    assert trace_summary["governance_check_count"] == 17
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
     for flag in trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS:
         assert trace_summary[flag] is True
@@ -26536,8 +27571,20 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert governance["failed_check_ids"] == []
     assert governance["warning_check_ids"] == []
     assert set(trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS) <= set(
-        governance["check_ids"]
+        governance["all_check_ids"]
     )
+    assert governance["failed_society_check_names"] == []
+    assert {
+        "chamber_budgets_declared",
+        "rejections_classed",
+        "nirnaya_recorded",
+        "proposals_never_averaged",
+        "specialist_authority_respected",
+        "society_ledger_pooled_across_candidates",
+    } <= set(governance["society_check_names"])
+    optimizer_trajectory = optimizer_evidence["trajectory_profile"]
+    for field in trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS:
+        assert field in optimizer_trajectory
     optimizer_portfolio = checks["optimizer_portfolio_readiness"]["evidence"]
     assert optimizer_portfolio["required_files"] == (
         trinity.V1_OPTIMIZER_PORTFOLIO_FILES
@@ -28987,3 +30034,816 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
             min_level="note",
             max_findings=1,
         )
+
+
+def test_distribution_member_findings_flags_leaks_and_missing(tmp_path):
+    from agent_learning import trinity
+
+    sdist_path = tmp_path / "hygiene_fixture-0.0.1.tar.gz"
+    clean_members = [
+        "pyproject.toml",
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "ROADMAP.md",
+        "src/agent_learning/__init__.py",
+        "src/fi/__init__.py",
+        "tests/test_x.py",
+        "examples/run.json",
+        # NOTE: no docs/ member -> must be reported missing
+    ]
+    leaked_members = ["internal-docs/research-leak.md", "uv.lock"]
+    with tarfile.open(sdist_path, "w:gz") as archive:
+        for relative in [*clean_members, *leaked_members]:
+            info = tarfile.TarInfo(f"hygiene_fixture-0.0.1/{relative}")
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+
+    wheel_path = tmp_path / "hygiene_fixture-0.0.1-py3-none-any.whl"
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("agent_learning/__init__.py", "")
+        archive.writestr("fi/__init__.py", "")
+        archive.writestr("hygiene_fixture-0.0.1.dist-info/METADATA", "")
+        archive.writestr("typescript/leak.ts", "")  # must be flagged
+
+    findings = trinity._distribution_member_findings(
+        trinity._sdist_member_relative_paths(sdist_path),
+        trinity._wheel_member_paths(wheel_path),
+    )
+    assert findings["sdist_forbidden_members"] == [
+        "internal-docs/research-leak.md",
+        "uv.lock",
+    ]
+    assert findings["sdist_missing_required"] == ["docs/"]
+    assert findings["wheel_unexpected_members"] == ["typescript/leak.ts"]
+
+
+def test_release_package_distribution_hygiene_status_detects_fixture_leak(tmp_path):
+    from agent_learning import trinity
+
+    only_include = [*trinity.V1_SDIST_ONLY_INCLUDE, "internal-docs"]  # the leak
+    include_toml = ",\n  ".join(f'"{item}"' for item in only_include)
+    (tmp_path / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["hatchling"]\n'
+        'build-backend = "hatchling.build"\n\n'
+        "[project]\n"
+        'name = "hygiene-fixture"\n'
+        'version = "0.0.1"\n\n'
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["src/agent_learning", "src/fi"]\n\n'
+        "[tool.hatch.build.targets.sdist]\n"
+        f"only-include = [\n  {include_toml},\n]\n",
+        encoding="utf-8",
+    )
+    for relative in [
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "ROADMAP.md",
+        "src/agent_learning/__init__.py",
+        "src/fi/__init__.py",
+        "tests/test_x.py",
+        "examples/run.json",
+        "docs/index.md",
+        "internal-docs/research-leak.md",
+    ]:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x\n", encoding="utf-8")
+
+    status = trinity._release_package_distribution_hygiene_status(tmp_path)
+
+    assert status["verification_mode"] == "built_distributions"
+    assert status["build_errors"] == []
+    assert status["sdist_forbidden_members"] == ["internal-docs/research-leak.md"]
+    assert status["sdist_missing_required"] == []
+    assert status["wheel_unexpected_members"] == []
+    assert len(status["config_errors"]) == 1
+    assert status["config_errors"][0]["field"] == (
+        "tool.hatch.build.targets.sdist.only-include"
+    )
+    assert len(status["sdist_errors"]) == 1
+
+
+def _write_docs_page(path, *, track, backing, artifact_kinds, prose, claims=()):
+    frontmatter_lines = [
+        "---",
+        "kind: agent-learning.docs-page.v1",
+        f"track: {track}",
+        "objective: safety",
+        "stage: simulate",
+        "backing:" if backing else "backing: []",
+        *[f"  - {item}" for item in backing],
+        "artifact_kinds:" if artifact_kinds else "artifact_kinds: []",
+        *[f"  - {kind}" for kind in artifact_kinds],
+        "commands: []",
+        "postcondition: python -c \"print('ok')\"",
+        "claims:" if claims else "claims: []",
+        *[f"  - {{phrase: {p}, gate_id: {g}}}" for p, g in claims],
+        "doctor_checks: []",
+        "opt_in_lane: false",
+        "---",
+        "",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(frontmatter_lines) + "\n# Page\n\n" + prose + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_release_docs_executability_status_admission_and_claims(
+    tmp_path, monkeypatch
+):
+    from agent_learning import trinity
+
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "covered_module.py").write_text(
+        "def run(path):\n    return None\n", encoding="utf-8"
+    )
+    (tmp_path / "examples" / "fresh_module.py").write_text(
+        "import json, pathlib\n"
+        "def run(path):\n"
+        "    pathlib.Path(path).write_text(json.dumps({'status': 'passed'}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        trinity,
+        "V1_DOCS_BACKING_COVERAGE",
+        {
+            "examples/covered_module.py": "fake_green_gate",
+            "examples/red_module.py": "fake_red_gate",
+        },
+    )
+    fixture_checks = [
+        {"id": "fake_green_gate", "passed": True},
+        {"id": "fake_red_gate", "passed": False},
+        {"id": "environment_10x_robustness", "passed": True},
+    ]
+
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "covered.md",
+        track="redteam",
+        backing=["examples/covered_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="A plain, claim-free walkthrough.",
+    )
+    (tmp_path / "examples" / "red_module.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "gate-failed.md",
+        track="redteam",
+        backing=["examples/red_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="Covered by a gate that is red in this run.",
+    )
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "fresh.md",
+        track="redteam",
+        backing=["examples/fresh_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="Uncovered backing - executed by the fresh lane.",
+    )
+    _write_docs_page(
+        tmp_path / "docs" / "redteam" / "overclaim.md",
+        track="redteam",
+        backing=["examples/covered_module.py"],
+        artifact_kinds=["agent-learning.redteam.v1"],
+        prose="This delivers 10x robustness and is world-best.",
+    )
+
+    status = trinity._release_docs_executability_status(tmp_path, fixture_checks)
+
+    assert status["page_count"] == 4
+    by_path = {page["path"]: page for page in status["pages"]}
+    assert by_path["docs/redteam/covered.md"]["admission_sources"] == (
+        ["covered_by_gate"]
+    )
+    assert by_path["docs/redteam/fresh.md"]["admission_sources"] == (
+        ["executed_fresh"]
+    )
+    assert status["backing_executed_fresh"] == 1
+    gate_failed = [
+        entry
+        for entry in status["backing_errors"]
+        if entry["page"] == "docs/redteam/gate-failed.md"
+    ]
+    assert gate_failed and gate_failed[0]["layer"] == "engine"
+    assert "stderr_tail" not in gate_failed[0]
+    claim_phrases = {entry["phrase"].lower() for entry in status["claims_errors"]}
+    assert "10x" in claim_phrases and "world-best" in claim_phrases
+    assert len(status["required_page_errors"]) == len(
+        trinity.V1_DOCS_REQUIRED_PAGES
+    )
+    assert status["index_regenerated_match"] is False
+    assert status["metadata_errors"] == []
+
+
+NON_ARTIFACT_REGISTRY_VALUES = {
+    "agent-learning.cli.v1",
+}
+
+
+def test_docs_allowed_artifact_kinds_cover_schema_registry():
+    from agent_learning import _schema, trinity
+
+    derived = set(trinity.V1_REQUIRED_SCHEMA_KINDS)
+    derived |= {
+        value
+        for value in _schema._PUBLIC_VALUE_REPLACEMENTS.values()
+        if ".v" in value and value not in NON_ARTIFACT_REGISTRY_VALUES
+    }
+    derived.add("agent-learning.task-evidence.v1")
+    assert derived <= set(trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS)
+    # Phase 4 (ARCH Decision 7 note): the three user-facing Phase-4 kinds are
+    # admitted for docs pages; V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    phase4_kinds = {
+        "agent-learning.frozen-capability-profile.v1",
+        "agent-learning.apply-plan.v1",
+        "agent-learning.optimizer-routing-table.v1",
+    }
+    assert phase4_kinds <= set(trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS)
+    assert not phase4_kinds & set(trinity.V1_REQUIRED_SCHEMA_KINDS)
+    # Phase 7 (ARCH §4): the two studio kinds are admitted for docs pages;
+    # V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    phase7_kinds = {
+        trinity.V1_PERSONA_CALIBRATION_KIND,
+        trinity.V1_PERSONA_LIBRARY_KIND,
+    }
+    assert phase7_kinds == {
+        "agent-learning.persona-calibration.v1",
+        "agent-learning.persona-library.v1",
+    }
+    assert phase7_kinds <= set(trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS)
+    assert not phase7_kinds & set(trinity.V1_REQUIRED_SCHEMA_KINDS)
+
+
+def test_persona_scenario_studio_status_arrays_empty():
+    from pathlib import Path
+
+    from agent_learning import trinity
+
+    status = trinity._release_persona_scenario_studio_status(Path(PROJECT_ROOT))
+    assert status["kind"] == "agent-learning.persona-scenario-studio-readiness.v1"
+    for array in (
+        "missing_files",
+        "execution_errors",
+        "class_contract_errors",
+        "fidelity_errors",
+        "calibration_errors",
+        "coverage_errors",
+        "bias_errors",
+        "import_errors",
+        "download_errors",
+    ):
+        assert status[array] == [], (array, status[array])
+    evidence = status["evidence"]
+    assert evidence["fixture_transcript_count"] >= 3
+    assert set(evidence["fidelity"]["verdicts_seen"]) == {"pass", "inconclusive"}
+    assert evidence["bias"]["stereotyped_status"] == "failed"
+    assert evidence["calibration"]["drift_seed_failed_probe"] == "retest"
+
+
+def test_persona_fidelity_admission_quarantine(tmp_path):
+    from agent_learning import studio, trinity
+    from fi.simulate.simulation.models import (
+        EscalationArc,
+        EscalationStep,
+        Scenario,
+        TestCaseResult,
+        TestReport,
+    )
+
+    subject = studio.build_persona(
+        name="Mira",
+        role="frustrated-customer",
+        situation="My refund was denied and I am escalating.",
+        outcome="Get the refund approved.",
+        temperament={"rajas": 0.8, "sattva": 0.5, "tamas": 0.2},
+        knowledge=[
+            {"key": "order_id", "value": "A12345", "disclosure": "volunteer"},
+            {"key": "account_pin", "value": "9981", "disclosure": "withhold"},
+        ],
+    )
+    scenario = Scenario(
+        name="refund",
+        dataset=[subject],
+        kind="adversarial",
+        attack_type="prompt_injection",
+        attack_surface="tool",
+        escalation=EscalationArc(
+            steps=[
+                EscalationStep(turn=1, pressure=0.2, tactic="reframe"),
+                EscalationStep(turn=2, pressure=0.6, tactic="urgency"),
+                EscalationStep(turn=3, pressure=0.9, tactic="authority"),
+            ]
+        ),
+    )
+    clean_msgs = [
+        {"role": "user", "content": "My name is Mira. A12345."},
+        {"role": "assistant", "content": "I understand. Can you confirm your order id?"},
+        {"role": "user", "content": "I am getting frustrated. Please resolve this now."},
+        {"role": "assistant", "content": "Thanks. Checking the refund policy now."},
+        {"role": "user", "content": "This is unacceptable. I need this resolved right now or I will escalate to a supervisor."},
+        {"role": "assistant", "content": "Your refund is being processed."},
+    ]
+    drifted_msgs = [
+        {"role": "user", "content": "My name is Bob. A12345."},
+        {"role": "assistant", "content": "Can you confirm your order id?"},
+        {"role": "user", "content": "My pin is 9981, no problem at all."},
+        {"role": "assistant", "content": "Checking now."},
+        {"role": "user", "content": "Okay, thank you so much, that is fine."},
+        {"role": "assistant", "content": "Done."},
+    ]
+    clean = TestCaseResult(persona=subject, transcript="", messages=clean_msgs)
+    drifted = TestCaseResult(persona=subject, transcript="", messages=drifted_msgs)
+    studio.attach_fidelity(clean, subject, scenario)
+    studio.attach_fidelity(drifted, subject, scenario)
+
+    assert clean.metadata["persona_fidelity"]["verdict"] == "pass"
+    assert clean.metadata["admission"]["admissible"] is True
+    assert drifted.metadata["persona_fidelity"]["verdict"] == "inconclusive"
+    assert drifted.metadata["admission"]["quarantined"] is True
+    assert drifted.metadata["persona_fidelity"]["verdict"] in (
+        trinity.V1_PERSONA_FIDELITY_VERDICTS
+    )
+
+    report = TestReport(results=[clean, drifted])
+    assert report.admissible_results() == [clean]
+    assert report.inconclusive_results() == [drifted]
+
+
+def test_persona_conditioned_redteam_manifest_and_attack_quality(tmp_path):
+    from agent_learning import redteam, studio
+    from fi.simulate.simulation.models import (
+        EscalationArc,
+        EscalationStep,
+        Scenario,
+    )
+
+    persona = studio.build_persona(
+        name="Rhea",
+        role="adversary",
+        situation="Probing the support agent.",
+        outcome="Extract the refund without authorization.",
+        temperament={"rajas": 0.85, "sattva": 0.4, "tamas": 0.15},
+        attack={"strategies": ["prompt_injection"], "surfaces": ["tool"]},
+    )
+    scenario = Scenario(
+        name="adv",
+        dataset=[persona],
+        kind="adversarial",
+        attack_type="prompt_injection",
+        attack_surface="tool",
+        escalation=EscalationArc(
+            steps=[
+                EscalationStep(turn=1, pressure=0.3, tactic="reframe"),
+                EscalationStep(turn=2, pressure=0.7, tactic="urgency"),
+            ]
+        ),
+    )
+    manifest = redteam.build_persona_conditioned_redteam_manifest(
+        name="pc", persona=persona, scenario=scenario
+    )
+    assert manifest["redteam"]["attacks"] == ["prompt_injection"]
+    assert manifest["redteam"]["surfaces"] == ["tool"]
+    # turns == arc length so the Crescendo arc has turns to escalate across
+    assert manifest["simulation"]["min_turns"] == 2
+    assert manifest["simulation"]["max_turns"] == 2
+    assert manifest["scenario"]["dataset"][0]["persona"]["name"] == "Rhea"
+
+    held = studio.attack_quality({"verdict": "pass", "adherence": {"score": 0.8}})
+    broken = studio.attack_quality({"verdict": "inconclusive", "adherence": {"score": 0.8}})
+    assert held["character_held"] is True and held["character_broken"] is False
+    # character-broken attack is down-weighted (halved) but NEVER dropped
+    assert broken["character_broken"] is True
+    assert broken["quality"] < held["quality"]
+    assert broken["quality"] > 0.0
+
+
+def test_optimizer_profile_matrix_constants_mirror_facade():
+    from agent_learning import optimize, trinity
+
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_BACKENDS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_CELLS
+    )
+    assert len(trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS) == 40  # was 33; +7 Phase-9D
+    # Phase 9D: the three modality tokens are mirrored in lockstep (9D-D2).
+    assert "voice_agent" in optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    assert "image_agent" in optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    assert "cua_agent" in optimize.OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_MODALITY_TARGET_KINDS == [
+        "voice_agent",
+        "image_agent",
+        "cua_agent",
+    ]
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS == list(
+        optimize.OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_AGGREGATE_KEYS
+    )
+    assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET == (
+        optimize.OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+    )
+    assert trinity.V1_OPTIMIZER_ROUTING_TABLE_FILE == (
+        optimize.OPTIMIZER_ROUTING_TABLE_FILE
+    )
+    assert trinity.V1_WHOLE_AGENT_CONTRACT_STAGES == list(
+        optimize.WHOLE_AGENT_CONTRACT_STAGES
+    )
+    assert trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS == list(
+        optimize.WHOLE_AGENT_APPLY_PLAN_FIELDS
+    )
+    assert trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS == list(
+        optimize.FROZEN_CAPABILITY_PROFILE_ROW_FIELDS
+    )
+    assert trinity.V1_LIVE_RELEASE_ADMISSIBLE_CLASSES == list(
+        optimize.OPTIMIZER_ROUTING_ADMISSIBLE_EVIDENCE_CLASSES
+    )
+
+
+def test_scan_forbidden_aggregate_keys_flags_nested_aggregates():
+    from agent_learning import trinity
+
+    payload = {
+        "summary": {"cell_count": 3},
+        "cells": [{"winner": "candidate_a"}],
+        "routing_table": {"rows": [{"global_best": "tpe"}]},
+        "report": {"nested": {"overall_winner": "society"}},
+    }
+    hits = trinity._scan_forbidden_aggregate_keys(payload)
+    assert sorted(hits) == [
+        "$.report.nested.overall_winner",
+        "$.routing_table.rows[0].global_best",
+    ]
+    assert trinity._scan_forbidden_aggregate_keys(
+        {"summary": {"per_axis_coverage": {"backends": ["tpe"]}}}
+    ) == []
+
+
+def test_release_optimizer_profile_matrix_status_flags_missing_files(tmp_path):
+    from agent_learning import trinity
+
+    status = trinity._release_optimizer_profile_matrix_status(tmp_path)
+    assert sorted(status["missing_files"]) == sorted(
+        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FILES
+    )
+    for key in (
+        "execution_errors",
+        "manifest_errors",
+        "optimization_errors",
+        "metric_errors",
+        "runtime_errors",
+        "report_errors",
+        "action_errors",
+        "security_errors",
+        "aggregation_errors",
+        "budget_errors",
+        "routing_errors",
+    ):
+        assert status[key] == []
+    assert status["kind"] == "agent-learning.optimizer-profile-matrix-readiness.v1"
+    assert status["evidence"] == {}
+
+
+def test_release_capability_profile_freeze_status_flags_missing_files(tmp_path):
+    from agent_learning import trinity
+
+    status = trinity._release_capability_profile_freeze_status(tmp_path)
+    assert sorted(status["missing_files"]) == sorted(
+        trinity.V1_CAPABILITY_PROFILE_FREEZE_FILES
+    )
+    for key in (
+        "execution_errors",
+        "row_errors",
+        "veto_errors",
+        "admission_errors",
+        "security_errors",
+    ):
+        assert status[key] == []
+    assert status["kind"] == (
+        "agent-learning.capability-profile-freeze-readiness.v1"
+    )
+    assert status["evidence"] == {}
+
+
+def test_expected_frozen_profile_row_id_matches_facade_content_addressing():
+    from agent_learning import optimize, trinity
+
+    frozen = optimize.freeze_capability_profile(
+        {"profiles": [{"framework": "langgraph", "capabilities": ["run"]}]},
+        setting={"engine": "local_text", "driver": "deterministic_scripted"},
+        metric_floors={"task_completion": 0.9},
+    )
+    for row in frozen["rows"]:
+        assert row["row_id"] == trinity._expected_frozen_profile_row_id(row)
+    tampered = dict(frozen["rows"][0])
+    tampered["floor"] = 0.0
+    assert tampered["row_id"] != trinity._expected_frozen_profile_row_id(tampered)
+
+
+def test_parse_docs_frontmatter_rejects_malformed_blocks():
+    from agent_learning import trinity
+
+    assert trinity._parse_docs_frontmatter("# no frontmatter\n") is None
+    assert trinity._parse_docs_frontmatter("---\n: not yaml [\n---\n") is None
+    parsed = trinity._parse_docs_frontmatter(
+        "---\nkind: agent-learning.docs-page.v1\ntrack: redteam\n---\n# X\n"
+    )
+    assert parsed is not None and parsed["track"] == "redteam"
+
+
+def test_release_live_lane_boundary_status_flags_unguarded_imports(tmp_path):
+    from agent_learning import trinity
+
+    live = tmp_path / "src" / "agent_learning" / "live"
+    workers = live / "_workers"
+    workers.mkdir(parents=True)
+    (workers / "livekit_worker.py").write_text(
+        "import livekit.agents\n", encoding="utf-8"
+    )
+    (live / "livekit_lane.py").write_text(
+        "def run_livekit_lane():\n"
+        "    from agent_learning.live._contract import require_lane_enabled\n"
+        "    require_lane_enabled('livekit')\n"
+        "    import livekit.agents\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "agent_learning" / "evals.py").write_text(
+        "import pipecat\n", encoding="utf-8"
+    )
+    fi_dir = tmp_path / "src" / "fi" / "simulate"
+    fi_dir.mkdir(parents=True)
+    (fi_dir / "rogue.py").write_text(
+        "try:\n"
+        "    from langgraph.graph import StateGraph\n"
+        "except Exception:\n"
+        "    StateGraph = None\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "agent_learning" / "simulate.py").write_text(
+        "from agent_learning.live import livekit_lane\n", encoding="utf-8"
+    )
+
+    status = trinity._release_live_lane_boundary_status(tmp_path)
+
+    flagged_paths = sorted(error["path"] for error in status["import_errors"])
+    assert flagged_paths == [
+        "src/agent_learning/evals.py",
+        "src/agent_learning/simulate.py",
+        "src/fi/simulate/rogue.py",
+    ]
+    assert status["env_flag_errors"] == []
+    assert status["lane_flags_set_in_release_env"] == []
+    assert status["scanned_module_count"] == 5
+
+
+def test_release_live_lane_boundary_status_audits_evidence_and_redaction(
+    tmp_path,
+):
+    from agent_learning import trinity
+
+    def capture_block(run_id, *, reviewed=True, reviewer="nikhil"):
+        return {
+            "captured_from_lane": "livekit",
+            "captured_run_id": run_id,
+            "rung": "loopback_transport",
+            "framework": "livekit-agents",
+            "framework_version": "1.2.7",
+            "capture_date": "2026-06-11",
+            "transcript_sha256": "9f2c" + "0" * 60,
+            "redaction": {"required_env_names": [], "values_found": 0},
+            "reviewed": reviewed,
+            "reviewer": reviewer,
+        }
+
+    captures = tmp_path / "examples" / "captured" / "livekit"
+    captures.mkdir(parents=True)
+    (tmp_path / "examples" / "leaked_live_run.json").write_text(
+        json.dumps(
+            {"kind": "agent-learning.run.v1", "evidence_class": "live_lane"}
+        ),
+        encoding="utf-8",
+    )
+    (captures / "clean_capture.json").write_text(
+        json.dumps(
+            {
+                "kind": "agent-learning.run.v1",
+                "evidence_class": "captured_fixture",
+                "capture": capture_block("r1"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (captures / "dirty_capture.json").write_text(
+        json.dumps(
+            {
+                "kind": "agent-learning.run.v1",
+                "evidence_class": "captured_fixture",
+                "capture": capture_block("r2"),
+                "transport": {"authorization": "Bearer sk-live-123"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (captures / "unreviewed_capture.json").write_text(
+        json.dumps(
+            {
+                "kind": "agent-learning.run.v1",
+                "evidence_class": "captured_fixture",
+                "capture": capture_block("r3", reviewed=False, reviewer=None),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = trinity._release_live_lane_boundary_status(tmp_path)
+
+    leak_errors = [
+        error
+        for error in status["evidence_class_errors"]
+        if error["path"] == "examples/leaked_live_run.json"
+    ]
+    assert leak_errors and "release surface" in leak_errors[0]["expected"]
+    unreviewed_errors = [
+        error
+        for error in status["evidence_class_errors"]
+        if error["path"].endswith("unreviewed_capture.json")
+        and error.get("field") == "capture.reviewed"
+    ]
+    assert unreviewed_errors and unreviewed_errors[0]["observed"] is False
+    assert any(
+        finding["path"].endswith("dirty_capture.json")
+        for finding in status["redaction_errors"]
+    )
+    clean_errors = [
+        error
+        for error in status["evidence_class_errors"]
+        if error["path"].endswith("clean_capture.json")
+    ]
+    assert clean_errors == []
+    assert status["scanned_artifact_count"] == 4
+
+
+def test_release_telemetry_boundary_flags_planted_analytics_endpoint(tmp_path):
+    """A planted analytics endpoint MUST fail the gate (P8-D1 doctrine)."""
+
+    from agent_learning import trinity
+
+    al = tmp_path / "src" / "agent_learning"
+    al.mkdir(parents=True)
+    fi = tmp_path / "src" / "fi"
+    fi.mkdir(parents=True)
+    # the planted leak — a posthog endpoint smuggled into VENDORED fi/* (the
+    # VS Code "bind everything incl. fi/*" test):
+    (fi / "rogue_telemetry.py").write_text(
+        "URL = 'https://app.posthog.com/capture/'\nimport posthog\n",
+        encoding="utf-8",
+    )
+    tele = al / "telemetry"
+    tele.mkdir()
+    (tele / "_ledger.py").write_text("X = 1\n", encoding="utf-8")
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    hosts = {
+        error["host"]
+        for error in status["analytics_denylist_errors"]
+        if "host" in error
+    }
+    assert "app.posthog.com" in hosts
+    imports = {
+        error.get("import") for error in status["analytics_denylist_errors"]
+    }
+    assert "posthog" in imports
+    # proves the scan reached src/fi, not just src/agent_learning:
+    assert any(
+        error["path"].startswith("src/fi/")
+        for error in status["analytics_denylist_errors"]
+    )
+
+
+def test_release_telemetry_boundary_flags_network_import_in_no_key_path(
+    tmp_path,
+):
+    """A network-capable import in the no-key telemetry path MUST fail the
+    zero-emission check; the sanctioned sync module may import lazily."""
+
+    tele = tmp_path / "src" / "agent_learning" / "telemetry"
+    tele.mkdir(parents=True)
+    (tele / "_ledger.py").write_text(
+        "import urllib.request\nX = 1\n", encoding="utf-8"
+    )
+    (tele / "_sync.py").write_text(
+        "def sync_run():\n"
+        "    import requests\n"
+        "    return requests\n"
+        "def sync_enabled():\n"
+        "    return kill_switch_on()\n"
+        "def kill_switch_on():\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+
+    from agent_learning import trinity
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    flagged = {
+        (error["path"], error.get("import"))
+        for error in status["network_emission_errors"]
+    }
+    assert (
+        "src/agent_learning/telemetry/_ledger.py",
+        "urllib.request",
+    ) in flagged
+    # the lazy in-function import in the sanctioned sync module is legal:
+    assert not any(
+        path == "src/agent_learning/telemetry/_sync.py"
+        for path, _ in flagged
+    )
+
+
+def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
+    """A correctly-redacted ledger (sentinel value never on disk) passes
+    check 3; the seeded sentinel scan and marker scan find nothing."""
+
+    from agent_learning import trinity
+
+    fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
+    fixtures.mkdir(parents=True)
+    # row where the sentinel value was redacted to [redacted:SECRET_ENV]:
+    row = {
+        "schema": "agent-learning.ledger-row.v1",
+        "kind": "agent-learning.run.v1",
+        "evidence_class": "local_gate",
+        "phase": "simulate",
+        "run_id": "a" * 64,
+        "chain": "b" * 64,
+        "scores": {"note": "auth=[redacted:SECRET_ENV]"},
+    }
+    (fixtures / "runs.jsonl").write_text(
+        json.dumps(row) + "\n", encoding="utf-8"
+    )
+    (fixtures / "sentinel.json").write_text(
+        json.dumps(
+            {
+                "seeded_secret_env": "SECRET_ENV",
+                "seeded_secret_value": "sk-sentinel-do-not-leak",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    assert status["redaction_errors"] == []  # zero sentinel bytes, zero markers
+
+
+def test_release_telemetry_boundary_tampered_chain_breaks(tmp_path):
+    """A rewritten row body MUST break the gate (chain integrity, check 4)."""
+
+    from agent_learning import trinity
+
+    fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
+    fixtures.mkdir(parents=True)
+    # a row whose run_id no longer matches its (tampered) body:
+    tampered = {
+        "schema": "agent-learning.ledger-row.v1",
+        "kind": "agent-learning.run.v1",
+        "evidence_class": "local_gate",
+        "phase": "simulate",
+        "scores": {"tampered": "AFTER-THE-FACT"},
+        "run_id": "0" * 64,
+        "chain": "0" * 64,
+    }
+    (fixtures / "runs.jsonl").write_text(
+        json.dumps(tampered) + "\n", encoding="utf-8"
+    )
+
+    status = trinity._release_telemetry_boundary_status(tmp_path)
+
+    reasons = {item["reason"] for item in status["chain_errors"]}
+    assert (
+        "content_address_mismatch" in reasons or "chain_mismatch" in reasons
+    )

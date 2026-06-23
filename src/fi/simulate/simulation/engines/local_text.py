@@ -12,6 +12,8 @@ from fi.simulate.environment import (
     coerce_environment_adapters,
 )
 from fi.simulate.simulation.engines.base import BaseEngine
+from fi.simulate.simulation.fidelity import attach_fidelity
+from fi.simulate.simulation import goal_machine
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
 from fi.simulate.simulation.synthetic import SyntheticDataGenerator
 
@@ -131,6 +133,12 @@ class LocalTextEngine(BaseEngine):
             "adapters": [adapter.name for adapter in environment_adapters],
         }
         stop_reason = "max_turns"
+        # G3 (ARCH §1.9): a declared scenario.goal binds the goal machine; with
+        # no declared goal the keyword path runs byte-identically (back-compat).
+        scenario_goal = getattr(scenario, "goal", None)
+        verification_spec = getattr(scenario, "verification", None)
+        goal_states_reached: List[str] = []
+        goal_checks: List[Dict[str, Any]] = []
 
         for adapter in environment_adapters:
             snapshot = adapter.reset(
@@ -269,11 +277,27 @@ class LocalTextEngine(BaseEngine):
                     metadata=environment_metadata,
                 )
 
+            if scenario_goal is not None:               # declared goal ⇒ goal machine
+                verdict = goal_machine.evaluate_turn(
+                    scenario_goal,
+                    verification_spec,
+                    environment_state=environment_state,
+                    world_status=environment_state.get("world_contract") or {},
+                    messages=messages,
+                )
+                for name in verdict["states_reached"]:
+                    if name not in goal_states_reached:
+                        goal_states_reached.append(name)
+                goal_checks.extend(verdict["checks"])
+                if verdict["stop"]:
+                    stop_reason = verdict["stop"]          # "goal_success" | "goal_failure"
+                    break
+
             if turn_index + 1 >= min_turns:
                 if stop_when and stop_when(messages, persona):
                     stop_reason = "custom_stop"
                     break
-                if self._outcome_satisfied(response.content, persona.outcome):
+                if scenario_goal is None and self._outcome_satisfied(response.content, persona.outcome):
                     stop_reason = "outcome_satisfied"
                     break
 
@@ -285,37 +309,118 @@ class LocalTextEngine(BaseEngine):
                 messages,
                 turn_index=turn_index,
                 attacks=attacks,
+                scenario=scenario,
             )
             if not next_user_message:
                 stop_reason = "simulator_stopped"
                 break
             messages.append({"role": "user", "content": next_user_message})
 
+        if scenario_goal is not None:                  # episode-end settle rung
+            settle = goal_machine.evaluate_settle(
+                scenario_goal,
+                verification_spec,
+                environment_state=environment_state,
+                world_status=environment_state.get("world_contract") or {},
+                messages=messages,
+            )
+            for name in settle["states_reached"]:
+                if name not in goal_states_reached:
+                    goal_states_reached.append(name)
+            goal_checks.extend(settle["checks"])
+
         transcript = self._format_transcript(messages)
-        return TestCaseResult(
+        metadata: Dict[str, Any] = {
+            "engine": "local_text",
+            "modality": modality,
+            "scenario_name": scenario.name,
+            "thread_id": thread_id,
+            "turn_count": len([m for m in messages if m.get("role") == "assistant"]),
+            "stop_reason": stop_reason,
+            "duration_ms": int((time.time() - started_at) * 1000),
+            "environment": environment_metadata,
+            "environment_state": environment_state,
+            "tools": tools,
+        }
+        if scenario_goal is not None:
+            # attach_fidelity metadata-only idiom — no structural TestCaseResult change.
+            metadata["goal_machine"] = {
+                "states_reached": goal_states_reached,
+                "stop_reason": stop_reason if stop_reason in ("goal_success", "goal_failure") else None,
+                "checks": goal_checks,
+            }
+        result = TestCaseResult(
             persona=persona,
             transcript=transcript,
             messages=messages,
             tool_calls=tool_calls,
             artifacts=artifacts,
             events=events,
-            metadata={
-                "engine": "local_text",
-                "modality": modality,
-                "scenario_name": scenario.name,
-                "thread_id": thread_id,
-                "turn_count": len([m for m in messages if m.get("role") == "assistant"]),
-                "stop_reason": stop_reason,
-                "duration_ms": int((time.time() - started_at) * 1000),
-                "environment": environment_metadata,
-                "environment_state": environment_state,
-                "tools": tools,
-            },
+            metadata=metadata,
         )
+        # Phase 7: fidelity attaches through metadata ONLY, and only for typed
+        # personas — untyped/legacy rows behave exactly as before (back-compat).
+        if persona.is_typed:
+            attach_fidelity(result, persona, scenario)
+        return result
 
     def _initial_user_message(self, persona: Persona) -> str:
         name = persona.persona.get("name", "User")
+        if persona.is_typed:
+            if persona.identity and persona.identity.name:
+                name = persona.identity.name
+            base = f"My name is {name}. {persona.situation} I want this outcome: {persona.outcome}"
+            volunteered = " ".join(
+                f"{fact.value}."
+                for fact in persona.knowledge
+                if fact.disclosure == "volunteer"
+            )
+            return f"{base} {volunteered}".rstrip()
         return f"My name is {name}. {persona.situation} I want this outcome: {persona.outcome}"
+
+    def _policy_user_message(
+        self,
+        persona: Persona,
+        messages: List[Dict[str, Any]],
+        *,
+        turn_index: int,
+        scenario: Optional[Scenario] = None,
+    ) -> str:
+        """Conduct resolver for typed personas (ARCH §2b) — engine-owned moves
+        derived from the compiled policy, deterministic, no prompt adjectives."""
+        from fi.simulate.simulation.behavior_policy import (
+            arc_pressure,
+            render_policy_directives,
+        )
+
+        policy = persona.behavior_policy
+        next_turn = turn_index + 1  # 0-based index of the upcoming user turn
+        pressure = (
+            arc_pressure(scenario.escalation, next_turn + 1)
+            if scenario is not None and scenario.escalation is not None
+            else 0.0
+        )
+        dials = render_policy_directives(policy, next_turn, pressure)
+        if dials["patience_level"] <= 0.05:
+            return ""  # disengage: patience exhausted -> simulator_stopped
+        latest_agent = (messages[-1].get("content", "") if messages else "").lower()
+        for fact in persona.knowledge:
+            if fact.key.lower() in latest_agent:
+                if fact.disclosure == "withhold":
+                    return "I'd rather not share that."
+                if fact.disclosure == "volunteer" or dials["disclosure_rate"] >= 0.3:
+                    return f"{fact.value}."
+                return "Why do you need that?"
+        if dials["escalation_level"] >= 0.8:
+            return (
+                "This is unacceptable. I need this resolved right now or I will "
+                "escalate to a supervisor."
+            )
+        if dials["escalation_level"] >= 0.5:
+            return "I am getting frustrated. Please resolve this now."
+        if dials["interruption_propensity"] >= 0.6:
+            return "(interrupting) Let me stop you - get to the point, please."
+        return "Please continue with the next concrete step."
 
     def _next_user_message(
         self,
@@ -324,7 +429,15 @@ class LocalTextEngine(BaseEngine):
         *,
         turn_index: int,
         attacks: List[str],
+        scenario: Optional[Scenario] = None,
     ) -> str:
+        if persona.is_typed:
+            return self._policy_user_message(
+                persona,
+                messages,
+                turn_index=turn_index,
+                scenario=scenario,
+            )
         latest_agent = messages[-1].get("content", "") if messages else ""
         risk_profile = persona.persona.get("risk_profile")
 

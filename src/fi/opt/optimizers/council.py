@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 from itertools import combinations
 from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence
 
@@ -32,6 +33,62 @@ SOCIETY_ROLES = (
     "adversary",
 )
 
+# Phase 4 society vocabulary (scholarly design devices used as deterministic
+# engineering metadata — psychometric/philological grounding only, zero
+# doctrinal claims).
+
+GUNA_AXES = ("rajas", "sattva", "tamas")
+
+GUNA_ARCHETYPE_DEFAULTS: dict[str, tuple[float, float, float]] = {
+    # (rajas, sattva, tamas) — dominant axis per the Phase-4 architecture
+    # archetype-default table (canon home; values stay byte-identical).
+    "focused_action": (0.8, 0.4, 0.2),          # arjuna — explorer
+    "prudent_critic": (0.7, 0.5, 0.4),          # vidura — adversary
+    "orchestrator": (0.5, 0.6, 0.4),            # sutradhara
+    "working_memory": (0.4, 0.6, 0.5),          # smriti
+    "bridge_builder": (0.6, 0.5, 0.3),          # hanuman
+    "charioteer_counsel": (0.3, 0.8, 0.4),      # krishna — critic
+    "collective_synthesis": (0.2, 0.9, 0.3),    # sangha — synthesizer
+    "minimal_process_guardian": (0.1, 0.5, 0.9),# dharma_steward — steward
+    "": (0.5, 0.5, 0.5),
+}
+
+CHAMBER_TOKENS = ("samiti", "sabha")
+
+# Chambers are ORTHOGONAL to phases/stages: within every phase samiti roles
+# generate widely and sabha roles deliberate/promote — chamber derives from
+# role kind, never from phase.
+SAMITI_PROPOSAL_KINDS = frozenset({"specialist", "explorer", "adversary"})
+SABHA_PROPOSAL_KINDS = frozenset(
+    {"critic", "synthesizer", "coverage_synthesis", "steward"}
+)
+
+PANCA_AVAYAVA_MEMBERS = (
+    # Five-member (panca-avayava) proposal justification — Nyaya-Sutra syllogism
+    # structure used as an auditable record schema (Pramana arXiv:2604.04937
+    # operationalization precedent). Scholarly design device, not a doctrinal
+    # claim.
+    "pratijna",   # claim: what this patch asserts will improve
+    "hetu",       # reason: the diagnosis/metric evidence relied on
+    "udaharana",  # rule + example: the prior candidate/row exhibiting the rule
+    "upanaya",    # application: why the rule covers THIS candidate
+    "nigamana",   # conclusion: the expected admissible evidence delta
+)
+
+HETVABHASA_REJECTION_CLASSES = (
+    "savyabhichara",   # inconclusive reason: evidence does not discriminate candidates
+    "viruddha",        # contradictory reason: evidence contradicts the claim
+    "satpratipaksha",  # counterbalanced: an equal counter-justification exists
+    "asiddha",         # unestablished reason: cited evidence/row not found in lineage
+    "badhita",         # defeated: claim contradicted by a stronger admissible check
+)
+
+CRITIQUE_OPERATOR_CLASSES = (
+    "vada",     # truth-seeking review — critic
+    "jalpa",    # adversarial stress — adversary; findings admissible only via evidence
+    "vitanda",  # refutation-only veto pass — may reject, never proposes
+)
+
 
 @dataclass(frozen=True)
 class AgentSearchProposal:
@@ -56,6 +113,9 @@ class AgentSearchState:
     beam_width: int
     max_proposals: int
     round_number: int
+    # Phase 4: round-scoped pooled-diagnosis society ledger (GEA experience
+    # pooling). None = legacy behavior.
+    ledger: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +129,13 @@ class AgentSocietyRole:
     path_prefixes: tuple[str, ...] = ()
     archetype: str = ""
     description: str = ""
+    # Phase 4 (placed after the legacy fields so positional construction stays
+    # byte-compatible): ONE nested optional guna mapping — {"rajas", "sattva",
+    # "tamas"} each in [0, 1]; None/absent = derive from archetype defaults —
+    # and an optional chamber ("samiti" | "sabha"); None = derive from role
+    # kind. No sentinel values.
+    guna: Optional[Mapping[str, float]] = None
+    chamber: Optional[str] = None
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -79,6 +146,8 @@ class AgentSocietyRole:
             "path_prefixes": list(self.path_prefixes),
             "archetype": self.archetype,
             "description": self.description,
+            "guna": dict(self.guna) if self.guna is not None else None,
+            "chamber": self.chamber,
         }
 
 
@@ -210,6 +279,7 @@ class SocietySearchStrategy(AgentSearchStrategy):
             beam_width=state.beam_width,
             max_proposals=state.max_proposals,
             round_number=state.round_number,
+            ledger=state.ledger,
         )
 
 
@@ -226,9 +296,25 @@ class SocietyRoleGraphSearchStrategy(AgentSearchStrategy):
     def __init__(
         self,
         role_graph: Optional[Sequence[AgentSocietyRole | Mapping[str, Any]]] = None,
+        *,
+        max_paths_per_proposal: int = 1,
+        staged_conditioning: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        if max_paths_per_proposal < 1:
+            raise ValueError("max_paths_per_proposal must be at least 1.")
         self.role_graph = _normalize_society_role_graph(role_graph)
         self.roles = tuple(role.name for role in self.role_graph)
+        # Guna patch-radius base: explorer/adversary streams propose
+        # max(1, round(rajas * max_paths_per_proposal)) paths per patch. The
+        # default of 1 reproduces the legacy single-path radius for every
+        # default-archetype triple.
+        self.max_paths_per_proposal = max_paths_per_proposal
+        # 4C staged conditioning declaration (stage -> phase -> path-class);
+        # the strategy EXECUTES stages through role-graph phases — this is the
+        # declared map the optimizer trace proves the order from.
+        self.staged_conditioning = (
+            dict(staged_conditioning) if staged_conditioning is not None else None
+        )
 
     def propose(self, state: AgentSearchState) -> List[AgentSearchProposal]:
         return _build_role_graph_society_proposals(
@@ -241,16 +327,32 @@ class SocietyRoleGraphSearchStrategy(AgentSearchStrategy):
             max_proposals=state.max_proposals,
             round_number=state.round_number,
             role_graph=self.role_graph,
+            ledger=state.ledger,
+            max_paths_per_proposal=self.max_paths_per_proposal,
         )
 
     def to_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "role_graph": [role.to_metadata() for role in self.role_graph],
             "role_graph_inspiration": (
                 "human social coordination, metacognition, and Hindu mythic "
                 "archetypes used only as deterministic proposal metadata"
             ),
+            "guna_mix": _guna_mix(self.role_graph),
+            "chambers": {
+                chamber: [
+                    role.name
+                    for role in self.role_graph
+                    if (role.chamber or _chamber_for_proposal_kind(role.proposal_kind))
+                    == chamber
+                ]
+                for chamber in CHAMBER_TOKENS
+            },
+            "max_paths_per_proposal": self.max_paths_per_proposal,
         }
+        if self.staged_conditioning is not None:
+            metadata["staged_conditioning"] = dict(self.staged_conditioning)
+        return metadata
 
 
 class CouncilAgentOptimizer(BaseOptimizer):
@@ -282,6 +384,10 @@ class CouncilAgentOptimizer(BaseOptimizer):
         auto_diagnose: bool = True,
         diagnostic_score_threshold: float = 0.85,
         search_strategy: Optional[AgentSearchStrategy | str] = None,
+        samiti_budget: Optional[int] = None,
+        sabha_budget: Optional[int] = None,
+        society_ledger: bool = False,
+        social_memory: Optional[Any] = None,
     ) -> None:
         if max_rounds < 1:
             raise ValueError("max_rounds must be at least 1.")
@@ -289,6 +395,7 @@ class CouncilAgentOptimizer(BaseOptimizer):
             raise ValueError("beam_width must be at least 1.")
         if max_proposals_per_round < 1:
             raise ValueError("max_proposals_per_round must be at least 1.")
+        _validate_chamber_budgets(samiti_budget, sabha_budget)
 
         self.target = target
         self.evaluate_candidate = evaluate_candidate
@@ -302,6 +409,10 @@ class CouncilAgentOptimizer(BaseOptimizer):
         self.auto_diagnose = auto_diagnose
         self.diagnostic_score_threshold = diagnostic_score_threshold
         self.search_strategy = _resolve_search_strategy(search_strategy)
+        self.samiti_budget = samiti_budget
+        self.sabha_budget = sabha_budget
+        self.society_ledger = society_ledger
+        self.social_memory = social_memory
         super().__init__()
 
     def optimize(
@@ -325,6 +436,10 @@ class CouncilAgentOptimizer(BaseOptimizer):
         auto_diagnose: Optional[bool] = None,
         diagnostic_score_threshold: Optional[float] = None,
         search_strategy: Optional[AgentSearchStrategy | str] = None,
+        samiti_budget: Optional[int] = None,
+        sabha_budget: Optional[int] = None,
+        society_ledger: Optional[bool] = None,
+        social_memory: Optional[Any] = None,
         **kwargs: Any,
     ) -> OptimizationResult:
         active_target = target or self.target
@@ -373,6 +488,19 @@ class CouncilAgentOptimizer(BaseOptimizer):
             if search_strategy is None
             else _resolve_search_strategy(search_strategy)
         )
+        active_samiti_budget = (
+            self.samiti_budget if samiti_budget is None else samiti_budget
+        )
+        active_sabha_budget = (
+            self.sabha_budget if sabha_budget is None else sabha_budget
+        )
+        _validate_chamber_budgets(active_samiti_budget, active_sabha_budget)
+        use_society_ledger = (
+            self.society_ledger if society_ledger is None else bool(society_ledger)
+        )
+        active_social_memory = (
+            self.social_memory if social_memory is None else social_memory
+        )
 
         seed_candidate = active_target.seed_candidate()
         evaluated: dict[str, CandidateEvaluation] = {}
@@ -380,6 +508,43 @@ class CouncilAgentOptimizer(BaseOptimizer):
         role_counts: dict[str, int] = {}
         round_summaries: List[dict[str, Any]] = []
         best: CandidateEvaluation | None = None
+
+        role_chambers = _strategy_role_chambers(active_search_strategy)
+        chamber_budgets = {
+            "samiti": active_samiti_budget,
+            "sabha": active_sabha_budget,
+        }
+        chamber_used = {"samiti": 0, "sabha": 0}
+        chamber_skipped = {"samiti": 0, "sabha": 0}
+        rejections: List[dict[str, Any]] = []
+        ledger_rounds: List[dict[str, Any]] = []
+        current_ledger: Optional[dict[str, Any]] = None
+        persisted_via: Optional[str] = None
+        if use_society_ledger and active_social_memory is not None:
+            persisted_via = active_social_memory.__class__.__name__
+            prior_ledgers = list(
+                getattr(active_social_memory, "society_ledgers", None) or []
+            )
+            prior_diagnoses = [
+                dict(item)
+                for entry in prior_ledgers
+                if isinstance(entry, Mapping)
+                for item in entry.get("diagnoses", []) or []
+                if isinstance(item, Mapping)
+            ]
+            if prior_diagnoses:
+                # Cross-campaign preload: previously persisted ledgers seed
+                # round 1 of this campaign (GEA experience pooling).
+                current_ledger = {
+                    "round": 0,
+                    "diagnoses": prior_diagnoses,
+                    "pooled_from_candidates": sum(
+                        int(entry.get("pooled_from_candidates") or 0)
+                        for entry in prior_ledgers
+                        if isinstance(entry, Mapping)
+                    ),
+                    "preloaded": True,
+                }
 
         if use_include_seed:
             seed_evaluation = self._evaluate(
@@ -413,14 +578,29 @@ class CouncilAgentOptimizer(BaseOptimizer):
                     beam_width=active_beam_width,
                     max_proposals=active_max_proposals,
                     round_number=round_number,
+                    ledger=current_ledger,
                 )
             )
-            proposals = [
-                proposal
-                for proposal in proposals
-                if _candidate_id_for_patch(seed_candidate, proposal.patch)
-                not in evaluated
-            ]
+            admitted_proposals: List[AgentSearchProposal] = []
+            for proposal in proposals:
+                duplicate_id = _candidate_id_for_patch(seed_candidate, proposal.patch)
+                if duplicate_id in evaluated:
+                    rejections.append(
+                        {
+                            "round": round_number,
+                            "role": proposal.role,
+                            "candidate_id": duplicate_id,
+                            "rejected": True,
+                            "hetvabhasa_class": "savyabhichara",
+                            "detail": (
+                                "duplicate patch: evidence does not discriminate "
+                                "from an already-evaluated candidate"
+                            ),
+                        }
+                    )
+                    continue
+                admitted_proposals.append(proposal)
+            proposals = admitted_proposals
             logger.info(
                 "Council round %s evaluating %s proposal(s)",
                 round_number,
@@ -429,7 +609,29 @@ class CouncilAgentOptimizer(BaseOptimizer):
 
             round_best = best
             round_evaluated = 0
+            round_evaluations: List[CandidateEvaluation] = []
             for proposal in proposals:
+                allowed_paths = set(search_paths)
+                if proposal.patch and not (set(proposal.patch) & allowed_paths):
+                    # Locality breach is recorded (asiddha) but not enforced
+                    # here — promotion-time enforcement is the replay veto's
+                    # job; in-round evidence must stay visible.
+                    rejections.append(
+                        {
+                            "round": round_number,
+                            "role": proposal.role,
+                            "candidate_id": _candidate_id_for_patch(
+                                seed_candidate, proposal.patch
+                            ),
+                            "rejected": False,
+                            "hetvabhasa_class": "asiddha",
+                            "detail": (
+                                "patch touches no path inside the diagnosed "
+                                "search locality"
+                            ),
+                        }
+                    )
+                chamber = _proposal_chamber(proposal, role_chambers)
                 candidate = seed_candidate.with_patch(
                     proposal.patch,
                     metadata={
@@ -442,6 +644,15 @@ class CouncilAgentOptimizer(BaseOptimizer):
                         "proposal_metadata": dict(proposal.metadata),
                     },
                 )
+                is_new_candidate = candidate.id not in evaluated
+                declared_chamber_budget = chamber_budgets.get(chamber)
+                if (
+                    is_new_candidate
+                    and declared_chamber_budget is not None
+                    and chamber_used[chamber] >= declared_chamber_budget
+                ):
+                    chamber_skipped[chamber] += 1
+                    continue
                 evaluation = self._evaluate(
                     candidate,
                     active_evaluator,
@@ -451,6 +662,52 @@ class CouncilAgentOptimizer(BaseOptimizer):
                     role=proposal.role,
                     round_number=round_number,
                 )
+                if is_new_candidate:
+                    chamber_used[chamber] += 1
+                    round_evaluations.append(evaluation)
+                parent_scores = [
+                    evaluated[parent_id].score
+                    for parent_id in proposal.parent_ids
+                    if parent_id in evaluated and parent_id != candidate.id
+                ]
+                role_kind = str(
+                    proposal.metadata.get("role_kind") or proposal.role
+                )
+                if parent_scores and evaluation.score < max(parent_scores):
+                    rejections.append(
+                        {
+                            "round": round_number,
+                            "role": proposal.role,
+                            "candidate_id": candidate.id,
+                            "rejected": True,
+                            "hetvabhasa_class": "viruddha",
+                            "detail": (
+                                f"score {evaluation.score:.4f} regresses parent "
+                                f"best {max(parent_scores):.4f}"
+                            ),
+                        }
+                    )
+                elif (
+                    role_kind == "steward"
+                    and parent_scores
+                    and evaluation.score == max(parent_scores)
+                ):
+                    rejections.append(
+                        {
+                            "round": round_number,
+                            "role": proposal.role,
+                            "candidate_id": proposal.parent_ids[0]
+                            if proposal.parent_ids
+                            else candidate.id,
+                            "rejected": True,
+                            "hetvabhasa_class": "satpratipaksha",
+                            "detail": (
+                                "steward removal kept the score unchanged: the "
+                                "removed change carries an equal counter-"
+                                "justification"
+                            ),
+                        }
+                    )
                 if round_best is None or evaluation.score > round_best.score:
                     round_best = evaluation
                 round_evaluated += 1
@@ -463,6 +720,46 @@ class CouncilAgentOptimizer(BaseOptimizer):
                     )
                 if best.score >= active_target_score:
                     break
+
+            if use_society_ledger:
+                pooled_diagnoses: List[ComponentDiagnosis] = []
+                contributing = 0
+                for evaluation in round_evaluations:
+                    candidate_diagnoses = _diagnose_candidate_evaluation(
+                        evaluation,
+                        failing_threshold=active_diagnostic_threshold,
+                    )
+                    if candidate_diagnoses:
+                        contributing += 1
+                        pooled_diagnoses.extend(candidate_diagnoses)
+                round_ledger = {
+                    "round": round_number,
+                    "diagnoses": [
+                        _dump_model(item)
+                        for item in _dedupe_diagnoses(pooled_diagnoses)
+                    ],
+                    "pooled_from_candidates": len(round_evaluations),
+                    "contributing_candidates": contributing,
+                }
+                ledger_rounds.append(
+                    {
+                        "round": round_number,
+                        "diagnoses_pooled": len(round_ledger["diagnoses"]),
+                        "pooled_from_candidates": round_ledger[
+                            "pooled_from_candidates"
+                        ],
+                        "persisted_via": persisted_via,
+                    }
+                )
+                current_ledger = round_ledger
+                if active_social_memory is not None:
+                    society_ledgers = getattr(
+                        active_social_memory, "society_ledgers", None
+                    )
+                    if society_ledgers is None:
+                        society_ledgers = []
+                        active_social_memory.society_ledgers = society_ledgers
+                    society_ledgers.append(dict(round_ledger))
 
             if round_best is not None and use_auto_diagnose:
                 round_diagnoses = _diagnose_candidate_evaluation(
@@ -513,9 +810,73 @@ class CouncilAgentOptimizer(BaseOptimizer):
             metadata["strategy_metadata"] = strategy_metadata
             if "role_graph" in strategy_metadata:
                 metadata["role_graph"] = strategy_metadata["role_graph"]
+            if "guna_mix" in strategy_metadata:
+                metadata["guna_mix"] = strategy_metadata["guna_mix"]
         if active_diagnoses:
             metadata["diagnostics"] = [_dump_model(item) for item in active_diagnoses]
             metadata["auto_diagnosed"] = use_auto_diagnose
+
+        # Phase 4 society/governance surfaces (additive; ranking comes only
+        # from the evaluation suite — external-verification rule).
+        metadata["ranking_source"] = "evaluation_suite"
+        metadata["chambers"] = {
+            chamber: {
+                "roles": sorted(
+                    name
+                    for name, value in role_chambers.items()
+                    if value == chamber
+                    and name in set(strategy_roles) | set(role_counts)
+                ),
+                "declared_budget": chamber_budgets[chamber],
+                "evaluations_used": chamber_used[chamber],
+                "skipped_proposals": chamber_skipped[chamber],
+            }
+            for chamber in CHAMBER_TOKENS
+        }
+        if rejections:
+            metadata["rejections"] = rejections
+        if ledger_rounds:
+            metadata["ledger_rounds"] = ledger_rounds
+            metadata["society_ledger"] = True
+        metadata["nirnaya"] = [
+            {
+                "round": round_summaries[-1]["round"] if round_summaries else 1,
+                "decision": "promote",
+                "selected_candidate_id": best.candidate.id,
+                "justification": _justification(
+                    pratijna=(
+                        f"candidate {best.candidate.id} is the promotable winner"
+                    ),
+                    hetu=(
+                        f"top admissible evaluation score {best.score:.4f} from "
+                        "the evaluation suite"
+                    ),
+                    udaharana=(
+                        "rule: selection is single-lineage — the steward promotes "
+                        "the top-ranked evidence-backed candidate, never an average"
+                    ),
+                    upanaya=(
+                        f"candidate {best.candidate.id} holds the top rank in this "
+                        "run's lineage"
+                    ),
+                    nigamana=(
+                        "promotion is expected to re-close every frozen evidence "
+                        "row on replay"
+                    ),
+                ),
+                "rejected_alternatives": [
+                    {
+                        "candidate_id": rejection.get("candidate_id"),
+                        "hetvabhasa_class": rejection.get("hetvabhasa_class"),
+                    }
+                    for rejection in rejections
+                    if rejection.get("rejected")
+                ],
+                "replay_verdict": None,
+                "admissible_evidence_refs": [best.candidate.id],
+                "frozen_rows_closed": None,
+            }
+        ]
 
         return OptimizationResult(
             best_generator=best.candidate,
@@ -585,21 +946,38 @@ def _ordered_search_paths(
 
 
 def _resolve_search_strategy(
-    strategy: Optional[AgentSearchStrategy | str],
+    strategy: Optional[AgentSearchStrategy | str | Mapping[str, Any]],
 ) -> AgentSearchStrategy:
     if strategy is None or strategy == "council":
         return DeterministicCouncilStrategy()
     if strategy == "society":
         return SocietySearchStrategy()
-    if strategy in {"role_graph", "society_role_graph"}:
+    if isinstance(strategy, str) and strategy in {"role_graph", "society_role_graph"}:
         return SocietyRoleGraphSearchStrategy()
     if isinstance(strategy, AgentSearchStrategy):
         return strategy
+    if isinstance(strategy, Mapping):
+        # Phase 4 (extend-only): JSON-declarable strategy — lets optimization
+        # manifests declare a staged role-graph society search without
+        # constructing strategy objects.
+        token = str(
+            strategy.get("strategy")
+            or strategy.get("name")
+            or strategy.get("type")
+            or "role_graph"
+        )
+        if token not in {"role_graph", "society_role_graph"}:
+            return _resolve_search_strategy(token)
+        return SocietyRoleGraphSearchStrategy(
+            strategy.get("role_graph"),
+            max_paths_per_proposal=int(strategy.get("max_paths_per_proposal", 1)),
+            staged_conditioning=strategy.get("staged_conditioning"),
+        )
     if hasattr(strategy, "propose"):
         return strategy  # type: ignore[return-value]
     raise ValueError(
         "search_strategy must be 'council', 'society', 'role_graph', "
-        "'society_role_graph', or an AgentSearchStrategy."
+        "'society_role_graph', a strategy mapping, or an AgentSearchStrategy."
     )
 
 
@@ -610,6 +988,44 @@ def _strategy_metadata(strategy: AgentSearchStrategy) -> dict[str, Any]:
         if isinstance(metadata, Mapping):
             return dict(metadata)
     return {}
+
+
+def _validate_chamber_budgets(
+    samiti_budget: Optional[int],
+    sabha_budget: Optional[int],
+) -> None:
+    if samiti_budget is not None and samiti_budget < 1:
+        raise ValueError("samiti_budget must be at least 1 when declared.")
+    if sabha_budget is not None and sabha_budget < 1:
+        raise ValueError("sabha_budget must be at least 1 when declared.")
+
+
+def _strategy_role_chambers(strategy: AgentSearchStrategy) -> dict[str, str]:
+    """Role name/kind -> chamber map for evaluation attribution."""
+
+    chambers: dict[str, str] = {}
+    role_graph = getattr(strategy, "role_graph", None) or ()
+    for role in role_graph:
+        if isinstance(role, AgentSocietyRole):
+            chambers[role.name] = role.chamber or _chamber_for_proposal_kind(
+                role.proposal_kind
+            )
+    for kind in ROLE_GRAPH_PROPOSAL_KINDS:
+        chambers.setdefault(kind, _chamber_for_proposal_kind(kind))
+    return chambers
+
+
+def _proposal_chamber(
+    proposal: AgentSearchProposal,
+    role_chambers: Mapping[str, str],
+) -> str:
+    explicit = proposal.metadata.get("role_chamber")
+    if explicit in CHAMBER_TOKENS:
+        return str(explicit)
+    if proposal.role in role_chambers:
+        return role_chambers[proposal.role]
+    role_kind = str(proposal.metadata.get("role_kind") or proposal.role)
+    return _chamber_for_proposal_kind(role_kind)
 
 
 def _normalize_society_role_graph(
@@ -630,6 +1046,8 @@ def _normalize_society_role_graph(
                 ),
                 archetype=str(item.get("archetype", "")),
                 description=str(item.get("description", "")),
+                guna=item.get("guna"),
+                chamber=item.get("chamber"),
             )
         else:
             raise TypeError("role_graph entries must be AgentSocietyRole or mappings")
@@ -639,12 +1057,111 @@ def _normalize_society_role_graph(
             )
         if role.phase < 1:
             raise ValueError("society role phase must be at least 1.")
-        roles.append(role)
+        # Phase 4: resolve absent guna through the archetype-default table,
+        # validate explicit triples, derive absent chamber from role kind.
+        guna = _normalized_guna(role)
+        chamber = role.chamber or _chamber_for_proposal_kind(role.proposal_kind)
+        if chamber not in CHAMBER_TOKENS:
+            raise ValueError(
+                f"society role chamber must be one of {CHAMBER_TOKENS}, "
+                f"got {chamber!r}."
+            )
+        roles.append(replace(role, guna=guna, chamber=chamber))
 
     names = [role.name for role in roles]
     if len(names) != len(set(names)):
         raise ValueError("society role names must be unique.")
     return tuple(roles)
+
+
+def _normalized_guna(role: AgentSocietyRole) -> dict[str, float]:
+    if role.guna is None:
+        rajas, sattva, tamas = GUNA_ARCHETYPE_DEFAULTS.get(
+            role.archetype, GUNA_ARCHETYPE_DEFAULTS[""]
+        )
+        return {"rajas": rajas, "sattva": sattva, "tamas": tamas}
+    guna = dict(role.guna)
+    if set(guna) != set(GUNA_AXES):
+        raise ValueError(
+            f"society role guna must declare exactly the axes {GUNA_AXES}, "
+            f"got {sorted(guna)}."
+        )
+    for axis in GUNA_AXES:
+        value = guna[axis]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"society role guna {axis} must be a number in [0, 1].")
+        if not 0.0 <= float(value) <= 1.0:
+            raise ValueError(
+                f"society role guna {axis} must be in [0, 1], got {value!r}."
+            )
+    return {axis: float(guna[axis]) for axis in GUNA_AXES}
+
+
+def _chamber_for_proposal_kind(proposal_kind: str) -> str:
+    return "samiti" if proposal_kind in SAMITI_PROPOSAL_KINDS else "sabha"
+
+
+def _guna_mix(role_graph: Sequence[AgentSocietyRole]) -> dict[str, float]:
+    """Society mean guna triple — the declared, tunable meta-parameter."""
+
+    resolved = [_normalized_guna(role) for role in role_graph]
+    if not resolved:
+        return {axis: 0.0 for axis in GUNA_AXES}
+    return {
+        axis: round(sum(item[axis] for item in resolved) / len(resolved), 4)
+        for axis in GUNA_AXES
+    }
+
+
+def _guna_radius(rajas: float, max_paths_per_proposal: int) -> int:
+    """Mechanical rajas mapping: patch-radius units for generative streams."""
+
+    return max(1, round(rajas * max_paths_per_proposal))
+
+
+def _validate_justification(justification: Mapping[str, Any]) -> dict[str, str]:
+    """Reject panca-avayava mappings missing any member or carrying empties."""
+
+    if not isinstance(justification, Mapping):
+        raise ValueError("proposal justification must be a mapping.")
+    record: dict[str, str] = {}
+    for member in PANCA_AVAYAVA_MEMBERS:
+        value = str(justification.get(member) or "").strip()
+        if not value:
+            raise ValueError(
+                f"proposal justification is missing a non-empty '{member}' member."
+            )
+        record[member] = value
+    return record
+
+
+def _justification(
+    *,
+    pratijna: str,
+    hetu: str,
+    udaharana: str,
+    upanaya: str,
+    nigamana: str,
+) -> dict[str, str]:
+    return {
+        "pratijna": pratijna,
+        "hetu": hetu,
+        "udaharana": udaharana,
+        "upanaya": upanaya,
+        "nigamana": nigamana,
+    }
+
+
+def _ledger_diagnoses(
+    ledger: Optional[Mapping[str, Any]],
+) -> List[ComponentDiagnosis]:
+    if not ledger:
+        return []
+    return _normalize_diagnoses(
+        item
+        for item in ledger.get("diagnoses", []) or []
+        if isinstance(item, (Mapping, ComponentDiagnosis))
+    )
 
 
 def _build_round_proposals(
@@ -705,6 +1222,7 @@ def _build_society_proposals(
     beam_width: int,
     max_proposals: int,
     round_number: int,
+    ledger: Optional[Mapping[str, Any]] = None,
 ) -> List[AgentSearchProposal]:
     ranked = sorted(
         evaluations,
@@ -715,6 +1233,12 @@ def _build_society_proposals(
     beam = ranked[:beam_width] or [
         CandidateEvaluation(candidate=seed_candidate, score=0.0)
     ]
+    pooled_diagnoses = list(diagnoses)
+    ledger_diagnoses = _ledger_diagnoses(ledger)
+    if ledger_diagnoses:
+        # GEA experience pooling: no role reasons only from its own
+        # candidate's diagnoses — the round-scoped society ledger joins in.
+        pooled_diagnoses = _dedupe_diagnoses([*pooled_diagnoses, *ledger_diagnoses])
 
     streams: List[Iterable[AgentSearchProposal]] = []
     if round_number > 1:
@@ -737,7 +1261,7 @@ def _build_society_proposals(
                 seed_candidate,
                 search_space,
                 search_paths,
-                diagnoses,
+                pooled_diagnoses,
             ),
             _explorer_proposals(seed_candidate, search_space, search_paths),
             _adversary_proposals(
@@ -770,6 +1294,8 @@ def _build_role_graph_society_proposals(
     max_proposals: int,
     round_number: int,
     role_graph: Sequence[AgentSocietyRole],
+    ledger: Optional[Mapping[str, Any]] = None,
+    max_paths_per_proposal: int = 1,
 ) -> List[AgentSearchProposal]:
     ranked = sorted(
         evaluations,
@@ -785,6 +1311,10 @@ def _build_role_graph_society_proposals(
         for evaluation in evaluations
         if evaluation.metadata.get("proposal_role")
     }
+    pooled_diagnoses = list(diagnoses)
+    ledger_diagnoses = _ledger_diagnoses(ledger)
+    if ledger_diagnoses:
+        pooled_diagnoses = _dedupe_diagnoses([*pooled_diagnoses, *ledger_diagnoses])
 
     streams: List[Iterable[AgentSearchProposal]] = []
     for role in _ordered_role_graph_roles(role_graph, round_number):
@@ -801,9 +1331,10 @@ def _build_role_graph_society_proposals(
             beam=beam,
             search_space=search_space,
             search_paths=role_paths,
-            diagnoses=diagnoses,
+            diagnoses=pooled_diagnoses,
             beam_width=beam_width,
             round_number=round_number,
+            max_paths_per_proposal=max_paths_per_proposal,
         )
         streams.append(stream)
 
@@ -858,7 +1389,13 @@ def _role_graph_stream(
     diagnoses: Sequence[ComponentDiagnosis],
     beam_width: int,
     round_number: int,
+    max_paths_per_proposal: int = 1,
 ) -> Iterable[AgentSearchProposal]:
+    # Deterministic guna behavioral mappings (pure functions of the resolved
+    # triple): rajas scales generative patch radius, sattva scales synthesis
+    # breadth / reconciliation, tamas scales steward removal aggressiveness.
+    guna = _normalized_guna(role)
+    radius_units = _guna_radius(guna["rajas"], max_paths_per_proposal)
     if role.proposal_kind == "specialist":
         proposals = _specialist_proposals(
             seed_candidate,
@@ -867,13 +1404,19 @@ def _role_graph_stream(
             diagnoses,
         )
     elif role.proposal_kind == "explorer":
-        proposals = _explorer_proposals(seed_candidate, search_space, search_paths)
+        proposals = _explorer_proposals(
+            seed_candidate,
+            search_space,
+            search_paths,
+            max_paths=radius_units,
+        )
     elif role.proposal_kind == "adversary":
         proposals = _adversary_proposals(
             seed_candidate,
             ranked[:beam_width],
             search_space,
             search_paths,
+            max_boundary_paths=3 * radius_units,
         )
     elif role.proposal_kind == "critic" and round_number > 1:
         proposals = (
@@ -887,15 +1430,20 @@ def _role_graph_stream(
             )
         )
     elif role.proposal_kind == "coverage_synthesis" and round_number > 1:
-        proposals = _coverage_synthesis_proposals(changed_ranked, search_paths)
+        proposals = _coverage_synthesis_proposals(
+            changed_ranked,
+            search_paths,
+            reconcile=guna["sattva"] >= 0.5,
+        )
     elif role.proposal_kind == "synthesizer" and round_number > 1:
-        proposals = _synthesis_proposals(changed_ranked[:beam_width], search_paths)
+        breadth = max(1, round(guna["sattva"] * beam_width))
+        proposals = _synthesis_proposals(changed_ranked[:breadth], search_paths)
     elif role.proposal_kind == "steward" and round_number > 1:
         allowed = set(search_paths)
         proposals = (
             proposal
             for evaluation in changed_ranked[:beam_width]
-            for proposal in _steward_proposals(evaluation.candidate)
+            for proposal in _steward_proposals(evaluation.candidate, tamas=guna["tamas"])
             if not allowed or allowed & set(proposal.patch)
         )
     else:
@@ -908,6 +1456,8 @@ def _annotate_role_graph_proposals(
     role: AgentSocietyRole,
     proposals: Iterable[AgentSearchProposal],
 ) -> Iterable[AgentSearchProposal]:
+    role_guna = _normalized_guna(role)
+    role_chamber = role.chamber or _chamber_for_proposal_kind(role.proposal_kind)
     for proposal in proposals:
         metadata = {
             **dict(proposal.metadata),
@@ -917,6 +1467,8 @@ def _annotate_role_graph_proposals(
             "role_description": role.description,
             "role_path_prefixes": list(role.path_prefixes),
             "role_depends_on": list(role.depends_on),
+            "role_guna": dict(role_guna),
+            "role_chamber": role_chamber,
         }
         yield AgentSearchProposal(
             patch=proposal.patch,
@@ -976,6 +1528,7 @@ def _specialist_proposals(
     search_paths: Sequence[str],
     diagnoses: Sequence[ComponentDiagnosis],
 ) -> Iterable[AgentSearchProposal]:
+    target_name = seed_candidate.target_name or "the optimization target"
     for group_key, paths in _path_groups(search_paths, diagnoses).items():
         patch: dict[str, Any] = {}
         for path in paths:
@@ -984,11 +1537,37 @@ def _specialist_proposals(
                 patch[path] = value
         if not patch:
             continue
+        evidence = "; ".join(
+            diagnosis.evidence
+            for diagnosis in diagnoses
+            if diagnosis.evidence
+            and _diagnostic_group_key(sorted(patch)[0], [diagnosis])
+        ) or f"component grouping over declared search paths {sorted(patch)}"
         yield AgentSearchProposal(
             patch=patch,
             role="specialist",
             parent_ids=(seed_candidate.id,),
             reason=f"apply_component_bundle:{group_key}",
+            metadata={
+                "justification": _justification(
+                    pratijna=(
+                        f"bundling component '{group_key}' repairs improves {target_name}"
+                    ),
+                    hetu=evidence,
+                    udaharana=(
+                        f"seed candidate {seed_candidate.id} exhibits the diagnosed "
+                        f"component state; rule: diagnosed components are repaired as one bundle"
+                    ),
+                    upanaya=(
+                        f"this candidate patches exactly the '{group_key}' paths "
+                        f"{sorted(patch)}"
+                    ),
+                    nigamana=(
+                        "expect the diagnosed-component metrics to close on the "
+                        "next admissible evaluation"
+                    ),
+                )
+            },
         )
 
 
@@ -997,13 +1576,15 @@ def _adversary_proposals(
     ranked: Sequence[CandidateEvaluation],
     search_space: dict[str, List[Any]],
     search_paths: Sequence[str],
+    max_boundary_paths: int = 3,
 ) -> Iterable[AgentSearchProposal]:
+    target_name = seed_candidate.target_name or "the optimization target"
     boundary_patch: dict[str, Any] = {}
     for path in search_paths:
         value = _last_non_seed_value(seed_candidate, search_space, path)
         if value is not _NO_VALUE:
             boundary_patch[path] = value
-        if len(boundary_patch) >= 3:
+        if len(boundary_patch) >= max_boundary_paths:
             break
     if boundary_patch:
         yield AgentSearchProposal(
@@ -1011,6 +1592,30 @@ def _adversary_proposals(
             role="adversary",
             parent_ids=(seed_candidate.id,),
             reason="stress_boundary_combination",
+            metadata={
+                "justification": _justification(
+                    pratijna=(
+                        f"a boundary-value combination stresses {target_name} "
+                        "into revealing brittle settings"
+                    ),
+                    hetu=(
+                        "search space declares boundary values on paths "
+                        f"{sorted(boundary_patch)}"
+                    ),
+                    udaharana=(
+                        f"seed candidate {seed_candidate.id} holds interior values; "
+                        "rule: adversarial probes test the declared extremes"
+                    ),
+                    upanaya=(
+                        "this candidate combines the last non-seed value of each "
+                        "boundary path in one patch"
+                    ),
+                    nigamana=(
+                        "expect either a robustness confirmation or an admissible "
+                        "failure signal at the boundary"
+                    ),
+                )
+            },
         )
 
     for evaluation in ranked:
@@ -1027,6 +1632,30 @@ def _adversary_proposals(
                 role="adversary",
                 parent_ids=(evaluation.candidate.id,),
                 reason="stress_candidate_with_boundary_change",
+                metadata={
+                    "justification": _justification(
+                        pratijna=(
+                            f"candidate {evaluation.candidate.id} should survive a "
+                            f"boundary change on {path}"
+                        ),
+                        hetu=(
+                            f"candidate {evaluation.candidate.id} scored "
+                            f"{evaluation.score:.4f} with patch {sorted(source_patch)}"
+                        ),
+                        udaharana=(
+                            "rule: strong candidates are stress-tested with one "
+                            "additional boundary value before promotion"
+                        ),
+                        upanaya=(
+                            f"this candidate keeps the parent patch and sets {path} "
+                            "to its boundary value"
+                        ),
+                        nigamana=(
+                            "expect a measurable score delta isolating the boundary "
+                            "sensitivity of the parent"
+                        ),
+                    )
+                },
             )
 
 
@@ -1099,6 +1728,25 @@ def _synthesis_proposals(
         role="synthesizer",
         parent_ids=tuple(item.candidate.id for item in all_sources),
         reason="combine_best_partial_candidates",
+        metadata={
+            "justification": _justification(
+                pratijna="merging the strongest partial candidates compounds their gains",
+                hetu=(
+                    "evaluated parents "
+                    f"{[item.candidate.id for item in all_sources]} each improved "
+                    "disjoint or compatible paths"
+                ),
+                udaharana=(
+                    "rule: compatible partial repairs are merged rank-first so the "
+                    "strongest parent wins conflicting paths"
+                ),
+                upanaya="this candidate is the rank-first merge of every parent patch",
+                nigamana=(
+                    "expect a combined score at or above the best parent on the "
+                    "next admissible evaluation"
+                ),
+            )
+        },
     )
     for left, right in combinations(evaluations, 2):
         yield AgentSearchProposal(
@@ -1106,12 +1754,35 @@ def _synthesis_proposals(
             role="synthesizer",
             parent_ids=(left.candidate.id, right.candidate.id),
             reason="combine_pairwise_partial_candidates",
+            metadata={
+                "justification": _justification(
+                    pratijna=(
+                        f"the pair {left.candidate.id} + {right.candidate.id} "
+                        "combines compatible repairs"
+                    ),
+                    hetu=(
+                        f"parents scored {left.score:.4f} and {right.score:.4f} on "
+                        "admissible evaluations"
+                    ),
+                    udaharana=(
+                        "rule: pairwise merges isolate which parent combination "
+                        "carries the gain"
+                    ),
+                    upanaya="this candidate merges exactly the two parent patches",
+                    nigamana=(
+                        "expect the pairwise merge to attribute the combined gain "
+                        "on the next admissible evaluation"
+                    ),
+                )
+            },
         )
 
 
 def _coverage_synthesis_proposals(
     evaluations: Sequence[CandidateEvaluation],
     search_paths: Sequence[str],
+    *,
+    reconcile: bool = True,
 ) -> Iterable[AgentSearchProposal]:
     if not evaluations:
         return
@@ -1127,6 +1798,18 @@ def _coverage_synthesis_proposals(
         ]
         if not path_evaluations:
             continue
+        if not reconcile:
+            # Low-sattva synthesis skips conflicting paths instead of
+            # reconciling them (deterministic guna mapping; default-archetype
+            # sattva >= 0.5 keeps the legacy reconciliation).
+            distinct_values = {
+                json.dumps(
+                    evaluation.candidate.patch[path], sort_keys=True, default=str
+                )
+                for evaluation in path_evaluations
+            }
+            if len(distinct_values) > 1:
+                continue
         selected = max(
             path_evaluations,
             key=lambda item: (
@@ -1144,6 +1827,30 @@ def _coverage_synthesis_proposals(
             role="synthesizer",
             parent_ids=tuple(dict.fromkeys(parent_ids)),
             reason="combine_best_path_representatives",
+            metadata={
+                "justification": _justification(
+                    pratijna=(
+                        "selecting the best representative per path covers the "
+                        "whole repaired surface"
+                    ),
+                    hetu=(
+                        f"per-path winners {sorted(set(parent_ids))} carry the "
+                        "highest admissible score for their path"
+                    ),
+                    udaharana=(
+                        "rule: coverage synthesis promotes each path's best "
+                        "evidence-backed value"
+                    ),
+                    upanaya=(
+                        f"this candidate sets {sorted(patch)} to their per-path "
+                        "winning values"
+                    ),
+                    nigamana=(
+                        "expect coverage of every repaired path without losing "
+                        "any single-path gain"
+                    ),
+                )
+            },
         )
 
 
@@ -1163,6 +1870,31 @@ def _critic_proposals(
                 role="critic",
                 parent_ids=(source_candidate.id,),
                 reason="test_next_change_against_current_candidate",
+                metadata={
+                    "justification": _justification(
+                        pratijna=(
+                            f"candidate {source_candidate.id} improves further with "
+                            f"{path} changed"
+                        ),
+                        hetu=(
+                            f"parent patch {sorted(source_patch)} passed an "
+                            "admissible evaluation and the search space declares "
+                            f"another value for {path}"
+                        ),
+                        udaharana=(
+                            "rule: critics test exactly one more change against the "
+                            "current strong candidate"
+                        ),
+                        upanaya=(
+                            f"this candidate keeps the parent patch and sets {path} "
+                            "to the next declared value"
+                        ),
+                        nigamana=(
+                            f"expect the evaluation to confirm or refute {path} as "
+                            "the next improving change"
+                        ),
+                    )
+                },
             )
 
 
@@ -1170,7 +1902,9 @@ def _explorer_proposals(
     seed_candidate: AgentCandidate,
     search_space: dict[str, List[Any]],
     search_paths: Sequence[str],
+    max_paths: int = 1,
 ) -> Iterable[AgentSearchProposal]:
+    target_name = seed_candidate.target_name or "the optimization target"
     for path in search_paths:
         for value in search_space.get(path, []):
             if seed_candidate.get_path(path) == value:
@@ -1180,15 +1914,92 @@ def _explorer_proposals(
                 role="explorer",
                 parent_ids=(seed_candidate.id,),
                 reason="isolate_single_path_effect",
+                metadata={
+                    "justification": _justification(
+                        pratijna=f"setting {path} improves {target_name}",
+                        hetu=(
+                            "the declared search space lists an untested value "
+                            f"for {path}"
+                        ),
+                        udaharana=(
+                            f"seed candidate {seed_candidate.id} holds "
+                            f"{seed_candidate.get_path(path)!r} on {path}; rule: "
+                            "isolated single-path probes attribute metric deltas"
+                        ),
+                        upanaya=(
+                            f"this candidate patches only {path}, so any score "
+                            "delta is attributable to it"
+                        ),
+                        nigamana=(
+                            f"expect an admissible evaluation-score delta for {path}"
+                        ),
+                    )
+                },
+            )
+    if max_paths > 1:
+        # Rajas-widened exploration: deterministic sliding windows of adjacent
+        # admissible paths, each set to its first non-seed value. max_paths == 1
+        # (the default radius for every default-archetype triple) skips this
+        # block entirely, preserving legacy proposals byte-for-byte.
+        paths = list(search_paths)
+        for start in range(len(paths)):
+            window = paths[start : start + max_paths]
+            if len(window) < 2:
+                continue
+            patch: dict[str, Any] = {}
+            for path in window:
+                value = _first_non_seed_value(seed_candidate, search_space, path)
+                if value is not _NO_VALUE:
+                    patch[path] = value
+            if len(patch) < 2:
+                continue
+            yield AgentSearchProposal(
+                patch=patch,
+                role="explorer",
+                parent_ids=(seed_candidate.id,),
+                reason="explore_adjacent_path_window",
+                metadata={
+                    "justification": _justification(
+                        pratijna=(
+                            f"jointly setting {sorted(patch)} improves {target_name}"
+                        ),
+                        hetu=(
+                            "high-rajas exploration widens the mutation radius over "
+                            "adjacent admissible paths"
+                        ),
+                        udaharana=(
+                            f"seed candidate {seed_candidate.id} holds the seed "
+                            "values; rule: widened probes test interacting paths "
+                            "together"
+                        ),
+                        upanaya=(
+                            f"this candidate patches the adjacent window {sorted(patch)}"
+                        ),
+                        nigamana=(
+                            "expect an admissible evaluation delta attributable to "
+                            "the window"
+                        ),
+                    )
+                },
             )
 
 
 def _steward_proposals(
     source_candidate: AgentCandidate,
+    *,
+    tamas: Optional[float] = None,
 ) -> Iterable[AgentSearchProposal]:
     if len(source_candidate.patch) < 2:
         return
-    for path in source_candidate.patch:
+    patch_paths = list(source_candidate.patch)
+    if tamas is None:
+        removal_limit = len(patch_paths)
+    else:
+        # Tamas mapping: removal attempts per round scale with the steward's
+        # tamas (ceil keeps every default-archetype triple at full coverage
+        # for the patch sizes the deterministic fixtures use).
+        removal_limit = max(1, math.ceil(float(tamas) * len(patch_paths)))
+    for path in patch_paths[:removal_limit]:
         patch = {
             key: value
             for key, value in source_candidate.patch.items()
@@ -1199,6 +2010,30 @@ def _steward_proposals(
             role="steward",
             parent_ids=(source_candidate.id,),
             reason="remove_one_change_to_check_minimality",
+            metadata={
+                "justification": _justification(
+                    pratijna=(
+                        f"candidate {source_candidate.id} keeps its score without "
+                        f"the change on {path}"
+                    ),
+                    hetu=(
+                        f"parent patch {sorted(source_candidate.patch)} passed an "
+                        "admissible evaluation with multiple combined changes"
+                    ),
+                    udaharana=(
+                        "rule: stewards remove one change at a time so only "
+                        "metric-proven repairs survive"
+                    ),
+                    upanaya=(
+                        f"this candidate is the parent patch minus {path} and "
+                        "nothing else"
+                    ),
+                    nigamana=(
+                        f"expect an equal score if {path} was unnecessary, or a "
+                        "regression proving it was load-bearing"
+                    ),
+                )
+            },
         )
 
 

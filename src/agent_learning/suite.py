@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shlex
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1004,13 +1005,28 @@ def build_optimization_lifecycle_plan(
     workspace_dir: str | Path | None = None,
     name: str = "optimization-lifecycle",
     required_env: Sequence[str] = (),
+    frozen_profile_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Build an executable optimize -> promote -> replay lifecycle plan."""
+    """Build an executable optimize -> promote -> replay lifecycle plan.
+
+    When ``frozen_profile_path`` names a frozen capability-profile contract
+    (kind ``agent-learning.frozen-capability-profile.v1``, ARCH §2a), the plan
+    gains a ``replay_frozen_profile`` step between the promotion and the
+    regression replay: every frozen row is re-closed against the optimization
+    artifact and an improving-but-row-breaking candidate is vetoed
+    (hetvabhasa class ``badhita``) before any replay runs.
+    """
 
     paths = _optimization_lifecycle_paths(
         optimize_manifest_path=optimize_manifest_path,
         workspace_dir=workspace_dir,
     )
+    if frozen_profile_path is not None:
+        frozen_path = Path(frozen_profile_path).expanduser().resolve()
+        paths["frozen_profile"] = frozen_path
+        paths["frozen_profile_replay"] = (
+            paths["optimization"].parent / "frozen-profile-replay.json"
+        )
     required_env_args = _required_env_cli_args(required_env)
     steps = [
         _lifecycle_step(
@@ -1096,6 +1112,37 @@ def build_optimization_lifecycle_plan(
                 "json": paths["promotion_report"],
                 "markdown": paths["promotion_report_markdown"],
             },
+        ),
+        *(
+            [
+                _lifecycle_step(
+                    "replay_frozen_profile",
+                    "Replay Frozen Capability Profile",
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import json, pathlib; "
+                            "from agent_learning import optimize; "
+                            "result = json.loads(pathlib.Path("
+                            f"{str(paths['optimization'])!r}"
+                            ").read_text(encoding='utf-8')); "
+                            "frozen = json.loads(pathlib.Path("
+                            f"{str(paths['frozen_profile'])!r}"
+                            ").read_text(encoding='utf-8')); "
+                            "verdict = optimize.replay_frozen_profile(result, frozen); "
+                            "pathlib.Path("
+                            f"{str(paths['frozen_profile_replay'])!r}"
+                            ").write_text(json.dumps(verdict, indent=2, "
+                            "sort_keys=True, default=str), encoding='utf-8'); "
+                            "raise SystemExit(1 if verdict.get('veto') else 0)"
+                        ),
+                    ],
+                    outputs={"json": paths["frozen_profile_replay"]},
+                )
+            ]
+            if frozen_profile_path is not None
+            else []
         ),
         _lifecycle_step(
             "replay_regression",

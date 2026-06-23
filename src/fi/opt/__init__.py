@@ -5,6 +5,8 @@ from .components import (
     ComponentDiagnosis,
     FailureMode,
     FAILURE_ROUTES,
+    HARNESS_LAYER_PATH_PREFIXES,
+    HARNESS_LAYERS,
     diagnose_agent_report_evaluation,
     diagnose_report,
     diagnose_text,
@@ -92,7 +94,7 @@ from .observability import (
     publish_futureagi_regression_dataset,
     triage_futureagi_registry_replay_pack_regression,
 )
-from .optimizer_trace import build_optimizer_society_trace
+from .optimizer_trace import build_optimizer_society_trace, optimizer_trajectory_profile
 from .research import (
     ResearchCorpusSummary,
     ResearchPaper,
@@ -148,6 +150,8 @@ __all__ = [
     "DEFAULT_SIMULATION_EVIDENCE_WEIGHTS",
     "FailureMode",
     "FAILURE_ROUTES",
+    "HARNESS_LAYER_PATH_PREFIXES",
+    "HARNESS_LAYERS",
     "EvalSuiteOptimizationProblem",
     "FrameworkMutationRule",
     "FutureAGIExperimentHistoryOptimizer",
@@ -167,6 +171,7 @@ __all__ = [
     "build_deep_read_queue",
     "build_futureagi_registry_replay_pack_manifest",
     "build_optimizer_society_trace",
+    "optimizer_trajectory_profile",
     "load_agent_report_replay_cases",
     "ManifestOptimizationProblem",
     "SuiteOptimizationProblem",

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from ._facade import optional_module
 from ._module_alias import install_lazy_module_aliases
 from ._schema import (
+    _json_sha256,
     public_payload,
     with_optimization_candidate_lineage,
     with_optimization_governance,
@@ -320,6 +321,14 @@ AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
 AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
 
+# --- Phase 13D: the generic SIMULATION contract (R1/RU-6) ------------------
+AGENT_LEARNING_SIMULATION_KIND = "agent-learning.simulation.v1"
+# The closed envelope strip list for round-trip/determinism byte-equality
+# (ARCH §3; AD-Q — frozen constant, mirrored into the gate).
+STABLE_RESULT_ENVELOPE_FIELDS = (
+    "created_at", "started_at", "completed_at", "duration_s", "timing",
+)
+
 
 def _manifest() -> Any:
     return optional_module("fi.simulate.manifest", _SIMULATE_EXTRA)
@@ -411,6 +420,15 @@ def build_task_run_manifest(
     Agent Learning simulation engine inside this package.
     """
 
+    # Phase 7: typed studio model instances are accepted and normalized —
+    # manifests stay pure JSON; the typed layers ride inside the scenario
+    # rows and the engine's Persona(**row) re-hydrates them. Zero signature
+    # breaks.
+    if hasattr(persona, "model_dump"):
+        persona = persona.model_dump(exclude_none=True)
+    if hasattr(scenario, "model_dump"):
+        scenario = scenario.model_dump(exclude_none=True)
+
     if not name:
         raise ValueError("name is required")
     if not agent:
@@ -464,6 +482,328 @@ def build_task_run_manifest(
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
+
+
+# ===========================================================================
+# Phase 13D — the SIMULATION contract builders (RU-6 names exact).
+# ===========================================================================
+def _simulation_contract_module() -> Any:
+    return optional_module("fi.simulate.simulation.contract", _SIMULATE_EXTRA)
+
+
+def _derive_world_kind(environments: Sequence[Mapping[str, Any]]) -> str:
+    """ARCH §2b closed derivation map (mechanical)."""
+    envs = list(environments or [])
+    for env in envs:
+        etype = str(env.get("type") or "")
+        if etype.startswith("browser") or etype in {"cua", "computer_use_browser"}:
+            return "browser"
+        if etype.startswith("voice") or etype.startswith("realtime"):
+            return "voice_telephony"
+    if envs:
+        return "tool_api"
+    return "conversation"
+
+
+def _lift_tool_bindings(environments: Sequence[Mapping[str, Any]]) -> list[dict]:
+    """Mock-tool specs lifted at static_fixture (local mocks/handlers) or
+    recorded_replay (openenv/capture replay packs). No existing builder lifts
+    to emulated or live (ARCH §2b step 3)."""
+    bindings: list[dict] = []
+    for env in environments or []:
+        etype = str(env.get("type") or "")
+        if etype in {"mock_tools", "tool_mock"}:
+            for tool in env.get("tools") or env.get("mock_tools") or []:
+                name = tool.get("name") if isinstance(tool, Mapping) else str(tool)
+                bindings.append({"name": str(name), "mock": {"level": "static_fixture"}})
+        elif etype in {"openenv", "open_env", "environment_replay", "observability_replay"}:
+            bindings.append({
+                "name": f"{etype}_replay",
+                "mock": {
+                    "level": "recorded_replay",
+                    "source": f"replay://{env.get('name') or etype}",
+                    "provenance": {"capture": "sha256:lifted"},
+                    "recorded_replay": {"miss_policy": "fail"},
+                },
+            })
+    return bindings
+
+
+def build_simulation_manifest(
+    *,
+    name: str,
+    personas: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenarios: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    world: Optional[Mapping[str, Any]] = None,
+    clock: Optional[Mapping[str, Any]] = None,
+    dynamics: Optional[Sequence[Mapping[str, Any]]] = None,
+    episodes: Optional[Mapping[str, Any]] = None,
+    goal: Optional[Mapping[str, Any]] = None,
+    verification: Optional[Mapping[str, Any]] = None,
+    objective: Optional[Mapping[str, Any]] = None,
+    admission: Optional[Mapping[str, Any]] = None,
+    seed: Optional[int] = None,
+    description: Optional[str] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build an ``agent-learning.simulation.v1`` contract (R1). Accepts the
+    novice legacy ``scenario=`` shape (auto-lifted) or the expert surface; one
+    contract behind every front door (validated by constructing the engine-side
+    ``Simulation``). Returns pure JSON with the content-address version."""
+    contract = _simulation_contract_module()
+    if not name:
+        raise ValueError("name is required")
+
+    # Novice shape: a single legacy run-style scenario block ⇒ auto-lift.
+    if scenario is not None and scenarios is None and world is None:
+        run_manifest = {
+            "version": AGENT_LEARNING_RUN_KIND,
+            "name": str(name),
+            "scenario": dict(scenario),
+            "simulation": {"environments": list((scenario or {}).get("environments") or [])},
+        }
+        return derive_simulation_manifest(run_manifest)
+
+    def _normalize(values):
+        out = []
+        for v in values or []:
+            out.append(v.model_dump(exclude_none=True) if hasattr(v, "model_dump") else dict(v))
+        return out
+
+    world_block = dict(world or {})
+    if "kind" not in world_block:
+        world_block["kind"] = _derive_world_kind(world_block.get("environments") or [])
+    # normalize a world.tools dict (UI-UX) into list[ToolBinding] (Appendix B-13)
+    tools = world_block.get("tools")
+    if isinstance(tools, Mapping):
+        world_block["tools"] = [
+            {"name": tname, **(tspec if isinstance(tspec, Mapping) else {})}
+            for tname, tspec in tools.items()
+        ]
+
+    payload: dict[str, Any] = {
+        "kind": AGENT_LEARNING_SIMULATION_KIND,
+        "name": str(name),
+        "personas": _normalize(personas),
+        "scenarios": _normalize(scenarios),
+        "world": world_block,
+    }
+    if description is not None:
+        payload["description"] = str(description)
+    if clock is not None:
+        payload["clock"] = dict(clock)
+    if dynamics is not None:
+        payload["dynamics"] = _normalize(dynamics)
+    if episodes is not None:
+        payload["episodes"] = dict(episodes)
+    if goal is not None:
+        payload["goal"] = dict(goal)
+    if verification is not None:
+        payload["verification"] = dict(verification)
+    if objective is not None:
+        payload["objective"] = dict(objective)
+    if admission is not None:
+        payload["admission"] = dict(admission)
+    if seed is not None:
+        payload["seed"] = int(seed)
+    if metadata is not None:
+        payload["metadata"] = dict(metadata)
+
+    simulation = contract.Simulation(**payload)  # one contract behind every door
+    result = simulation.model_dump(exclude_none=True)
+    result["kind"] = AGENT_LEARNING_SIMULATION_KIND
+    return result
+
+
+def derive_simulation_manifest(run_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Auto-lift any existing run/optimization manifest to ``simulation.v1``
+    (ARCH §2b uniform base rule, steps 1-7). Lossless post-G4."""
+    contract = _simulation_contract_module()
+    manifest = dict(run_manifest)
+    name = str(manifest.get("name") or "agent-simulation")
+
+    # optimization manifests derive through their embedded run shape.
+    optimization = manifest.get("optimization")
+    scenario = dict(manifest.get("scenario") or {})
+    simulation_settings = dict(manifest.get("simulation") or {})
+    environments = list(simulation_settings.get("environments") or [])
+    evaluation = dict(manifest.get("evaluation") or {})
+
+    # 1. personas ← re-hydrated dataset rows keyed by content hash.
+    persona_module = optional_module("fi.simulate.simulation.models", _SIMULATE_EXTRA)
+    personas: list[dict] = []
+    persona_hashes: list[str] = []
+    for index, row in enumerate(scenario.get("dataset") or [], start=1):
+        rowd = dict(row)
+        rowd.setdefault("persona", dict(rowd.get("persona") or {"name": f"persona-{index}"}))
+        rowd.setdefault("situation", str(rowd.get("situation") or ""))
+        rowd.setdefault("outcome", str(rowd.get("outcome") or ""))
+        persona_obj = persona_module.Persona(**rowd)
+        digest = persona_obj.version or persona_obj.content_hash()
+        personas.append(persona_obj.model_dump(exclude_none=True))
+        persona_hashes.append(digest)
+
+    # 2. ONE ScenarioBinding: per-persona role:"user" cast, casting:"each".
+    scenario_typed = {
+        key: scenario[key]
+        for key in ("name", "description", "kind", "coverage", "constraints",
+                    "escalation", "attack_type", "attack_surface", "version", "parent_version")
+        if key in scenario
+    }
+    scenario_typed.setdefault("name", name)
+    scenario_typed["dataset"] = []  # contract scenarios have empty legacy dataset
+    binding = {
+        "scenario": scenario_typed,
+        "cast": [{"persona": digest, "role": "user"} for digest in persona_hashes],
+        "casting": "each",
+    }
+
+    # 3. world ← kind from the closed map; environments verbatim; tools lifted.
+    world = {
+        "kind": _derive_world_kind(environments),
+        "environments": copy.deepcopy(environments),
+        "tools": _lift_tool_bindings(environments),
+    }
+    # Preserve engine settings that affect output but have no contract field
+    # (modality, auto_execute_tools): they ride world.spec so the forward
+    # derivation reproduces the original run byte-for-byte (AD-Q round-trip).
+    spec: dict[str, Any] = {}
+    if simulation_settings.get("modality") is not None:
+        spec["modality"] = str(simulation_settings["modality"])
+    if "auto_execute_tools" in simulation_settings:
+        spec["auto_execute_tools"] = bool(simulation_settings["auto_execute_tools"])
+    if simulation_settings.get("engine") is not None:
+        spec["engine"] = str(simulation_settings["engine"])
+    if spec:
+        world["spec"] = spec
+
+    # 4. clock ← turn horizon; dynamics ← []; episodes ← fresh single.
+    clock = {
+        "model": "turn",
+        "horizon": {
+            "max_turns": int(simulation_settings.get("max_turns", 1)),
+            "min_turns": int(simulation_settings.get("min_turns", 1)),
+        },
+    }
+
+    # 5. goal/verification ← from the typed Scenario when present, else null.
+    goal = scenario.get("goal")
+    verification = scenario.get("verification")
+
+    # 6. objective ← lifted from evaluation.agent_report (+ optimizer
+    #    metric_weights for optimization manifests) with source:"derived".
+    objective = None
+    agent_report = evaluation.get("agent_report") if isinstance(evaluation, Mapping) else None
+    if agent_report or optimization:
+        terms = [{"eval": "agent_report", "weight": 1.0}]
+        if optimization:
+            optimizer = (optimization.get("optimizer") or {}) if isinstance(optimization, Mapping) else {}
+            weights = optimizer.get("metric_weights") if isinstance(optimizer, Mapping) else None
+            if isinstance(weights, Mapping):
+                terms = [{"eval": str(k), "weight": float(v)} for k, v in sorted(weights.items())]
+        objective = {
+            "evals": terms,
+            "aggregation": {"mode": "obligation_cells",
+                            "conjunction": "all_cells_must_close",
+                            "projection": "weighted_mean"},
+            "source": "derived",
+        }
+
+    # 7. seed ← manifest seed else the documented default 42; provenance.
+    seed = manifest.get("seed")
+    if seed is None:
+        seed = 42
+
+    builder_name = ""
+    meta = manifest.get("metadata") or {}
+    if isinstance(meta, Mapping):
+        builder_name = str(meta.get("source") or "")
+    manifest_address = "sha256:" + _json_sha256(manifest)
+    provenance = {
+        "lifted_from": {
+            "shape": "optimization" if optimization else "run",
+            "builder": builder_name,
+            "manifest_address": manifest_address,
+        }
+    }
+
+    payload: dict[str, Any] = {
+        "kind": AGENT_LEARNING_SIMULATION_KIND,
+        "name": name,
+        "personas": personas,
+        "scenarios": [binding],
+        "world": world,
+        "clock": clock,
+        "dynamics": [],
+        "episodes": {"count": 1, "persistence": "fresh"},
+        "seed": int(seed),
+        "provenance": provenance,
+    }
+    if goal is not None:
+        payload["goal"] = goal
+    if verification is not None:
+        payload["verification"] = verification
+    if objective is not None:
+        payload["objective"] = objective
+
+    simulation = contract.Simulation(**payload)
+    result = simulation.model_dump(exclude_none=True)
+    result["kind"] = AGENT_LEARNING_SIMULATION_KIND
+    return result
+
+
+def derive_simulation_run_manifest(
+    simulation: Mapping[str, Any],
+    agent: Mapping[str, Any],
+    scenario_name: Optional[str] = None,
+    **_kwargs: Any,
+) -> dict[str, Any]:
+    """Forward derivation: simulation × agent → a standard
+    ``agent-learning.run.v1`` manifest (existing engine path, zero new
+    executors) carrying the additive top-level ``simulation_contract`` block."""
+    sim = dict(simulation)
+    scenarios = sim.get("scenarios") or []
+    first = dict(scenarios[0]) if scenarios else {}
+    scenario_block = dict(first.get("scenario") or {})
+    # The legacy dataset is the simulation's owned personas (re-attached for the
+    # existing engine path, which enumerates scenario.dataset).
+    scenario_block["dataset"] = copy.deepcopy(list(sim.get("personas") or []))
+    scenario_block.setdefault("name", scenario_name or sim.get("name") or "simulation-run")
+    if sim.get("goal") is not None and "goal" not in scenario_block:
+        scenario_block["goal"] = sim["goal"]
+    if sim.get("verification") is not None and "verification" not in scenario_block:
+        scenario_block["verification"] = sim["verification"]
+
+    world = dict(sim.get("world") or {})
+    clock = dict(sim.get("clock") or {})
+    horizon = dict(clock.get("horizon") or {})
+    spec = dict(world.get("spec") or {})
+
+    simulation_block: dict[str, Any] = {
+        "engine": str(spec.get("engine") or "local_text"),
+        "max_turns": int(horizon.get("max_turns", 1)),
+        "min_turns": int(horizon.get("min_turns", 1)),
+        "auto_execute_tools": bool(spec.get("auto_execute_tools", True)),
+        "environments": copy.deepcopy(list(world.get("environments") or [])),
+    }
+    if spec.get("modality") is not None:
+        simulation_block["modality"] = str(spec["modality"])
+
+    run_manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(sim.get("name") or "simulation-run"),
+        "required_env": [],
+        "scenario": scenario_block,
+        "agent": copy.deepcopy(dict(agent)),
+        "simulation": simulation_block,
+        "evaluation": {"enabled": False},
+        "simulation_contract": {
+            "version": sim.get("version"),
+            "inline": copy.deepcopy(sim),
+        },
+    }
+    return run_manifest
 
 
 def build_external_agent_run_manifest(
@@ -2752,6 +3092,7 @@ def build_redteam_readiness_certification_run_manifest(
     simulation_engine: str = "local_text",
     min_turns: int = 5,
     max_turns: Optional[int] = None,
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build a runnable red-team readiness certification manifest.
@@ -2801,6 +3142,7 @@ def build_redteam_readiness_certification_run_manifest(
         channels=channels,
         providers=providers,
         taxonomies=taxonomies,
+        persona_conditioned_campaign=persona_conditioned_campaign,
         metadata=metadata,
     )
     readiness_payload = environments[-1]["data"]
@@ -2877,6 +3219,7 @@ def build_redteam_readiness_certification_environments(
     channels: Sequence[str] = ("chat",),
     providers: Sequence[str] = ("local_cli",),
     taxonomies: Sequence[str] = ("owasp_llm_top_10", "owasp_agentic_ai"),
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Return a complete readiness-certification environment bundle."""
@@ -2971,6 +3314,7 @@ def build_redteam_readiness_certification_environments(
         artifacts=artifact_payloads,
         required_evidence=required_evidence,
         required_signals=required_readiness_signals,
+        persona_conditioned_campaign=persona_conditioned_campaign,
         metadata=metadata,
     )
     return [
@@ -8014,7 +8358,8 @@ def _redteam_readiness_payload(
     artifacts: Sequence[Mapping[str, Any]],
     required_evidence: Sequence[str],
     required_signals: Sequence[str],
-    metadata: Optional[Mapping[str, Any]],
+    persona_conditioned_campaign: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     evidence = _unique_strings(
         required_evidence
@@ -8050,26 +8395,31 @@ def _redteam_readiness_payload(
             "workspace_run_manifest",
         ]
     )
-    return copy.deepcopy(
-        _simulate().normalize_red_team_readiness_manifest(
-            {
-                "name": f"{name}-readiness",
-                "target": copy.deepcopy(dict(target)),
-                "framework_import": _redteam_readiness_child_digest(framework_import),
-                "red_team_campaign": _redteam_readiness_child_digest(red_team_campaign),
-                "workspace_run": _redteam_readiness_child_digest(workspace_run),
-                "trust_boundary": _redteam_readiness_child_digest(trust_boundary),
-                "control_plane": _redteam_readiness_child_digest(control_plane),
-                "observability": copy.deepcopy(dict(observability)),
-                "artifacts": [copy.deepcopy(dict(item)) for item in artifacts],
-                "required_evidence": evidence,
-                "required_signals": signals,
-                "metadata": {
-                    "source": "agent_learning.simulate.redteam_readiness_certification",
-                    **copy.deepcopy(dict(metadata or {})),
-                },
-            }
+    readiness_manifest: dict[str, Any] = {
+        "name": f"{name}-readiness",
+        "target": copy.deepcopy(dict(target)),
+        "framework_import": _redteam_readiness_child_digest(framework_import),
+        "red_team_campaign": _redteam_readiness_child_digest(red_team_campaign),
+        "workspace_run": _redteam_readiness_child_digest(workspace_run),
+        "trust_boundary": _redteam_readiness_child_digest(trust_boundary),
+        "control_plane": _redteam_readiness_child_digest(control_plane),
+        "observability": copy.deepcopy(dict(observability)),
+        "artifacts": [copy.deepcopy(dict(item)) for item in artifacts],
+        "required_evidence": evidence,
+        "required_signals": signals,
+        "metadata": {
+            "source": "agent_learning.simulate.redteam_readiness_certification",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    if persona_conditioned_campaign:
+        # Phase 7 (§9.7): the persona-conditioned campaign block (per-attack
+        # in-character fidelity) rides on the readiness manifest.
+        readiness_manifest["persona_conditioned_campaign"] = copy.deepcopy(
+            dict(persona_conditioned_campaign)
         )
+    return copy.deepcopy(
+        _simulate().normalize_red_team_readiness_manifest(readiness_manifest)
     )
 
 

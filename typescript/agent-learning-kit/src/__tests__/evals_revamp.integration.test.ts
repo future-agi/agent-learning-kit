@@ -1,8 +1,9 @@
 /**
  * End-to-end integration tests for the revamped evals TypeScript SDK.
  *
- * Runs against a live backend (defaults to ws2-backend at
- * http://localhost:8003). Uses the test account to auto-fetch API keys.
+ * Runs against a live backend selected via FI_BASE_URL. Credentials come
+ * from the environment only: either FI_API_KEY + FI_SECRET_KEY, or
+ * FI_TEST_EMAIL + FI_TEST_PASSWORD (used to mint API keys at runtime).
  *
  * Run directly (skips jest mocks):
  *   npx ts-node -T -O '{"module":"commonjs"}' src/__tests__/evals_revamp.integration.test.ts
@@ -12,12 +13,25 @@
 import axios from 'axios';
 
 const BASE_URL = process.env.FI_BASE_URL || 'http://localhost:8003';
-const EMAIL = process.env.FI_TEST_EMAIL || 'kartik.nvj@futureagi.com';
-const PASSWORD = process.env.FI_TEST_PASSWORD || 'test@123';
-const SHOULD_RUN_LIVE = process.env.AGENT_LEARNING_TS_LIVE_EVALS === '1';
+const EMAIL = process.env.FI_TEST_EMAIL;
+const PASSWORD = process.env.FI_TEST_PASSWORD;
+const HAS_CREDENTIALS = Boolean(
+    (process.env.FI_API_KEY && process.env.FI_SECRET_KEY) || (EMAIL && PASSWORD)
+);
+const SHOULD_RUN_LIVE =
+    process.env.AGENT_LEARNING_TS_LIVE_EVALS === '1' && HAS_CREDENTIALS;
+const SKIP_REASON =
+    'Skipping live eval integration. Set AGENT_LEARNING_TS_LIVE_EVALS=1 plus '
+    + 'FI_API_KEY/FI_SECRET_KEY (or FI_TEST_EMAIL/FI_TEST_PASSWORD) to run.';
 
 async function ensureAuth(): Promise<void> {
     if (process.env.FI_API_KEY && process.env.FI_SECRET_KEY) return;
+    if (!EMAIL || !PASSWORD) {
+        throw new Error(
+            'FI_TEST_EMAIL and FI_TEST_PASSWORD must be set when '
+            + 'FI_API_KEY/FI_SECRET_KEY are not provided.'
+        );
+    }
     const tokenResp = await axios.post(`${BASE_URL}/accounts/token/`, {
         email: EMAIL,
         password: PASSWORD,
@@ -68,8 +82,7 @@ function randomName(prefix: string): string {
 }
 
 async function main(): Promise<void> {
-    console.log(`Using backend: ${BASE_URL}`);
-    console.log(`Test user: ${EMAIL}\n`);
+    console.log(`Using backend: ${BASE_URL}\n`);
 
     await ensureAuth();
 
@@ -501,9 +514,7 @@ if (typeof jest !== 'undefined') {
     }, 180_000);
 } else {
     if (!SHOULD_RUN_LIVE) {
-        console.log(
-            'Skipping live eval integration. Set AGENT_LEARNING_TS_LIVE_EVALS=1 with real Future AGI credentials to run.'
-        );
+        console.log(SKIP_REASON);
         process.exit(0);
     }
     main().catch((err) => {

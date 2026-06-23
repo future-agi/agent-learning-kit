@@ -3,12 +3,16 @@ from __future__ import annotations
 import ast
 import asyncio
 import copy
+import fnmatch
+import hashlib
 import importlib
 import importlib.util
 import json
 import os
 import re
+import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
@@ -61,6 +65,68 @@ V1_TYPESCRIPT_SDK_REQUIRED_FILES = [
     "typescript/agent-learning-kit/src/local/index.ts",
     "typescript/agent-learning-kit/examples/02-local-heuristic-metrics.ts",
 ]
+
+V1_ACTIVE_AI_EVALUATION_PYTHON_FILES = [
+    "src/fi/evals/__init__.py",
+    "src/fi/evals/core/evaluate.py",
+    "src/fi/evals/core/registry.py",
+    "src/fi/evals/evaluator.py",
+    "src/fi/evals/execution.py",
+    "src/fi/evals/framework/evaluator.py",
+    "src/fi/evals/framework/evals/agentic.py",
+    "src/fi/evals/guardrails/gateway.py",
+    "src/fi/evals/local/evaluator.py",
+    "src/fi/evals/metrics/agents/report.py",
+    "src/fi/evals/metrics/code_security/metrics.py",
+    "src/fi/evals/metrics/function_calling/metrics.py",
+    "src/fi/evals/metrics/hallucination/metrics.py",
+    "src/fi/evals/metrics/rag/rag_score.py",
+    "src/fi/evals/metrics/structured/structured_output_score.py",
+    "src/fi/evals/otel/processors/evaluation.py",
+    "src/fi/evals/protect.py",
+    "src/fi/evals/streaming/evaluator.py",
+]
+
+V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES = [
+    "typescript/agent-learning-kit/src/index.ts",
+    "typescript/agent-learning-kit/src/evaluator.ts",
+    "typescript/agent-learning-kit/src/execution.ts",
+    "typescript/agent-learning-kit/src/manager.ts",
+    "typescript/agent-learning-kit/src/protect.ts",
+    "typescript/agent-learning-kit/src/templates.ts",
+    "typescript/agent-learning-kit/src/types.ts",
+    "typescript/agent-learning-kit/src/core/auth.ts",
+    "typescript/agent-learning-kit/src/local/evaluator.ts",
+    "typescript/agent-learning-kit/src/local/metrics/index.ts",
+    "typescript/agent-learning-kit/src/local/metrics/rag/index.ts",
+    "typescript/agent-learning-kit/src/local/streaming/evaluator.ts",
+    "typescript/agent-learning-kit/examples/01-basic-cloud-evaluation.ts",
+    "typescript/agent-learning-kit/examples/02-local-heuristic-metrics.ts",
+]
+
+V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE = (
+    "internal-docs/ai-evaluation-source-inventory.json"
+)
+V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND = (
+    "agent-learning.active-ai-evaluation-source-inventory.v1"
+)
+V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT = 219
+V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT = 87
+
+V1_ACTIVE_AI_EVALUATION_DOC_PHRASES = {
+    "README.md": [
+        "The active `ai-evaluation` code is included here under `src/fi/evals`",
+        "TypeScript SDK source under `typescript/agent-learning-kit/src`",
+    ],
+    "DEVELOPMENT.md": [
+        "`ai-evaluation` is an active engine for this release, not legacy history.",
+        "`ai-evaluation` TypeScript source lives under `typescript/agent-learning-kit/src`.",
+    ],
+    "LIBRARIES.md": [
+        "`ai-evaluation` remains the active evaluation engine",
+        "legacy dependency for this release",
+    ],
+}
 
 RESEARCH_SOURCES = [
     {
@@ -134,24 +200,721 @@ V1_RELEASE_PROOF_REQUIRED_CHECKS = [
     "git_diff_check",
 ]
 
+V1_SDIST_ONLY_INCLUDE = [
+    "src",
+    "tests",
+    "examples",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "ROADMAP.md",
+]
+
+V1_SDIST_REQUIRED_PATHS = [
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "ROADMAP.md",
+    "src/agent_learning/",
+    "src/fi/",
+    "tests/",
+    "examples/",
+    "docs/",
+]
+
+V1_SDIST_FORBIDDEN_PATHS = [
+    "internal-docs/",
+    "uv.lock",
+    "V1_RELEASE_ROADMAP.md",
+    "DEVELOPMENT.md",
+    "LIBRARIES.md",
+    "typescript/",
+    ".github/",
+    "dist/",
+    "artifacts/",
+    "examples/artifacts/",
+    "__pycache__",
+]
+
+V1_WHEEL_ALLOWED_TOP_LEVEL = [
+    "agent_learning",
+    "fi",
+    "*.dist-info",
+]
+
+V1_DOCS_PAGE_METADATA_KIND = "agent-learning.docs-page.v1"
+V1_DOCS_MACHINE_INDEX_FILE = "docs/llms.txt"
+V1_DOCS_MIN_PAGE_COUNT = 60
+
+V1_DOCS_TRACKS = [
+    "quickstart",
+    "eval",
+    "simulate",
+    "optimize",
+    "redteam",
+    "frameworks",
+    "prove",
+    "reference",
+]
+V1_DOCS_OBJECTIVE_AXIS = ["behavior", "capability", "reliability", "safety"]
+V1_DOCS_STAGE_AXIS = ["simulate", "evaluate", "optimize", "promote", "prove"]
+
+V1_DOCS_REQUIRED_PAGES = [
+    "docs/index.md",
+    "docs/cookbooks/index.md",
+    "docs/quickstart/golden-path-ci.md",
+    "docs/quickstart/golden-path-run.md",
+    "docs/quickstart/golden-path-redteam.md",
+    "docs/quickstart/golden-path-optimize.md",
+    "docs/eval/evaluate-any-task.md",
+    "docs/simulate/simulate-any-framework.md",
+    "docs/optimize/optimize-any-agent.md",
+    "docs/redteam/red-team-anything.md",
+    "docs/eval/judge-reliability.md",
+    "docs/redteam/stored-prompt-injection.md",
+    "docs/frameworks/openenv.md",
+    "docs/reference/artifacts.md",
+    "docs/reference/cli.md",
+    "docs/reference/configure.md",
+]
+
+# Backing object -> the executing gate whose same-run verdict admits it.
+# Populated from the spec_from_file_location sites in this module; the
+# milestone test pins every value into the closed check-id set.
+V1_DOCS_BACKING_COVERAGE: dict[str, str] = {
+    # Phase 11B (§7.3 / Appendix A2): the 5 profile pages are admitted via their
+    # OWN backing IO-contract example, which is ALREADY mapped below — streaming
+    # / typed_output / nested_method examples -> framework_adapter_io_readiness;
+    # message_history / handoff_transcript examples ->
+    # framework_adapter_probe_readiness. No page-key entry is needed (the docs
+    # gate resolves coverage by the page's backing path, not the page path).
+    "examples/custom_framework_optimization.json": "framework_optimizer_readiness",
+    "examples/framework_certification_optimization.json": "framework_optimizer_readiness",
+    "examples/framework_import_repair_optimization.json": "framework_optimizer_readiness",
+    "examples/multi_agent_framework_handoff_optimization.json": "framework_optimizer_readiness",
+    "examples/sdk_account_sync.py": "telemetry_boundary",
+    "examples/sdk_agent_control_plane_optimization.py": "agent_control_plane_readiness",
+    "examples/sdk_agent_control_plane_simulation.py": "agent_control_plane_readiness",
+    "examples/sdk_agent_integration_optimization.py": "agent_integration_readiness",
+    "examples/sdk_agent_integration_simulation.py": "agent_integration_readiness",
+    "examples/sdk_browser_cua_probe_optimization.py": "browser_cua_probe_readiness",
+    "examples/sdk_capability_freeze_regression.py": "capability_profile_freeze_readiness",
+    "examples/sdk_cua_improvement.py": "cua_loop_readiness",
+    "examples/sdk_cua_loop.py": "cua_loop_readiness",
+    "examples/sdk_evaluation_hook_optimization.py": "evaluation_hook_readiness",
+    "examples/sdk_evaluation_hook_probe_optimization.py": "evaluation_hook_probe_readiness",
+    "examples/sdk_external_http_agent_optimization.py": "external_agent_adapter_readiness",
+    "examples/sdk_image_improvement.py": "image_loop_readiness",
+    "examples/sdk_image_loop.py": "image_loop_readiness",
+    "examples/sdk_framework_adapter_a2a_protocol_trace.py": "protocol_adapter_readiness",
+    "examples/sdk_framework_adapter_agent_control_plane.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_auto_discovery_optimization.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_auto_discovery_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_browser_cua_trace.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_cert_a2a.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_agno.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_bedrock.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_beeai.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_cerebras.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_claude_agent_sdk.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_cohere.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_deepseek.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_fireworks.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_google_adk.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_huggingface.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_instructor.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_litellm.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_ollama.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_portkey.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_smolagents.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_strands.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_together.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_cert_xai.py": "framework_adapter_preset_certification_readiness",
+    "examples/sdk_framework_adapter_discovery.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_handoff_transcript.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_http_transport.py": "framework_http_transport_readiness",
+    "examples/sdk_framework_adapter_keyword_inputs.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_langchain_invoke_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_lifecycle_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_framework_adapter_livekit_run_session_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_matrix_optimization.py": "framework_adapter_matrix_optimization_readiness",
+    "examples/sdk_framework_adapter_mcp_tool_session.py": "protocol_adapter_readiness",
+    "examples/sdk_framework_adapter_memory_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_framework_adapter_message_history.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_nested_method.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_nested_method_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_one_call_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_one_call_run.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_openenv_trace.py": "framework_environment_replay_adapter_readiness",
+    "examples/sdk_framework_adapter_orchestration_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_framework_adapter_pipecat_process_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_probe.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_probe_optimization.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_probe_promotion.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_provider_response.py": "framework_adapter_probe_readiness",
+    "examples/sdk_framework_adapter_side_kwargs.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_streaming.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_target_optimization.py": "framework_adapter_target_optimizer_readiness",
+    "examples/sdk_framework_adapter_trace_export.py": "framework_trace_export_readiness",
+    "examples/sdk_framework_adapter_typed_output.py": "framework_adapter_io_readiness",
+    "examples/sdk_framework_adapter_websocket_transport.py": "framework_websocket_transport_readiness",
+    "examples/sdk_framework_adapter_workflow_trace.py": "stateful_framework_adapter_readiness",
+    "examples/sdk_memory_layer_probe_optimization.py": "memory_layer_probe_readiness",
+    "examples/sdk_memory_target_optimization.py": "memory_target_optimizer_readiness",
+    "examples/sdk_multi_agent_room_probe_optimization.py": "multi_agent_room_probe_readiness",
+    "examples/sdk_multi_agent_target_optimization.py": "multi_agent_target_optimizer_readiness",
+    "examples/sdk_multi_framework_simulation.py": "multi_framework_runtime_readiness",
+    "examples/sdk_openenv_environment_optimization.py": "environment_replay_optimizer_readiness",
+    "examples/sdk_optimizer_governance_optimization.py": "optimizer_governance_readiness",
+    "examples/sdk_persona_scenario_studio.py": "persona_scenario_studio_readiness",
+    "examples/sdk_practice_loop.py": "practice_loop_readiness",
+    "examples/sdk_optimizer_portfolio_optimization.py": "optimizer_portfolio_readiness",
+    "examples/sdk_optimizer_profile_matrix.py": "optimizer_profile_matrix_readiness",
+    "examples/sdk_orchestration_stack_probe_optimization.py": "orchestration_stack_probe_readiness",
+    "examples/sdk_orchestration_target_optimization.py": "orchestration_target_optimizer_readiness",
+    "examples/sdk_realtime_stack_probe_optimization.py": "realtime_stack_probe_readiness",
+    "examples/sdk_redteam_adaptive_loop_optimization.py": "redteam_attack_evolution_readiness",
+    "examples/sdk_redteam_attack_evolution_optimization.py": "redteam_attack_evolution_readiness",
+    "examples/sdk_redteam_causal_attribution_optimization.py": "redteam_society_causal_readiness",
+    "examples/sdk_redteam_readiness_certification_optimization.py": "redteam_readiness_certification",
+    "examples/sdk_redteam_society_optimization.py": "redteam_society_causal_readiness",
+    "examples/sdk_regression_artifact_suite.py": "regression_artifact_readiness",
+    "examples/sdk_retrieval_hook_optimization.py": "retrieval_hook_readiness",
+    "examples/sdk_run_ledger.py": "telemetry_boundary",
+    "examples/sdk_simulation_contract.py": "simulation_contract_readiness",
+    "examples/sdk_target_optimization.py": "generic_target_optimizer_readiness",
+    "examples/sdk_task_evaluation.py": "task_artifact_evaluation_readiness",
+    "examples/sdk_task_evaluation_synthesis.py": "task_evaluation_synthesis_readiness",
+    "examples/sdk_task_world_optimization.py": "task_world_optimizer_readiness",
+    "examples/sdk_trinity_stack_probe_optimization.py": "trinity_stack_probe_readiness",
+    "examples/sdk_voice_improvement.py": "voice_loopback_readiness",
+    "examples/sdk_voice_loopback.py": "voice_loopback_readiness",
+    "examples/sdk_voice_redteam_campaign.py": "voice_redteam_readiness",
+    "examples/sdk_workflow_hook_optimization.py": "workflow_hook_readiness",
+    "examples/sdk_workflow_target_optimization.py": "workflow_target_optimizer_readiness",
+    "examples/sdk_workflow_target_profile_matrix.py": "workflow_target_profile_matrix_readiness",
+    "examples/sdk_workspace_import_certification_optimization.py": "workspace_import_certification_readiness",
+    "examples/sdk_world_hooks_optimization.py": "world_hooks_readiness",
+    "examples/social_memory_framework_optimization.json": "framework_optimizer_readiness",
+    "examples/world_framework_memory_optimization.json": "framework_optimizer_readiness",
+}
+
+# Closed kind universe a docs page may claim to emit. Derivation rule asserted
+# by tests: V1_REQUIRED_SCHEMA_KINDS plus the ".v"-suffixed public registry
+# values minus named non-artifact labels, plus the eval-task evidence kind.
+V1_DOCS_ALLOWED_ARTIFACT_KINDS = [
+    "agent-learning.run.v1",
+    "agent-learning.eval.v1",
+    "agent-learning.artifact-evaluation.v1",
+    "agent-learning.task-evidence.v1",
+    "agent-learning.redteam.v1",
+    "agent-learning.optimization.v1",
+    "agent-learning.eval-optimization.v1",
+    "agent-learning.suite.v1",
+    "agent-learning.suite-optimization.v1",
+    "agent-learning.actions.v1",
+    "agent-learning.action-run.v1",
+    "agent-learning.release-proof.v1",
+    "agent-learning.baseline.v1",
+    "agent-learning.compare.v1",
+    "agent-learning.init.v1",
+    "agent-learning.regression-promotion.v1",
+    "agent-learning.attack-evolution-shrink.v1",
+    "agent-learning.replay.v1",
+    "agent-learning.report.v1",
+    "agent-learning.doctor.v1",
+    "agent-learning.release-check.v1",
+    # Phase 4 (ARCH Decision 7 note): new kinds join the docs allowed list,
+    # never the frozen V1_REQUIRED_SCHEMA_KINDS.
+    "agent-learning.frozen-capability-profile.v1",
+    "agent-learning.apply-plan.v1",
+    "agent-learning.optimizer-routing-table.v1",
+    # Phase 7 (ARCH §4 canon): the calibration lifecycle artifact + the
+    # admitted-library index; V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    "agent-learning.persona-calibration.v1",
+    "agent-learning.persona-library.v1",
+    # Phase 8 (ARCH §3 canon): the ledger-row schema tag the prove pages
+    # document; V1_REQUIRED_SCHEMA_KINDS stays frozen.
+    "agent-learning.ledger-row.v1",
+    # Phase 13D — the SIMULATION contract + the Practice Loop (docs allowed-list
+    # only; NEVER V1_REQUIRED_SCHEMA_KINDS — the Phase-4 rule, ARCH §2g).
+    "agent-learning.simulation.v1",
+    "agent-learning.objective.v1",
+    "agent-learning.loss-report.v1",
+    "agent-learning.practice-loop.v1",
+    "agent-learning.practice-result.v1",
+    "agent-learning.practice-report.v1",
+    "agent-learning.practice-deficits.v1",
+    "agent-learning.practice-drill.v1",
+    "agent-learning.practice-update.v1",
+    "agent-learning.consolidated-lesson.v1",
+    "agent-learning.practice-calibration.v1",
+]
+
+# Claims-lint vocabulary and license table: trigger pattern -> the only gate id
+# that may license it; None = unlicensable (any prose hit fails).
+V1_DOCS_CLAIM_PHRASE_GATES: dict[str, str | None] = {
+    r"\b10x\b": "environment_10x_robustness",
+    r"\bguarantee[sd]?\b": "docs_executability",
+    r"\btrain(?:ing|er|ed|s)?\b": "practice_loop_readiness",  # Phase 13D-D3 (clause f)
+    # Phase 9A-A8: new voice-capability wording licensed only while
+    # voice_loopback_readiness is green. Scoped to codec-survival/audio-loopback
+    # (the genuinely-NEW 9A phrases); "phone-survival" is deliberately EXCLUDED
+    # to avoid retroactively re-gating the already-green redteam corpus page that
+    # uses it (BBG §6.5: "must not collide with existing licensed/unlicensed
+    # phrases — verify against the dict at build time").
+    r"\b(?:codec[- ]survival|audio[- ]loopback)\b": "voice_loopback_readiness",
+    # Phase 9B-A9: new image-capability wording licensed only while
+    # image_loop_readiness is green. Scoped to the genuinely-NEW 9B phrases
+    # (image-improvement-loop / perception-bypass(-guard) / image-eval-as-loss);
+    # verified collision-free vs the existing docs at build time.
+    r"\b(?:image[- ]improvement[- ]loop|perception[- ]bypass(?:[- ]guard)?|image[- ]eval[- ]as[- ]loss)\b": "image_loop_readiness",
+    # Phase 9C-A9: new CUA-capability wording licensed only while
+    # cua_loop_readiness is green. Scoped to the genuinely-NEW 9C phrases
+    # (cua-improvement-loop / fake-completion(-guard) / cua-eval-as-loss);
+    # verified collision-free vs the existing docs at build time. Generic terms
+    # ("computer-use", "browser", "CUA") are deliberately EXCLUDED to avoid
+    # retroactively re-gating the already-green browser/CUA probe + optimization
+    # pages (the 9A/9B scoping discipline).
+    r"\b(?:cua[- ]improvement[- ]loop|fake[- ]completion(?:[- ]guard)?|cua[- ]eval[- ]as[- ]loss)\b": "cua_loop_readiness",
+    # Phase 11B-A6: new certification/coverage wording licensed only while
+    # framework_adapter_preset_certification_readiness is green. Scoped to the
+    # genuinely-NEW 11B phrases (verified collision-free against existing docs).
+    r"\b(?:certified[- ]preset|preset[- ]certification|first[- ]class[- ]adapter)\b": (
+        "framework_adapter_preset_certification_readiness"
+    ),
+    r"\bworld[- ]best\b": None,
+    r"\bbest[- ]in[- ]class\b": None,
+    r"\b\d+(?:\.\d+)?x\s+(?:faster|better|more\s+robust)\b": None,
+    r"\bonly\s+(?:tool|kit|sdk|framework)\b": None,
+}
+
+# Top-level import roots of the lane extras. "mcp" and "a2a" are the import
+# names of the mcp / a2a-sdk distributions.
+V1_LIVE_LANE_EXTRA_PACKAGES = [
+    "livekit",
+    "pipecat",
+    "langchain",
+    "langchain_core",
+    "langgraph",
+    "mcp",
+    "a2a",
+]
+
+V1_LIVE_LANE_MODULES = [
+    "src/agent_learning/live/livekit_lane.py",
+    "src/agent_learning/live/pipecat_lane.py",
+    "src/agent_learning/live/langgraph_lane.py",
+    "src/agent_learning/live/mcp_lane.py",
+    "src/agent_learning/live/a2a_lane.py",
+]
+
+V1_LIVE_LANE_ENV_FLAGS = {
+    "livekit": "AGENT_LEARNING_LIVE_LIVEKIT",
+    "pipecat": "AGENT_LEARNING_LIVE_PIPECAT",
+    "langchain": "AGENT_LEARNING_LIVE_LANGCHAIN",
+    "mcp": "AGENT_LEARNING_LIVE_MCP",
+    "a2a": "AGENT_LEARNING_LIVE_A2A",
+    "credentialed": "AGENT_LEARNING_LIVE_CREDENTIALED",
+}
+
+V1_LIVE_EVIDENCE_CLASSES = [
+    "local_gate",
+    "live_lane",
+    "live_stressed",
+    "captured_fixture",
+]
+V1_LIVE_RELEASE_ADMISSIBLE_CLASSES = ["local_gate", "captured_fixture"]
+V1_LIVE_FAILURE_LAYERS = [
+    "lane_infra",
+    "framework_runtime",
+    "provider",
+    "agent_behavior",
+]
+
+# Pre-existing vendored optional-import sites — each wraps the import in
+# try/except today; the gate re-verifies the guard, not just the path.
+V1_LIVE_LANE_GUARDED_IMPORT_FILES = [
+    "src/fi/simulate/simulation/engines/livekit.py",
+    "src/fi/simulate/simulation/generator.py",
+    "src/fi/simulate/recording/room_recorder.py",
+    "src/fi/simulate/agent/wrappers/langchain.py",
+]
+
+V1_LIVE_LANE_CAPTURE_DIR = "examples/captured"
+V1_LIVE_LANE_EVIDENCE_CLASS_FIELD = "evidence_class"
+
+# ---- Phase 4A: capability-profile regression freezing ----
+V1_CAPABILITY_PROFILE_FREEZE_FILES = [
+    "examples/sdk_capability_freeze_regression.py",
+    "examples/frozen_profiles/frozen_capability_profile.json",
+]
+V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+)
+# Fixtures live here, never in the pinned examples/regression_artifacts/
+# 4-file gate surface (ARCH Decision 3).
+V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR = "examples/frozen_profiles"
+V1_FROZEN_CAPABILITY_PROFILE_KIND = "agent-learning.frozen-capability-profile.v1"  # ARCH §2a
+V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND = (
+    "agent-learning.frozen-capability-profile-replay.v1"
+)
+V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY = "frozen_capability_profile"
+V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS = [
+    # ARCH §2a row schema; row_id = sha256 of the sorted-JSON of all other fields
+    "row_id",
+    "framework",
+    "capability",
+    "metric",
+    "floor",
+    "setting",
+    "security",
+    "source",
+]
+V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS = [
+    "rows_content_addressed",            # row_id == sha256(sorted-JSON of other fields)
+    "improving_candidate_with_broken_row_vetoed",
+    "veto_recorded_in_governance",       # hetvabhasa_class == "badhita"
+    "out_of_setting_win_non_admissible",
+    "security_row_non_tradable",
+]
+
+# ---- Phase 4B (+4C/4D evidence asserted here): 3-axis optimizer profile matrix ----
+V1_OPTIMIZER_PROFILE_MATRIX_FILES = [
+    "examples/sdk_optimizer_profile_matrix.py",
+    "examples/optimizer_routing_table.json",     # committed table, byte-compared (ARCH Decision 7)
+]
+V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_OPTIMIZER_PROFILE_MATRIX_KEY"
+)
+V1_OPTIMIZER_PROFILE_MATRIX_KIND = "agent-learning.optimizer-profile-matrix.v1"
+V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS = [
+    # The six existing framework profiles; pinned equal to
+    # V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS by unit test (the constant
+    # is defined later in this module, so the list is spelled literally here).
+    "langgraph",
+    "crewai",
+    "llamaindex",
+    "langchain",
+    "pipecat",
+    "livekit",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS = [    # ARCH §2f canon, byte-exact
+    "prompt",
+    "whole_agent",
+    "memory_ops",
+    "multi_agent_roster",
+    "workflow_trace",
+    "orchestration_spans",
+    "framework_method",
+    # Phase 9D: modality target-kinds (mirror of optimize.py; 9D-D2). Lockstep.
+    "voice_agent",
+    "image_agent",
+    "cua_agent",
+]
+# Phase 9D: the declared set of modality tokens (9D-D4). The gate's
+# modality-coverage clause asserts each one that is in the vocabulary has >=1
+# declared cell — the optimizer-target sibling of 13D A13 world-kind coverage.
+V1_OPTIMIZER_PROFILE_MATRIX_MODALITY_TARGET_KINDS = [
+    "voice_agent",
+    "image_agent",
+    "cua_agent",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS = [        # ARCH §2f canon, byte-exact
+    "gepa",
+    "tpe",
+    "evolution_elo",
+    "bandit",
+    "society",
+    "regression_replay",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_CELLS = [
+    # P4-D2: the declared launch subset — 40 coordinates (27 new + 6 inherited
+    # workflow cells + 7 Phase-9D modality cells), per the ARCH §6 composition
+    # table. The gate asserts EXACTLY this set (no minimum-count floor); growing
+    # coverage is an edit to this constant + the example, deliberately visible
+    # in review.
+    ("langgraph", "workflow_trace", "society"),
+    ("crewai", "workflow_trace", "society"),
+    ("llamaindex", "workflow_trace", "society"),
+    ("langchain", "workflow_trace", "society"),
+    ("pipecat", "workflow_trace", "society"),
+    ("livekit", "workflow_trace", "society"),
+    ("langgraph", "workflow_trace", "gepa"),
+    ("langgraph", "workflow_trace", "tpe"),
+    ("langgraph", "workflow_trace", "evolution_elo"),
+    ("langgraph", "workflow_trace", "bandit"),
+    ("langgraph", "workflow_trace", "regression_replay"),
+    ("llamaindex", "prompt", "gepa"),
+    ("llamaindex", "prompt", "tpe"),
+    ("llamaindex", "prompt", "evolution_elo"),
+    ("llamaindex", "prompt", "bandit"),
+    ("llamaindex", "prompt", "society"),
+    ("llamaindex", "prompt", "regression_replay"),
+    ("livekit", "whole_agent", "society"),
+    ("livekit", "whole_agent", "evolution_elo"),
+    ("livekit", "whole_agent", "tpe"),
+    ("langgraph", "whole_agent", "society"),
+    ("langgraph", "whole_agent", "evolution_elo"),
+    ("langgraph", "whole_agent", "tpe"),
+    ("langgraph", "memory_ops", "society"),
+    ("langgraph", "memory_ops", "bandit"),
+    ("crewai", "multi_agent_roster", "society"),
+    ("crewai", "multi_agent_roster", "evolution_elo"),
+    ("langgraph", "orchestration_spans", "society"),
+    ("langgraph", "orchestration_spans", "tpe"),
+    ("pipecat", "orchestration_spans", "society"),
+    ("pipecat", "orchestration_spans", "tpe"),
+    ("langchain", "framework_method", "gepa"),
+    ("langchain", "framework_method", "regression_replay"),
+    # Phase 9D modality cells (mirror of optimize.py; 9D-D3). Lockstep, byte-exact.
+    ("livekit", "voice_agent", "society"),
+    ("livekit", "voice_agent", "evolution_elo"),
+    ("livekit", "voice_agent", "tpe"),
+    ("llamaindex", "image_agent", "society"),
+    ("llamaindex", "image_agent", "evolution_elo"),
+    ("langgraph", "cua_agent", "society"),
+    ("langgraph", "cua_agent", "regression_replay"),
+]
+V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS = [
+    "framework",
+    "target_kind",
+    "backend",
+    "setting",
+    "eval_budget",
+    "native_proof_closed",
+    "trajectory_profile",
+    "winner",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS = [
+    "global_best",
+    "global_best_backend",
+    "overall_winner",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES = [
+    "retrieval_first",
+    "write_retrieval_factorial",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES = [
+    "multi_agent",
+    "orchestration",
+    "router",
+    "graph",
+]
+V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET = 24  # ARCH §6 per-cell budget cap
+
+# ---- 4C surfaces asserted via the matrix gate + governance flags (no 4C gate) ----
+V1_WHOLE_AGENT_CONTRACT_STAGES = [
+    "component_text",
+    "structural_config",
+    "global_repolish",
+]  # ARCH §2f canon
+V1_WHOLE_AGENT_APPLY_PLAN_KIND = "agent-learning.apply-plan.v1"
+V1_WHOLE_AGENT_APPLY_PLAN_FIELDS = [            # ARCH §2c/Decision 9 — the ONE schema
+    "provider",
+    "agent_ref",
+    "apply_fields",
+    "read_back_checks",
+    "mismatch_policy",
+    "frozen_profile_ref",
+    "nirnaya_ref",
+]
+
+# ---- 4D routing evidence asserted inside the matrix gate's routing_errors ----
+V1_OPTIMIZER_ROUTING_TABLE_KIND = "agent-learning.optimizer-routing-table.v1"  # ARCH §2d
+V1_OPTIMIZER_ROUTING_TABLE_FILE = "examples/optimizer_routing_table.json"
+V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS = [
+    "improvement_frequency",
+    "semantic_locality",
+    "dedupe_rate",
+    "regression_count",
+    "iterations",
+    "evaluations",
+]
+V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS = [
+    "routing_table_byte_identical",                       # regenerated vs committed
+    "every_recommendation_cites_profile_evidence",        # same-run cell, matching axes + winner
+    "live_lane_evidence_excluded_from_recommendations",   # P4-D6
+    "no_global_aggregate",
+    "default_picker_resolves_overrides_and_cold_starts",  # §2.4 engagement contract
+]
+
+# ---- Phase 7: persona & scenario studio ----
+V1_PERSONA_SCENARIO_STUDIO_FILES = [
+    "examples/sdk_persona_scenario_studio.py",
+]
+V1_PERSONA_LIBRARY_FIXTURE_DIR = "examples/persona_library"
+# Exactly TWO new artifact kinds (ARCH §4 canon): the calibration lifecycle
+# artifact + the admitted-library index. Persona/scenario source files are
+# library content (no kind); fidelity = in-row run.v1 block; bias-lint =
+# block inside calibration artifacts; pull receipts = index provenance entries.
+V1_PERSONA_CALIBRATION_KIND = "agent-learning.persona-calibration.v1"
+V1_PERSONA_LIBRARY_KIND = "agent-learning.persona-library.v1"
+
+V1_PERSONA_LAYERS = [
+    "identity", "temperament", "behavior_policy", "knowledge", "provenance",
+]
+V1_PERSONA_EVIDENCE_CLASSES = [
+    "hand_written", "schema_sampled", "policy_evolved",
+    "trace_mined", "cloud_downloaded", "legacy",
+]
+V1_PERSONA_TEMPERAMENT_AXES = ["rajas", "sattva", "tamas"]
+    # byte-equal to fi.opt.optimizers.council.GUNA_AXES (council.py:40) AND
+    # fi.simulate.simulation.models.PERSONA_TEMPERAMENT_AXES — cross-pinned in tests
+V1_PERSONA_BEHAVIOR_AXES = [
+    "patience", "disclosure", "interruption", "escalation",
+    "cooperation", "repair",
+]
+V1_PERSONA_BEHAVIOR_REALIZATION_METRICS = [
+    # paired 1:1, same order, with V1_PERSONA_BEHAVIOR_AXES (ARCH §2b/§4)
+    "turns_to_escalation", "info_withholding_rate", "interruption_count",
+    "intensity_trajectory_match", "compliance_rate", "repair_turn_fraction",
+]
+V1_PERSONA_FIDELITY_RECORD_FIELDS = [
+    "persona_version", "scenario_version", "evidence_class",
+    "adherence", "consistency", "naturalness", "drift", "drift_trajectory",
+    "floors", "verdict", "verdict_reason",
+]
+V1_PERSONA_FIDELITY_VERDICTS = ["pass", "fail", "inconclusive"]
+V1_PERSONA_FIDELITY_EPIDEMIC_RATE = 0.5
+    # run-level: admission-inconclusive rate above this => exit 1 with
+    # finding "persona_fidelity_epidemic" (ARCH §4; Phase-3 void-rate mirror)
+V1_PERSONA_FIDELITY_FLOORS = {
+    # GATE-FIXTURE floors keyed by evidence class (ARCH §2c: runtime floors
+    # are library-index data seeded from these). legacy has NO floors (cannot
+    # produce fidelity evidence at all) — the dict omits it on purpose.
+    # hand_written floors bind LOCAL verdicts only: hand_written rows can
+    # never back release claims regardless of floors (PRD §4.2).
+    "hand_written":     {"adherence": 0.6, "consistency": 0.7, "naturalness": 0.5},
+    "schema_sampled":   {"adherence": 0.7, "consistency": 0.8, "naturalness": 0.6},
+    "policy_evolved":   {"adherence": 0.75, "consistency": 0.8, "naturalness": 0.65},
+    "trace_mined":      {"adherence": 0.75, "consistency": 0.85, "naturalness": 0.7},
+    "cloud_downloaded": {"adherence": 0.7, "consistency": 0.8, "naturalness": 0.6},
+}
+V1_SCENARIO_KINDS = ["task", "adversarial", "regression", "perturbation", "composed"]
+V1_SCENARIO_COVERAGE_AXES = [
+    "intents", "personas", "perturbations",
+    "tool_obligations", "delegation_obligations",
+]
+V1_SCENARIO_COVERAGE_FORBIDDEN_HEADLINE_KEYS = ["library_size", "scenario_count"]
+V1_PERSONA_CALIBRATION_STAGES = ["sampled", "validated", "interrogated", "admitted"]
+V1_PERSONA_CALIBRATION_PROBES = ["internal", "external", "retest"]
+V1_PERSONA_CONTENT_SCAN_RESULTS = ["clean", "flagged"]
+    # two-level encoding (ARCH §4): result token clean|flagged; a flagged
+    # artifact's ENVELOPE disposition is "quarantined"
+V1_PERSONA_BIAS_LINT_CHECKS = [
+    "demographic_clustering", "trait_demographic_cells",
+    "subgroup_error_redistribution", "caricature_two_sided",
+]
+V1_PERSONA_VENDOR_IMPORT_FORMATS = ["vapi", "retell"]
+V1_PERSONA_DOWNLOAD_PIN_FIELDS = [
+    "source", "source_id", "source_updated_at", "downloaded_at",
+    "checksum_sha256", "content_scan",
+]
+
+# ---- Phase 8: account-integrated telemetry (gate #72, telemetry_boundary) ----
+# --- kill switch + row vocabulary (ARCH §3 canon) ---------------------------
+V1_TELEMETRY_KILL_SWITCH_ENV = "AGENT_LEARNING_TELEMETRY"  # "off" binds all (P8-D6)
+V1_TELEMETRY_KILL_SWITCH_OFF_VALUE = "off"
+V1_TELEMETRY_ROW_SCHEMA = "agent-learning.ledger-row.v1"
+V1_TELEMETRY_TOMBSTONE_SCHEMA = "agent-learning.ledger-tombstone.v1"
+V1_TELEMETRY_GAP_SCHEMA = "agent-learning.ledger-gap.v1"
+V1_TELEMETRY_UNREADABLE_SCHEMA = "agent-learning.ledger-unreadable-line.v1"
+V1_TELEMETRY_GENESIS_SENTINEL = "agent-learning.ledger.genesis.v1"
+V1_TELEMETRY_RUN_KIND = "agent-learning.run.v1"  # == live/_contract.py:15
+V1_TELEMETRY_ROW_FIELDS = [  # ARCH §2a, full set (MF3)
+    "schema", "kind", "phase", "evidence_class", "verdict", "scores",
+    "gate_outcomes", "semconv_version", "manifest_address", "asset_refs",
+    "trace_ids", "content_bearing", "redaction", "created_at", "run_id",
+    "chain",
+]
+V1_TELEMETRY_TOMBSTONE_FIELDS = [  # ARCH §2b
+    "schema", "kind", "tombstones", "reason", "redacted_fields",
+    "evidence_class", "created_at", "run_id", "chain",
+]
+V1_TELEMETRY_EVIDENCE_CLASSES = list(V1_LIVE_EVIDENCE_CLASSES)  # reuse live vocab
+V1_TELEMETRY_CONTENT_BEARING_REQUIRES = ["redaction"]  # row-level contract field
+
+# --- modules in the no-key telemetry path (scanned for network emission) ---
+V1_TELEMETRY_LOCAL_PATH_MODULES = [
+    "src/agent_learning/telemetry/__init__.py",
+    "src/agent_learning/telemetry/_contract.py",
+    "src/agent_learning/telemetry/_row.py",
+    "src/agent_learning/telemetry/_ledger.py",
+    "src/agent_learning/telemetry/_queue.py",
+    "src/agent_learning/_schema.py",  # hosts the emission hook
+]
+V1_TELEMETRY_SYNC_MODULE = (
+    "src/agent_learning/telemetry/_sync.py"  # the original sanctioned network home
+)
+# Sanctioned network homes (Phase 14 adds the W&B-cloud emit + URL resolver).
+# Each MUST keep its network-capable imports lazy (in-function), after the kill
+# switch + key gates — the gate enforces lazy-ness on every home below, exactly
+# as it did for _sync alone. The no-key path remains zero-emission.
+V1_TELEMETRY_NETWORK_HOME_MODULES = [
+    "src/agent_learning/telemetry/_sync.py",
+    "src/agent_learning/telemetry/_emit.py",  # export-result-aware OTLP emit (P14)
+    "src/agent_learning/telemetry/_url.py",   # dashboard URL resolve (P14)
+]
+
+# --- ledger disk layout (ARCH §2a) ------------------------------------------
+V1_TELEMETRY_LEDGER_HOME_ENV = "AGENT_LEARNING_HOME"
+V1_TELEMETRY_LEDGER_PATH_ENV = "AGENT_LEARNING_LEDGER_PATH"  # overrides the DIRECTORY
+V1_TELEMETRY_LEDGER_PATHS = [
+    "ledger/runs.jsonl", "ledger/chain.head", "ledger/sync.cursor",
+]
+
+# --- scan scope: BOTH trees (the VS Code "bind everything incl. fi/*" lesson) ---
+V1_TELEMETRY_SCAN_ROOTS = ["src/agent_learning", "src/fi"]
+
+# --- forbidden analytics-endpoint denylist (anywhere in kit source) --------
+# P8-D1: no anonymous analytics channel exists. Any hostname/SDK below ANYWHERE
+# in src/* fails the release. This is the structural proof the third channel
+# is absent. Never remove a host from this list to make a build pass; if a
+# host is genuinely needed it is, by definition, the wrong build.
+V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS = [
+    "posthog.com", "i.posthog.com", "app.posthog.com",
+    "api.segment.io", "segment.com", "cdn.segment.com",
+    "google-analytics.com", "analytics.google.com", "www.googletagmanager.com",
+    "api.mixpanel.com", "mixpanel.com",
+    "api.amplitude.com", "amplitude.com",
+    "api2.amplitude.com",
+]
+V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS = [
+    "posthog", "segment", "analytics", "mixpanel", "amplitude",
+]
+
+# --- network-capable call markers (the import scan keys off these) ---------
+V1_TELEMETRY_NETWORK_IMPORT_ROOTS = [
+    "requests", "httpx", "urllib", "http", "socket", "aiohttp", "websockets",
+    "grpc", "fi_instrumentation",
+]
+
+# --- the gate's own committed fixtures (ARCH §5) ----------------------------
+V1_TELEMETRY_GATE_FIXTURE_DIR = "examples/telemetry_ledger_fixture"
+
+# Internal release-planning docs (V1_RELEASE_ROADMAP.md, the engineering handover)
+# live in the separate internal-docs repo, not the shippable kit — the handover
+# gate verifies only the public README's release-proof guidance.
 V1_RELEASE_HANDOVER_REQUIRED_FILES = [
     "README.md",
-    "V1_RELEASE_ROADMAP.md",
-    "internal-docs/v1-engineering-handover.md",
 ]
 
 V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES = {
     "README.md": [
         "For the heavier release cut, run `agent-learn release-proof --project-root .`.",
         "It emits `agent-learning.release-proof.v1`",
-    ],
-    "V1_RELEASE_ROADMAP.md": [
-        "`agent-learn release-proof` emits one release-cut artifact",
-        "`agent-learning.release-proof.v1` and `ready=true`",
-    ],
-    "internal-docs/v1-engineering-handover.md": [
-        "release-proof packaging executable",
-        "Do not mark v1 complete until current evidence proves all of these:",
     ],
 }
 
@@ -335,7 +1098,6 @@ V1_UI_FORBIDDEN_SECRET_MARKERS = [
 V1_REGRESSION_ARTIFACT_FILES = [
     "examples/regression_artifact_suite.json",
     "examples/sdk_regression_artifact_suite.py",
-    "internal-docs/regression-artifact-readiness-research.md",
 ]
 
 V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS = [
@@ -384,7 +1146,6 @@ V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES = [
 V1_REQUIRED_DOCS = [
     "README.md",
     "DEVELOPMENT.md",
-    "V1_RELEASE_ROADMAP.md",
 ]
 
 V1_REQUIRED_EXAMPLES = [
@@ -433,7 +1194,6 @@ V1_TASK_ARTIFACT_EVALUATION_FILES = [
     "examples/artifact_task_eval_suite.json",
     "examples/artifact_task_eval_config.json",
     "examples/fixtures/task_artifacts/refund_task_run.json",
-    "internal-docs/task-artifact-evaluation-readiness-research.md",
 ]
 
 V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS = [
@@ -463,7 +1223,6 @@ V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS = 8
 
 V1_TASK_EVALUATION_SYNTHESIS_FILES = [
     "examples/sdk_task_evaluation_synthesis.py",
-    "internal-docs/task-evaluation-synthesis-readiness-research.md",
 ]
 
 V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS = [
@@ -537,7 +1296,6 @@ V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS = [
 
 V1_TASK_WORLD_OPTIMIZER_FILES = [
     "examples/sdk_task_world_optimization.py",
-    "internal-docs/task-world-optimizer-readiness-research.md",
 ]
 
 V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -585,7 +1343,6 @@ V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS = [
 
 V1_GENERIC_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_target_optimization.py",
-    "internal-docs/generic-target-optimizer-readiness-research.md",
 ]
 
 V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -630,7 +1387,6 @@ V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
 
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_framework_adapter_target_optimization.py",
-    "internal-docs/framework-adapter-target-optimizer-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -693,7 +1449,6 @@ V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL = (
 V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_multi_agent_target_optimization.py",
     "examples/sdk_multi_agent_optimization.py",
-    "internal-docs/multi-agent-target-optimizer-readiness-research.md",
 ]
 
 V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -766,7 +1521,6 @@ V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
 V1_MEMORY_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_memory_target_optimization.py",
     "examples/sdk_memory_optimization.py",
-    "internal-docs/memory-target-optimizer-readiness-research.md",
 ]
 
 V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -841,7 +1595,6 @@ V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
 V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_orchestration_target_optimization.py",
     "examples/sdk_orchestration_optimization.py",
-    "internal-docs/orchestration-target-optimizer-readiness-research.md",
 ]
 
 V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -948,7 +1701,6 @@ V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
 
 V1_WORKFLOW_TARGET_OPTIMIZER_FILES = [
     "examples/sdk_workflow_target_optimization.py",
-    "internal-docs/workflow-target-optimizer-readiness-research.md",
 ]
 
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
@@ -1034,7 +1786,6 @@ V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM = 0.98
 
 V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES = [
     "examples/sdk_workflow_target_profile_matrix.py",
-    "internal-docs/workflow-target-profile-matrix-readiness-research.md",
 ]
 
 V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV = (
@@ -1101,7 +1852,6 @@ V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS = [
 
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
-    "internal-docs/world-hooks-readiness-research.md",
 ]
 
 V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES = [
@@ -1193,7 +1943,6 @@ V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS = [
 
 V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES = [
     "examples/sdk_external_http_agent_optimization.py",
-    "internal-docs/external-agent-adapter-readiness-research.md",
 ]
 
 V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES = [
@@ -1280,7 +2029,6 @@ V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS = [
 
 V1_EVALUATION_HOOK_PROBE_FILES = [
     "examples/sdk_evaluation_hook_probe_optimization.py",
-    "internal-docs/evaluation-hook-probe-research.md",
 ]
 
 V1_EVALUATION_HOOK_PROBE_PROOF_KIND = (
@@ -1414,6 +2162,17 @@ V1_REDTEAM_RESEARCH_SOURCE_URLS = [
     "https://arxiv.org/abs/2605.15338",
     "https://arxiv.org/abs/2605.17075",
     "https://arxiv.org/abs/2606.04329",
+    # Phase 12 (12B) voice red-team research lineage (MF7): each appears as a
+    # voice corpus-row source so the research gate's observed-in-corpus tripwire
+    # stays green. SMIA 2509.07677 is NOT registered this phase (voice-auth
+    # bypass — wrong lineage; no corpus row exercises it).
+    "https://arxiv.org/abs/2602.07379",  # Aegis — voice-agent red-team taxonomy
+    "https://arxiv.org/abs/2603.19127",  # JAMA — joint two-channel optimization
+    "https://arxiv.org/abs/2604.14604",  # AudioHijack — auditory prompt injection
+    "https://arxiv.org/abs/2605.20519",  # CodecAttack — codec-latent survival
+    "https://arxiv.org/abs/2606.06037",  # SpeechJBB — code-switch / pseudo-word
+    "https://arxiv.org/abs/2606.04425",  # cross-session stored injection — the
+    # base the stored_voice rows extend to voice-origin / voice-delivery
 ]
 
 V1_REDTEAM_CORPUS_EXECUTION_FILE = V1_REDTEAM_RESEARCH_CORPUS_FILE
@@ -1422,11 +2181,448 @@ V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS = ["agent_learning_kit"]
 
 V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS = ["local_cli"]
 
-V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat"]
+V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat", "voice"]
+
+# === Phase 12 (Voice AI Red-Teaming) closed vocabularies ====================
+# These are the rung-1 voice-attack canon (ARCH §3 / BUILD-GUIDE §1.1). The 6
+# semantic surfaces in V1_REDTEAM_RESEARCH_SURFACES stay FROZEN; voice adds an
+# ORTHOGONAL physical-cascade surface axis. Every voice corpus row carries BOTH
+# `surface` (one of the frozen 6) AND `voice_surface` (one of the new 6).
+
+V1_REDTEAM_VOICE_SURFACES = [
+    "asr_front_end",          # ASR/encoder ingestion (incl. initial-prompt
+                              #   poisoning at the transcription boundary)
+    "diarization",            # speaker-label poisoning / synthetic SYSTEM speaker
+    "vad_boundary",           # voice-activity-detection boundary exploitation
+    "silence_region",         # silence-region hallucination injection
+    "homophone_divergence",   # spoken-form vs transcript divergence toward injection
+    "stored_voice",           # voicemail / CRM-note / transcript-store persistence
+]
+
+V1_VOICE_ATTACK_MATURITY_LEVELS = ["classic", "established", "emerging", "frontier"]
+
+# phone_survival is a STRUCTURED object everywhere (the ONE schema across all
+# four phase-12 docs):
+#   {"status": <statuses>, "tier": <tiers>, "scope_label"?: str, "reason": str}
+V1_VOICE_PHONE_SURVIVAL_STATUSES = ["survives", "partial", "dies", "untested"]
+V1_VOICE_PHONE_SURVIVAL_TIERS = [
+    "research_pinned",
+    "channel_simulated",
+    "channel_live",
+]
+
+# attack family -> {maturity, phone_survival{...}, defended_by: [...],
+# rung_1_expressible: bool} — the RICH row shape. Source of truth:
+# RESEARCH-ACOUSTIC.md §J (the "dies" rows are load-bearing honesty — a voice
+# corpus must not sell ultrasonic coverage to a SIP agent). phone_survival here
+# is the FAMILY-level research-pinned prior (tier "research_pinned" on every row
+# at day one); per-attack phone_survival is a rung-2 measured field (unit 10) and
+# stays the rung-1 pin {"status": "untested", "tier": "research_pinned"}.
+V1_VOICE_ATTACK_FAMILY_MATRIX = {
+    "waveform_asr_perturbation": {
+        "maturity": "classic",
+        "phone_survival": {
+            "status": "dies",
+            "tier": "research_pinned",
+            "reason": "band-limit + codec strip the waveform perturbation",
+        },
+        "defended_by": ["band_limit_codec"],
+        "rung_1_expressible": False,
+    },
+    "feature_space_vocoder": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "untested",
+            "tier": "research_pinned",
+            "reason": "plausible in-band; channel proof outstanding",
+        },
+        "defended_by": ["none_mature"],
+        "rung_1_expressible": False,
+    },
+    "phonetic_dual_effect": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "partial",
+            "tier": "research_pinned",
+            "reason": "phonetic component survives; signal component degrades",
+        },
+        "defended_by": ["anti_spoofing_partial"],
+        "rung_1_expressible": True,
+    },
+    "ultrasonic_carrier": {
+        "maturity": "classic",
+        "phone_survival": {
+            "status": "dies",
+            "tier": "research_pinned",
+            "scope_label": "smart_speaker_only",
+            "reason": "8 kHz anti-alias + codec annihilate the carrier",
+        },
+        "defended_by": ["band_limit_total"],
+        "rung_1_expressible": False,
+    },
+    "over_the_air_noise_hijack": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "partial",
+            "tier": "research_pinned",
+            "reason": "in-band noise component partially survives",
+        },
+        "defended_by": ["liveness_weak"],
+        "rung_1_expressible": False,
+    },
+    "psychoacoustic_masking": {
+        "maturity": "classic",
+        "phone_survival": {
+            "status": "dies",
+            "tier": "research_pinned",
+            "reason": "perceptual codec removes exactly what masking hides in",
+        },
+        "defended_by": ["perceptual_codec"],
+        "rung_1_expressible": False,
+    },
+    "audio_native_jailbreak": {
+        "maturity": "established",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "intelligible speech; codec-invariant",
+        },
+        "defended_by": ["moderation_weak"],
+        "rung_1_expressible": True,
+    },
+    "paralinguistic_interference": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "untested",
+            "tier": "research_pinned",
+            "reason": "plausibly survives; needs verification (RESEARCH-ACOUSTIC §J)",
+        },
+        "defended_by": ["none"],
+        "rung_1_expressible": False,
+    },
+    "benign_carrier_embedding": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "partial",
+            "tier": "research_pinned",
+            "reason": "carrier survives; embedded payload degrades with bitrate",
+        },
+        "defended_by": ["waveform_defenses_partial"],
+        "rung_1_expressible": False,
+    },
+    "codec_robust_signal": {
+        "maturity": "frontier",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "engineered for the <4 kHz Opus passband",
+        },
+        "defended_by": ["neural_codec_frontend_candidate"],
+        "rung_1_expressible": False,
+    },
+    "voice_clone_spoofing": {
+        "maturity": "established",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "intelligible synthetic speech; codec-invariant",
+        },
+        "defended_by": ["asvspoof_cm_weak_generalization"],
+        "rung_1_expressible": True,
+    },
+    "backdoor_alignment_poisoning": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "scope_label": "poisoned_model_only",
+            "reason": "channel-independent; fires iff the deployed model is poisoned",
+        },
+        "defended_by": ["none_reliable"],
+        "rung_1_expressible": True,
+    },
+    "cross_modal_tool_argument": {
+        "maturity": "emerging",
+        "phone_survival": {
+            "status": "survives",
+            "tier": "research_pinned",
+            "reason": "argument corruption rides intelligible speech; needs no safety break",
+        },
+        "defended_by": ["transcript_sanitization_cascade_only", "tool_allow_lists"],
+        "rung_1_expressible": True,
+    },
+}
+
+# Detection-evidence FIELDS per matrix family (12E; ARCH §2h / BUILD-GUIDE §6).
+# rung-1 transcript-derivable evidence only; rung-2 acoustic fields (wer_spike,
+# energy_band_fingerprint, diarization_anomaly_acoustic) land with unit 10 as a
+# separate suffix list, never mixed in silently. Evidence fields are NEVER a
+# verdict (no verdict/passed/pass keys may appear in an emitted block).
+V1_VOICE_DETECTION_EVIDENCE_FIELDS = {
+    "audio_native_jailbreak": [
+        "refusal_rate_delta",
+        "narrative_frame_marker",
+        "escalation_pressure_trace",
+    ],
+    "cross_modal_tool_argument": [
+        "tool_argument_divergence",
+        "transcript_divergence_ratio",
+    ],
+    "benign_carrier_embedding": [
+        "transcript_divergence_ratio",
+        "injection_marker_present",
+    ],
+    "codec_robust_signal": [
+        "injection_marker_present",
+        "channel_provenance_note",
+    ],
+    "voice_clone_spoofing": [
+        "caller_identity_assertion_count",
+        "challenge_response_outcome",
+    ],
+    "waveform_asr_perturbation": ["transcript_divergence_ratio"],
+    "feature_space_vocoder": ["transcript_divergence_ratio"],
+    "phonetic_dual_effect": [
+        "transcript_divergence_ratio",
+        "speaker_label_anomaly",
+    ],
+    "ultrasonic_carrier": ["channel_band_limit_note"],
+    "over_the_air_noise_hijack": ["channel_provenance_note"],
+    "psychoacoustic_masking": ["channel_band_limit_note"],
+    "paralinguistic_interference": ["refusal_rate_delta"],
+    "backdoor_alignment_poisoning": ["provenance_supply_chain_note"],
+}
+
+# --- Phase 12 gate (#73) constants (unit 7) ---------------------------------
+V1_VOICE_REDTEAM_FILES = [
+    "examples/sdk_voice_redteam_campaign.py",
+]
+V1_VOICE_REDTEAM_FIXTURE_DIR = "examples/voice_redteam"
+# the canonized attack-rung tokens, stamped on every voice-attack artifact;
+# aligned with — not equal to — the P3 lane labels.
+V1_VOICE_ATTACK_RUNGS = ["transcript_level", "acoustic", "telephony"]
+V1_VOICE_REDTEAM_AB_ARMS = ["composed", "persona_only", "signal_only"]
+V1_VOICE_REDTEAM_AB_VERDICTS = ["composed_lift", "no_lift", "inconclusive"]
+# byte-equal to live._perturb.TEXT_RUNG_OPERATORS — cross-pinned by a unit test
+# (the Phase-7 GUNA_AXES cross-pin pattern), never imported by trinity.
+V1_VOICE_REDTEAM_TEXT_OPERATORS = ["asr_error", "homophone", "code_switch", "near_dup"]
+V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1 = {
+    "status": "untested",
+    "tier": "research_pinned",
+}
+
+# === Phase 9A (gate M4) — voice loopback / codec-survival vocabularies =======
+# Closed sets, gate-pinned. Mirrors of the live._codec / voice_loop canon —
+# cross-pinned by the milestone test (the GUNA_AXES cross-pin pattern); trinity
+# never imports those modules so the gate runs even if they are broken.
+V1_VOICE_FIDELITY_TIERS = ("deterministic_loopback", "keyed_live_channel")
+# a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
+# frozen 4-tuple live._contract.EVIDENCE_CLASSES is unchanged).
+V1_VOICE_CODECS = ("g711_ulaw", "g711_alaw", "opus_nb", "amr_nb")
+# g711_* = v1 pure-numpy; opus_nb/amr_nb = post-v1 build-dep, auto-skip.
+V1_VOICE_PACKET_LOSS_MODELS = ("gilbert_elliott",)
+V1_VOICE_CODEC_PROFILES = (
+    "g711_ulaw_8k_ge", "g711_alaw_8k_ge",  # v1
+    "opus_nb_8k_ge", "amr_nb_8k_ge",       # post-v1, auto-skip
+    "none",                                 # opt-out (clean-PCM loopback)
+)
+V1_VOICE_FAILURE_SUBLAYERS = ("acoustic_codec", "asr_mishear", "llm", "tts_endpointing")
+V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR = "examples/voice_loopback_fixture"
+# precedent: V1_TELEMETRY_GATE_FIXTURE_DIR = "examples/telemetry_ledger_fixture"
+V1_VOICE_LOOPBACK_FILES = (
+    "examples/sdk_voice_loopback.py",
+    "examples/sdk_voice_improvement.py",
+)
+V1_VOICE_LOOPBACK_GATE_FIXTURE_FILES = (
+    "examples/voice_loopback_fixture/user_turns/turn_1.wav",
+    "examples/voice_loopback_fixture/user_turns/turn_2.wav",
+    "examples/voice_loopback_fixture/agent_turns/turn_1.wav",
+    "examples/voice_loopback_fixture/agent_turns/turn_2.wav",
+    "examples/voice_loopback_fixture/expected/loopback_channels.json",
+    "examples/voice_loopback_fixture/expected/codec_roundtrip.json",
+    "examples/voice_loopback_fixture/expected/phone_survival.json",
+    "examples/voice_loopback_fixture/ab/toy_space.json",
+)
+V1_VOICE_LOSS_TERM_REFS = (
+    "task_success", "tool_argument_correctness", "barge_in_latency", "ttfb",
+    "wer_delta", "recovery", "selectivity", "codec_survival", "perturbation_robustness",
+)
+V1_VOICE_LOSS_NON_TIMING_QUALITY_TERMS = ("task_success", "tool_argument_correctness")
+V1_VOICE_PHONE_SURVIVAL_RUNG1 = {"status": "untested", "tier": "research_pinned"}
+# byte-equal to live.voice_redteam.PHONE_SURVIVAL_RUNG1 — cross-pinned by a unit
+# test, never imported by trinity (the GUNA_AXES cross-pin pattern).
+
+# === Phase 9B: image / multimodal improvement loop (closed sets, gate-pinned) ===
+# All are MIRRORS of the image_loop.py / image_perturb.py canon, cross-pinned by
+# a unit test (the GUNA_AXES pattern — trinity.py never imports the modules so
+# the gate runs even if they are broken).
+V1_IMAGE_LOOP_GATE_FIXTURE_DIR = "examples/image_loop_fixture"
+# precedent: V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR = "examples/voice_loopback_fixture"
+V1_IMAGE_LOOP_FILES = (
+    "examples/sdk_image_loop.py",
+    "examples/sdk_image_improvement.py",
+)
+V1_IMAGE_LOOP_GATE_FIXTURE_FILES = (
+    "examples/image_loop_fixture/chart_synthetic.png",
+    "examples/image_loop_fixture/chart.json",
+    "examples/image_loop_fixture/document_rendered.png",
+    "examples/image_loop_fixture/ocr.json",
+    "examples/image_loop_fixture/vqa_scene.png",
+    "examples/image_loop_fixture/vqa.json",
+    "examples/image_loop_fixture/counterfactual_pair/a.png",
+    "examples/image_loop_fixture/counterfactual_pair/b.png",
+    "examples/image_loop_fixture/counterfactual_pair/cf.json",
+    "examples/image_loop_fixture/prior_answerable/sentinels.json",
+    "examples/image_loop_fixture/expected/loop_trajectory.json",
+    "examples/image_loop_fixture/expected/deterministic_anchors.json",
+    "examples/image_loop_fixture/ab/toy_space.json",
+)
+V1_IMAGE_LOSS_TERM_REFS = (
+    "task_success", "ocr_accuracy", "chart_accuracy", "artifact_grounding",
+    "instruction_adherence", "tool_argument_correctness",
+)   # byte-equal to image_loop.V1_IMAGE_LOSS_TERM_REFS (cross-pinned by a unit test)
+V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS = (
+    "task_success", "ocr_accuracy", "chart_accuracy", "artifact_grounding",
+)
+V1_IMAGE_LOSS_JUDGE_TERMS = ("instruction_adherence",)
+V1_IMAGE_GENERATION_ANCHOR_TERMS = ("element_presence",)
+V1_IMAGE_GENERATION_JUDGE_TERMS = ("generation_alignment", "generation_quality")
+V1_IMAGE_FAILURE_SUBLAYERS = ("preprocessing", "perception", "reasoning", "tool_grounding")
+V1_IMAGE_PERTURBATION_OPERATORS = ("blur", "jpeg_compress", "resolution_drop", "occlusion")
+V1_IMAGE_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
+# a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
+# frozen EVIDENCE_CLASSES 4-tuple _contract.py:18 is unchanged). Analogue of
+# V1_VOICE_FIDELITY_TIERS.
+
+# === task-dataset benchmark gate (#80) — closed sets, gate-pinned ===
+# The gate exec-loads examples/sdk_task_benchmark.py (credential-free, fixture
+# lane) and audits its gate_evidence block. The shipped dataset is BYTE-PINNED by
+# its content-address (changing any task changes the version → the gate fails
+# until the pin is updated — the world_kinds/kinds.json discipline, inline).
+V1_TASK_BENCHMARK_FILES = (
+    "examples/sdk_task_benchmark.py",
+    "examples/task_datasets/support_starter.json",
+)
+V1_TASK_BENCHMARK_DATASET_PINNED_VERSION = (
+    "sha256:19704fd51ba0c34267e73f6db66aff9ddd5f777c51b029258ccd87604522c2c4"
+)
+# the shipped dataset MUST span at least these EXECUTABLE world kinds (the v1
+# executable substrate; mirror of contract.EXECUTABLE_WORLD_KINDS_V1).
+V1_TASK_BENCHMARK_REQUIRED_WORLD_KINDS = ("conversation", "tool_api")
+
+# === Phase 15B: unified bench harness contract (artifact_in coding lane) ===
+# The shipped coding bench suite + its credential-free, Docker-free example
+# runner. The gate proves the code-tests verifier accepts the gold reference,
+# FAILS a broken candidate AND a fake-success no-op, is deterministic, keeps the
+# oracle held out of the candidate, and that every task declares anti-gaming
+# guards. No live agent and no Docker — the subprocess sandbox runs only trusted
+# shipped reference code.
+V1_BENCH_CONTRACT_FILES = (
+    "examples/coding_bench.py",
+    "examples/bench_suites/coding_starter.json",
+    "examples/bench_suites/coding_command_starter.json",
+    "examples/bench_suites/pull_starter.json",
+    "examples/bench_suites/voice_starter.json",
+)
+
+# === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
+# All are MIRRORS of the cua_loop.py canon, cross-pinned by a unit test (the
+# GUNA_AXES pattern — trinity.py never imports cua_loop so the gate runs even if it
+# is broken). NOTE: browser / computer_use are ALREADY frozen members of
+# V1_SIMULATION_WORLD_KINDS (the 9C-A1b nuance vs 9B's image) — 9C flips their
+# EXECUTABLE-LOOP status via the R4 registry record, NOT by widening the tuple; the
+# simulation_contract_readiness byte-pin + executable-split stay green.
+V1_CUA_LOOP_GATE_FIXTURE_DIR = "examples/cua_loop_fixture"
+# precedent: V1_IMAGE_LOOP_GATE_FIXTURE_DIR = "examples/image_loop_fixture"
+V1_CUA_LOOP_FILES = (
+    "examples/sdk_cua_loop.py",
+    "examples/sdk_cua_improvement.py",
+)
+V1_CUA_LOOP_GATE_FIXTURE_FILES = (
+    # checkout_baseline is the EXISTING shop.example.test fixture (referenced, not
+    # duplicated — its anchors live in V1_BROWSER_CUA_PROBE_* below).
+    "examples/cua_loop_fixture/multistep_form/form.json",
+    "examples/cua_loop_fixture/selector_drift_family/clean.json",
+    "examples/cua_loop_fixture/selector_drift_family/drifted.json",
+    "examples/cua_loop_fixture/injected_dom_family/inject.json",
+    "examples/cua_loop_fixture/injected_dom_family/clean.json",
+    "examples/cua_loop_fixture/fake_completion_sentinel/sentinels.json",
+    "examples/cua_loop_fixture/desktop_episode/episode.json",
+    "examples/cua_loop_fixture/expected/loop_trajectory.json",
+    "examples/cua_loop_fixture/expected/deterministic_anchors.json",
+    "examples/cua_loop_fixture/ab/toy_space.json",
+)
+V1_CUA_LOSS_TERM_REFS = (
+    "task_success", "state_match", "grounding_mutation_resilience",
+    "action_correctness", "step_efficiency", "safety_adherence",
+    "tool_evidence", "trace_coverage", "completion_judge",
+)   # byte-equal to cua_loop.V1_CUA_LOSS_TERM_REFS (cross-pinned by a unit test)
+V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS = ("task_success", "state_match")
+V1_CUA_DESKTOP_ANCHOR_TERMS = ("grounding_step_accuracy",)
+V1_CUA_LOSS_JUDGE_TERMS = ("completion_judge",)
+V1_CUA_LOSS_MANDATORY_SAFETY_TERMS = ("safety_adherence",)
+V1_CUA_FAILURE_SUBLAYERS = ("perception", "grounding", "action_policy", "reasoning_memory")
+V1_CUA_SURFACES = ("browser", "desktop")
+V1_CUA_COMPLETION_GUARD_KINDS = ("fake_completion", "unsafe_completion")
+V1_CUA_PERTURBATION_OPERATORS = ("selector_drift", "layout_shift", "stale_screenshot", "injected_dom")
+# NAMING MIRROR ONLY (9C-A1c) — references the kit's existing mutation-pack
+# operators (normalize_browser_mutation_pack, environment.py:5146); there is NO
+# cua_perturb.py module (the contrast with V1_IMAGE_PERTURBATION_OPERATORS, which
+# IS backed by image_perturb.py).
+V1_CUA_FIDELITY_TIERS = ("deterministic_fixture", "keyed_live_model")
+# a MARKER field on artifact metadata — NOT a new evidence class (R5/A18; the
+# frozen EVIDENCE_CLASSES 4-tuple live/_contract.py:18 is unchanged). Analogue of
+# V1_IMAGE_FIDELITY_TIERS.
+
+# === Phase 13D (gate M2/M3) closed vocabularies =============================
+# Mirrors of the contract/loss/practice canon. The status fns byte-compare these
+# literal tuples (no import dependency on contract.py/loss.py/practice — the gate
+# must run even if those modules are broken; the milestone test separately
+# asserts mirror == module canon, the persona-gate cross-pin pattern).
+V1_SIMULATION_KIND = "agent-learning.simulation.v1"
+V1_SIMULATION_WORLD_KINDS = [
+    "conversation", "tool_api", "browser", "computer_use", "code_exec", "voice_telephony",
+]
+V1_SIMULATION_EXECUTABLE_WORLD_KINDS = ["conversation", "tool_api"]
+V1_SIMULATION_TYPED_ONLY_WORLD_KINDS = ["browser", "computer_use", "code_exec", "voice_telephony"]
+V1_SIMULATION_TOOL_MOCK_LEVELS = ["static_fixture", "recorded_replay", "emulated", "live"]
+V1_SIMULATION_CAST_ROLES = ["user", "opponent", "coworker", "counterpart"]
+V1_SIMULATION_DYNAMICS_EVENT_KINDS = [
+    "env_state_patch", "counterpart_message", "tool_outcome_shift", "fault_profile",
+]
+V1_SIMULATION_EPISODE_PERSISTENCE = ["fresh", "carry_state", "carry_memory"]
+V1_SIMULATION_GOAL_CHECK_KINDS = [
+    "state_predicate", "world_invariant", "world_success_condition",
+    "eval_template", "keyword_fallback",
+]  # R5/A7 STAGED — the v1 5-kind set is frozen
+V1_SIMULATION_OBJECTIVE_SOURCES = ["declared", "derived"]
+V1_SIMULATION_STABLE_RESULT_ENVELOPE_FIELDS = [
+    "created_at", "started_at", "completed_at", "duration_s", "timing",
+]
+V1_SIMULATION_EXTENSION_POINTS = ["environment", "loss", "optimizer", "generator"]
+V1_SIMULATION_FIXTURE_DIR = "examples/simulation_contract_fixtures"
+
+# Practice-loop canon (RU-1/RU-4) — Unit-8 mirrors.
+V1_PRACTICE_PHASES = ["assess", "diagnose", "drill", "update", "consolidate", "calibrate"]
+V1_PRACTICE_ARTIFACT_KINDS = [
+    "agent-learning.practice-loop.v1", "agent-learning.practice-result.v1",
+    "agent-learning.practice-report.v1", "agent-learning.practice-deficits.v1",
+    "agent-learning.practice-drill.v1", "agent-learning.practice-update.v1",
+    "agent-learning.consolidated-lesson.v1", "agent-learning.practice-calibration.v1",
+]
+V1_PRACTICE_SCAFFOLD_TYPES = ["world_simplification", "hint_tool", "worked_example", "relaxed_success"]
+V1_PRACTICE_LADDER_STATES = ["episodic", "instruction", "skill"]
+V1_PRACTICE_REPLAY_INTERVALS = [1, 2, 4, 8, 16]
+V1_PRACTICE_STORE_ACTIVE_CAP = 64
+V1_PRACTICE_ZPD_BAND = [0.2, 0.7]
+V1_PRACTICE_REVIEW_RATIO = 0.25
+V1_PRACTICE_BUDGET_PLAN = [0.25, 0.35, 0.25, 0.15]
+V1_PRACTICE_SCAFFOLD_FADE_DEFAULT = [1.0, 0.5, 0.0]
+V1_PRACTICE_FIXTURE_DIR = "examples/practice_loop_fixture"
+V1_PRACTICE_STORE_PATH_ENV = "AGENT_LEARNING_PRACTICE_STORE_PATH"
 
 V1_REDTEAM_READINESS_CERTIFICATION_FILES = [
     "examples/sdk_redteam_readiness_certification_optimization.py",
-    "internal-docs/redteam-readiness-certification-research.md",
 ]
 
 V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES = [
@@ -1441,6 +2637,7 @@ V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES = [
 V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS = [
     "control_plane",
     "framework_import",
+    "persona_conditioning",
     "red_team_campaign",
     "trust_boundary",
     "workspace_run",
@@ -1456,6 +2653,7 @@ V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS = [
     "agent_control_plane",
     "agent_trust_boundary_model",
     "framework_import_manifest",
+    "persona_conditioned_campaign",
     "red_team_campaign",
     "red_team_readiness",
     "workspace_run_manifest",
@@ -1471,7 +2669,7 @@ V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS = [
 ]
 
 V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS = {
-    "ready_component_count": 5,
+    "ready_component_count": 6,
     "artifact_count": 1,
     "observability_hook_count": 1,
     "campaign_coverage_cell_count": 4,
@@ -1479,6 +2677,8 @@ V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS = {
     "campaign_passed_run_count": 4,
     "campaign_finding_count": 4,
     "campaign_implemented_mitigation_count": 4,
+    "persona_conditioned_attack_count": 2,
+    "persona_in_character_attack_count": 1,
 }
 
 V1_REDTEAM_SOCIETY_CAUSAL_FILES = [
@@ -1784,7 +2984,6 @@ V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES = {
 
 V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES = [
     "examples/sdk_framework_adapter_matrix_optimization.py",
-    "internal-docs/framework-adapter-matrix-optimization-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS = [
@@ -2048,7 +3247,6 @@ V1_AGENT_INTEGRATION_FILES = [
     "examples/agent_integration_optimization.json",
     "examples/sdk_agent_integration_optimization.py",
     "examples/sdk_agent_integration_simulation.py",
-    "internal-docs/agent-integration-readiness-research.md",
 ]
 
 V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS = [
@@ -2210,7 +3408,6 @@ V1_AGENT_INTEGRATION_MIN_COUNTS = {
 V1_ORCHESTRATION_STACK_PROBE_FILES = [
     "examples/sdk_orchestration_stack_probe_optimization.py",
     "examples/sdk_orchestration_optimization.py",
-    "internal-docs/orchestration-stack-probe-research.md",
 ]
 
 V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
@@ -2323,9 +3520,6 @@ V1_TRINITY_STACK_PROBE_FILES = [
     "examples/sdk_trinity_stack_probe_optimization.py",
     "examples/sdk_orchestration_stack_probe_optimization.py",
     "examples/sdk_evaluation_hook_probe_optimization.py",
-    "internal-docs/trinity-stack-probe-research.md",
-    "internal-docs/orchestration-stack-probe-research.md",
-    "internal-docs/evaluation-hook-probe-research.md",
 ]
 
 V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
@@ -2365,7 +3559,6 @@ V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS = [
 V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES = [
     "examples/sdk_framework_adapter_trinity_suite.py",
     "examples/sdk_framework_adapter_trinity_suite_optimization.py",
-    "internal-docs/framework-adapter-trinity-suite-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK = "custom_refund_orchestrator"
@@ -2409,7 +3602,6 @@ V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS = [
 V1_REALTIME_STACK_PROBE_FILES = [
     "examples/sdk_realtime_stack_probe_optimization.py",
     "examples/sdk_realtime_voice_optimization.py",
-    "internal-docs/realtime-stack-probe-research.md",
 ]
 
 V1_REALTIME_STACK_PROBE_FRAMEWORK = "livekit"
@@ -2467,7 +3659,6 @@ V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS = [
 V1_MEMORY_LAYER_PROBE_FILES = [
     "examples/sdk_memory_layer_probe_optimization.py",
     "examples/sdk_memory_optimization.py",
-    "internal-docs/memory-layer-probe-research.md",
 ]
 
 V1_MEMORY_LAYER_PROBE_PROOF_KIND = (
@@ -2519,7 +3710,6 @@ V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS = [
 
 V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
-    "internal-docs/openenv-environment-adapter-research.md",
 ]
 
 V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES = [
@@ -2565,18 +3755,14 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = (
     V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
 )
 
+# The compatibility-boundary stance is asserted in the shipped README; the
+# internal research/handover docs that also recorded it live in the internal-docs
+# repo and are no longer gate evidence.
 V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES = [
     "pyproject.toml",
     "typescript/package.json",
     "typescript/agent-learning-kit/package.json",
     "README.md",
-    "V1_RELEASE_ROADMAP.md",
-    "internal-docs/environment-10x-robustness-research.md",
-    "internal-docs/framework-http-transport-readiness-research.md",
-    "internal-docs/framework-openenv-adapter-readiness-research.md",
-    "internal-docs/openenv-compatibility-boundary-research.md",
-    "internal-docs/openenv-environment-adapter-research.md",
-    "internal-docs/v1-engineering-handover.md",
 ]
 
 V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES = ["openenv", "gym", "gymnasium"]
@@ -2590,23 +3776,6 @@ V1_OPENENV_COMPATIBILITY_DOC_PHRASES = {
         "compatibility inputs, not the product center.",
         "OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.",
     ],
-    "V1_RELEASE_ROADMAP.md": [
-        "OpenEnv/Gymnasium shapes should stay compatible inputs",
-        "owned system of",
-    ],
-    "internal-docs/environment-10x-robustness-research.md": [
-        "OpenEnv and Gymnasium are compatibility inputs",
-        "They are not runtime dependencies",
-    ],
-    "internal-docs/openenv-compatibility-boundary-research.md": [
-        "OpenEnv/Gymnasium are compatibility inputs only.",
-        "Agent Learning remains the primary optimization",
-        "pen-test layer.",
-    ],
-    "internal-docs/v1-engineering-handover.md": [
-        "OpenEnv/Gymnasium remain compatibility input shapes only.",
-        "OpenEnv compatibility remains compatibility, not product ownership.",
-    ],
 }
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
@@ -2619,7 +3788,6 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_workflow_hook_optimization.py",
     "examples/sdk_workspace_import_certification_optimization.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
-    "internal-docs/environment-10x-robustness-research.md",
 ]
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
@@ -2687,7 +3855,6 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS = [
 
 V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_openenv_trace.py",
-    "internal-docs/framework-openenv-adapter-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE = [
@@ -2765,7 +3932,6 @@ V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = (
 
 V1_FRAMEWORK_TRACE_EXPORT_FILES = [
     "examples/sdk_framework_adapter_trace_export.py",
-    "internal-docs/framework-trace-export-adapter-research.md",
 ]
 
 V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK = "langgraph"
@@ -2821,7 +3987,6 @@ V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS = [
 
 V1_FRAMEWORK_HTTP_TRANSPORT_FILES = [
     "examples/sdk_framework_adapter_http_transport.py",
-    "internal-docs/framework-http-transport-readiness-research.md",
 ]
 
 V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK = "langgraph"
@@ -2875,7 +4040,6 @@ V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS = [
 
 V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FILES = [
     "examples/sdk_framework_adapter_websocket_transport.py",
-    "internal-docs/framework-websocket-transport-readiness-research.md",
 ]
 
 V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK = "livekit"
@@ -2938,7 +4102,6 @@ V1_FRAMEWORK_ADAPTER_IO_FILES = [
     "examples/sdk_framework_adapter_provider_response.py",
     "examples/sdk_framework_adapter_message_history.py",
     "examples/sdk_framework_adapter_handoff_transcript.py",
-    "internal-docs/framework-adapter-probe-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_IO_CONTRACTS = [
@@ -3257,7 +4420,6 @@ V1_FRAMEWORK_OPTIMIZER_FILES = [
     "examples/multi_agent_framework_handoff_optimization.json",
     "examples/framework_certification_optimization.json",
     "examples/framework_import_repair_optimization.json",
-    "internal-docs/framework-optimizer-readiness-research.md",
 ]
 
 V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
@@ -3432,7 +4594,6 @@ V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
 V1_MULTI_AGENT_ROOM_PROBE_FILES = [
     "examples/sdk_multi_agent_room_probe_optimization.py",
     "examples/sdk_multi_agent_optimization.py",
-    "internal-docs/multi-agent-room-probe-research.md",
 ]
 
 V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND = (
@@ -3517,7 +4678,6 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
     "examples/sdk_framework_adapter_agent_control_plane.py",
-    "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
 V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
@@ -4313,11 +5473,414 @@ V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS = [
     "export_framework_adapter_probe_replay_lock",
 ]
 
+# Phase 11B: framework-adapter preset certification (closed sets, gate-pinned).
+# Certification of already-shipped FRAMEWORK_PRESETS rows — the 19 agent/model
+# clients carry the six-artifact set (ARCH 11B-A1); the 9 vector DBs are EXCLUDED
+# (they bind to RetrievalHookEnvironment, never FRAMEWORK_PRESETS, §2.7).
+V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS = (
+    # agentic (7)
+    "a2a",
+    "agno",
+    "beeai",
+    "claude_agent_sdk",
+    "google_adk",
+    "instructor",
+    "smolagents",
+    # model clients (12)
+    "bedrock",
+    "cerebras",
+    "cohere",
+    "deepseek",
+    "fireworks",
+    "huggingface",
+    "litellm",
+    "ollama",
+    "portkey",
+    "strands",
+    "together",
+    "xai",
+)
+
+# Asserted ABSENT from FRAMEWORK_PRESETS by the certification gate (category
+# guard, §2.7): a vector DB has no turn/policy/tool-selection decision, so it is
+# never an agent preset. Its home is the retrieval_hook_readiness gate.
+V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES = (
+    "chromadb",
+    "lancedb",
+    "milvus",
+    "mongodb-vector",
+    "pgvector",
+    "pinecone",
+    "qdrant",
+    "redis-vector",
+    "weaviate",
+)
+
+# ◐ renders live_validation_pending; ✅ renders live_validated. The ◐ lane NEVER
+# gates — the gate asserts the register is well-formed, never reads its status.
+V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS = (
+    "live_validation_pending",
+    "live_validated",
+)
+
+# 10 hard-keyed + 2 conditional; ollama is NOT here (11B-A9, a local daemon is
+# not a credential). The env_var names are build-time-recheckable data (BBG A4) —
+# the gate never reads a key; the live run is owner-keyed, opt-in, never a gate
+# prerequisite (11B-A3).
+V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE = (
+    {
+        "framework": "bedrock",
+        "status": "live_validation_pending",
+        "env_var": "AWS_BEARER_TOKEN_BEDROCK",
+        "recipe": "agent-learn probe bedrock --live",
+    },
+    {
+        "framework": "cerebras",
+        "status": "live_validation_pending",
+        "env_var": "CEREBRAS_API_KEY",
+        "recipe": "agent-learn probe cerebras --live",
+    },
+    {
+        "framework": "cohere",
+        "status": "live_validation_pending",
+        "env_var": "COHERE_API_KEY",
+        "recipe": "agent-learn probe cohere --live",
+    },
+    {
+        "framework": "deepseek",
+        "status": "live_validation_pending",
+        "env_var": "DEEPSEEK_API_KEY",
+        "recipe": "agent-learn probe deepseek --live",
+    },
+    {
+        "framework": "fireworks",
+        "status": "live_validation_pending",
+        "env_var": "FIREWORKS_API_KEY",
+        "recipe": "agent-learn probe fireworks --live",
+    },
+    {
+        "framework": "litellm",
+        "status": "live_validation_pending",
+        "env_var": "OPENAI_API_KEY",
+        "recipe": "agent-learn probe litellm --live",
+    },
+    {
+        "framework": "portkey",
+        "status": "live_validation_pending",
+        "env_var": "PORTKEY_API_KEY",
+        "recipe": "agent-learn probe portkey --live",
+    },
+    {
+        "framework": "together",
+        "status": "live_validation_pending",
+        "env_var": "TOGETHER_API_KEY",
+        "recipe": "agent-learn probe together --live",
+    },
+    {
+        "framework": "xai",
+        "status": "live_validation_pending",
+        "env_var": "XAI_API_KEY",
+        "recipe": "agent-learn probe xai --live",
+    },
+    {
+        "framework": "instructor",
+        "status": "live_validation_pending",
+        "env_var": "OPENAI_API_KEY",
+        "recipe": "agent-learn probe instructor --live",
+    },
+    # conditional (hosted inference)
+    {
+        "framework": "huggingface",
+        "status": "live_validation_pending",
+        "env_var": "HF_TOKEN",
+        "recipe": "agent-learn probe huggingface --live",
+    },
+    # conditional (model-backed)
+    {
+        "framework": "strands",
+        "status": "live_validation_pending",
+        "env_var": "AWS_BEARER_TOKEN_BEDROCK",
+        "recipe": "agent-learn probe strands --live",
+    },
+)
+
+# EMPTY today (11B-A8: the audit found NO drift; every preset's method/input_mode
+# matches its framework's current SDK). Rows
+# {framework, old, new, reason, sdk_version} are added ONLY if a probe proves a
+# default wrong — the only circumstance a shipped default changes.
+V1_FRAMEWORK_PRESET_CORRECTIONS: tuple[dict[str, str], ...] = ()
+
+# The certified frameworks' probe shims + consolidated promotions + cookbook
+# pages (the gate's missing_files check). a2a.md already exists (EDITED, 11B-A11).
+V1_FRAMEWORK_PRESET_CERTIFICATION_FILES = [
+    # probe shims (one per framework)
+    "examples/sdk_framework_adapter_cert_a2a.py",
+    "examples/sdk_framework_adapter_cert_agno.py",
+    "examples/sdk_framework_adapter_cert_beeai.py",
+    "examples/sdk_framework_adapter_cert_claude_agent_sdk.py",
+    "examples/sdk_framework_adapter_cert_google_adk.py",
+    "examples/sdk_framework_adapter_cert_instructor.py",
+    "examples/sdk_framework_adapter_cert_smolagents.py",
+    "examples/sdk_framework_adapter_cert_bedrock.py",
+    "examples/sdk_framework_adapter_cert_cerebras.py",
+    "examples/sdk_framework_adapter_cert_cohere.py",
+    "examples/sdk_framework_adapter_cert_deepseek.py",
+    "examples/sdk_framework_adapter_cert_fireworks.py",
+    "examples/sdk_framework_adapter_cert_huggingface.py",
+    "examples/sdk_framework_adapter_cert_litellm.py",
+    "examples/sdk_framework_adapter_cert_ollama.py",
+    "examples/sdk_framework_adapter_cert_portkey.py",
+    "examples/sdk_framework_adapter_cert_strands.py",
+    "examples/sdk_framework_adapter_cert_together.py",
+    "examples/sdk_framework_adapter_cert_xai.py",
+    # consolidated promotions (one per IO-surface family, §2.4)
+    "examples/sdk_framework_adapter_cert_keyword_inputs_promotion.py",
+    "examples/sdk_framework_adapter_cert_message_history_promotion.py",
+    "examples/sdk_framework_adapter_cert_provider_response_promotion.py",
+    "examples/sdk_framework_adapter_cert_typed_output_promotion.py",
+    "examples/sdk_framework_adapter_cert_side_kwargs_promotion.py",
+    "examples/sdk_framework_adapter_cert_nested_method_promotion.py",
+    # cookbook pages (a2a.md already exists; the other 18 are new)
+    "docs/frameworks/a2a.md",
+    "docs/frameworks/agno.md",
+    "docs/frameworks/beeai.md",
+    "docs/frameworks/claude_agent_sdk.md",
+    "docs/frameworks/google_adk.md",
+    "docs/frameworks/instructor.md",
+    "docs/frameworks/smolagents.md",
+    "docs/frameworks/bedrock.md",
+    "docs/frameworks/cerebras.md",
+    "docs/frameworks/cohere.md",
+    "docs/frameworks/deepseek.md",
+    "docs/frameworks/fireworks.md",
+    "docs/frameworks/huggingface.md",
+    "docs/frameworks/litellm.md",
+    "docs/frameworks/ollama.md",
+    "docs/frameworks/portkey.md",
+    "docs/frameworks/strands.md",
+    "docs/frameworks/together.md",
+    "docs/frameworks/xai.md",
+]
+
+# One row per certified framework — mirrors V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+# shape. io_surface from the §2.4 classification (a classification of the preset
+# shape against the 8 existing V1_FRAMEWORK_ADAPTER_IO_CONTRACTS surfaces, NOT a
+# new contract). live_lane = True for the keyed/conditional clients (◐ register).
+V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS = [
+    {
+        "framework": "a2a",
+        "path": "examples/sdk_framework_adapter_cert_a2a.py",
+        "expected_method": "send_message",
+        "expected_input_mode": "dict",
+        "io_surface": "side_kwargs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "agno",
+        "path": "examples/sdk_framework_adapter_cert_agno.py",
+        "expected_method": "run",
+        "expected_input_mode": "dict",
+        "io_surface": "keyword_inputs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "beeai",
+        "path": "examples/sdk_framework_adapter_cert_beeai.py",
+        "expected_method": "run",
+        "expected_input_mode": "dict",
+        "io_surface": "keyword_inputs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "claude_agent_sdk",
+        "path": "examples/sdk_framework_adapter_cert_claude_agent_sdk.py",
+        "expected_method": "query",
+        "expected_input_mode": "text",
+        "io_surface": "message_history",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "google_adk",
+        "path": "examples/sdk_framework_adapter_cert_google_adk.py",
+        "expected_method": "run",
+        "expected_input_mode": "dict",
+        "io_surface": "keyword_inputs",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "instructor",
+        "path": "examples/sdk_framework_adapter_cert_instructor.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "typed_output",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "smolagents",
+        "path": "examples/sdk_framework_adapter_cert_smolagents.py",
+        "expected_method": "run",
+        "expected_input_mode": "text",
+        "io_surface": "message_history",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "bedrock",
+        "path": "examples/sdk_framework_adapter_cert_bedrock.py",
+        "expected_method": "invoke_model",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "cerebras",
+        "path": "examples/sdk_framework_adapter_cert_cerebras.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "cohere",
+        "path": "examples/sdk_framework_adapter_cert_cohere.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "deepseek",
+        "path": "examples/sdk_framework_adapter_cert_deepseek.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "fireworks",
+        "path": "examples/sdk_framework_adapter_cert_fireworks.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "huggingface",
+        "path": "examples/sdk_framework_adapter_cert_huggingface.py",
+        "expected_method": "__call__",
+        "expected_input_mode": "dict",
+        "io_surface": "nested_method",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "litellm",
+        "path": "examples/sdk_framework_adapter_cert_litellm.py",
+        "expected_method": "completion",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "ollama",
+        "path": "examples/sdk_framework_adapter_cert_ollama.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": False,
+    },
+    {
+        "framework": "portkey",
+        "path": "examples/sdk_framework_adapter_cert_portkey.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "strands",
+        "path": "examples/sdk_framework_adapter_cert_strands.py",
+        "expected_method": "__call__",
+        "expected_input_mode": "text",
+        "io_surface": "message_history",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "together",
+        "path": "examples/sdk_framework_adapter_cert_together.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+    {
+        "framework": "xai",
+        "path": "examples/sdk_framework_adapter_cert_xai.py",
+        "expected_method": "chat",
+        "expected_input_mode": "dict",
+        "io_surface": "provider_response",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+        "require_callable_signature": True,
+        "live_lane": True,
+    },
+]
+
 V1_PROTOCOL_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
-    "internal-docs/mcp-tool-session-adapter-research.md",
-    "internal-docs/a2a-protocol-adapter-research.md",
 ]
 
 V1_PROTOCOL_ADAPTER_CONTRACTS = [
@@ -4401,8 +5964,6 @@ V1_PROTOCOL_ADAPTER_CONTRACTS = [
 V1_BROWSER_REALTIME_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_realtime_trace.py",
     "examples/sdk_framework_adapter_browser_cua_trace.py",
-    "internal-docs/realtime-stack-probe-research.md",
-    "internal-docs/browser-cua-probe-research.md",
 ]
 
 V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
@@ -4525,7 +6086,6 @@ V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
 
 V1_BROWSER_CUA_PROBE_FILES = [
     "examples/sdk_browser_cua_probe_optimization.py",
-    "internal-docs/browser-cua-probe-research.md",
 ]
 
 V1_BROWSER_CUA_PROBE_PROOF_KIND = (
@@ -4594,10 +6154,6 @@ V1_STATEFUL_FRAMEWORK_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_workflow_trace.py",
     "examples/sdk_framework_adapter_orchestration_trace.py",
     "examples/sdk_framework_adapter_lifecycle_trace.py",
-    "internal-docs/memory-layer-probe-research.md",
-    "internal-docs/workflow-graph-probe-research.md",
-    "internal-docs/orchestration-trace-adapter-research.md",
-    "internal-docs/framework-lifecycle-adapter-research.md",
 ]
 
 V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROOF_ACTIONS = [
@@ -4902,7 +6458,6 @@ V1_REQUIRED_EVIDENCE_COMPONENTS = [
 V1_OPTIMIZER_GOVERNANCE_FILES = [
     "examples/sdk_optimizer_governance_optimization.py",
     "examples/optimizer_governance_optimization.json",
-    "internal-docs/optimizer-governance-readiness-research.md",
 ]
 
 V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS = [
@@ -4923,6 +6478,16 @@ V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS = [
     "has_rollback",
     "has_locality",
     "has_dependency_audit",
+    # ---- Phase 4 society/contract flags (ARCH §2e, additive 11 -> 20) ----
+    "has_guna_axes",
+    "has_two_chamber",
+    "has_nyaya_justifications",
+    "has_hetvabhasa_rejections",
+    "has_nirnaya",
+    "has_staged_conditioning",     # 4C
+    "has_layer_locality",          # 4C
+    "has_declared_budget",         # 4C
+    "has_external_ranking",        # 4C
 ]
 
 V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
@@ -4932,6 +6497,15 @@ V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
     "selected_candidate_top_ranked",
     "score_credit_nonnegative",
     "metric_evidence_present",
+    # ---- Phase 4 society checks (ARCH §2e, additive 6 -> 12; produced by
+    # build_optimizer_society_trace and audited from the society-trace
+    # governance records) ----
+    "chamber_budgets_declared",
+    "rejections_classed",
+    "nirnaya_recorded",
+    "proposals_never_averaged",
+    "specialist_authority_respected",
+    "society_ledger_pooled_across_candidates",
 ]
 
 V1_OPTIMIZER_PORTFOLIO_FILES = [
@@ -4981,7 +6555,6 @@ V1_AGENT_CONTROL_PLANE_FILES = [
     "examples/sdk_agent_control_plane_optimization.py",
     "examples/sdk_agent_control_plane_simulation.py",
     "examples/agent_control_plane_optimization.json",
-    "internal-docs/agent-control-plane-readiness-research.md",
 ]
 
 V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES = [
@@ -5195,6 +6768,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         milestone="M0",
         evidence=typescript_consolidation,
+    )
+    active_ai_evaluation_source = _release_active_ai_evaluation_source_status(root)
+    _append_release_check(
+        checks,
+        check_id="active_ai_evaluation_source_embedded",
+        passed=(
+            not active_ai_evaluation_source["missing_files"]
+            and not active_ai_evaluation_source["package_errors"]
+            and not active_ai_evaluation_source["source_count_errors"]
+            and not active_ai_evaluation_source["source_inventory_errors"]
+            and not active_ai_evaluation_source["source_inventory_missing_files"]
+            and not active_ai_evaluation_source["source_inventory_extra_files"]
+            and not active_ai_evaluation_source["import_errors"]
+            and not active_ai_evaluation_source["doc_errors"]
+        ),
+        milestone="M0",
+        evidence=active_ai_evaluation_source,
     )
     _append_release_check(
         checks,
@@ -5941,6 +7531,34 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_adapter_io,
     )
+    framework_adapter_preset_certification = (
+        _release_framework_adapter_preset_certification_status(root)
+    )
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_preset_certification_readiness",
+        passed=(
+            not framework_adapter_preset_certification["missing_files"]
+            and not framework_adapter_preset_certification[
+                "preset_registration_errors"
+            ]
+            and not framework_adapter_preset_certification["input_mode_errors"]
+            and not framework_adapter_preset_certification[
+                "probe_determinism_errors"
+            ]
+            and not framework_adapter_preset_certification[
+                "io_contract_binding_errors"
+            ]
+            and not framework_adapter_preset_certification[
+                "cookbook_coverage_errors"
+            ]
+            and not framework_adapter_preset_certification[
+                "live_lane_register_errors"
+            ]
+        ),
+        milestone="M6",  # framework-adapter family — same as the probe/io gates
+        evidence=framework_adapter_preset_certification,
+    )
     protocol_adapter = _release_protocol_adapter_status(root)
     _append_release_check(
         checks,
@@ -6162,6 +7780,19 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "console_scripts": pyproject.get("scripts", {}),
         },
     )
+    package_distribution_hygiene = _release_package_distribution_hygiene_status(root)
+    _append_release_check(
+        checks,
+        check_id="package_distribution_hygiene",
+        passed=(
+            not package_distribution_hygiene["build_errors"]
+            and not package_distribution_hygiene["sdist_errors"]
+            and not package_distribution_hygiene["wheel_errors"]
+            and not package_distribution_hygiene["config_errors"]
+        ),
+        milestone="M7",
+        evidence=package_distribution_hygiene,
+    )
     release_handover_packaging = _release_handover_packaging_status(root)
     _append_release_check(
         checks,
@@ -6173,6 +7804,274 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         milestone="M7",
         evidence=release_handover_packaging,
+    )
+    live_lane_boundary = _release_live_lane_boundary_status(root)
+    _append_release_check(
+        checks,
+        check_id="live_lane_boundary",
+        passed=(
+            not live_lane_boundary["import_errors"]
+            and not live_lane_boundary["evidence_class_errors"]
+            and not live_lane_boundary["env_flag_errors"]
+            and not live_lane_boundary["redaction_errors"]
+        ),
+        milestone="M6",
+        evidence=live_lane_boundary,
+    )
+    optimizer_profile_matrix = _release_optimizer_profile_matrix_status(root)
+    _append_release_check(
+        checks,
+        check_id="optimizer_profile_matrix_readiness",
+        passed=(
+            not optimizer_profile_matrix["missing_files"]
+            and not optimizer_profile_matrix["execution_errors"]
+            and not optimizer_profile_matrix["manifest_errors"]
+            and not optimizer_profile_matrix["optimization_errors"]
+            and not optimizer_profile_matrix["metric_errors"]
+            and not optimizer_profile_matrix["runtime_errors"]
+            and not optimizer_profile_matrix["report_errors"]
+            and not optimizer_profile_matrix["action_errors"]
+            and not optimizer_profile_matrix["security_errors"]
+            and not optimizer_profile_matrix["aggregation_errors"]
+            and not optimizer_profile_matrix["budget_errors"]
+            and not optimizer_profile_matrix["routing_errors"]
+        ),
+        milestone="M3",
+        evidence=optimizer_profile_matrix,
+    )
+    capability_profile_freeze = _release_capability_profile_freeze_status(root)
+    _append_release_check(
+        checks,
+        check_id="capability_profile_freeze_readiness",
+        passed=(
+            not capability_profile_freeze["missing_files"]
+            and not capability_profile_freeze["execution_errors"]
+            and not capability_profile_freeze["row_errors"]
+            and not capability_profile_freeze["veto_errors"]
+            and not capability_profile_freeze["admission_errors"]
+            and not capability_profile_freeze["security_errors"]
+        ),
+        milestone="M3",
+        evidence=capability_profile_freeze,
+    )
+    persona_scenario_studio = _release_persona_scenario_studio_status(root)
+    _append_release_check(
+        checks,
+        check_id="persona_scenario_studio_readiness",
+        passed=(
+            not persona_scenario_studio["missing_files"]
+            and not persona_scenario_studio["execution_errors"]
+            and not persona_scenario_studio["class_contract_errors"]
+            and not persona_scenario_studio["fidelity_errors"]
+            and not persona_scenario_studio["calibration_errors"]
+            and not persona_scenario_studio["coverage_errors"]
+            and not persona_scenario_studio["bias_errors"]
+            and not persona_scenario_studio["import_errors"]
+            and not persona_scenario_studio["download_errors"]
+        ),
+        milestone="M2",   # sim/eval evidence family (ARCH §3; verified M2 members)
+        evidence=persona_scenario_studio,
+    )
+    telemetry_boundary = _release_telemetry_boundary_status(root)
+    _append_release_check(
+        checks,
+        check_id="telemetry_boundary",
+        passed=(
+            not telemetry_boundary["network_emission_errors"]
+            and not telemetry_boundary["analytics_denylist_errors"]
+            and not telemetry_boundary["evidence_class_errors"]
+            and not telemetry_boundary["redaction_errors"]
+            and not telemetry_boundary["chain_errors"]
+            and not telemetry_boundary["fault_injection_errors"]
+            and not telemetry_boundary["identity_errors"]
+            and not telemetry_boundary["telemetry_flags_set_in_release_env"]
+        ),
+        milestone="M6",  # boundary family — same as live_lane_boundary /
+        # openenv_compatibility_boundary (persona's M2 is its own; Phase 8
+        # does NOT share it — REVIEW-RULINGS MF10)
+        evidence=telemetry_boundary,
+    )
+    voice_redteam = _release_voice_redteam_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="voice_redteam_readiness",
+        passed=(
+            not voice_redteam["missing_files"]
+            and not voice_redteam["execution_errors"]
+            and not voice_redteam["corpus_errors"]
+            and not voice_redteam["matrix_errors"]
+            and not voice_redteam["operator_errors"]
+            and not voice_redteam["search_errors"]
+            and not voice_redteam["fidelity_errors"]
+            and not voice_redteam["pack_errors"]
+            and not voice_redteam["authorization_errors"]
+            and not voice_redteam["rung2_errors"]  # Phase-12 12C rung-2 extension
+        ),
+        milestone="M4",  # red-team family — same milestone as
+        # redteam_corpus_execution_readiness
+        evidence=voice_redteam,
+    )
+    # --- Phase 13D gates (M2 contract / M3 practice) -----------------------
+    simulation_contract = _release_simulation_contract_status(root)
+    _append_release_check(
+        checks,
+        check_id="simulation_contract_readiness",
+        passed=(
+            not simulation_contract["rehydration_errors"]
+            and not simulation_contract["goal_binding_errors"]
+            and not simulation_contract["roundtrip_errors"]
+            and not simulation_contract["cast_role_errors"]
+            and not simulation_contract["world_kind_errors"]
+            and not simulation_contract["tool_mock_errors"]
+            and not simulation_contract["canonicalization_errors"]
+            and not simulation_contract["objective_schema_errors"]
+            and not simulation_contract["derived_view_errors"]
+        ),
+        milestone="M2",  # sim/eval evidence family (the persona gate's family)
+        evidence=simulation_contract,
+    )
+    practice_loop = _release_practice_loop_status(root)
+    _append_release_check(
+        checks,
+        check_id="practice_loop_readiness",
+        passed=(
+            not practice_loop["determinism_errors"]
+            and not practice_loop["schedule_errors"]
+            and not practice_loop["promotion_veto_errors"]
+            and not practice_loop["interference_errors"]
+            and not practice_loop["budget_errors"]
+            and not practice_loop["claims_errors"]
+        ),
+        milestone="M3",  # optimizer family (the capability_profile_freeze family)
+        evidence=practice_loop,
+    )
+    # --- Phase 9A gate (M4 voice/red-team evidence family) -----------------
+    # Registered as the LAST gate before docs_executability (BBG §6.0 / A1: the
+    # binding invariant is "after voice_redteam_readiness, before
+    # docs_executability"; the 13D gates sit between them, harmless to the set).
+    voice_loopback = _release_voice_loopback_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="voice_loopback_readiness",
+        passed=(
+            not voice_loopback["missing_files"]
+            and not voice_loopback["loopback_determinism_errors"]
+            and not voice_loopback["codec_roundtrip_errors"]
+            and not voice_loopback["metrics_wiring_errors"]
+            and not voice_loopback["voice_loss_errors"]
+            and not voice_loopback["evidence_class_errors"]
+            and not voice_loopback["phone_survival_errors"]
+            and not voice_loopback["rung_honesty_errors"]
+        ),
+        milestone="M4",  # red-team/voice evidence family — same milestone as
+        # voice_redteam_readiness / redteam_corpus_execution_readiness
+        evidence=voice_loopback,
+    )
+    # --- Phase 9B gate (M4 modality-loop family) ---------------------------
+    # Registered AFTER voice_loopback_readiness (the modality-loop family) and
+    # DIRECTLY BEFORE docs_executability (which stays last). ARCH-9B §2.5 / 9B-A5
+    # — count-agnostic, by-name insertion; closed set 77 -> 78.
+    image_loop = _release_image_loop_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="image_loop_readiness",
+        passed=(
+            not image_loop["missing_files"]
+            and not image_loop["loop_determinism_errors"]
+            and not image_loop["deterministic_loss_anchoring_errors"]
+            and not image_loop["image_loss_errors"]
+            and not image_loop["perception_guard_errors"]
+            and not image_loop["eval_wiring_errors"]
+            and not image_loop["evidence_class_errors"]
+            and not image_loop["ab_capstone_errors"]
+        ),
+        milestone="M4",  # modality-loop family — same milestone as
+        # voice_loopback_readiness
+        evidence=image_loop,
+    )
+    # --- Phase 9C gate (M4 modality-loop family) ---------------------------
+    # Registered AFTER image_loop_readiness (the modality-loop family:
+    # voice_loopback_readiness -> image_loop_readiness -> cua_loop_readiness) and
+    # DIRECTLY BEFORE docs_executability (which stays last). ARCH-9C §2.5 / 9C-A5
+    # — count-agnostic, by-name insertion; closed set 78 -> 79.
+    cua_loop = _release_cua_loop_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="cua_loop_readiness",
+        passed=(
+            not cua_loop["missing_files"]
+            and not cua_loop["loop_determinism_errors"]
+            and not cua_loop["deterministic_verifier_anchoring_errors"]
+            and not cua_loop["cua_loss_errors"]
+            and not cua_loop["completion_guard_errors"]
+            and not cua_loop["eval_wiring_errors"]
+            and not cua_loop["evidence_class_errors"]
+            and not cua_loop["ab_capstone_errors"]
+        ),
+        milestone="M4",  # modality-loop family — same milestone as
+        # voice_loopback_readiness AND image_loop_readiness
+        evidence=cua_loop,
+    )
+    # --- task-dataset benchmark gate (#80, M4) — readiness --------
+    # Registered AFTER the modality-loop family and DIRECTLY BEFORE
+    # docs_executability (which stays last). Count-agnostic, by-name insertion;
+    # closed set 79 -> 80.
+    task_benchmark = _release_task_dataset_benchmark_status(root)
+    _append_release_check(
+        checks,
+        check_id="task_dataset_benchmark_readiness",
+        passed=(
+            not task_benchmark["missing_files"]
+            and not task_benchmark["dataset_compile_errors"]
+            and not task_benchmark["determinism_errors"]
+            and not task_benchmark["guard_presence_errors"]
+            and not task_benchmark["overclaim_errors"]
+            and not task_benchmark["coverage_errors"]
+            and not task_benchmark["world_kind_errors"]
+        ),
+        milestone="M4",  # benchmark surface rides the modality-loop milestone
+        evidence=task_benchmark,
+    )
+    # Bench harness contract (15B): the unified harness's coding artifact_in lane.
+    # Count-agnostic, by-name insertion DIRECTLY BEFORE docs_executability.
+    bench_contract = _release_bench_contract_status(root)
+    _append_release_check(
+        checks,
+        check_id="bench_contract_readiness",
+        passed=(
+            not bench_contract["missing_files"]
+            and not bench_contract["suite_errors"]
+            and not bench_contract["reference_pass_errors"]
+            and not bench_contract["discrimination_errors"]
+            and not bench_contract["determinism_errors"]
+            and not bench_contract["oracle_held_out_errors"]
+            and not bench_contract["guard_errors"]
+            and not bench_contract["command_graded_errors"]
+            and not bench_contract["pull_errors"]
+            and not bench_contract["voice_errors"]
+        ),
+        milestone="M4",
+        evidence=bench_contract,
+    )
+    # Registered last by design: the docs gate admits backing objects against
+    # the accumulated same-run check verdicts above.
+    docs_executability = _release_docs_executability_status(root, checks)
+    _append_release_check(
+        checks,
+        check_id="docs_executability",
+        passed=not any(
+            docs_executability[key]
+            for key in (
+                "metadata_errors",
+                "index_errors",
+                "coverage_errors",
+                "backing_errors",
+                "claims_errors",
+                "required_page_errors",
+            )
+        ),
+        milestone="M7",
+        evidence=docs_executability,
     )
 
     milestones = _release_milestones(checks)
@@ -6213,6 +8112,90 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "typescript_public_package": TYPESCRIPT_PUBLIC_PACKAGE,
         "legacy_typescript_packages": list(LEGACY_TYPESCRIPT_PACKAGES),
         "required_typescript_sdk_files": list(V1_TYPESCRIPT_SDK_REQUIRED_FILES),
+        "required_active_ai_evaluation_python_files": list(
+            V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
+        ),
+        "required_active_ai_evaluation_typescript_files": list(
+            V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
+        ),
+        "required_active_ai_evaluation_source_inventory_file": (
+            V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+        ),
+        "required_active_ai_evaluation_source_inventory_kind": (
+            V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+        ),
+        "required_active_ai_evaluation_doc_phrases": copy.deepcopy(
+            V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+        ),
+        "required_active_ai_evaluation_min_python_file_count": (
+            V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
+        ),
+        "required_active_ai_evaluation_min_typescript_file_count": (
+            V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+        ),
+        "required_sdist_paths": list(V1_SDIST_REQUIRED_PATHS),
+        "forbidden_sdist_paths": list(V1_SDIST_FORBIDDEN_PATHS),
+        "allowed_wheel_top_level": list(V1_WHEEL_ALLOWED_TOP_LEVEL),
+        "required_docs_pages": list(V1_DOCS_REQUIRED_PAGES),
+        "docs_allowed_artifact_kinds": list(V1_DOCS_ALLOWED_ARTIFACT_KINDS),
+        "docs_claim_phrase_gates": dict(V1_DOCS_CLAIM_PHRASE_GATES),
+        "live_lane_env_flags": dict(V1_LIVE_LANE_ENV_FLAGS),
+        "live_lane_extra_packages": list(V1_LIVE_LANE_EXTRA_PACKAGES),
+        "live_lane_evidence_classes": list(V1_LIVE_EVIDENCE_CLASSES),
+        "required_capability_profile_freeze_row_fields": list(
+            V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+        ),
+        "required_capability_profile_freeze_checks": list(
+            V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+        ),
+        "required_optimizer_profile_matrix_target_kinds": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+        ),
+        "required_optimizer_profile_matrix_backends": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
+        ),
+        "required_optimizer_profile_matrix_cells": [
+            list(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+        ],
+        "required_whole_agent_contract_stages": list(
+            V1_WHOLE_AGENT_CONTRACT_STAGES
+        ),
+        "required_whole_agent_apply_plan_fields": list(
+            V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
+        ),
+        "required_optimizer_trajectory_profile_fields": list(
+            V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+        ),
+        "required_optimizer_routing_checks": list(
+            V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
+        ),
+        "required_persona_layers": list(V1_PERSONA_LAYERS),
+        "required_persona_evidence_classes": list(V1_PERSONA_EVIDENCE_CLASSES),
+        "required_persona_temperament_axes": list(V1_PERSONA_TEMPERAMENT_AXES),
+        "required_persona_behavior_axes": list(V1_PERSONA_BEHAVIOR_AXES),
+        "required_persona_behavior_realization_metrics": list(
+            V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
+        ),
+        "required_persona_fidelity_record_fields": list(
+            V1_PERSONA_FIDELITY_RECORD_FIELDS
+        ),
+        "required_persona_fidelity_verdicts": list(V1_PERSONA_FIDELITY_VERDICTS),
+        "persona_fidelity_epidemic_rate": V1_PERSONA_FIDELITY_EPIDEMIC_RATE,
+        "required_persona_fidelity_floors": copy.deepcopy(V1_PERSONA_FIDELITY_FLOORS),
+        "required_scenario_kinds": list(V1_SCENARIO_KINDS),
+        "required_scenario_coverage_axes": list(V1_SCENARIO_COVERAGE_AXES),
+        "required_persona_calibration_stages": list(V1_PERSONA_CALIBRATION_STAGES),
+        "required_persona_calibration_probes": list(V1_PERSONA_CALIBRATION_PROBES),
+        "required_persona_content_scan_results": list(V1_PERSONA_CONTENT_SCAN_RESULTS),
+        "required_persona_bias_lint_checks": list(V1_PERSONA_BIAS_LINT_CHECKS),
+        "required_persona_vendor_import_formats": list(V1_PERSONA_VENDOR_IMPORT_FORMATS),
+        "required_persona_download_pin_fields": list(V1_PERSONA_DOWNLOAD_PIN_FIELDS),
+        "telemetry_kill_switch_env": V1_TELEMETRY_KILL_SWITCH_ENV,
+        "telemetry_scan_roots": list(V1_TELEMETRY_SCAN_ROOTS),
+        "telemetry_forbidden_analytics_hosts": list(
+            V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+        ),
+        "telemetry_evidence_classes": list(V1_TELEMETRY_EVIDENCE_CLASSES),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -6690,6 +8673,45 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_redteam_corpus_execution_channels": list(
             V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
         ),
+        # Phase 12 (voice red-team) payload mirrors (unit 7.4)
+        "required_redteam_voice_surfaces": list(V1_REDTEAM_VOICE_SURFACES),
+        "voice_attack_family_matrix": copy.deepcopy(V1_VOICE_ATTACK_FAMILY_MATRIX),
+        "voice_attack_maturity_levels": list(V1_VOICE_ATTACK_MATURITY_LEVELS),
+        "voice_phone_survival_statuses": list(V1_VOICE_PHONE_SURVIVAL_STATUSES),
+        "voice_phone_survival_tiers": list(V1_VOICE_PHONE_SURVIVAL_TIERS),
+        "voice_attack_rungs": list(V1_VOICE_ATTACK_RUNGS),
+        "voice_detection_evidence_fields": copy.deepcopy(
+            V1_VOICE_DETECTION_EVIDENCE_FIELDS
+        ),
+        "voice_redteam_ab_arms": list(V1_VOICE_REDTEAM_AB_ARMS),
+        "voice_redteam_ab_verdicts": list(V1_VOICE_REDTEAM_AB_VERDICTS),
+        # Phase 9A (voice loopback / codec-survival) payload mirrors (unit 6.4)
+        "voice_fidelity_tiers": list(V1_VOICE_FIDELITY_TIERS),
+        "voice_codecs": list(V1_VOICE_CODECS),
+        "voice_packet_loss_models": list(V1_VOICE_PACKET_LOSS_MODELS),
+        "voice_codec_profiles": list(V1_VOICE_CODEC_PROFILES),
+        "voice_failure_sublayers": list(V1_VOICE_FAILURE_SUBLAYERS),
+        "voice_loss_term_refs": list(V1_VOICE_LOSS_TERM_REFS),
+        # Phase 9B (image / multimodal loop) payload mirrors (unit 5.5)
+        "image_loss_term_refs": list(V1_IMAGE_LOSS_TERM_REFS),
+        "image_loss_deterministic_anchor_terms": list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "image_loss_judge_terms": list(V1_IMAGE_LOSS_JUDGE_TERMS),
+        "image_generation_anchor_terms": list(V1_IMAGE_GENERATION_ANCHOR_TERMS),
+        "image_generation_judge_terms": list(V1_IMAGE_GENERATION_JUDGE_TERMS),
+        "image_failure_sublayers": list(V1_IMAGE_FAILURE_SUBLAYERS),
+        "image_perturbation_operators": list(V1_IMAGE_PERTURBATION_OPERATORS),
+        "image_fidelity_tiers": list(V1_IMAGE_FIDELITY_TIERS),
+        # Phase 9C (CUA / browser / computer-use loop) payload mirrors (unit 5.5)
+        "cua_loss_term_refs": list(V1_CUA_LOSS_TERM_REFS),
+        "cua_loss_deterministic_anchor_terms": list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "cua_desktop_anchor_terms": list(V1_CUA_DESKTOP_ANCHOR_TERMS),
+        "cua_loss_judge_terms": list(V1_CUA_LOSS_JUDGE_TERMS),
+        "cua_loss_mandatory_safety_terms": list(V1_CUA_LOSS_MANDATORY_SAFETY_TERMS),
+        "cua_failure_sublayers": list(V1_CUA_FAILURE_SUBLAYERS),
+        "cua_surfaces": list(V1_CUA_SURFACES),
+        "cua_completion_guard_kinds": list(V1_CUA_COMPLETION_GUARD_KINDS),
+        "cua_perturbation_operators": list(V1_CUA_PERTURBATION_OPERATORS),
+        "cua_fidelity_tiers": list(V1_CUA_FIDELITY_TIERS),
         "required_redteam_readiness_certification_files": list(
             V1_REDTEAM_READINESS_CERTIFICATION_FILES
         ),
@@ -7250,6 +9272,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_adapter_io_contracts": copy.deepcopy(
             V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
         ),
+        "framework_preset_certification_frameworks": list(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
+        ),
+        "framework_preset_vector_db_names": list(
+            V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
+        ),
+        "framework_preset_live_validation_status": list(
+            V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+        ),
+        "framework_preset_live_validation_lane": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
+        ],
+        "framework_preset_corrections": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_CORRECTIONS
+        ],
+        "required_framework_preset_certification_files": list(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
+        ),
+        "required_framework_preset_certification_contracts": copy.deepcopy(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS
+        ),
         "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
         "required_protocol_adapter_contracts": copy.deepcopy(
             V1_PROTOCOL_ADAPTER_CONTRACTS
@@ -7450,11 +9493,6 @@ def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
                 )
         doc_phrase_hits[relative_path] = hits
 
-    handover_text = ""
-    handover_path = root / "internal-docs/v1-engineering-handover.md"
-    if handover_path.exists():
-        handover_text = handover_path.read_text(encoding="utf-8", errors="ignore")
-
     command_plan = copy.deepcopy(V1_RELEASE_HANDOVER_COMMANDS)
     proof_command_ids = [
         str(command["proof_check_id"])
@@ -7499,24 +9537,9 @@ def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
                 "reason": "handover plan must include the final release-proof command",
             }
         )
-    for output_path in V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS:
-        if output_path not in handover_text:
-            command_errors.append(
-                {
-                    "field": "handover_doc.proof_outputs",
-                    "missing": output_path,
-                    "reason": "handover doc must show the current proof output path",
-                }
-            )
-    for output_path in V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS:
-        if output_path in handover_text:
-            command_errors.append(
-                {
-                    "field": "handover_doc.proof_outputs",
-                    "forbidden": output_path,
-                    "reason": "handover doc still references stale slice proof output",
-                }
-            )
+    # The engineering handover doc lives in the separate internal-docs repo now,
+    # so its proof-output content is no longer gate evidence (handover_text is
+    # empty when the doc is absent — these checks are intentionally dropped).
 
     status = (
         "passed"
@@ -7526,7 +9549,7 @@ def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
     return {
         "kind": "agent-learning.release-handover.v1",
         "status": status,
-        "handover_doc": "internal-docs/v1-engineering-handover.md",
+        "handover_doc": "(internal-docs repo)",
         "release_proof_output": "/tmp/agent-learning-release-proof.json",
         "required_files": list(V1_RELEASE_HANDOVER_REQUIRED_FILES),
         "missing_files": missing_files,
@@ -7759,6 +9782,12 @@ def _append_release_check(
 def _missing_relative_paths(root: Path, relative_paths: Iterable[str]) -> list[str]:
     missing: list[str] = []
     for relative_path in relative_paths:
+        # Internal research/planning docs are kept OUT of the shippable repo
+        # (they live in the separate internal-docs repo); they are no longer
+        # required gate evidence, so an absent ``internal-docs/`` path is never
+        # "missing".
+        if str(relative_path).startswith("internal-docs/"):
+            continue
         if not (root / relative_path).exists():
             missing.append(relative_path)
     return missing
@@ -7770,6 +9799,4505 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _release_active_ai_evaluation_source_status(root: Path) -> dict[str, Any]:
+    required_python_files = list(V1_ACTIVE_AI_EVALUATION_PYTHON_FILES)
+    required_typescript_files = list(V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES)
+    required_doc_paths = list(V1_ACTIVE_AI_EVALUATION_DOC_PHRASES)
+    required_inventory_file = V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *required_python_files,
+            *required_typescript_files,
+            *required_doc_paths,
+            required_inventory_file,
+        ],
+    )
+    package_errors: list[dict[str, Any]] = []
+    source_count_errors: list[dict[str, Any]] = []
+    source_inventory_errors: list[dict[str, Any]] = []
+    import_errors: list[dict[str, Any]] = []
+    doc_errors: list[dict[str, Any]] = []
+
+    pyproject = _read_full_pyproject(root)
+    tool = _as_mapping(pyproject.get("tool"))
+    hatch = _as_mapping(tool.get("hatch"))
+    build = _as_mapping(hatch.get("build"))
+    targets = _as_mapping(build.get("targets"))
+    wheel = _as_mapping(targets.get("wheel"))
+    package_paths = [str(item) for item in _as_list(wheel.get("packages"))]
+    for required_package in ("src/agent_learning", "src/fi"):
+        if required_package not in package_paths:
+            package_errors.append(
+                {
+                    "field": "tool.hatch.build.targets.wheel.packages",
+                    "expected": required_package,
+                    "observed": package_paths,
+                }
+            )
+
+    python_source_files = [
+        path
+        for path in sorted((root / "src" / "fi" / "evals").rglob("*.py"))
+        if "__pycache__" not in path.parts
+    ]
+    typescript_source_files = [
+        path
+        for path in [
+            *sorted((root / "typescript" / "agent-learning-kit" / "src").rglob("*.ts")),
+            *sorted(
+                (root / "typescript" / "agent-learning-kit" / "examples").rglob("*.ts")
+            ),
+        ]
+        if "__pycache__" not in path.parts and "dist" not in path.parts
+    ]
+
+    source_inventory = _read_json_file(root / required_inventory_file)
+    source_inventory_kind = source_inventory.get("kind")
+    if source_inventory_kind != V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND:
+        source_inventory_errors.append(
+            {
+                "field": "kind",
+                "expected": V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND,
+                "observed": source_inventory_kind,
+            }
+        )
+    source_inventory_python_files = [
+        str(item) for item in _as_list(source_inventory.get("python_files"))
+    ]
+    source_inventory_typescript_files = [
+        str(item) for item in _as_list(source_inventory.get("typescript_files"))
+    ]
+    source_inventory_python = _as_mapping(source_inventory.get("python_source"))
+    source_inventory_typescript = _as_mapping(
+        source_inventory.get("typescript_source")
+    )
+    source_inventory_python_py_file_count = sum(
+        1 for path in source_inventory_python_files if path.endswith(".py")
+    )
+    source_inventory_typescript_ts_file_count = sum(
+        1 for path in source_inventory_typescript_files if path.endswith(".ts")
+    )
+    source_inventory_count_expectations = {
+        "python_source.tracked_file_count": (
+            source_inventory_python.get("tracked_file_count"),
+            len(source_inventory_python_files),
+        ),
+        "python_source.python_file_count": (
+            source_inventory_python.get("python_file_count"),
+            source_inventory_python_py_file_count,
+        ),
+        "typescript_source.tracked_file_count": (
+            source_inventory_typescript.get("tracked_file_count"),
+            len(source_inventory_typescript_files),
+        ),
+        "typescript_source.typescript_file_count": (
+            source_inventory_typescript.get("typescript_file_count"),
+            source_inventory_typescript_ts_file_count,
+        ),
+    }
+    for field, (expected, observed) in source_inventory_count_expectations.items():
+        if expected != observed:
+            source_inventory_errors.append(
+                {"field": field, "expected": expected, "observed": observed}
+            )
+
+    actual_source_inventory_python_files = sorted(
+        str(path.relative_to(root))
+        for path in (root / "src" / "fi" / "evals").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    actual_source_inventory_typescript_files = sorted(
+        str(path.relative_to(root))
+        for base in [
+            root / "typescript" / "agent-learning-kit" / "src",
+            root / "typescript" / "agent-learning-kit" / "examples",
+        ]
+        for path in base.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and "dist" not in path.parts
+    )
+    expected_source_inventory_files = sorted(
+        [*source_inventory_python_files, *source_inventory_typescript_files]
+    )
+    actual_source_inventory_files = sorted(
+        [
+            *actual_source_inventory_python_files,
+            *actual_source_inventory_typescript_files,
+        ]
+    )
+    source_inventory_missing_files = sorted(
+        set(expected_source_inventory_files) - set(actual_source_inventory_files)
+    )
+    source_inventory_extra_files = sorted(
+        set(actual_source_inventory_files) - set(expected_source_inventory_files)
+    )
+    if len(python_source_files) < V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT:
+        source_count_errors.append(
+            {
+                "path": "src/fi/evals",
+                "expected": f">={V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT}",
+                "observed": len(python_source_files),
+            }
+        )
+    if (
+        len(typescript_source_files)
+        < V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+    ):
+        source_count_errors.append(
+            {
+                "path": "typescript/agent-learning-kit",
+                "expected": (
+                    f">={V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT}"
+                ),
+                "observed": len(typescript_source_files),
+            }
+        )
+
+    for module in ("fi.evals", "agent_learning.evals"):
+        try:
+            spec = importlib.util.find_spec(module)
+        except Exception as exc:
+            import_errors.append({"module": module, "error": str(exc)})
+            continue
+        if spec is None:
+            import_errors.append({"module": module, "error": "module not found"})
+
+    doc_phrase_hits: dict[str, list[str]] = {}
+    for relative_path, phrases in V1_ACTIVE_AI_EVALUATION_DOC_PHRASES.items():
+        path = root / relative_path
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        hits = [phrase for phrase in phrases if phrase in text]
+        doc_phrase_hits[relative_path] = hits
+        missing_phrases = sorted(set(phrases) - set(hits))
+        if missing_phrases:
+            doc_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "active_ai_evaluation_doc_phrases",
+                    "expected": phrases,
+                    "observed": hits,
+                    "missing": missing_phrases,
+                }
+            )
+
+    # The source-inventory JSON is internal build evidence that now lives in the
+    # separate internal-docs repo; when it is absent its validation is not gate
+    # evidence (the wheel's package source is still validated above).
+    if not (root / required_inventory_file).exists():
+        source_inventory_errors = []
+        source_inventory_missing_files = []
+        source_inventory_extra_files = []
+
+    return {
+        "kind": "agent-learning.active-ai-evaluation-source.v1",
+        "required_python_files": required_python_files,
+        "required_typescript_files": required_typescript_files,
+        "source_inventory_file": required_inventory_file,
+        "source_inventory_kind": source_inventory_kind,
+        "required_source_inventory_kind": (
+            V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
+        ),
+        "required_doc_phrases": copy.deepcopy(
+            V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
+        ),
+        "min_python_file_count": V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT,
+        "min_typescript_file_count": (
+            V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
+        ),
+        "package_paths": package_paths,
+        "python_source_file_count": len(python_source_files),
+        "typescript_source_file_count": len(typescript_source_files),
+        "source_inventory_python_file_count": len(source_inventory_python_files),
+        "source_inventory_python_py_file_count": (
+            source_inventory_python_py_file_count
+        ),
+        "source_inventory_typescript_file_count": len(
+            source_inventory_typescript_files
+        ),
+        "source_inventory_typescript_ts_file_count": (
+            source_inventory_typescript_ts_file_count
+        ),
+        "missing_files": missing_files,
+        "package_errors": package_errors,
+        "source_count_errors": source_count_errors,
+        "source_inventory_errors": source_inventory_errors,
+        "source_inventory_missing_files": source_inventory_missing_files,
+        "source_inventory_extra_files": source_inventory_extra_files,
+        "import_errors": import_errors,
+        "doc_phrase_hits": doc_phrase_hits,
+        "doc_errors": doc_errors,
+    }
+
+
+def _sdist_member_relative_paths(sdist_path: Path) -> list[str]:
+    """File members of an sdist tarball with the `<name>-<version>/` prefix stripped."""
+    members: list[str] = []
+    with tarfile.open(sdist_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/", 1)
+            if len(parts) == 2 and parts[1]:
+                members.append(parts[1])
+    return sorted(members)
+
+
+def _wheel_member_paths(wheel_path: Path) -> list[str]:
+    with zipfile.ZipFile(wheel_path) as archive:
+        return sorted(name for name in archive.namelist() if not name.endswith("/"))
+
+
+def _distribution_member_findings(
+    sdist_members: Sequence[str],
+    wheel_members: Sequence[str],
+) -> dict[str, list[str]]:
+    def _is_forbidden(member: str) -> bool:
+        for forbidden in V1_SDIST_FORBIDDEN_PATHS:
+            if forbidden.endswith("/") and member.startswith(forbidden):
+                return True
+            if forbidden == "__pycache__" and "__pycache__" in member.split("/"):
+                return True
+            if member == forbidden:
+                return True
+        return False
+
+    def _is_satisfied(required: str) -> bool:
+        if required.endswith("/"):
+            return any(member.startswith(required) for member in sdist_members)
+        return required in sdist_members
+
+    return {
+        "sdist_forbidden_members": sorted(
+            member for member in sdist_members if _is_forbidden(member)
+        ),
+        "sdist_missing_required": sorted(
+            required
+            for required in V1_SDIST_REQUIRED_PATHS
+            if not _is_satisfied(required)
+        ),
+        "wheel_unexpected_members": sorted(
+            member
+            for member in wheel_members
+            if not any(
+                fnmatch.fnmatch(member.split("/", 1)[0], allowed)
+                for allowed in V1_WHEEL_ALLOWED_TOP_LEVEL
+            )
+        ),
+    }
+
+
+def _release_package_distribution_hygiene_status(root: Path) -> dict[str, Any]:
+    build_errors: list[dict[str, Any]] = []
+    sdist_errors: list[dict[str, Any]] = []
+    wheel_errors: list[dict[str, Any]] = []
+    config_errors: list[dict[str, Any]] = []
+
+    # Static config check — runs in every mode; pins pyproject to the constant.
+    pyproject = _read_full_pyproject(root)
+    tool = _as_mapping(pyproject.get("tool"))
+    hatch = _as_mapping(tool.get("hatch"))
+    build_cfg = _as_mapping(hatch.get("build"))
+    targets = _as_mapping(build_cfg.get("targets"))
+    sdist_cfg = _as_mapping(targets.get("sdist"))
+    only_include = [str(item) for item in _as_list(sdist_cfg.get("only-include"))]
+    if not sdist_cfg:
+        config_errors.append(
+            {
+                "field": "tool.hatch.build.targets.sdist",
+                "expected": "configured sdist allowlist",
+                "observed": None,
+            }
+        )
+    elif sorted(only_include) != sorted(V1_SDIST_ONLY_INCLUDE):
+        config_errors.append(
+            {
+                "field": "tool.hatch.build.targets.sdist.only-include",
+                "expected": sorted(V1_SDIST_ONLY_INCLUDE),
+                "observed": sorted(only_include),
+            }
+        )
+
+    build_available = importlib.util.find_spec("build") is not None
+    backend_available = importlib.util.find_spec("hatchling") is not None
+    verification_mode = "config_only"
+    notes: list[str] = []
+    sdist_filename: str | None = None
+    wheel_filename: str | None = None
+    sdist_members: list[str] = []
+    wheel_members: list[str] = []
+
+    if build_available and backend_available:
+        verification_mode = "built_distributions"
+        try:
+            import build as build_module
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                builder = build_module.ProjectBuilder(str(root))
+                sdist_path = Path(builder.build("sdist", tmp_dir))
+                wheel_path = Path(builder.build("wheel", tmp_dir))
+                sdist_filename = sdist_path.name
+                wheel_filename = wheel_path.name
+                sdist_members = _sdist_member_relative_paths(sdist_path)
+                wheel_members = _wheel_member_paths(wheel_path)
+        except Exception as exc:
+            build_errors.append({"step": "built_distributions", "error": str(exc)})
+    else:
+        # config_only — the build module is unavailable, so no build is attempted.
+        # Honest degradation, not a failure: the note is evidence, never an error
+        # entry, and member findings are never fabricated — a config_only run must
+        # NOT be treated as a leak.
+        notes.append("build_unavailable")
+
+    findings = {
+        "sdist_forbidden_members": [],
+        "sdist_missing_required": [],
+        "wheel_unexpected_members": [],
+    }
+    if verification_mode == "built_distributions" and not build_errors:
+        findings = _distribution_member_findings(sdist_members, wheel_members)
+        for member in findings["sdist_forbidden_members"]:
+            sdist_errors.append(
+                {"path": member, "expected": "absent from sdist", "observed": "present"}
+            )
+        for required in findings["sdist_missing_required"]:
+            sdist_errors.append(
+                {"path": required, "expected": "present in sdist", "observed": "missing"}
+            )
+        for member in findings["wheel_unexpected_members"]:
+            wheel_errors.append(
+                {
+                    "path": member,
+                    "expected": f"top-level in {V1_WHEEL_ALLOWED_TOP_LEVEL}",
+                    "observed": "unexpected member",
+                }
+            )
+
+    return {
+        "kind": "agent-learning.package-distribution-hygiene.v1",
+        "verification_mode": verification_mode,
+        "build_tool_available": build_available and backend_available,
+        "notes": notes,
+        "required_sdist_paths": list(V1_SDIST_REQUIRED_PATHS),
+        "forbidden_sdist_paths": list(V1_SDIST_FORBIDDEN_PATHS),
+        "allowed_wheel_top_level": list(V1_WHEEL_ALLOWED_TOP_LEVEL),
+        "sdist_only_include": only_include,
+        "sdist_filename": sdist_filename,
+        "wheel_filename": wheel_filename,
+        "sdist_member_count": len(sdist_members),
+        "wheel_member_count": len(wheel_members),
+        "sdist_forbidden_members": findings["sdist_forbidden_members"],
+        "sdist_missing_required": findings["sdist_missing_required"],
+        "wheel_unexpected_members": findings["wheel_unexpected_members"],
+        "build_errors": build_errors,
+        "sdist_errors": sdist_errors,
+        "wheel_errors": wheel_errors,
+        "config_errors": config_errors,
+    }
+
+
+def _docs_page_paths(root: Path) -> list[Path]:
+    docs_root = root / "docs"
+    if not docs_root.is_dir():
+        return []
+    return sorted(
+        path
+        for path in docs_root.rglob("*.md")
+        if "assets" not in path.relative_to(docs_root).parts
+    )
+
+
+def _parse_docs_frontmatter(text: str) -> dict[str, Any] | None:
+    """Parse the leading YAML frontmatter block; None on any malformation."""
+
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return None
+    import yaml
+
+    try:
+        payload = yaml.safe_load(text[4:end])
+    except yaml.YAMLError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _docs_page_title(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return "(untitled)"
+
+
+def _render_docs_machine_index(pages: Sequence[Mapping[str, Any]]) -> str:
+    """Deterministic llms.txt content from parsed page records.
+
+    Grammar per page line:
+    `- [<title>](<repo-relative path>): twin=<first backing | none> kind=<first kind | none>`
+    Sorted by V1_DOCS_TRACKS order then path; no timestamps. Shared by the
+    docs gate (byte-compare) and scripts/generate_docs_index.py (file write).
+    """
+
+    lines = [
+        "# Agent Learning Kit — docs index",
+        "",
+        "> Every page below is backed by an executable twin in `examples/` and admitted",
+        "> by the `docs_executability` release gate. Page metadata is the YAML",
+        "> frontmatter at the top of each file — the frontmatter IS the manifest twin.",
+    ]
+    track_order = {track: index for index, track in enumerate(V1_DOCS_TRACKS)}
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for page in pages:
+        grouped.setdefault(str(page.get("track")), []).append(page)
+    for track in sorted(grouped, key=lambda item: track_order.get(item, len(track_order))):
+        lines.append("")
+        lines.append(f"## {track.capitalize()}")
+        for page in sorted(grouped[track], key=lambda item: str(item.get("path"))):
+            backing = [str(item) for item in page.get("backing", [])]
+            kinds = [str(item) for item in page.get("artifact_kinds", [])]
+            twin = backing[0] if backing else "none"
+            kind = kinds[0] if kinds else "none"
+            title = str(page.get("title") or "(untitled)")
+            lines.append(
+                f"- [{title}]({page.get('path')}): twin={twin} kind={kind}"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _execute_docs_backing_fresh(
+    root: Path, page: str, backing_path: str
+) -> dict[str, Any] | None:
+    """Fresh lane: exec-load an uncovered examples/*.py and run it in a tempdir.
+
+    Identical mechanism to the executing-gate sites in this module
+    (spec_from_file_location + exec_module + module.run, env save/restore,
+    no subprocess). Returns None on success, else a backing_errors entry
+    {page, step, layer, error, stderr_tail}.
+    """
+
+    import contextlib
+    import io as io_module
+
+    previous_environ = dict(os.environ)
+    stderr_buffer = io_module.StringIO()
+    try:
+        example_path = root / backing_path
+        spec = importlib.util.spec_from_file_location(
+            "agent_learning_docs_fresh_" + re.sub(r"\W", "_", backing_path),
+            example_path,
+        )
+        if spec is None or spec.loader is None:
+            return {
+                "page": page,
+                "step": backing_path,
+                "layer": "env",
+                "error": f"unable to load {backing_path}",
+                "stderr_tail": "",
+            }
+        module = importlib.util.module_from_spec(spec)
+        with contextlib.redirect_stderr(stderr_buffer):
+            spec.loader.exec_module(module)
+            runner = getattr(module, "run", None)
+            if not callable(runner):
+                return {
+                    "page": page,
+                    "step": backing_path,
+                    "layer": "manifest",
+                    "error": f"{backing_path} has no callable run(path)",
+                    "stderr_tail": stderr_buffer.getvalue()[-2000:],
+                }
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-docs-fresh-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "docs-fresh-output.json"
+                runner(output_path)
+                if not output_path.is_file():
+                    return {
+                        "page": page,
+                        "step": backing_path,
+                        "layer": "engine",
+                        "error": "run(path) wrote no artifact",
+                        "stderr_tail": stderr_buffer.getvalue()[-2000:],
+                    }
+    except Exception as exc:
+        missing_key = isinstance(exc, KeyError) or "API_KEY" in str(exc).upper()
+        return {
+            "page": page,
+            "step": backing_path,
+            "layer": "keys" if missing_key else "engine",
+            "error": f"{type(exc).__name__}: {exc}",
+            "stderr_tail": stderr_buffer.getvalue()[-2000:],
+        }
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_environ)
+    return None
+
+
+def _release_docs_executability_status(
+    root: Path, checks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    metadata_errors: list[dict[str, Any]] = []
+    index_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    backing_errors: list[dict[str, Any]] = []
+    claims_errors: list[dict[str, Any]] = []
+    required_page_errors: list[dict[str, Any]] = []
+
+    check_passed = {check["id"]: bool(check.get("passed")) for check in checks}
+    pages: list[dict[str, Any]] = []
+    page_paths = _docs_page_paths(root)
+    discovered = {
+        str(path.relative_to(root)).replace(os.sep, "/") for path in page_paths
+    }
+    covered_count = 0
+    fresh_count = 0
+
+    for required in V1_DOCS_REQUIRED_PAGES:
+        if required not in discovered:
+            required_page_errors.append(
+                {"path": required, "expected": "present", "observed": "missing"}
+            )
+
+    backing_optional = set(V1_DOCS_REQUIRED_PAGES[:2]) | {
+        page
+        for page in V1_DOCS_REQUIRED_PAGES
+        if page.startswith(("docs/reference/", "docs/quickstart/"))
+    } | {
+        # Phase 11B (11B-A10): the profile-doc index is a cross-link page with
+        # no executable twin — it rides the backing_optional lane (ARCH §2.8).
+        "docs/frameworks/profiles/index.md",
+    }
+
+    for path in page_paths:
+        relative = str(path.relative_to(root)).replace(os.sep, "/")
+        text = path.read_text(encoding="utf-8")
+        metadata = _parse_docs_frontmatter(text)
+        if metadata is None or metadata.get("kind") != V1_DOCS_PAGE_METADATA_KIND:
+            metadata_errors.append(
+                {
+                    "path": relative,
+                    "expected": V1_DOCS_PAGE_METADATA_KIND,
+                    "observed": "missing or invalid frontmatter",
+                }
+            )
+            continue
+        track = metadata.get("track")
+        if track not in V1_DOCS_TRACKS:
+            metadata_errors.append(
+                {
+                    "path": relative,
+                    "field": "track",
+                    "expected": V1_DOCS_TRACKS,
+                    "observed": track,
+                }
+            )
+        backing = [str(item) for item in _as_list(metadata.get("backing"))]
+        executable = bool(backing)
+        if executable:
+            if metadata.get("objective") not in V1_DOCS_OBJECTIVE_AXIS:
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "objective",
+                        "expected": V1_DOCS_OBJECTIVE_AXIS,
+                        "observed": metadata.get("objective"),
+                    }
+                )
+            if metadata.get("stage") not in V1_DOCS_STAGE_AXIS:
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "stage",
+                        "expected": V1_DOCS_STAGE_AXIS,
+                        "observed": metadata.get("stage"),
+                    }
+                )
+        elif relative not in backing_optional:
+            metadata_errors.append(
+                {
+                    "path": relative,
+                    "expected": "at least one backing object",
+                    "observed": [],
+                }
+            )
+
+        artifact_kinds = [str(k) for k in _as_list(metadata.get("artifact_kinds"))]
+        for kind in artifact_kinds:
+            if kind not in V1_DOCS_ALLOWED_ARTIFACT_KINDS:
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "artifact_kinds",
+                        "expected": "member of allowed artifact kinds",
+                        "observed": kind,
+                    }
+                )
+
+        admission_sources: list[str] = []
+        for backing_path in backing:
+            if not (root / backing_path).is_file():
+                metadata_errors.append(
+                    {
+                        "path": relative,
+                        "field": "backing",
+                        "expected": "exists",
+                        "observed": backing_path,
+                    }
+                )
+                continue
+            covering_gate = V1_DOCS_BACKING_COVERAGE.get(backing_path)
+            if covering_gate is not None:
+                if covering_gate not in check_passed:
+                    coverage_errors.append(
+                        {
+                            "path": relative,
+                            "backing": backing_path,
+                            "expected": (
+                                f"covering gate {covering_gate} in same-run checks"
+                            ),
+                            "observed": "absent",
+                        }
+                    )
+                elif not check_passed[covering_gate]:
+                    backing_errors.append(
+                        {
+                            "page": relative,
+                            "step": backing_path,
+                            "layer": "engine",
+                            "error": (
+                                f"covering gate {covering_gate} failed in this run"
+                            ),
+                        }
+                    )
+                else:
+                    covered_count += 1
+                    admission_sources.append("covered_by_gate")
+            elif backing_path.endswith(".py"):
+                failure = _execute_docs_backing_fresh(root, relative, backing_path)
+                if failure is not None:
+                    backing_errors.append(failure)
+                else:
+                    fresh_count += 1
+                    admission_sources.append("executed_fresh")
+            else:
+                coverage_errors.append(
+                    {
+                        "path": relative,
+                        "backing": backing_path,
+                        "expected": (
+                            "V1_DOCS_BACKING_COVERAGE entry (fresh lane is .py-only)"
+                        ),
+                        "observed": "uncovered non-Python backing",
+                    }
+                )
+
+        prose = text[text.find("\n---\n", 4) + len("\n---\n"):]
+        declared = {
+            (str(claim.get("phrase")), str(claim.get("gate_id")))
+            for claim in _as_list(metadata.get("claims"))
+            if isinstance(claim, Mapping)
+        }
+        for pattern, licensed_gate in V1_DOCS_CLAIM_PHRASE_GATES.items():
+            for match in re.finditer(pattern, prose, re.IGNORECASE):
+                phrase = match.group(0)
+                green = (
+                    licensed_gate is not None
+                    and (phrase, licensed_gate) in declared
+                    and check_passed.get(licensed_gate) is True
+                )
+                if not green:
+                    claims_errors.append(
+                        {
+                            "path": relative,
+                            "phrase": phrase,
+                            "pattern": pattern,
+                            "expected": (
+                                "declared claim licensed by green gate "
+                                f"{licensed_gate or '(unlicensable)'}"
+                            ),
+                            "observed": sorted(
+                                f"{p}->{g}" for p, g in declared
+                            ),
+                        }
+                    )
+        pages.append(
+            {
+                "path": relative,
+                "title": _docs_page_title(text),
+                "track": track,
+                "backing": backing,
+                "artifact_kinds": artifact_kinds,
+                "admission_sources": admission_sources,
+            }
+        )
+
+    rendered = _render_docs_machine_index(pages)
+    index_path = root / V1_DOCS_MACHINE_INDEX_FILE
+    committed = (
+        index_path.read_text(encoding="utf-8") if index_path.is_file() else None
+    )
+    index_regenerated_match = committed == rendered
+    if not index_regenerated_match:
+        index_errors.append(
+            {
+                "path": V1_DOCS_MACHINE_INDEX_FILE,
+                "expected": "byte-identical to in-memory regeneration",
+                "observed": (
+                    "missing"
+                    if committed is None
+                    else "stale — rerun scripts/generate_docs_index.py"
+                ),
+            }
+        )
+
+    if len(pages) < V1_DOCS_MIN_PAGE_COUNT:
+        coverage_errors.append(
+            {
+                "path": "docs/",
+                "expected": f">= {V1_DOCS_MIN_PAGE_COUNT} pages",
+                "observed": len(pages),
+            }
+        )
+
+    return {
+        "kind": "agent-learning.docs-executability.v1",
+        "machine_index_file": V1_DOCS_MACHINE_INDEX_FILE,
+        "required_docs_pages": list(V1_DOCS_REQUIRED_PAGES),
+        "docs_allowed_artifact_kinds": list(V1_DOCS_ALLOWED_ARTIFACT_KINDS),
+        "docs_claim_phrase_gates": dict(V1_DOCS_CLAIM_PHRASE_GATES),
+        "page_count": len(pages),
+        "backing_covered_by_gate": covered_count,
+        "backing_executed_fresh": fresh_count,
+        "admission_source_counts": {
+            "covered_by_gate": covered_count,
+            "executed_fresh": fresh_count,
+        },
+        "index_regenerated_match": index_regenerated_match,
+        "pages": pages,
+        "metadata_errors": metadata_errors,
+        "index_errors": index_errors,
+        "coverage_errors": coverage_errors,
+        "backing_errors": backing_errors,
+        "claims_errors": claims_errors,
+        "required_page_errors": required_page_errors,
+    }
+
+
+# Private helper (not one of the nine V1_LIVE_* constants — no payload mirror):
+_LIVE_LANE_CAPTURE_PROVENANCE_FIELDS = (
+    "captured_from_lane",
+    "captured_run_id",
+    "rung",
+    "framework",
+    "framework_version",
+    "capture_date",
+    "transcript_sha256",
+    "redaction",
+    "reviewed",
+    "reviewer",
+)
+
+
+def _release_live_lane_boundary_status(root: Path) -> dict[str, Any]:
+    import_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    env_flag_errors: list[dict[str, Any]] = []
+    redaction_errors: list[dict[str, Any]] = []
+    scanned_module_count = 0
+    scanned_artifact_count = 0
+    live_prefix = "src/agent_learning/live/"
+    workers_prefix = live_prefix + "_workers/"
+
+    # Check 1: static import-graph scan — framework imports may live only in
+    # workers (top-level), lane modules (lazy in-function), or listed guarded
+    # vendored sites; release modules may never import the live package.
+    for base in ("src/agent_learning", "src/fi"):
+        base_dir = root / base
+        if not base_dir.is_dir():
+            continue
+        for path in sorted(base_dir.rglob("*.py")):
+            relative = str(path.relative_to(root)).replace(os.sep, "/")
+            scanned_module_count += 1
+            in_live = relative.startswith(live_prefix)
+            in_workers = relative.startswith(workers_prefix)
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError as exc:
+                import_errors.append(
+                    {"path": relative, "error": f"unparseable: {exc}"}
+                )
+                continue
+            guarded_node_ids = {
+                id(node)
+                for try_node in ast.walk(tree)
+                if isinstance(try_node, ast.Try) and try_node.handlers
+                for node in ast.walk(try_node)
+            }
+            lazy_node_ids = {
+                id(node)
+                for fn in ast.walk(tree)
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                for node in ast.walk(fn)
+            }
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots = [alias.name.split(".")[0] for alias in node.names]
+                    dotted = [alias.name for alias in node.names]
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.level == 0
+                ):
+                    roots = [node.module.split(".")[0]]
+                    dotted = [node.module]
+                else:
+                    continue
+                for root_name, full_name in zip(roots, dotted):
+                    if root_name in V1_LIVE_LANE_EXTRA_PACKAGES:
+                        if in_workers:
+                            continue
+                        if in_live and id(node) in lazy_node_ids:
+                            continue
+                        if (
+                            relative in V1_LIVE_LANE_GUARDED_IMPORT_FILES
+                            and id(node) in guarded_node_ids
+                        ):
+                            continue
+                        import_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": (
+                                    "live/_workers module, lazy lane import, "
+                                    "or listed guarded site"
+                                ),
+                                "observed": (
+                                    "framework import outside the sanctioned homes"
+                                ),
+                            }
+                        )
+                    if not in_live and full_name.startswith("agent_learning.live"):
+                        import_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": "no release-module dependency on live/",
+                                "observed": "live import outside the live package",
+                            }
+                        )
+
+    # Check 2: artifact evidence-class audit — live classes may not leak onto
+    # the release surface; captured fixtures carry the full reviewed provenance.
+    capture_dir_prefix = V1_LIVE_LANE_CAPTURE_DIR + "/"
+    examples_dir = root / "examples"
+    if examples_dir.is_dir():
+        for json_path in sorted(examples_dir.rglob("*.json")):
+            relative = str(json_path.relative_to(root)).replace(os.sep, "/")
+            payload = _read_json_file(json_path)
+            if not payload:
+                continue
+            scanned_artifact_count += 1
+            in_capture_dir = relative.startswith(capture_dir_prefix)
+            evidence_class = payload.get(V1_LIVE_LANE_EVIDENCE_CLASS_FIELD)
+            if evidence_class is None and not in_capture_dir:
+                continue
+            if evidence_class not in V1_LIVE_EVIDENCE_CLASSES:
+                evidence_class_errors.append(
+                    {
+                        "path": relative,
+                        "expected": V1_LIVE_EVIDENCE_CLASSES,
+                        "observed": evidence_class,
+                    }
+                )
+                continue
+            if evidence_class not in V1_LIVE_RELEASE_ADMISSIBLE_CLASSES:
+                evidence_class_errors.append(
+                    {
+                        "path": relative,
+                        "expected": (
+                            "one of "
+                            f"{V1_LIVE_RELEASE_ADMISSIBLE_CLASSES} "
+                            "on release surface"
+                        ),
+                        "observed": evidence_class,
+                    }
+                )
+            if in_capture_dir and evidence_class != "captured_fixture":
+                evidence_class_errors.append(
+                    {
+                        "path": relative,
+                        "expected": "captured_fixture under capture dir",
+                        "observed": evidence_class,
+                    }
+                )
+            if evidence_class == "captured_fixture":
+                capture = _as_mapping(payload.get("capture"))
+                for field in _LIVE_LANE_CAPTURE_PROVENANCE_FIELDS:
+                    if field not in capture:
+                        evidence_class_errors.append(
+                            {
+                                "path": relative,
+                                "field": f"capture.{field}",
+                                "expected": "present",
+                                "observed": "missing",
+                            }
+                        )
+                if capture.get("reviewed") is not True:
+                    evidence_class_errors.append(
+                        {
+                            "path": relative,
+                            "field": "capture.reviewed",
+                            "expected": True,
+                            "observed": capture.get("reviewed"),
+                        }
+                    )
+                if not _as_mapping(capture.get("redaction")):
+                    evidence_class_errors.append(
+                        {
+                            "path": relative,
+                            "field": "capture.redaction",
+                            "expected": "non-empty mapping",
+                            "observed": "missing/empty",
+                        }
+                    )
+                redaction_errors.extend(
+                    _release_secret_marker_findings(
+                        relative, {"captured_fixture": payload}
+                    )
+                )
+
+    # Check 3: env-flag discipline — static half (every lane entry routes
+    # through require_lane_enabled) + runtime half (no lane flag set in the
+    # release-check process itself).
+    for module_path in V1_LIVE_LANE_MODULES:
+        path = root / module_path
+        if not path.is_file():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = {
+            node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else getattr(node.func, "id", "")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+        }
+        if "require_lane_enabled" not in calls:
+            env_flag_errors.append(
+                {
+                    "path": module_path,
+                    "expected": "require_lane_enabled(...) call",
+                    "observed": "absent",
+                }
+            )
+
+    lane_flags_set_in_release_env = sorted(
+        flag
+        for flag in V1_LIVE_LANE_ENV_FLAGS.values()
+        if os.environ.get(flag) == "1"
+    )
+    for flag in lane_flags_set_in_release_env:
+        env_flag_errors.append(
+            {"flag": flag, "expected": "unset in release env", "observed": "set"}
+        )
+
+    return {
+        "kind": "agent-learning.live-lane-boundary.v1",
+        "lane_extra_packages": list(V1_LIVE_LANE_EXTRA_PACKAGES),
+        "lane_modules": list(V1_LIVE_LANE_MODULES),
+        "lane_env_flags": dict(V1_LIVE_LANE_ENV_FLAGS),
+        "evidence_classes": list(V1_LIVE_EVIDENCE_CLASSES),
+        "release_admissible_classes": list(V1_LIVE_RELEASE_ADMISSIBLE_CLASSES),
+        "failure_layers": list(V1_LIVE_FAILURE_LAYERS),
+        "guarded_import_files": list(V1_LIVE_LANE_GUARDED_IMPORT_FILES),
+        "capture_dir": V1_LIVE_LANE_CAPTURE_DIR,
+        "evidence_class_field": V1_LIVE_LANE_EVIDENCE_CLASS_FIELD,
+        "scanned_module_count": scanned_module_count,
+        "scanned_artifact_count": scanned_artifact_count,
+        "lane_flags_set_in_release_env": lane_flags_set_in_release_env,
+        "import_errors": import_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "env_flag_errors": env_flag_errors,
+        "redaction_errors": redaction_errors,
+    }
+
+
+def _read_telemetry_ledger_rows(path: Path) -> list[dict[str, Any]]:
+    """Tolerant fixture-ledger reader, inlined so the gate has NO import
+    dependency on the telemetry package (it must run even if
+    ``telemetry/_ledger.py`` is broken — the same independence
+    ``live_lane_boundary`` keeps from the lane modules)."""
+
+    rows: list[dict[str, Any]] = []
+    if not path.is_file():
+        return rows
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return rows
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            loaded = json.loads(line)
+        except ValueError:
+            rows.append(
+                {
+                    "schema": V1_TELEMETRY_UNREADABLE_SCHEMA,
+                    "line_number": line_number,
+                }
+            )
+            continue
+        rows.append(
+            loaded
+            if isinstance(loaded, dict)
+            else {
+                "schema": V1_TELEMETRY_UNREADABLE_SCHEMA,
+                "line_number": line_number,
+            }
+        )
+    return rows
+
+
+def _telemetry_row_address(row: Mapping[str, Any]) -> str:
+    """Recompute a row's content address with the canonical recipe
+    (``sort_keys=True``, ``separators=(",", ":")``, ``default=str``) over the
+    addressed core — ``created_at``/``run_id``/``chain`` excluded, and ONLY
+    those three (ARCH §2a)."""
+
+    preimage = {
+        key: value
+        for key, value in row.items()
+        if key not in ("created_at", "run_id", "chain")
+    }
+    data = json.dumps(
+        preimage, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _recompute_telemetry_chain_breaks(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One linear pass from the genesis sentinel: recompute every content
+    address (tamper on the body) AND every chain link (tamper on
+    order/insertion). Either mismatch is a break (gate #72 check 4)."""
+
+    prev = V1_TELEMETRY_GENESIS_SENTINEL
+    breaks: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if row.get("schema") == V1_TELEMETRY_UNREADABLE_SCHEMA:
+            breaks.append(
+                {
+                    "index": index,
+                    "reason": "unreadable_line",
+                    "line_number": row.get("line_number"),
+                }
+            )
+            continue
+        recomputed = _telemetry_row_address(row)
+        if row.get("run_id") != recomputed:
+            breaks.append(
+                {
+                    "index": index,
+                    "reason": "content_address_mismatch",
+                    "run_id": row.get("run_id"),
+                    "recomputed": recomputed,
+                }
+            )
+        expected = hashlib.sha256(
+            (prev + str(row.get("run_id") or "")).encode("utf-8")
+        ).hexdigest()
+        if row.get("chain") != expected:
+            breaks.append(
+                {
+                    "index": index,
+                    "reason": "chain_mismatch",
+                    "chain": row.get("chain"),
+                    "expected": expected,
+                }
+            )
+        prev = row.get("chain") or prev
+    return breaks
+
+
+def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
+    """Gate #72 (Phase 8): the architectural twin of ``live_lane_boundary``.
+
+    Six checks mapped to SEVEN error arrays (REVIEW-RULINGS MF6); static +
+    committed-fixture recompute only — the gate never opens a socket. The
+    dynamic twins (a real run redacts a real sentinel; a real ledger failure
+    leaves a real verdict unchanged) live in the focused tests and
+    ``examples/sdk_run_ledger.py``; the gate verifies the residue and the
+    recomputation. Same gate-vs-substrate division the live gate documents.
+    """
+
+    network_emission_errors: list[dict[str, Any]] = []
+    analytics_denylist_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    redaction_errors: list[dict[str, Any]] = []
+    chain_errors: list[dict[str, Any]] = []
+    fault_injection_errors: list[dict[str, Any]] = []
+    identity_errors: list[dict[str, Any]] = []
+    scanned_module_count = 0
+    sync_module = V1_TELEMETRY_SYNC_MODULE
+    network_home_modules = set(V1_TELEMETRY_NETWORK_HOME_MODULES)
+    telemetry_prefix = "src/agent_learning/telemetry/"
+    local_path_modules = set(V1_TELEMETRY_LOCAL_PATH_MODULES)
+    # The gate module itself declares the denylist (these literal hostnames)
+    # so the substring scan skips it; the AST import scan still covers it.
+    denylist_home = "src/agent_learning/trinity.py"
+
+    # ---- CHECK 1: zero-emission (no-key path) + analytics denylist, BOTH
+    # trees (src/agent_learning AND src/fi — the P8-D6 "bind everything"
+    # scope). Network-capable imports are forbidden anywhere in the declared
+    # no-key telemetry path (V1_TELEMETRY_LOCAL_PATH_MODULES + the telemetry
+    # package); telemetry/_sync.py is the only sanctioned network home, and
+    # even there the import must be lazy (in-function), never module scope.
+    for base in V1_TELEMETRY_SCAN_ROOTS:
+        base_dir = root / base
+        if not base_dir.is_dir():
+            continue
+        for path in sorted(base_dir.rglob("*.py")):
+            relative = str(path.relative_to(root)).replace(os.sep, "/")
+            scanned_module_count += 1
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                network_emission_errors.append(
+                    {"path": relative, "error": f"unreadable: {exc}"}
+                )
+                continue
+            lowered = text.lower()
+            # 1a. denylist: any analytics host ANYWHERE in kit source fails:
+            if relative != denylist_home:
+                for host in V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS:
+                    if host in lowered:
+                        analytics_denylist_errors.append(
+                            {"path": relative, "host": host}
+                        )
+            try:
+                tree = ast.parse(text)
+            except SyntaxError as exc:
+                network_emission_errors.append(
+                    {"path": relative, "error": f"unparseable: {exc}"}
+                )
+                continue
+            lazy_node_ids = {
+                id(node)
+                for fn in ast.walk(tree)
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                for node in ast.walk(fn)
+            }
+            in_no_key_path = (
+                relative in local_path_modules
+                or (
+                    relative.startswith(telemetry_prefix)
+                    and relative not in network_home_modules
+                )
+            )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots = [alias.name.split(".")[0] for alias in node.names]
+                    dotted = [alias.name for alias in node.names]
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.level == 0
+                ):
+                    roots = [node.module.split(".")[0]]
+                    dotted = [node.module]
+                else:
+                    continue
+                for root_name, full_name in zip(roots, dotted):
+                    # 1b. denylist: analytics SDK import anywhere fails:
+                    if root_name in V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS:
+                        analytics_denylist_errors.append(
+                            {
+                                "path": relative,
+                                "import": root_name,
+                                "line": node.lineno,
+                            }
+                        )
+                    if root_name not in V1_TELEMETRY_NETWORK_IMPORT_ROOTS:
+                        continue
+                    # 1c. zero-emission: the no-key path carries NOTHING
+                    # network-capable, at any scope; the sync module may
+                    # import network roots lazily (in-function) only.
+                    if in_no_key_path:
+                        network_emission_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": (
+                                    "network import only in telemetry/"
+                                    "_sync.py (lazy), unreachable with "
+                                    "no keys"
+                                ),
+                                "observed": (
+                                    "network-capable import in the "
+                                    "no-key path"
+                                ),
+                            }
+                        )
+                    elif (
+                        relative in network_home_modules
+                        and id(node) not in lazy_node_ids
+                    ):
+                        network_emission_errors.append(
+                            {
+                                "path": relative,
+                                "import": full_name,
+                                "line": node.lineno,
+                                "expected": (
+                                    "lazy in-function network import "
+                                    "(after the kill-switch + key gates)"
+                                ),
+                                "observed": (
+                                    "module-scope network import in a "
+                                    "sanctioned network-home module"
+                                ),
+                            }
+                        )
+            # 1d. kill-switch guard discipline (the require_lane_enabled
+            # analogue): every emission front door routes through the one
+            # guard that honors AGENT_LEARNING_TELEMETRY=off.
+            if relative in (
+                "src/agent_learning/telemetry/__init__.py",
+                sync_module,
+            ):
+                calls = {
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else getattr(node.func, "id", "")
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                }
+                if not calls & {"kill_switch_on", "_kill_switch_on"}:
+                    network_emission_errors.append(
+                        {
+                            "path": relative,
+                            "expected": "kill_switch_on(...) guard call",
+                            "observed": "absent",
+                        }
+                    )
+
+    # ---- CHECK 2: evidence-class discipline on the gate's fixture ledger ----
+    fixture_dir = root / V1_TELEMETRY_GATE_FIXTURE_DIR
+    rows = _read_telemetry_ledger_rows(fixture_dir / "runs.jsonl")
+    for index, row in enumerate(rows):
+        if row.get("schema") in (
+            V1_TELEMETRY_TOMBSTONE_SCHEMA,
+            V1_TELEMETRY_GAP_SCHEMA,
+            V1_TELEMETRY_UNREADABLE_SCHEMA,
+        ):
+            continue  # tombstones/gaps have their own field sets
+        for field in V1_TELEMETRY_ROW_FIELDS:
+            if field not in row:
+                evidence_class_errors.append(
+                    {"index": index, "field": field, "observed": "missing"}
+                )
+        if row.get("evidence_class") not in V1_TELEMETRY_EVIDENCE_CLASSES:
+            evidence_class_errors.append(
+                {
+                    "index": index,
+                    "field": "evidence_class",
+                    "observed": row.get("evidence_class"),
+                }
+            )
+        if row.get("content_bearing") is True:
+            if not _as_mapping(row.get("redaction")):
+                evidence_class_errors.append(
+                    {
+                        "index": index,
+                        "field": "redaction",
+                        "observed": (
+                            "content_bearing without a redaction mapping"
+                        ),
+                    }
+                )
+
+    # ---- CHECK 3: redaction proof — seeded sentinel must not appear ----
+    for index, row in enumerate(rows):
+        redaction_errors.extend(
+            _release_secret_marker_findings(
+                f"{V1_TELEMETRY_GATE_FIXTURE_DIR}#row{index}",
+                {"ledger_row": row},
+            )
+        )
+    sentinel = _read_json_file(fixture_dir / "sentinel.json")
+    sentinel_value = (sentinel or {}).get("seeded_secret_value")
+    if sentinel_value:
+        blob = json.dumps(rows, default=str)
+        if str(sentinel_value) in blob:
+            redaction_errors.append(
+                {
+                    "reason": "seeded secret value present in ledger",
+                    "sentinel_env": (sentinel or {}).get("seeded_secret_env"),
+                }
+            )
+
+    # ---- CHECK 4: chain integrity — recompute over the fixture ledger ----
+    chain_errors.extend(_recompute_telemetry_chain_breaks(rows))
+
+    # ---- CHECK 5: never-run-blocking — fault-injection fixture ----
+    # The prep example records, in faults.json, a run verdict computed (a)
+    # normally and (b) with the ledger write forced to fail. Equal or red.
+    faults = _read_json_file(fixture_dir / "faults.json") or {}
+    if faults.get("verdict_without_telemetry") != faults.get(
+        "verdict_with_failing_ledger"
+    ):
+        fault_injection_errors.append(
+            {
+                "reason": "verdict differs when telemetry I/O fails",
+                "clean": faults.get("verdict_without_telemetry"),
+                "faulted": faults.get("verdict_with_failing_ledger"),
+            }
+        )
+
+    # ---- CHECK 6: identity equivalence — local == sync-encoder address ----
+    identity = _read_json_file(fixture_dir / "identity.json") or {}
+    if identity.get("local_run_id") != identity.get("encoded_run_id"):
+        identity_errors.append(
+            {
+                "reason": "content address differs local vs sync encoder",
+                "local": identity.get("local_run_id"),
+                "encoded": identity.get("encoded_run_id"),
+            }
+        )
+
+    # ---- runtime half: no telemetry flag may be set in the release process
+    # (the lane_flags_set_in_release_env analogue; ARCH §2e — must be []).
+    telemetry_flags_set_in_release_env = [
+        name
+        for name in (V1_TELEMETRY_KILL_SWITCH_ENV,)
+        if os.environ.get(name, "").strip()
+    ]
+
+    return {
+        "kind": "agent-learning.telemetry-boundary.v1",
+        # constant mirrors — the UNION set (ARCH §3, MF6): frozen canon +
+        # scan mirrors; the milestone test asserts the full union.
+        "row_fields": list(V1_TELEMETRY_ROW_FIELDS),
+        "evidence_classes": list(V1_TELEMETRY_EVIDENCE_CLASSES),
+        "kill_switch_env": V1_TELEMETRY_KILL_SWITCH_ENV,
+        "ledger_paths": list(V1_TELEMETRY_LEDGER_PATHS),
+        "genesis_sentinel": V1_TELEMETRY_GENESIS_SENTINEL,
+        "tombstone_fields": list(V1_TELEMETRY_TOMBSTONE_FIELDS),
+        "analytics_denylist": {
+            "hosts": list(V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS),
+            "imports": list(V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS),
+        },
+        "scan_roots": list(V1_TELEMETRY_SCAN_ROOTS),
+        "forbidden_analytics_hosts": list(
+            V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
+        ),
+        "forbidden_analytics_imports": list(
+            V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS
+        ),
+        "sync_module": V1_TELEMETRY_SYNC_MODULE,
+        # observed:
+        "scanned_module_count": scanned_module_count,
+        "scanned_artifact_count": len(rows),
+        "telemetry_flags_set_in_release_env": telemetry_flags_set_in_release_env,
+        # the seven error arrays:
+        "network_emission_errors": network_emission_errors,
+        "analytics_denylist_errors": analytics_denylist_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "redaction_errors": redaction_errors,
+        "chain_errors": chain_errors,
+        "fault_injection_errors": fault_injection_errors,
+        "identity_errors": identity_errors,
+    }
+
+
+def _scan_forbidden_aggregate_keys(value: Any, *, path: str = "$") -> list[str]:
+    """Recursive scan for cross-cell 'best backend' aggregate keys (R§3.1)."""
+
+    hits: list[str] = []
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key) in V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS:
+                hits.append(f"{path}.{key}")
+            hits.extend(
+                _scan_forbidden_aggregate_keys(child, path=f"{path}.{key}")
+            )
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            hits.extend(
+                _scan_forbidden_aggregate_keys(child, path=f"{path}[{index}]")
+            )
+    return hits
+
+
+def _release_optimizer_profile_matrix_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_OPTIMIZER_PROFILE_MATRIX_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    aggregation_errors: list[dict[str, Any]] = []
+    budget_errors: list[dict[str, Any]] = []
+    routing_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifests: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    declared_cell_refs = [
+        "/".join(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS
+    ]
+    release_secret = (
+        "agent-learning-release-local-"
+        f"{V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV.lower()}"
+    )
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        cell: str | None = None,
+    ) -> None:
+        error = {"field": field, "expected": expected, "observed": observed}
+        if cell:
+            error["cell"] = cell
+        bucket.append(error)
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        example_path = root / "examples/sdk_optimizer_profile_matrix.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_optimizer_profile_matrix",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            manifests = dict(module.build_manifests())
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-optimizer-profile-matrix-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "optimizer-profile-matrix.json"
+
+                def run_example() -> dict[str, Any]:
+                    return dict(module.run(output_path))
+
+                result = _release_run_with_local_env(
+                    [V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV],
+                    run_example,
+                )
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            manifests = {}
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+
+    if manifests:
+        if sorted(manifests) != sorted(declared_cell_refs):
+            append_error(
+                manifest_errors,
+                field="manifests.cell_refs",
+                expected=sorted(declared_cell_refs),
+                observed=sorted(manifests),
+            )
+        for cell_ref, manifest in sorted(manifests.items()):
+            manifest = _as_mapping(manifest)
+            framework, _, _ = cell_ref.partition("/")
+            target_kind = cell_ref.split("/")[1] if cell_ref.count("/") == 2 else ""
+            backend = cell_ref.rsplit("/", 1)[-1]
+            cell_info = _as_mapping(
+                _as_mapping(manifest.get("metadata")).get(
+                    "optimizer_profile_matrix_cell"
+                )
+            )
+            expectations = {
+                "version": (
+                    manifest.get("version"),
+                    "agent-learning.optimization.v1",
+                ),
+                "required_env": (
+                    list(manifest.get("required_env") or []),
+                    [V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV],
+                ),
+                "metadata.optimizer_profile_matrix_cell.cell_ref": (
+                    cell_info.get("cell_ref"),
+                    cell_ref,
+                ),
+                "metadata.optimizer_profile_matrix_cell.framework": (
+                    cell_info.get("framework"),
+                    framework,
+                ),
+                "metadata.optimizer_profile_matrix_cell.target_kind": (
+                    cell_info.get("target_kind"),
+                    target_kind,
+                ),
+                "metadata.optimizer_profile_matrix_cell.backend": (
+                    cell_info.get("backend"),
+                    backend,
+                ),
+                "metadata.optimizer_profile_matrix_cell.setting.engine": (
+                    _as_mapping(cell_info.get("setting")).get("engine"),
+                    "local_text",
+                ),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                        cell=cell_ref,
+                    )
+            declared_budget = cell_info.get("eval_budget")
+            if (
+                not isinstance(declared_budget, int)
+                or declared_budget < 1
+                or declared_budget > V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+            ):
+                append_error(
+                    budget_errors,
+                    field="metadata.optimizer_profile_matrix_cell.eval_budget",
+                    expected=(
+                        f"int in [1, {V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET}]"
+                    ),
+                    observed=declared_budget,
+                    cell=cell_ref,
+                )
+            optimization = _as_mapping(manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            search_paths = [
+                str(path) for path in _as_mapping(target.get("search_space"))
+            ]
+            target_metadata = _as_mapping(target.get("metadata"))
+            if target_kind == "memory_ops":
+                if target_metadata.get("gain_density_prior") != "retrieval":
+                    append_error(
+                        manifest_errors,
+                        field="target.metadata.gain_density_prior",
+                        expected="retrieval",
+                        observed=target_metadata.get("gain_density_prior"),
+                        cell=cell_ref,
+                    )
+                if list(target_metadata.get("slices") or []) != (
+                    V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
+                ):
+                    append_error(
+                        manifest_errors,
+                        field="target.metadata.slices",
+                        expected=V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES,
+                        observed=target_metadata.get("slices"),
+                        cell=cell_ref,
+                    )
+                if not list(target_metadata.get("security_row_refs") or []):
+                    append_error(
+                        security_errors,
+                        field="target.metadata.security_row_refs",
+                        expected=">=1 security row ref",
+                        observed=target_metadata.get("security_row_refs"),
+                        cell=cell_ref,
+                    )
+                retrieval_indexes = [
+                    index
+                    for index, path in enumerate(search_paths)
+                    if "retrieval" in path
+                ]
+                write_indexes = [
+                    index
+                    for index, path in enumerate(search_paths)
+                    if ".write." in path
+                ]
+                if not retrieval_indexes or not write_indexes or (
+                    min(retrieval_indexes) >= min(write_indexes)
+                ):
+                    append_error(
+                        manifest_errors,
+                        field="target.search_space.retrieval_first",
+                        expected="retrieval-side paths before write-side paths",
+                        observed=search_paths,
+                        cell=cell_ref,
+                    )
+            if target_kind in {
+                "multi_agent_roster",
+                "orchestration_spans",
+                "workflow_trace",
+            }:
+                if not any(
+                    path.split(".", 1)[0]
+                    in V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+                    for path in search_paths
+                ):
+                    append_error(
+                        manifest_errors,
+                        field="target.search_space.topology_paths",
+                        expected=(
+                            ">=1 path under "
+                            f"{V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES}"
+                        ),
+                        observed=search_paths,
+                        cell=cell_ref,
+                    )
+            if target_kind == "whole_agent":
+                whole_agent = _as_mapping(manifest.get("whole_agent"))
+                staged = _as_mapping(
+                    _as_mapping(whole_agent.get("staged_conditioning")).get(
+                        "stages"
+                    )
+                )
+                if sorted(staged) != sorted(V1_WHOLE_AGENT_CONTRACT_STAGES):
+                    append_error(
+                        manifest_errors,
+                        field="whole_agent.staged_conditioning.stages",
+                        expected=V1_WHOLE_AGENT_CONTRACT_STAGES,
+                        observed=sorted(staged),
+                        cell=cell_ref,
+                    )
+                if whole_agent.get("ranking_source") != "evaluation_suite":
+                    append_error(
+                        manifest_errors,
+                        field="whole_agent.ranking_source",
+                        expected="evaluation_suite",
+                        observed=whole_agent.get("ranking_source"),
+                        cell=cell_ref,
+                    )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        cells = [
+            _as_mapping(cell)
+            for cell in _as_list(result.get("cells"))
+            if isinstance(cell, Mapping)
+        ]
+        cells_by_ref = {
+            str(cell.get("cell_ref")): cell for cell in cells if cell.get("cell_ref")
+        }
+        runtime_expectations = {
+            "kind": (result.get("kind"), V1_OPTIMIZER_PROFILE_MATRIX_KIND),
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "required_env": (
+                list(result.get("required_env") or []),
+                [V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV],
+            ),
+            "declared_cells": (
+                [list(cell) for cell in _as_list(result.get("declared_cells"))],
+                [list(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS],
+            ),
+            "summary.cell_count": (
+                summary.get("cell_count"),
+                len(V1_OPTIMIZER_PROFILE_MATRIX_CELLS),
+            ),
+            "summary.passed_cell_count": (
+                summary.get("passed_cell_count"),
+                len(V1_OPTIMIZER_PROFILE_MATRIX_CELLS),
+            ),
+            "summary.failed_cells": (
+                list(summary.get("failed_cells") or []),
+                [],
+            ),
+            "summary.per_axis_coverage.frameworks": (
+                list(
+                    _as_mapping(summary.get("per_axis_coverage")).get(
+                        "frameworks"
+                    )
+                    or []
+                ),
+                sorted(V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS),
+            ),
+            "summary.per_axis_coverage.target_kinds": (
+                list(
+                    _as_mapping(summary.get("per_axis_coverage")).get(
+                        "target_kinds"
+                    )
+                    or []
+                ),
+                sorted(V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS),
+            ),
+            "summary.per_axis_coverage.backends": (
+                list(
+                    _as_mapping(summary.get("per_axis_coverage")).get("backends")
+                    or []
+                ),
+                sorted(V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS),
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        # The gate asserts EXACTLY the declared cell set (no minimum-count
+        # floor; extra cells are as much a failure as missing ones).
+        if sorted(cells_by_ref) != sorted(declared_cell_refs):
+            append_error(
+                optimization_errors,
+                field="cells.cell_refs",
+                expected=sorted(declared_cell_refs),
+                observed=sorted(cells_by_ref),
+            )
+        # Phase 9D modality-coverage clause (PRD-9D §4.3 / 9D-D4): the declared
+        # matrix MUST contain >=1 cell for each LANDED modality target-kind. The
+        # optimizer-target sibling of 13D A13 world-kind coverage. "Landed" keys
+        # off the declared cells themselves (Open Q5): a modality token is
+        # asserted iff it appears in the vocabulary AND has >=1 declared cell —
+        # automatically satisfied as each increment lands, and is what makes the
+        # cua deferral safe (no cua cells until 9C lands).
+        landed_modality_target_kinds = [
+            tk
+            for tk in V1_OPTIMIZER_PROFILE_MATRIX_MODALITY_TARGET_KINDS
+            if tk in V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
+        ]
+        for token in landed_modality_target_kinds:
+            modality_cell_refs = [
+                cell_ref
+                for cell_ref in declared_cell_refs
+                if cell_ref.split("/")[1] == token
+            ]
+            if not modality_cell_refs:
+                append_error(
+                    optimization_errors,
+                    field="modality_coverage.cell_refs",
+                    expected=f">=1 declared cell for landed modality '{token}'",
+                    observed=modality_cell_refs,
+                )
+        # PRD-9D §4.7 (Open Q4 settled: generalize the filter, do not
+        # special-case). Apply-plan-exporting kinds = whole_agent + the modality
+        # kinds (all ride build_whole_agent_optimization_manifest, all export a
+        # full-config apply plan). Lockstep partner of the runtime export filter
+        # in optimize.py (_APPLY_PLAN_EXPORTING_TARGET_KINDS).
+        apply_plan_exporting_kinds = {"whole_agent", *landed_modality_target_kinds}
+        apply_plan_cell_refs = [
+            cell_ref
+            for cell_ref in declared_cell_refs
+            if cell_ref.split("/")[1] in apply_plan_exporting_kinds
+        ]
+        for cell_ref in declared_cell_refs:
+            cell = _as_mapping(cells_by_ref.get(cell_ref))
+            if not cell:
+                continue
+            missing_fields = sorted(
+                set(V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS) - set(cell)
+            )
+            if missing_fields:
+                append_error(
+                    optimization_errors,
+                    field="cell.required_fields",
+                    expected=V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS,
+                    observed=sorted(cell),
+                    cell=cell_ref,
+                )
+            for field, expected in (
+                ("status", "passed"),
+                ("native_proof_closed", True),
+                ("evidence_class", "local_gate"),
+            ):
+                if cell.get(field) != expected:
+                    append_error(
+                        optimization_errors,
+                        field=f"cell.{field}",
+                        expected=expected,
+                        observed=cell.get(field),
+                        cell=cell_ref,
+                    )
+            if not cell.get("winner"):
+                append_error(
+                    optimization_errors,
+                    field="cell.winner",
+                    expected="per-cell winner candidate id",
+                    observed=cell.get("winner"),
+                    cell=cell_ref,
+                )
+            profile = _as_mapping(cell.get("trajectory_profile"))
+            missing_profile_fields = sorted(
+                set(V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS) - set(profile)
+            )
+            if missing_profile_fields:
+                append_error(
+                    metric_errors,
+                    field="cell.trajectory_profile",
+                    expected=V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS,
+                    observed=sorted(profile),
+                    cell=cell_ref,
+                )
+            declared_budget = cell.get("eval_budget")
+            evaluations_used = cell.get("evaluations_used")
+            if (
+                not isinstance(declared_budget, int)
+                or declared_budget < 1
+                or declared_budget > V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
+            ):
+                append_error(
+                    budget_errors,
+                    field="cell.eval_budget",
+                    expected=(
+                        f"int in [1, {V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET}]"
+                    ),
+                    observed=declared_budget,
+                    cell=cell_ref,
+                )
+            elif (
+                evaluations_used is None
+                or cell.get("budget_exceeded")
+                or int(evaluations_used) > int(declared_budget)
+            ):
+                append_error(
+                    budget_errors,
+                    field="cell.evaluations_used",
+                    expected=f"<= {declared_budget}",
+                    observed=evaluations_used,
+                    cell=cell_ref,
+                )
+
+        # Per-cell winners only — a global-best key anywhere is a release
+        # failure (orderings invert across settings, R§3.1).
+        for hit in _scan_forbidden_aggregate_keys(result):
+            append_error(
+                aggregation_errors,
+                field=hit,
+                expected="absent",
+                observed="present",
+            )
+
+        report_card = _as_mapping(result.get("report_card"))
+        if report_card.get("section") != "optimizer_profile_matrix":
+            append_error(
+                report_errors,
+                field="report_card.section",
+                expected="optimizer_profile_matrix",
+                observed=report_card.get("section"),
+            )
+        if len(_as_list(report_card.get("rows"))) != len(declared_cell_refs):
+            append_error(
+                report_errors,
+                field="report_card.rows",
+                expected=len(declared_cell_refs),
+                observed=len(_as_list(report_card.get("rows"))),
+            )
+        for column in ("cell_ref", "backend", "eval_budget", "winner"):
+            if column not in _as_list(report_card.get("columns")):
+                append_error(
+                    report_errors,
+                    field="report_card.columns",
+                    expected=column,
+                    observed=_as_list(report_card.get("columns")),
+                )
+
+        apply_plans = {
+            str(_as_mapping(plan).get("cell_ref")): _as_mapping(plan)
+            for plan in _as_list(result.get("apply_plans"))
+            if isinstance(plan, Mapping)
+        }
+        if sorted(apply_plans) != sorted(apply_plan_cell_refs):
+            append_error(
+                action_errors,
+                field="apply_plans.cell_refs",
+                expected=sorted(apply_plan_cell_refs),
+                observed=sorted(apply_plans),
+            )
+        for cell_ref, plan in sorted(apply_plans.items()):
+            if plan.get("kind") != V1_WHOLE_AGENT_APPLY_PLAN_KIND:
+                append_error(
+                    action_errors,
+                    field="apply_plan.kind",
+                    expected=V1_WHOLE_AGENT_APPLY_PLAN_KIND,
+                    observed=plan.get("kind"),
+                    cell=cell_ref,
+                )
+            missing_plan_fields = sorted(
+                set(V1_WHOLE_AGENT_APPLY_PLAN_FIELDS) - set(plan)
+            )
+            if missing_plan_fields:
+                append_error(
+                    action_errors,
+                    field="apply_plan.fields",
+                    expected=V1_WHOLE_AGENT_APPLY_PLAN_FIELDS,
+                    observed=sorted(plan),
+                    cell=cell_ref,
+                )
+            if plan.get("mismatch_policy") != "abort":
+                append_error(
+                    action_errors,
+                    field="apply_plan.mismatch_policy",
+                    expected="abort",
+                    observed=plan.get("mismatch_policy"),
+                    cell=cell_ref,
+                )
+
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        if release_secret in serialized:
+            append_error(
+                security_errors,
+                field="serialized_payload",
+                expected="release env value never serialized",
+                observed="release secret found in payload",
+            )
+
+        # ---- 4D: routing-table evidence (asserted HERE — no separate gate) ----
+        routing_table = _as_mapping(result.get("routing_table"))
+        routing_rows = [
+            _as_mapping(row)
+            for row in _as_list(routing_table.get("rows"))
+            if isinstance(row, Mapping)
+        ]
+        committed_path = root / V1_OPTIMIZER_ROUTING_TABLE_FILE
+        committed_text = (
+            committed_path.read_text(encoding="utf-8")
+            if committed_path.is_file()
+            else ""
+        )
+        from . import optimize as agent_optimize
+
+        regenerated_text = agent_optimize.render_optimizer_routing_table_json(
+            routing_table
+        )
+        routing_checks_status = {
+            "routing_table_byte_identical": (
+                bool(committed_text) and regenerated_text == committed_text
+            ),
+            "every_recommendation_cites_profile_evidence": True,
+            "live_lane_evidence_excluded_from_recommendations": True,
+            "no_global_aggregate": not aggregation_errors,
+            "default_picker_resolves_overrides_and_cold_starts": True,
+        }
+        if routing_table.get("kind") != V1_OPTIMIZER_ROUTING_TABLE_KIND:
+            append_error(
+                routing_errors,
+                field="routing_table.kind",
+                expected=V1_OPTIMIZER_ROUTING_TABLE_KIND,
+                observed=routing_table.get("kind"),
+            )
+        if list(routing_table.get("admissible_evidence_classes") or []) != (
+            V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
+        ):
+            append_error(
+                routing_errors,
+                field="routing_table.admissible_evidence_classes",
+                expected=V1_LIVE_RELEASE_ADMISSIBLE_CLASSES,
+                observed=routing_table.get("admissible_evidence_classes"),
+            )
+        if not routing_checks_status["routing_table_byte_identical"] or (
+            result.get("routing_table_matches_committed") is not True
+        ):
+            routing_checks_status["routing_table_byte_identical"] = False
+            append_error(
+                routing_errors,
+                field="routing_table_byte_identical",
+                expected=f"regenerated table == {V1_OPTIMIZER_ROUTING_TABLE_FILE}",
+                observed={
+                    "byte_identical": regenerated_text == committed_text,
+                    "routing_table_matches_committed": result.get(
+                        "routing_table_matches_committed"
+                    ),
+                },
+            )
+        for row in routing_rows:
+            row_key = (
+                f"{row.get('framework_profile')}/{row.get('target_kind')}"
+            )
+            recommendation = row.get("recommended_backend")
+            evidence_entries = [
+                _as_mapping(entry)
+                for entry in _as_list(row.get("evidence"))
+                if isinstance(entry, Mapping)
+            ]
+            live_in_evidence = [
+                entry
+                for entry in evidence_entries
+                if str(entry.get("evidence_class"))
+                not in V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
+            ]
+            if live_in_evidence:
+                routing_checks_status[
+                    "live_lane_evidence_excluded_from_recommendations"
+                ] = False
+                append_error(
+                    routing_errors,
+                    field="routing_table.rows.evidence.evidence_class",
+                    expected=V1_LIVE_RELEASE_ADMISSIBLE_CLASSES,
+                    observed=[
+                        entry.get("evidence_class") for entry in live_in_evidence
+                    ],
+                    cell=row_key,
+                )
+            if recommendation is None:
+                continue
+            cited = [
+                entry
+                for entry in evidence_entries
+                if str(entry.get("backend")) == str(recommendation)
+                and str(entry.get("cell_ref", "")).startswith(
+                    f"{row.get('framework_profile')}/{row.get('target_kind')}/"
+                )
+            ]
+            if not cited:
+                routing_checks_status[
+                    "every_recommendation_cites_profile_evidence"
+                ] = False
+                append_error(
+                    routing_errors,
+                    field="routing_table.rows.recommended_backend",
+                    expected=(
+                        ">=1 same-run evidence entry with matching axes and "
+                        "winner == recommendation"
+                    ),
+                    observed=recommendation,
+                    cell=row_key,
+                )
+        routing_checks = _as_mapping(result.get("routing_checks"))
+        picker_expectations = {
+            "default.selected_by": (
+                _as_mapping(routing_checks.get("default")).get("selected_by"),
+                "routing_table",
+            ),
+            "override.selected_by": (
+                _as_mapping(routing_checks.get("override")).get("selected_by"),
+                "override",
+            ),
+            "cold_start.selected_by": (
+                _as_mapping(routing_checks.get("cold_start")).get("selected_by"),
+                "cold_start",
+            ),
+            "default.citations_present": (
+                bool(_as_mapping(routing_checks.get("default")).get("citations")),
+                True,
+            ),
+            "override.recommendation_visible": (
+                "routing_table_recommendation"
+                in _as_mapping(routing_checks.get("override")),
+                True,
+            ),
+            "cold_start.warning_present": (
+                bool(
+                    _as_mapping(routing_checks.get("cold_start")).get("warning")
+                ),
+                True,
+            ),
+            "cold_start.citations_empty": (
+                list(
+                    _as_mapping(routing_checks.get("cold_start")).get(
+                        "citations"
+                    )
+                    or []
+                ),
+                [],
+            ),
+        }
+        for field, (observed, expected) in picker_expectations.items():
+            if observed != expected:
+                routing_checks_status[
+                    "default_picker_resolves_overrides_and_cold_starts"
+                ] = False
+                append_error(
+                    routing_errors,
+                    field=f"routing_checks.{field}",
+                    expected=expected,
+                    observed=observed,
+                )
+        if aggregation_errors:
+            append_error(
+                routing_errors,
+                field="no_global_aggregate",
+                expected="no forbidden aggregate keys",
+                observed=[error["field"] for error in aggregation_errors],
+            )
+
+        evidence.update(
+            {
+                "cell_count": len(cells),
+                "passed_cell_count": summary.get("passed_cell_count"),
+                "cell_refs": sorted(cells_by_ref),
+                "apply_plan_exporting_cell_refs": sorted(apply_plan_cell_refs),
+                "apply_plan_cell_refs": sorted(apply_plans),
+                "routing_row_count": len(routing_rows),
+                "routing_checks_status": routing_checks_status,
+                "per_axis_coverage": dict(
+                    _as_mapping(summary.get("per_axis_coverage"))
+                ),
+                "report_card_section": report_card.get("section"),
+                "cells": [
+                    {
+                        "cell_ref": cell.get("cell_ref"),
+                        "framework": cell.get("framework"),
+                        "target_kind": cell.get("target_kind"),
+                        "backend": cell.get("backend"),
+                        "inherited": cell.get("inherited"),
+                        "status": cell.get("status"),
+                        "score": cell.get("score"),
+                        "eval_budget": cell.get("eval_budget"),
+                        "evaluations_used": cell.get("evaluations_used"),
+                        "winner": cell.get("winner"),
+                    }
+                    for cell in cells
+                ],
+            }
+        )
+
+    return {
+        "kind": "agent-learning.optimizer-profile-matrix-readiness.v1",
+        "required_files": list(V1_OPTIMIZER_PROFILE_MATRIX_FILES),
+        "required_env": V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_ENV,
+        "required_frameworks": list(V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS),
+        "required_target_kinds": list(V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS),
+        "required_backends": list(V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS),
+        "required_cells": [list(cell) for cell in V1_OPTIMIZER_PROFILE_MATRIX_CELLS],
+        "required_cell_fields": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS
+        ),
+        "forbidden_aggregate_keys": list(V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS),
+        "required_memory_slices": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
+        ),
+        "required_topology_prefixes": list(
+            V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
+        ),
+        "required_trajectory_profile_fields": list(
+            V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
+        ),
+        "required_routing_checks": list(V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS),
+        "required_apply_plan_fields": list(V1_WHOLE_AGENT_APPLY_PLAN_FIELDS),
+        "required_contract_stages": list(V1_WHOLE_AGENT_CONTRACT_STAGES),
+        "routing_table_file": V1_OPTIMIZER_ROUTING_TABLE_FILE,
+        "cell_eval_budget_max": V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "report_errors": report_errors,
+        "action_errors": action_errors,
+        "security_errors": security_errors,
+        "aggregation_errors": aggregation_errors,
+        "budget_errors": budget_errors,
+        "routing_errors": routing_errors,
+        "evidence": evidence,
+    }
+
+
+def _expected_frozen_profile_row_id(row: Mapping[str, Any]) -> str:
+    import hashlib
+
+    body = {
+        field: row.get(field)
+        for field in V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
+        if field != "row_id"
+    }
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    return f"row_{digest[:16]}"
+
+
+def _release_capability_profile_freeze_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_CAPABILITY_PROFILE_FREEZE_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    row_errors: list[dict[str, Any]] = []
+    veto_errors: list[dict[str, Any]] = []
+    admission_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = (
+        "agent-learning-release-local-"
+        f"{V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV.lower()}"
+    )
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        example_path = root / "examples/sdk_capability_freeze_regression.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_capability_profile_freeze",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-capability-profile-freeze-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "capability-profile-freeze.json"
+
+                def run_example() -> dict[str, Any]:
+                    return dict(module.run(output_path))
+
+                result = _release_run_with_local_env(
+                    [V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV],
+                    run_example,
+                )
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+
+    if result:
+        frozen = _as_mapping(result.get("frozen"))
+        rows = [
+            _as_mapping(row)
+            for row in _as_list(frozen.get("rows"))
+            if isinstance(row, Mapping)
+        ]
+        fixture = _as_mapping(result.get("fixture"))
+        replays = _as_mapping(result.get("replays"))
+        compliant = _as_mapping(replays.get("compliant"))
+        improving = _as_mapping(replays.get("improving_but_breaking"))
+        out_of_setting = _as_mapping(replays.get("out_of_setting"))
+        security_trade = _as_mapping(replays.get("security_trade"))
+        tampered_row = _as_mapping(replays.get("tampered_row"))
+        checks = _as_mapping(result.get("checks"))
+        nirnaya_records = [
+            _as_mapping(record)
+            for record in _as_list(
+                _as_mapping(result.get("governance")).get("nirnaya")
+            )
+            if isinstance(record, Mapping)
+        ]
+
+        if result != saved:
+            append_error(
+                execution_errors,
+                field="output_roundtrip",
+                expected=True,
+                observed=False,
+            )
+        if result.get("status") != "passed":
+            append_error(
+                execution_errors,
+                field="status",
+                expected="passed",
+                observed=result.get("status"),
+            )
+        if sorted(checks) != sorted(V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS):
+            append_error(
+                row_errors,
+                field="checks",
+                expected=sorted(V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS),
+                observed=sorted(checks),
+            )
+
+        # ---- row_errors: content addressing + schema ----
+        if frozen.get("kind") != V1_FROZEN_CAPABILITY_PROFILE_KIND:
+            append_error(
+                row_errors,
+                field="frozen.kind",
+                expected=V1_FROZEN_CAPABILITY_PROFILE_KIND,
+                observed=frozen.get("kind"),
+            )
+        if not rows:
+            append_error(
+                row_errors,
+                field="frozen.rows",
+                expected=">=1 frozen row",
+                observed=len(rows),
+            )
+        for index, row in enumerate(rows):
+            if sorted(row) != sorted(V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS):
+                append_error(
+                    row_errors,
+                    field=f"frozen.rows[{index}].fields",
+                    expected=sorted(V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS),
+                    observed=sorted(row),
+                )
+            expected_row_id = _expected_frozen_profile_row_id(row)
+            if row.get("row_id") != expected_row_id:
+                append_error(
+                    row_errors,
+                    field=f"frozen.rows[{index}].row_id",
+                    expected=expected_row_id,
+                    observed=row.get("row_id"),
+                )
+        if fixture.get("match") is not True:
+            append_error(
+                row_errors,
+                field="fixture.match",
+                expected=True,
+                observed=fixture.get("match"),
+            )
+        if checks.get("rows_content_addressed") is not True:
+            append_error(
+                row_errors,
+                field="checks.rows_content_addressed",
+                expected=True,
+                observed=checks.get("rows_content_addressed"),
+            )
+        tampered_classes = sorted(
+            {
+                str(row.get("hetvabhasa_class"))
+                for row in _as_list(tampered_row.get("vetoed_rows"))
+                if isinstance(row, Mapping) and row.get("hetvabhasa_class")
+            }
+        )
+        if tampered_row.get("veto") is not True or "asiddha" not in tampered_classes:
+            append_error(
+                row_errors,
+                field="replays.tampered_row",
+                expected={"veto": True, "hetvabhasa_class": "asiddha"},
+                observed={
+                    "veto": tampered_row.get("veto"),
+                    "classes": tampered_classes,
+                },
+            )
+
+        # ---- veto_errors: the improve-but-break fixture must be vetoed ----
+        if compliant.get("veto") is not False or (
+            compliant.get("closed_row_count") != len(rows)
+        ):
+            append_error(
+                veto_errors,
+                field="replays.compliant",
+                expected={"veto": False, "closed_row_count": len(rows)},
+                observed={
+                    "veto": compliant.get("veto"),
+                    "closed_row_count": compliant.get("closed_row_count"),
+                },
+            )
+        if improving.get("veto") is not True or (
+            improving.get("hetvabhasa_class") != "badhita"
+        ) or not _as_list(improving.get("vetoed_rows")):
+            append_error(
+                veto_errors,
+                field="replays.improving_but_breaking",
+                expected={
+                    "veto": True,
+                    "hetvabhasa_class": "badhita",
+                    "vetoed_rows": ">=1",
+                },
+                observed={
+                    "veto": improving.get("veto"),
+                    "hetvabhasa_class": improving.get("hetvabhasa_class"),
+                    "vetoed_row_count": len(_as_list(improving.get("vetoed_rows"))),
+                },
+            )
+        if checks.get("improving_candidate_with_broken_row_vetoed") is not True:
+            append_error(
+                veto_errors,
+                field="checks.improving_candidate_with_broken_row_vetoed",
+                expected=True,
+                observed=checks.get("improving_candidate_with_broken_row_vetoed"),
+            )
+        recorded = [
+            record
+            for record in nirnaya_records
+            for alternative in _as_list(record.get("rejected_alternatives"))
+            if isinstance(alternative, Mapping)
+            and alternative.get("hetvabhasa_class") == "badhita"
+            and _as_list(alternative.get("vetoed_row_ids"))
+        ]
+        if not recorded or checks.get("veto_recorded_in_governance") is not True:
+            append_error(
+                veto_errors,
+                field="governance.nirnaya",
+                expected=(
+                    "steward nirnaya records the badhita veto with row_ids"
+                ),
+                observed={
+                    "recorded": bool(recorded),
+                    "check": checks.get("veto_recorded_in_governance"),
+                },
+            )
+
+        # ---- admission_errors: out-of-setting wins never count ----
+        non_admissible = _as_list(out_of_setting.get("non_admissible_wins"))
+        if len(non_admissible) != len(rows) or (
+            checks.get("out_of_setting_win_non_admissible") is not True
+        ):
+            append_error(
+                admission_errors,
+                field="replays.out_of_setting.non_admissible_wins",
+                expected=len(rows),
+                observed=len(non_admissible),
+            )
+        if any(
+            _as_mapping(row).get("setting_digest_match") is not False
+            for row in non_admissible
+        ):
+            append_error(
+                admission_errors,
+                field="replays.out_of_setting.setting_digest_match",
+                expected=False,
+                observed=[
+                    _as_mapping(row).get("setting_digest_match")
+                    for row in non_admissible
+                ],
+            )
+
+        # ---- security_errors: security rows are non-tradable ----
+        security_rows = [row for row in rows if row.get("security")]
+        if not security_rows:
+            append_error(
+                security_errors,
+                field="frozen.rows.security",
+                expected=">=1 security row",
+                observed=len(security_rows),
+            )
+        if (
+            security_trade.get("veto") is not True
+            or security_trade.get("security_veto") is not True
+            or security_trade.get("touches_context_memory_paths") is not True
+            or security_trade.get("security_rows_non_tradable") is not True
+            or checks.get("security_row_non_tradable") is not True
+        ):
+            append_error(
+                security_errors,
+                field="replays.security_trade",
+                expected={
+                    "veto": True,
+                    "security_veto": True,
+                    "touches_context_memory_paths": True,
+                    "security_rows_non_tradable": True,
+                },
+                observed={
+                    "veto": security_trade.get("veto"),
+                    "security_veto": security_trade.get("security_veto"),
+                    "touches_context_memory_paths": security_trade.get(
+                        "touches_context_memory_paths"
+                    ),
+                    "security_rows_non_tradable": security_trade.get(
+                        "security_rows_non_tradable"
+                    ),
+                },
+            )
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        if release_secret in serialized:
+            append_error(
+                security_errors,
+                field="serialized_payload",
+                expected="release env value never serialized",
+                observed="release secret found in payload",
+            )
+
+        evidence.update(
+            {
+                "contract_digest": frozen.get("contract_digest"),
+                "setting_digest": frozen.get("setting_digest"),
+                "row_count": len(rows),
+                "security_row_count": len(security_rows),
+                "fixture": dict(fixture),
+                "checks": {
+                    name: checks.get(name)
+                    for name in V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
+                },
+                "replays": {
+                    "compliant": {
+                        "veto": compliant.get("veto"),
+                        "closed_row_count": compliant.get("closed_row_count"),
+                    },
+                    "improving_but_breaking": {
+                        "veto": improving.get("veto"),
+                        "hetvabhasa_class": improving.get("hetvabhasa_class"),
+                        "vetoed_row_count": len(
+                            _as_list(improving.get("vetoed_rows"))
+                        ),
+                    },
+                    "out_of_setting": {
+                        "non_admissible_win_count": len(non_admissible),
+                    },
+                    "security_trade": {
+                        "veto": security_trade.get("veto"),
+                        "security_veto": security_trade.get("security_veto"),
+                    },
+                    "tampered_row": {
+                        "veto": tampered_row.get("veto"),
+                        "classes": tampered_classes,
+                    },
+                },
+            }
+        )
+
+    return {
+        "kind": "agent-learning.capability-profile-freeze-readiness.v1",
+        "required_files": list(V1_CAPABILITY_PROFILE_FREEZE_FILES),
+        "required_env": V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV,
+        "required_row_fields": list(V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS),
+        "required_checks": list(V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS),
+        "frozen_profile_kind": V1_FROZEN_CAPABILITY_PROFILE_KIND,
+        "frozen_profile_replay_kind": V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND,
+        "attachment_key": V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY,
+        "fixture_dir": V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "row_errors": row_errors,
+        "veto_errors": veto_errors,
+        "admission_errors": admission_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_persona_scenario_studio_status(root: Path) -> dict[str, Any]:
+    """Gate #71 — persona & scenario studio readiness (Phase 7, §9.2).
+
+    Exec-loads ``examples/sdk_persona_scenario_studio.py`` in a tempdir (no
+    network, no env keys — the example runs entirely on the committed
+    ``examples/persona_library/`` fixtures) and audits its evidence payload
+    field-by-field into nine error arrays. The drifted fixture row MUST be
+    quarantined as ``inconclusive``; the stereotyped set MUST fail the bias
+    lint; the tampered/unpinned/injection downloads MUST be refused.
+    """
+    missing_files = _missing_relative_paths(
+        root, [*V1_PERSONA_SCENARIO_STUDIO_FILES, V1_PERSONA_LIBRARY_FIXTURE_DIR]
+    )
+    execution_errors: list[dict[str, Any]] = []
+    class_contract_errors: list[dict[str, Any]] = []
+    fidelity_errors: list[dict[str, Any]] = []
+    calibration_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    bias_errors: list[dict[str, Any]] = []
+    import_errors: list[dict[str, Any]] = []
+    download_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        previous_environ = dict(os.environ)
+        example_path = root / "examples/sdk_persona_scenario_studio.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_persona_scenario_studio", example_path
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-persona-scenario-studio-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "persona-scenario-studio.json"
+                result = dict(module.run(output_path))
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+                if result != saved:
+                    err(
+                        execution_errors,
+                        field="output_roundtrip",
+                        expected=True,
+                        observed=False,
+                    )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_persona_scenario_studio.py",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            result = {}
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environ)
+
+    if result:
+        if result.get("kind") != "agent-learning.persona-scenario-studio-readiness.v1":
+            err(
+                execution_errors,
+                field="kind",
+                expected="agent-learning.persona-scenario-studio-readiness.v1",
+                observed=result.get("kind"),
+            )
+
+        # ---- constant mirrors ----
+        mirrors = [
+            ("persona_layers", V1_PERSONA_LAYERS),
+            ("persona_evidence_classes", V1_PERSONA_EVIDENCE_CLASSES),
+            ("persona_temperament_axes", V1_PERSONA_TEMPERAMENT_AXES),
+            ("persona_behavior_axes", V1_PERSONA_BEHAVIOR_AXES),
+            ("persona_behavior_realization_metrics", V1_PERSONA_BEHAVIOR_REALIZATION_METRICS),
+            ("persona_fidelity_verdicts", V1_PERSONA_FIDELITY_VERDICTS),
+            ("scenario_kinds", V1_SCENARIO_KINDS),
+            ("scenario_coverage_axes", V1_SCENARIO_COVERAGE_AXES),
+            ("scenario_coverage_forbidden_headline_keys", V1_SCENARIO_COVERAGE_FORBIDDEN_HEADLINE_KEYS),
+            ("persona_calibration_stages", V1_PERSONA_CALIBRATION_STAGES),
+            ("persona_calibration_probes", V1_PERSONA_CALIBRATION_PROBES),
+            ("persona_content_scan_results", V1_PERSONA_CONTENT_SCAN_RESULTS),
+            ("persona_bias_lint_checks", V1_PERSONA_BIAS_LINT_CHECKS),
+            ("persona_vendor_import_formats", V1_PERSONA_VENDOR_IMPORT_FORMATS),
+            ("persona_download_pin_fields", V1_PERSONA_DOWNLOAD_PIN_FIELDS),
+        ]
+        for field, expected in mirrors:
+            if list(result.get(field) or []) != list(expected):
+                err(execution_errors, field=field, expected=expected, observed=result.get(field))
+        if result.get("persona_fidelity_floors") != V1_PERSONA_FIDELITY_FLOORS:
+            err(
+                execution_errors,
+                field="persona_fidelity_floors",
+                expected=V1_PERSONA_FIDELITY_FLOORS,
+                observed=result.get("persona_fidelity_floors"),
+            )
+        if result.get("persona_fidelity_epidemic_rate") != V1_PERSONA_FIDELITY_EPIDEMIC_RATE:
+            err(
+                execution_errors,
+                field="persona_fidelity_epidemic_rate",
+                expected=V1_PERSONA_FIDELITY_EPIDEMIC_RATE,
+                observed=result.get("persona_fidelity_epidemic_rate"),
+            )
+
+        # ---- class_contract ----
+        contract = _as_mapping(result.get("class_contract"))
+        for field in (
+            "typed_roundtrip_stable",
+            "legacy_upgraded",
+            "legacy_keys_preserved",
+            "hash_stable",
+            "scenario_roundtrip_stable",
+            "adversarial_requires_arc",
+        ):
+            if contract.get(field) is not True:
+                err(class_contract_errors, field=f"class_contract.{field}", expected=True, observed=contract.get(field))
+        if contract.get("legacy_evidence_class") != "legacy":
+            err(
+                class_contract_errors,
+                field="class_contract.legacy_evidence_class",
+                expected="legacy",
+                observed=contract.get("legacy_evidence_class"),
+            )
+
+        # ---- fidelity ----
+        fidelity = _as_mapping(result.get("fidelity"))
+        if sorted(fidelity.get("record_fields") or []) != sorted(V1_PERSONA_FIDELITY_RECORD_FIELDS):
+            err(
+                fidelity_errors,
+                field="fidelity.record_fields",
+                expected=sorted(V1_PERSONA_FIDELITY_RECORD_FIELDS),
+                observed=sorted(fidelity.get("record_fields") or []),
+            )
+        for verdict in fidelity.get("verdicts_seen") or []:
+            if verdict not in V1_PERSONA_FIDELITY_VERDICTS:
+                err(fidelity_errors, field="fidelity.verdict", expected=V1_PERSONA_FIDELITY_VERDICTS, observed=verdict)
+        clean = _as_mapping(fidelity.get("clean"))
+        if clean.get("verdict") != "pass" or _as_mapping(clean.get("admission")).get("admissible") is not True:
+            err(fidelity_errors, field="fidelity.clean", expected={"verdict": "pass", "admissible": True}, observed=clean)
+        drifted = _as_mapping(fidelity.get("drifted"))
+        drift_admission = _as_mapping(drifted.get("admission"))
+        if (
+            drifted.get("verdict") != "inconclusive"
+            or drift_admission.get("verdict") != "inconclusive"
+            or drift_admission.get("quarantined") is not True
+            or drift_admission.get("admissible") is not False
+        ):
+            err(
+                fidelity_errors,
+                field="fidelity.drifted",
+                expected={"verdict": "inconclusive", "quarantined": True, "admissible": False},
+                observed=drifted,
+            )
+        over = _as_mapping(fidelity.get("over_acted"))
+        if over.get("verdict") != "inconclusive" or _float_or_zero(over.get("caricature_index")) <= 0.5:
+            err(
+                fidelity_errors,
+                field="fidelity.over_acted",
+                expected={"verdict": "inconclusive", "caricature_index": ">0.5"},
+                observed=over,
+            )
+        if _int_or_zero(fidelity.get("admissible_count")) != 1:
+            err(fidelity_errors, field="fidelity.admissible_count", expected=1, observed=fidelity.get("admissible_count"))
+        if _int_or_zero(fidelity.get("inconclusive_count")) != 2:
+            err(fidelity_errors, field="fidelity.inconclusive_count", expected=2, observed=fidelity.get("inconclusive_count"))
+        if _int_or_zero(drifted.get("trajectory_len")) != _int_or_zero(fidelity.get("clean_user_turn_count")):
+            err(
+                fidelity_errors,
+                field="fidelity.drift_trajectory_len",
+                expected=fidelity.get("clean_user_turn_count"),
+                observed=drifted.get("trajectory_len"),
+            )
+
+        # ---- calibration ----
+        calibration = _as_mapping(result.get("calibration"))
+        missing_stages = sorted(set(V1_PERSONA_CALIBRATION_STAGES) - set(calibration.get("stages") or []))
+        if missing_stages:
+            err(calibration_errors, field="calibration.stages", expected=V1_PERSONA_CALIBRATION_STAGES, observed=calibration.get("stages"))
+        if sorted(calibration.get("probes") or []) != sorted(V1_PERSONA_CALIBRATION_PROBES):
+            err(calibration_errors, field="calibration.probes", expected=sorted(V1_PERSONA_CALIBRATION_PROBES), observed=calibration.get("probes"))
+        cal_ok = _as_mapping(calibration.get("calibratable"))
+        if cal_ok.get("status") != "passed" or cal_ok.get("failed_probe") is not None:
+            err(calibration_errors, field="calibration.calibratable.status", expected="passed", observed=cal_ok.get("status"))
+        if cal_ok.get("kind") != V1_PERSONA_CALIBRATION_KIND:
+            err(calibration_errors, field="calibration.calibratable.kind", expected=V1_PERSONA_CALIBRATION_KIND, observed=cal_ok.get("kind"))
+        cal_class = _as_mapping(cal_ok.get("evidence_class"))
+        if cal_class.get("before") != "hand_written" or cal_class.get("after") != "schema_sampled":
+            err(
+                calibration_errors,
+                field="calibration.calibratable.evidence_class",
+                expected={"before": "hand_written", "after": "schema_sampled"},
+                observed=cal_class,
+            )
+        cal_red = _as_mapping(calibration.get("drift_seed"))
+        if cal_red.get("status") != "failed" or cal_red.get("failed_probe") != "retest":
+            err(
+                calibration_errors,
+                field="calibration.drift_seed",
+                expected={"status": "failed", "failed_probe": "retest"},
+                observed=cal_red,
+            )
+        if _as_mapping(cal_red.get("evidence_class")).get("after") != "hand_written":
+            err(
+                calibration_errors,
+                field="calibration.drift_seed.monotone",
+                expected="class unchanged on failed calibration",
+                observed=cal_red.get("evidence_class"),
+            )
+
+        # ---- coverage ----
+        coverage = _as_mapping(result.get("coverage"))
+        if sorted(coverage.get("axes") or []) != sorted(V1_SCENARIO_COVERAGE_AXES):
+            err(coverage_errors, field="coverage.axes", expected=sorted(V1_SCENARIO_COVERAGE_AXES), observed=coverage.get("axes"))
+        if coverage.get("residual_present") is not True or not (coverage.get("plateau_curve") or []):
+            err(coverage_errors, field="coverage.residual_uncovered", expected="present with plateau curve", observed=coverage.get("plateau_curve"))
+        if coverage.get("forbidden_present"):
+            err(coverage_errors, field="coverage.forbidden_headline_keys", expected=[], observed=coverage.get("forbidden_present"))
+        if coverage.get("expansion_lineage_ok") is not True:
+            err(coverage_errors, field="coverage.expansion_lineage", expected=True, observed=coverage.get("expansion_lineage_ok"))
+
+        # ---- bias ----
+        bias = _as_mapping(result.get("bias"))
+        if sorted(bias.get("checks") or []) != sorted(V1_PERSONA_BIAS_LINT_CHECKS):
+            err(bias_errors, field="bias.checks", expected=sorted(V1_PERSONA_BIAS_LINT_CHECKS), observed=bias.get("checks"))
+        if bias.get("stereotyped_status") != "failed":
+            err(bias_errors, field="bias.stereotyped_status", expected="failed", observed=bias.get("stereotyped_status"))
+        if bias.get("clean_status") != "passed":
+            err(bias_errors, field="bias.clean_status", expected="passed", observed=bias.get("clean_status"))
+        if len(bias.get("clean_locales") or []) < 2:
+            err(bias_errors, field="bias.clean_locales", expected=">=2 locales linted", observed=bias.get("clean_locales"))
+
+        # ---- import ----
+        vendor = _as_mapping(result.get("vendor_import"))
+        if list(vendor.get("formats") or []) != list(V1_PERSONA_VENDOR_IMPORT_FORMATS):
+            err(import_errors, field="vendor_import.formats", expected=V1_PERSONA_VENDOR_IMPORT_FORMATS, observed=vendor.get("formats"))
+        for fmt in V1_PERSONA_VENDOR_IMPORT_FORMATS:
+            row = _as_mapping(vendor.get(fmt))
+            if row.get("byte_exact") is not True:
+                err(import_errors, field=f"vendor_import.{fmt}.byte_exact", expected=True, observed=row.get("byte_exact"))
+            if row.get("source_format") != fmt or row.get("raw_present") is not True:
+                err(import_errors, field=f"vendor_import.{fmt}.provenance", expected={"source_format": fmt, "raw_present": True}, observed=row)
+            if row.get("persona_owns_no_goal") is not True or not (row.get("goal_states") or []):
+                err(import_errors, field=f"vendor_import.{fmt}.goal_separation", expected="goal on ScenarioGoal stub, not persona", observed=row)
+
+        # ---- download ----
+        download = _as_mapping(result.get("download"))
+        if sorted(download.get("pin_fields") or []) != sorted(V1_PERSONA_DOWNLOAD_PIN_FIELDS):
+            err(download_errors, field="download.pin_fields", expected=sorted(V1_PERSONA_DOWNLOAD_PIN_FIELDS), observed=download.get("pin_fields"))
+        if list(download.get("scan_results") or []) != list(V1_PERSONA_CONTENT_SCAN_RESULTS):
+            err(download_errors, field="download.scan_results", expected=V1_PERSONA_CONTENT_SCAN_RESULTS, observed=download.get("scan_results"))
+        dl_clean = _as_mapping(download.get("clean"))
+        if dl_clean.get("status") != "ok" or dl_clean.get("scan") != "clean" or dl_clean.get("pin_complete") is not True:
+            err(download_errors, field="download.clean", expected={"status": "ok", "scan": "clean", "pin_complete": True}, observed=dl_clean)
+        dl_tampered = _as_mapping(download.get("tampered"))
+        if dl_tampered.get("status") != "tampered" or dl_tampered.get("admissible") is not False:
+            err(download_errors, field="download.tampered", expected={"status": "tampered", "admissible": False}, observed=dl_tampered)
+        dl_unpinned = _as_mapping(download.get("unpinned"))
+        if dl_unpinned.get("status") != "unpinned" or dl_unpinned.get("admissible") is not False:
+            err(download_errors, field="download.unpinned", expected={"status": "unpinned", "admissible": False}, observed=dl_unpinned)
+        dl_injection = _as_mapping(download.get("injection"))
+        if (
+            dl_injection.get("flagged") is not True
+            or dl_injection.get("refused_in_quarantine") is not True
+            or dl_injection.get("quarantine_unloadable") is not True
+        ):
+            err(
+                download_errors,
+                field="download.injection",
+                expected={"flagged": True, "refused_in_quarantine": True, "quarantine_unloadable": True},
+                observed=dl_injection,
+            )
+
+        evidence = {
+            "kind": result.get("kind"),
+            "fixture_persona_count": result.get("fixture_persona_count"),
+            "fixture_transcript_count": result.get("fixture_transcript_count"),
+            "coverage_cells_declared": result.get("coverage_cells_declared"),
+            "class_contract": contract,
+            "fidelity": {
+                "verdicts_seen": fidelity.get("verdicts_seen"),
+                "admissible_count": fidelity.get("admissible_count"),
+                "inconclusive_count": fidelity.get("inconclusive_count"),
+            },
+            "calibration": {
+                "stages": calibration.get("stages"),
+                "calibratable_status": cal_ok.get("status"),
+                "drift_seed_failed_probe": cal_red.get("failed_probe"),
+            },
+            "coverage": {
+                "axes": coverage.get("axes"),
+                "forbidden_present": coverage.get("forbidden_present"),
+            },
+            "bias": {
+                "stereotyped_status": bias.get("stereotyped_status"),
+                "clean_status": bias.get("clean_status"),
+                "clean_locales": bias.get("clean_locales"),
+            },
+            "vendor_import": {
+                fmt: _as_mapping(vendor.get(fmt)).get("byte_exact")
+                for fmt in V1_PERSONA_VENDOR_IMPORT_FORMATS
+            },
+            "download": {
+                "tampered": dl_tampered.get("status"),
+                "unpinned": dl_unpinned.get("status"),
+                "injection_quarantined": dl_injection.get("refused_in_quarantine"),
+            },
+            "persona_conditioned_manifest": result.get("persona_conditioned_manifest"),
+        }
+        if _int_or_zero(result.get("fixture_persona_count")) <= 0:
+            err(execution_errors, field="fixture_persona_count", expected=">0", observed=result.get("fixture_persona_count"))
+        if _int_or_zero(result.get("fixture_transcript_count")) < 3:
+            err(execution_errors, field="fixture_transcript_count", expected=">=3", observed=result.get("fixture_transcript_count"))
+
+    return {
+        "kind": "agent-learning.persona-scenario-studio-readiness.v1",
+        "required_files": list(V1_PERSONA_SCENARIO_STUDIO_FILES),
+        "fixture_dir": V1_PERSONA_LIBRARY_FIXTURE_DIR,
+        "calibration_kind": V1_PERSONA_CALIBRATION_KIND,
+        "library_kind": V1_PERSONA_LIBRARY_KIND,
+        "required_persona_layers": list(V1_PERSONA_LAYERS),
+        "required_persona_evidence_classes": list(V1_PERSONA_EVIDENCE_CLASSES),
+        "required_persona_temperament_axes": list(V1_PERSONA_TEMPERAMENT_AXES),
+        "required_persona_behavior_axes": list(V1_PERSONA_BEHAVIOR_AXES),
+        "required_persona_behavior_realization_metrics": list(
+            V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
+        ),
+        "required_persona_fidelity_record_fields": list(V1_PERSONA_FIDELITY_RECORD_FIELDS),
+        "required_persona_fidelity_verdicts": list(V1_PERSONA_FIDELITY_VERDICTS),
+        "persona_fidelity_epidemic_rate": V1_PERSONA_FIDELITY_EPIDEMIC_RATE,
+        "required_persona_fidelity_floors": copy.deepcopy(V1_PERSONA_FIDELITY_FLOORS),
+        "required_scenario_kinds": list(V1_SCENARIO_KINDS),
+        "required_scenario_coverage_axes": list(V1_SCENARIO_COVERAGE_AXES),
+        "required_persona_calibration_stages": list(V1_PERSONA_CALIBRATION_STAGES),
+        "required_persona_calibration_probes": list(V1_PERSONA_CALIBRATION_PROBES),
+        "required_persona_content_scan_results": list(V1_PERSONA_CONTENT_SCAN_RESULTS),
+        "required_persona_bias_lint_checks": list(V1_PERSONA_BIAS_LINT_CHECKS),
+        "required_persona_vendor_import_formats": list(V1_PERSONA_VENDOR_IMPORT_FORMATS),
+        "required_persona_download_pin_fields": list(V1_PERSONA_DOWNLOAD_PIN_FIELDS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "class_contract_errors": class_contract_errors,
+        "fidelity_errors": fidelity_errors,
+        "calibration_errors": calibration_errors,
+        "coverage_errors": coverage_errors,
+        "bias_errors": bias_errors,
+        "import_errors": import_errors,
+        "download_errors": download_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_voice_redteam_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate #73 — voice red-team readiness (Phase 12, §7.2).
+
+    Exec-loads ``examples/sdk_voice_redteam_campaign.py`` in a tempdir (no
+    network, no env keys, no lanes — the example runs entirely on the committed
+    ``examples/voice_redteam/`` fixtures) and audits its evidence payload into
+    NINE error arrays. Static corpus + matrix JSON reads pin the dual-field
+    voice rows, the family/maturity/phone-survival matrix, and the new source
+    URLs. ``passed`` = all nine empty."""
+
+    missing_files = _missing_relative_paths(
+        root, [*V1_VOICE_REDTEAM_FILES, V1_VOICE_REDTEAM_FIXTURE_DIR]
+    )
+    execution_errors: list[dict[str, Any]] = []
+    corpus_errors: list[dict[str, Any]] = []
+    matrix_errors: list[dict[str, Any]] = []
+    operator_errors: list[dict[str, Any]] = []
+    search_errors: list[dict[str, Any]] = []
+    fidelity_errors: list[dict[str, Any]] = []
+    pack_errors: list[dict[str, Any]] = []
+    authorization_errors: list[dict[str, Any]] = []
+    rung2_errors: list[dict[str, Any]] = []  # Phase-12 12C rung-2 evidence extension
+    result: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    # ---- static matrix audit (closed-vocabulary validity) ----
+    for family, row in V1_VOICE_ATTACK_FAMILY_MATRIX.items():
+        for key in ("maturity", "phone_survival", "defended_by", "rung_1_expressible"):
+            if key not in row:
+                err(matrix_errors, field=f"matrix.{family}.{key}", expected="present", observed=None)
+        maturity = row.get("maturity")
+        if maturity not in V1_VOICE_ATTACK_MATURITY_LEVELS:
+            err(matrix_errors, field=f"matrix.{family}.maturity", expected=V1_VOICE_ATTACK_MATURITY_LEVELS, observed=maturity)
+        ps = row.get("phone_survival")
+        if not isinstance(ps, Mapping) or "status" not in ps or "tier" not in ps or "reason" not in ps:
+            err(matrix_errors, field=f"matrix.{family}.phone_survival", expected="{status, tier, scope_label?, reason}", observed=ps)
+        else:
+            if ps.get("status") not in V1_VOICE_PHONE_SURVIVAL_STATUSES:
+                err(matrix_errors, field=f"matrix.{family}.phone_survival.status", expected=V1_VOICE_PHONE_SURVIVAL_STATUSES, observed=ps.get("status"))
+            if ps.get("tier") not in V1_VOICE_PHONE_SURVIVAL_TIERS:
+                err(matrix_errors, field=f"matrix.{family}.phone_survival.tier", expected=V1_VOICE_PHONE_SURVIVAL_TIERS, observed=ps.get("tier"))
+        if not isinstance(row.get("defended_by"), list):
+            err(matrix_errors, field=f"matrix.{family}.defended_by", expected="list", observed=row.get("defended_by"))
+        if not isinstance(row.get("rung_1_expressible"), bool):
+            err(matrix_errors, field=f"matrix.{family}.rung_1_expressible", expected="bool", observed=row.get("rung_1_expressible"))
+    # every matrix family must declare a detection-evidence field list
+    for family in V1_VOICE_ATTACK_FAMILY_MATRIX:
+        if family not in V1_VOICE_DETECTION_EVIDENCE_FIELDS:
+            err(matrix_errors, field=f"detection_evidence_fields.{family}", expected="present", observed=None)
+
+    # ---- static corpus audit (dual-field shape + coverage + URLs) ----
+    corpus_row_count = 0
+    corpus_path = root / V1_REDTEAM_CORPUS_EXECUTION_FILE
+    if corpus_path.is_file():
+        try:
+            corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+            rows = corpus.get("rows") or []
+        except Exception as exc:  # noqa: BLE001
+            err(corpus_errors, field="corpus.parse", expected="json", observed=f"{type(exc).__name__}: {exc}")
+            rows = []
+        voice_rows = [r for r in rows if isinstance(r, Mapping) and r.get("channel") == "voice"]
+        corpus_row_count = len(voice_rows)
+        observed_voice_surfaces: set[str] = set()
+        observed_voice_sources: set[str] = set()
+        for r in voice_rows:
+            rid = r.get("id")
+            observed_voice_sources.add(str(r.get("source")))
+            voice = r.get("voice")
+            if not isinstance(voice, Mapping):
+                err(corpus_errors, field=f"corpus.{rid}.voice", expected="block", observed=None)
+                continue
+            if r.get("surface") not in V1_REDTEAM_RESEARCH_SURFACES:
+                err(corpus_errors, field=f"corpus.{rid}.surface", expected="frozen 6 semantic", observed=r.get("surface"))
+            vs = r.get("voice_surface")
+            if vs not in V1_REDTEAM_VOICE_SURFACES:
+                err(corpus_errors, field=f"corpus.{rid}.voice_surface", expected=V1_REDTEAM_VOICE_SURFACES, observed=vs)
+            else:
+                observed_voice_surfaces.add(vs)
+            family = voice.get("attack_family")
+            if family not in V1_VOICE_ATTACK_FAMILY_MATRIX:
+                err(corpus_errors, field=f"corpus.{rid}.attack_family", expected="matrix key", observed=family)
+            else:
+                family_prior = V1_VOICE_ATTACK_FAMILY_MATRIX[family]["phone_survival"]
+                if voice.get("rung") == 1 and voice.get("phone_survival") != family_prior:
+                    err(corpus_errors, field=f"corpus.{rid}.phone_survival", expected=family_prior, observed=voice.get("phone_survival"))
+                declared = V1_VOICE_DETECTION_EVIDENCE_FIELDS.get(family)
+                if list(voice.get("detection_evidence_fields") or []) != list(declared or []):
+                    err(corpus_errors, field=f"corpus.{rid}.detection_evidence_fields", expected=declared, observed=voice.get("detection_evidence_fields"))
+            if voice.get("attack_rung") not in V1_VOICE_ATTACK_RUNGS:
+                err(corpus_errors, field=f"corpus.{rid}.attack_rung", expected=V1_VOICE_ATTACK_RUNGS, observed=voice.get("attack_rung"))
+        # every voice surface seeded >= 1 voice row
+        for surface in V1_REDTEAM_VOICE_SURFACES:
+            if surface not in observed_voice_surfaces:
+                err(corpus_errors, field=f"corpus.voice_surface_coverage.{surface}", expected=">=1 row", observed=0)
+        # the six new source URLs (unit 1.1d) must appear among voice-row sources
+        for url in V1_REDTEAM_RESEARCH_SOURCE_URLS[-6:]:
+            if url not in observed_voice_sources:
+                err(corpus_errors, field=f"corpus.source_url.{url}", expected="observed in a voice row", observed="absent")
+    else:
+        err(corpus_errors, field="corpus.file", expected=V1_REDTEAM_CORPUS_EXECUTION_FILE, observed="missing")
+
+    # ---- exec-load the example for the operator/search/fidelity/pack/auth audit ----
+    if not missing_files:
+        previous_environ = dict(os.environ)
+        example_path = root / "examples/sdk_voice_redteam_campaign.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_voice_redteam", example_path
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(prefix="agent-learning-voice-redteam-") as tmpdir:
+                output_path = Path(tmpdir) / "voice-redteam.json"
+                result = dict(module.run(output_path))
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+                if result != saved:
+                    err(execution_errors, field="output_roundtrip", expected=True, observed=False)
+        except Exception as exc:  # noqa: BLE001
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_voice_redteam_campaign.py",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            result = {}
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environ)
+
+    if result:
+        if result.get("kind") != "agent-learning.voice-redteam-campaign.v1":
+            err(execution_errors, field="kind", expected="agent-learning.voice-redteam-campaign.v1", observed=result.get("kind"))
+
+        # ---- constant mirrors ----
+        for field, expected in (
+            ("corpus_channels", V1_REDTEAM_CORPUS_EXECUTION_CHANNELS),
+            ("voice_surfaces", V1_REDTEAM_VOICE_SURFACES),
+            ("voice_attack_rungs", V1_VOICE_ATTACK_RUNGS),
+            ("ab_arms", V1_VOICE_REDTEAM_AB_ARMS),
+            ("ab_verdicts", V1_VOICE_REDTEAM_AB_VERDICTS),
+            ("text_rung_operators", V1_VOICE_REDTEAM_TEXT_OPERATORS),
+        ):
+            if list(result.get(field) or []) != list(expected):
+                err(execution_errors, field=field, expected=expected, observed=result.get(field))
+        if result.get("phone_survival_rung1") != V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1:
+            err(execution_errors, field="phone_survival_rung1", expected=V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1, observed=result.get("phone_survival_rung1"))
+
+        # ---- operators ----
+        ops = _as_mapping(result.get("operators"))
+        if list(ops.get("text_rung_operators") or []) != list(V1_VOICE_REDTEAM_TEXT_OPERATORS):
+            err(operator_errors, field="operators.text_rung_operators", expected=V1_VOICE_REDTEAM_TEXT_OPERATORS, observed=ops.get("text_rung_operators"))
+        for name, rec in _as_mapping(ops.get("pinned")).items():
+            rec = _as_mapping(rec)
+            if rec.get("deterministic") is not True:
+                err(operator_errors, field=f"operators.{name}.deterministic", expected=True, observed=rec.get("deterministic"))
+            if rec.get("rate_zero_identity") is not True:
+                err(operator_errors, field=f"operators.{name}.rate_zero_identity", expected=True, observed=rec.get("rate_zero_identity"))
+        if ops.get("acoustic_raises_at_text_rung") is not True:
+            err(operator_errors, field="operators.acoustic_raises_at_text_rung", expected=True, observed=ops.get("acoustic_raises_at_text_rung"))
+        if ops.get("unknown_operator_raises") is not True:
+            err(operator_errors, field="operators.unknown_operator_raises", expected=True, observed=ops.get("unknown_operator_raises"))
+        if ops.get("applied_records_complete") is not True:
+            err(operator_errors, field="operators.applied_records_complete", expected=True, observed=ops.get("applied_records_complete"))
+
+        # ---- search (A/B contract) ----
+        search = _as_mapping(result.get("search"))
+        if list(search.get("ab_arms") or []) != list(V1_VOICE_REDTEAM_AB_ARMS):
+            err(search_errors, field="search.ab_arms", expected=V1_VOICE_REDTEAM_AB_ARMS, observed=search.get("ab_arms"))
+        if search.get("ranking_source") != "evaluation_suite":
+            err(search_errors, field="search.ranking_source", expected="evaluation_suite", observed=search.get("ranking_source"))
+        if search.get("manifest_kind") != "agent-learning.optimization.v1":
+            err(search_errors, field="search.manifest_kind", expected="agent-learning.optimization.v1", observed=search.get("manifest_kind"))
+        if search.get("budget_equal") is not True:
+            err(search_errors, field="search.budget_equal", expected=True, observed=search.get("budget_equal"))
+        if search.get("composed_has_both") is not True:
+            err(search_errors, field="search.composed_has_both", expected=True, observed=search.get("composed_has_both"))
+        if search.get("persona_only_drops_signal") is not True:
+            err(search_errors, field="search.persona_only_drops_signal", expected=True, observed=search.get("persona_only_drops_signal"))
+        if search.get("signal_only_drops_persona") is not True:
+            err(search_errors, field="search.signal_only_drops_persona", expected=True, observed=search.get("signal_only_drops_persona"))
+        if search.get("ab_verdict") not in V1_VOICE_REDTEAM_AB_VERDICTS:
+            err(search_errors, field="search.ab_verdict", expected=V1_VOICE_REDTEAM_AB_VERDICTS, observed=search.get("ab_verdict"))
+        # the verdict must be re-derivable from the per-seed numbers
+        if search.get("ab_verdict") != search.get("ab_verdict_rederived"):
+            err(search_errors, field="search.ab_verdict_rederivable", expected=search.get("ab_verdict"), observed=search.get("ab_verdict_rederived"))
+        # lift numeric only with full equal budgets and no quarantine epidemic
+        lift = _as_mapping(search.get("lift"))
+        if search.get("budget_equal") is True and lift.get("vs_best_ablation") is None:
+            err(search_errors, field="search.lift.numeric", expected="float on full equal budget", observed=None)
+        # the null-rule negatives must fire correctly
+        negs = _as_mapping(search.get("negatives"))
+        epi = _as_mapping(negs.get("quarantine_epidemic"))
+        if epi.get("exit_code") != 1 or epi.get("lift_null") is not True or "composed_arm_quarantine_epidemic" not in (epi.get("findings") or []):
+            err(search_errors, field="search.negatives.quarantine_epidemic", expected={"exit": 1, "lift_null": True}, observed=epi)
+        bm = _as_mapping(negs.get("budget_mismatch"))
+        if bm.get("lift_null") is not True or "composed_budget_mismatch" not in (bm.get("findings") or []):
+            err(search_errors, field="search.negatives.budget_mismatch", expected={"lift_null": True}, observed=bm)
+
+        # ---- fidelity (halving, never a floor; timing proxy; rung-1 pin) ----
+        fid = _as_mapping(result.get("fidelity"))
+        if fid.get("halving_correct") is not True:
+            err(fidelity_errors, field="fidelity.halving_correct", expected=True, observed=fid.get("halving_correct"))
+        if fid.get("broken_retained") is not True:
+            err(fidelity_errors, field="fidelity.broken_retained", expected=True, observed=fid.get("broken_retained"))
+        broken = _as_mapping(fid.get("broken"))
+        if broken.get("character_broken") is not True:
+            err(fidelity_errors, field="fidelity.broken.character_broken", expected=True, observed=broken.get("character_broken"))
+        timing = _as_mapping(fid.get("timing_fidelity"))
+        if timing.get("proxy") != "timing_only" or _int_or_zero(timing.get("rung")) != 1:
+            err(fidelity_errors, field="fidelity.timing_fidelity", expected={"proxy": "timing_only", "rung": 1}, observed=timing)
+        if fid.get("phone_survival") != V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1:
+            err(fidelity_errors, field="fidelity.phone_survival", expected=V1_VOICE_REDTEAM_PHONE_SURVIVAL_RUNG1, observed=fid.get("phone_survival"))
+
+        # ---- pack (capture round-trip; attack extras survive) ----
+        pack = _as_mapping(result.get("pack"))
+        if pack.get("capture_tree_refused") is not True:
+            err(pack_errors, field="pack.capture_tree_refused", expected=True, observed=pack.get("capture_tree_refused"))
+        if pack.get("reviewed_replay_verdict") != "pass":
+            err(pack_errors, field="pack.reviewed_replay_verdict", expected="pass", observed=pack.get("reviewed_replay_verdict"))
+        if pack.get("reviewed_evidence_class") != "captured_fixture":
+            err(pack_errors, field="pack.reviewed_evidence_class", expected="captured_fixture", observed=pack.get("reviewed_evidence_class"))
+        if pack.get("attack_extras_survive") is not True:
+            err(pack_errors, field="pack.attack_extras_survive", expected=True, observed=pack.get("attack_extras_survive"))
+        # provenance schema NOT extended (byte-stable)
+        if sorted(pack.get("provenance_fields") or []) != sorted(_LIVE_LANE_CAPTURE_PROVENANCE_FIELDS):
+            err(pack_errors, field="pack.provenance_fields", expected=sorted(_LIVE_LANE_CAPTURE_PROVENANCE_FIELDS), observed=pack.get("provenance_fields"))
+
+        # ---- detection-evidence (per family; no verdict keys) ----
+        detection = _as_mapping(result.get("detection"))
+        if detection.get("no_verdict_keys") is not True:
+            err(pack_errors, field="detection.no_verdict_keys", expected=True, observed=detection.get("no_verdict_keys"))
+        if detection.get("unknown_family_raises") is not True:
+            err(pack_errors, field="detection.unknown_family_raises", expected=True, observed=detection.get("unknown_family_raises"))
+        blocks = _as_mapping(detection.get("blocks"))
+        for family, block in blocks.items():
+            block = _as_mapping(block)
+            if any(k in block for k in ("verdict", "passed", "pass")):
+                err(pack_errors, field=f"detection.{family}.verdict_leak", expected="no verdict key", observed=list(block))
+            declared = V1_VOICE_DETECTION_EVIDENCE_FIELDS.get(family)
+            observed_signals = [f.get("signal") for f in block.get("fields") or []]
+            if declared is None or observed_signals != list(declared):
+                err(pack_errors, field=f"detection.{family}.fields", expected=declared, observed=observed_signals)
+
+        # ---- authorization ----
+        auth = _as_mapping(result.get("authorization"))
+        if auth.get("kit_local_relationship") != "kit_local":
+            err(authorization_errors, field="authorization.kit_local", expected="kit_local", observed=auth.get("kit_local_relationship"))
+        if auth.get("non_local_refused") is not True or auth.get("non_local_finding") != "voice_target_authorization_missing":
+            err(authorization_errors, field="authorization.non_local_refusal", expected="voice_target_authorization_missing", observed=auth)
+        if auth.get("complete_relationship") != "owned":
+            err(authorization_errors, field="authorization.complete_stanza", expected="owned", observed=auth.get("complete_relationship"))
+        if auth.get("preflight_secret_free") is not True:
+            err(authorization_errors, field="authorization.preflight_secret_free", expected=True, observed=auth.get("preflight_secret_free"))
+
+        # ---- Phase-12 12C rung-2 acoustic evidence extension (BBG §10) ----
+        # Audits the rung-2 acoustic operators over the Phase-9A loopback:
+        # operator determinism over the loopback, computed-phone_survival
+        # honesty (no survives/partial without a channel record), and attack_rung
+        # correctness (the canonical "acoustic" token). This EXTENDS #73 without
+        # loosening any rung-1 check (the BBG "own test + #73 evidence extension"
+        # rule); it does NOT grow EVIDENCE_CLASSES.
+        rung2 = _as_mapping(result.get("rung2"))
+        # the acoustic operator set is the closed rung-2 set + reverb_blend
+        if list(rung2.get("acoustic_operators") or []) != ["noise", "interference", "reverb_blend"]:
+            err(rung2_errors, field="rung2.acoustic_operators", expected=["noise", "interference", "reverb_blend"], observed=rung2.get("acoustic_operators"))
+        if rung2.get("reverb_blend_registered") is not True:
+            err(rung2_errors, field="rung2.reverb_blend_registered", expected=True, observed=rung2.get("reverb_blend_registered"))
+        # determinism over the loopback (same seed → byte-identical channels)
+        if rung2.get("operator_deterministic_over_loopback") is not True:
+            err(rung2_errors, field="rung2.operator_deterministic_over_loopback", expected=True, observed=rung2.get("operator_deterministic_over_loopback"))
+        # the acoustic attack genuinely changes the channel signal
+        if rung2.get("attack_changes_channel") is not True:
+            err(rung2_errors, field="rung2.attack_changes_channel", expected=True, observed=rung2.get("attack_changes_channel"))
+        # computed phone_survival honesty (channel_simulated + 3 evidence fields;
+        # the clean-PCM opt-out carries none) — the P12-D2 channel-proof rule.
+        if rung2.get("computed_phone_survival_honest") is not True:
+            err(rung2_errors, field="rung2.computed_phone_survival_honest", expected=True, observed=rung2.get("computed_phone_survival_honest"))
+        ps2 = _as_mapping(rung2.get("phone_survival"))
+        if ps2.get("tier") != "channel_simulated":
+            err(rung2_errors, field="rung2.phone_survival.tier", expected="channel_simulated", observed=ps2.get("tier"))
+        if ps2.get("status") not in V1_VOICE_PHONE_SURVIVAL_STATUSES:
+            err(rung2_errors, field="rung2.phone_survival.status", expected=V1_VOICE_PHONE_SURVIVAL_STATUSES, observed=ps2.get("status"))
+        # the applied acoustic operator records ride the channels block
+        if rung2.get("applied_records_complete") is not True:
+            err(rung2_errors, field="rung2.applied_records_complete", expected=True, observed=rung2.get("applied_records_complete"))
+        # the rung wall runs in BOTH directions
+        if rung2.get("acoustic_text_op_raises") is not True:
+            err(rung2_errors, field="rung2.acoustic_text_op_raises", expected=True, observed=rung2.get("acoustic_text_op_raises"))
+        if rung2.get("text_acoustic_op_raises") is not True:
+            err(rung2_errors, field="rung2.text_acoustic_op_raises", expected=True, observed=rung2.get("text_acoustic_op_raises"))
+        # byte-parallel across both lanes
+        if rung2.get("byte_parallel_lanes") is not True:
+            err(rung2_errors, field="rung2.byte_parallel_lanes", expected=True, observed=rung2.get("byte_parallel_lanes"))
+        # attack_rung correctness — the canonical V1_VOICE_ATTACK_RUNGS token
+        if rung2.get("attack_rung") != "acoustic" or "acoustic" not in V1_VOICE_ATTACK_RUNGS:
+            err(rung2_errors, field="rung2.attack_rung", expected="acoustic", observed=rung2.get("attack_rung"))
+        if rung2.get("attack_rung_canonical") is not True:
+            err(rung2_errors, field="rung2.attack_rung_canonical", expected=True, observed=rung2.get("attack_rung_canonical"))
+        if rung2.get("fidelity_tier") != "deterministic_loopback":
+            err(rung2_errors, field="rung2.fidelity_tier", expected="deterministic_loopback", observed=rung2.get("fidelity_tier"))
+
+    return {
+        "kind": "agent-learning.voice-redteam-readiness.v1",
+        "required_files": list(V1_VOICE_REDTEAM_FILES),
+        "fixture_dir": V1_VOICE_REDTEAM_FIXTURE_DIR,
+        "corpus_channels": list(V1_REDTEAM_CORPUS_EXECUTION_CHANNELS),
+        "voice_surfaces": list(V1_REDTEAM_VOICE_SURFACES),
+        "voice_attack_family_matrix": copy.deepcopy(V1_VOICE_ATTACK_FAMILY_MATRIX),
+        "voice_attack_maturity_levels": list(V1_VOICE_ATTACK_MATURITY_LEVELS),
+        "voice_phone_survival_statuses": list(V1_VOICE_PHONE_SURVIVAL_STATUSES),
+        "voice_phone_survival_tiers": list(V1_VOICE_PHONE_SURVIVAL_TIERS),
+        "voice_attack_rungs": list(V1_VOICE_ATTACK_RUNGS),
+        "voice_detection_evidence_fields": copy.deepcopy(V1_VOICE_DETECTION_EVIDENCE_FIELDS),
+        "voice_redteam_ab_arms": list(V1_VOICE_REDTEAM_AB_ARMS),
+        "voice_redteam_ab_verdicts": list(V1_VOICE_REDTEAM_AB_VERDICTS),
+        "voice_corpus_row_count": corpus_row_count,
+        "fixture_count": _count_voice_fixtures(root),
+        "ab_arm_count": len(V1_VOICE_REDTEAM_AB_ARMS),
+        "scanned_attack_rows": corpus_row_count,
+        "voice_acoustic_operators": ["noise", "interference", "reverb_blend"],
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "corpus_errors": corpus_errors,
+        "matrix_errors": matrix_errors,
+        "operator_errors": operator_errors,
+        "search_errors": search_errors,
+        "fidelity_errors": fidelity_errors,
+        "pack_errors": pack_errors,
+        "authorization_errors": authorization_errors,
+        "rung2_errors": rung2_errors,
+    }
+
+
+def _count_voice_fixtures(root: Path) -> int:
+    fixture_dir = root / V1_VOICE_REDTEAM_FIXTURE_DIR
+    if not fixture_dir.is_dir():
+        return 0
+    return sum(1 for _ in fixture_dir.rglob("*.json"))
+
+
+def _exec_example_run(root: Path, relative: str, modname: str) -> tuple[Any, str | None]:
+    """Exec-load an example by file location and call its ``run(output_path)`` in
+    a tempdir, asserting the returned payload round-trips through the written
+    JSON (the Phase-4/7/12 executing-gate idiom). Returns (payload, error)."""
+
+    previous_environ = dict(os.environ)
+    example_path = root / relative
+    try:
+        spec = importlib.util.spec_from_file_location(modname, example_path)
+        if spec is None or spec.loader is None:
+            return {}, f"Unable to load {example_path}"
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory(prefix="agent-learning-voice-loopback-") as tmp:
+            output_path = Path(tmp) / "out.json"
+            result = dict(module.run(output_path))
+            saved = json.loads(output_path.read_text(encoding="utf-8"))
+            if result != saved:
+                return result, "output_roundtrip"
+            return result, None
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"{type(exc).__name__}: {exc}"
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_environ)
+
+
+def _release_voice_loopback_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate #76 (M4) — voice loopback readiness (Phase 9A, ARCH §2.4 / §2.5).
+
+    Exec-loads ``examples/sdk_voice_loopback.py`` + ``sdk_voice_improvement.py``
+    in a tempdir (no network, no env keys, no lanes — entirely on the committed
+    ``examples/voice_loopback_fixture/`` fixtures) and audits their evidence into
+    EIGHT error arrays. The ``loopback_fidelity_overclaim`` token (9A-A10) fires
+    inside ``evidence_class_errors`` for any rung-2 / ``deterministic_loopback``
+    artifact carrying ``live_lane`` (the §2.5 binding correction). ``passed`` =
+    all eight empty."""
+
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *V1_VOICE_LOOPBACK_FILES,
+            V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR,
+            *V1_VOICE_LOOPBACK_GATE_FIXTURE_FILES,
+        ],
+    )
+    loopback_determinism_errors: list[dict[str, Any]] = []
+    codec_roundtrip_errors: list[dict[str, Any]] = []
+    metrics_wiring_errors: list[dict[str, Any]] = []
+    voice_loss_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    phone_survival_errors: list[dict[str, Any]] = []
+    rung_honesty_errors: list[dict[str, Any]] = []
+
+    loopback: dict[str, Any] = {}
+    improvement: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        loopback, lb_err = _exec_example_run(
+            root, "examples/sdk_voice_loopback.py", "agent_learning_release_voice_loopback"
+        )
+        if lb_err is not None:
+            err(loopback_determinism_errors, field="example.run", expected="executes", observed=lb_err)
+        improvement, imp_err = _exec_example_run(
+            root, "examples/sdk_voice_improvement.py", "agent_learning_release_voice_improvement"
+        )
+        if imp_err is not None:
+            err(voice_loss_errors, field="example.run", expected="executes", observed=imp_err)
+
+    if loopback:
+        if loopback.get("kind") != "agent-learning.voice-loopback.v1":
+            err(loopback_determinism_errors, field="kind", expected="agent-learning.voice-loopback.v1", observed=loopback.get("kind"))
+
+        # ---- constant mirrors (the gate pins them against the example) ----
+        for field, expected in (
+            ("fidelity_tiers", list(V1_VOICE_FIDELITY_TIERS)),
+            ("codecs", list(V1_VOICE_CODECS)),
+            ("packet_loss_models", list(V1_VOICE_PACKET_LOSS_MODELS)),
+            ("codec_profiles", list(V1_VOICE_CODEC_PROFILES)),
+            ("failure_sublayers", list(V1_VOICE_FAILURE_SUBLAYERS)),
+            ("loss_term_refs", list(V1_VOICE_LOSS_TERM_REFS)),
+        ):
+            if list(loopback.get(field) or []) != expected:
+                err(loopback_determinism_errors, field=f"mirror.{field}", expected=expected, observed=loopback.get(field))
+
+        # ---- loopback determinism (same seed ⇒ byte-identical) ----
+        det = _as_mapping(loopback.get("loopback_determinism"))
+        for key in ("user_pcm_byte_identical", "agent_pcm_byte_identical", "channels_identical", "provenance_identical"):
+            if det.get(key) is not True:
+                err(loopback_determinism_errors, field=f"determinism.{key}", expected=True, observed=det.get(key))
+        if det.get("produces_only_two_pcm_streams") is not True:
+            err(loopback_determinism_errors, field="determinism.two_streams_only", expected=True, observed=det.get("produces_only_two_pcm_streams"))
+        # cross-check against the committed golden channels block
+        golden_path = root / "examples/voice_loopback_fixture/expected/loopback_channels.json"
+        if golden_path.is_file() and det.get("channels_identical") is not True:
+            err(loopback_determinism_errors, field="determinism.golden", expected="channels match committed golden", observed=det.get("channels_identical"))
+
+        # ---- codec round-trip reproducibility + opus auto-skip ----
+        codec = _as_mapping(loopback.get("codec_roundtrip"))
+        for key in ("g711_ulaw_reproducible", "g711_alaw_reproducible", "gilbert_elliott_reproducible"):
+            if codec.get(key) is not True:
+                err(codec_roundtrip_errors, field=f"codec.{key}", expected=True, observed=codec.get(key))
+        if codec.get("opus_auto_skip") is not True:
+            err(codec_roundtrip_errors, field="codec.opus_auto_skip", expected=True, observed=codec.get("opus_auto_skip"))
+        if codec.get("text_rung_raises") is not True:
+            err(codec_roundtrip_errors, field="codec.text_rung_raises", expected=True, observed=codec.get("text_rung_raises"))
+
+        # ---- metrics wiring (rung-2 has channels; rung-1 does NOT) ----
+        rung2 = _as_mapping(loopback.get("rung2"))
+        rung1 = _as_mapping(loopback.get("rung1"))
+        if rung2.get("channels_at_rung2") is not True:
+            err(metrics_wiring_errors, field="rung2.channels_present", expected=True, observed=rung2.get("channels_at_rung2"))
+        if rung2.get("byte_parallel_lanes") is not True:
+            err(metrics_wiring_errors, field="rung2.byte_parallel_lanes", expected=True, observed=rung2.get("byte_parallel_lanes"))
+        if rung1.get("has_channels_block") is not False:
+            err(metrics_wiring_errors, field="rung1.no_channels", expected=False, observed=rung1.get("has_channels_block"))
+        if rung2.get("codec_none_optout_has_channels") is not True:
+            err(metrics_wiring_errors, field="rung2.none_optout_channels", expected=True, observed=rung2.get("codec_none_optout_has_channels"))
+
+        # ---- evidence-class + the loopback_fidelity_overclaim token (§2.5) ----
+        artifact = _as_mapping(rung2.get("rung2_artifact"))
+        if artifact.get("evidence_class") == "live_lane":
+            evidence_class_errors.append({
+                "artifact": "rung2.rung2_artifact",
+                "reason": (
+                    "loopback_fidelity_overclaim: rung loopback_transport stamped "
+                    "evidence_class=live_lane; a deterministic in-process loopback "
+                    "is live_stressed/captured_fixture, never live_lane (9A-D6 corrected)"
+                ),
+            })
+        if artifact.get("evidence_class") not in ("live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="rung2.evidence_class", expected="live_stressed|captured_fixture", observed=artifact.get("evidence_class"))
+        if artifact.get("fidelity_tier") != "deterministic_loopback":
+            err(evidence_class_errors, field="rung2.fidelity_tier", expected="deterministic_loopback", observed=artifact.get("fidelity_tier"))
+        # the frozen 4-tuple is byte-stable (no new evidence class via this gate)
+        from .live import _contract as _live_contract  # downward import (gate-only)
+        if tuple(_live_contract.EVIDENCE_CLASSES) != ("local_gate", "live_lane", "live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="evidence_classes.frozen", expected=("local_gate", "live_lane", "live_stressed", "captured_fixture"), observed=tuple(_live_contract.EVIDENCE_CLASSES))
+
+        # the constructed overclaim negatives MUST be catchable — the example
+        # hand-builds them; the gate verifies the discipline catches each.
+        negatives = _as_mapping(loopback.get("negatives"))
+        neg_live = _as_mapping(negatives.get("rung2_claims_live_lane"))
+        if neg_live.get("evidence_class") != "live_lane":
+            err(evidence_class_errors, field="negatives.rung2_claims_live_lane", expected="constructed live_lane overclaim", observed=neg_live.get("evidence_class"))
+        neg_keyed = _as_mapping(negatives.get("keyed_without_credential"))
+        if not (neg_keyed.get("fidelity_tier") == "keyed_live_channel" and neg_keyed.get("credentialed") is False):
+            err(evidence_class_errors, field="negatives.keyed_without_credential", expected="keyed_live_channel without credential", observed=neg_keyed)
+
+        # ---- phone_survival (no survives/partial without a channel record) ----
+        ps = _as_mapping(rung2.get("phone_survival"))
+        if ps.get("tier") not in ("channel_simulated", "channel_live"):
+            err(phone_survival_errors, field="rung2.phone_survival.tier", expected="channel_simulated|channel_live", observed=ps.get("tier"))
+        if ps.get("status") in ("survives", "partial"):
+            for f in ("pre_channel_success", "post_channel_success", "band_energy_lt_4khz"):
+                if f not in ps:
+                    err(phone_survival_errors, field=f"rung2.phone_survival.{f}", expected="present at channel_simulated", observed="absent")
+        if rung2.get("codec_none_optout_has_no_phone_survival") is not True:
+            err(phone_survival_errors, field="rung2.none_optout_no_phone_survival", expected=True, observed=rung2.get("codec_none_optout_has_no_phone_survival"))
+        # rung-1 pin byte-identical to Phase-12 (no extra fields)
+        rung1_ps = _as_mapping(rung1.get("phone_survival"))
+        if dict(rung1_ps) != dict(V1_VOICE_PHONE_SURVIVAL_RUNG1):
+            err(phone_survival_errors, field="rung1.phone_survival_pin", expected=dict(V1_VOICE_PHONE_SURVIVAL_RUNG1), observed=rung1_ps)
+        # the constructed survives-without-channel negative is research_pinned (caught)
+        neg_survives = _as_mapping(negatives.get("survives_without_channel"))
+        neg_ps = _as_mapping(neg_survives.get("phone_survival"))
+        if not (neg_ps.get("status") == "survives" and neg_ps.get("tier") == "research_pinned"):
+            err(phone_survival_errors, field="negatives.survives_without_channel", expected="constructed survives+research_pinned overclaim", observed=neg_ps)
+
+        # ---- rung honesty (labels, rung-1 no channels, rung wall raises) ----
+        if artifact.get("rung") != "loopback_transport":
+            err(rung_honesty_errors, field="rung2.rung_label", expected="loopback_transport", observed=artifact.get("rung"))
+        if rung1.get("rung") != "virtual_clock":
+            err(rung_honesty_errors, field="rung1.rung_label", expected="virtual_clock", observed=rung1.get("rung"))
+        neg_channels_rung1 = _as_mapping(negatives.get("channels_at_rung1"))
+        if not (neg_channels_rung1.get("rung") == "virtual_clock" and "channels" in neg_channels_rung1):
+            err(rung_honesty_errors, field="negatives.channels_at_rung1", expected="constructed rung-1 channels overclaim", observed=neg_channels_rung1)
+        # the live rung wall still raises for rung-3-without-keys / unknown rung
+        try:
+            from .live import livekit_lane as _lk
+            previous = dict(os.environ)
+            try:
+                os.environ["AGENT_LEARNING_LIVE_LIVEKIT"] = "1"
+                wall_ok = True
+                try:
+                    _lk.run_livekit_lane({"name": "gate"}, rung=3)
+                    wall_ok = False  # rung-3 without credentialed must refuse
+                except Exception:
+                    wall_ok = True
+                if not wall_ok:
+                    err(rung_honesty_errors, field="rung_wall.rung3_refuses", expected="raises without keys", observed="did not raise")
+            finally:
+                os.environ.clear()
+                os.environ.update(previous)
+        except Exception as exc:  # noqa: BLE001
+            err(rung_honesty_errors, field="rung_wall.probe", expected="probe runs", observed=f"{type(exc).__name__}: {exc}")
+
+    if improvement:
+        if improvement.get("kind") != "agent-learning.voice-improvement.v1":
+            err(voice_loss_errors, field="improvement.kind", expected="agent-learning.voice-improvement.v1", observed=improvement.get("kind"))
+        if improvement.get("multi_objective_compiles") is not True:
+            err(voice_loss_errors, field="improvement.multi_objective", expected=True, observed=improvement.get("multi_objective_compiles"))
+        if improvement.get("single_timing_rejected") is not True:
+            err(voice_loss_errors, field="improvement.single_timing_rejected", expected=True, observed=improvement.get("single_timing_rejected"))
+        if improvement.get("search_space_is_whole_agent") is not True:
+            err(voice_loss_errors, field="improvement.whole_agent_search_space", expected=True, observed=improvement.get("search_space_is_whole_agent"))
+        if improvement.get("ab_equal_budget") is not True:
+            err(voice_loss_errors, field="improvement.ab_equal_budget", expected=True, observed=improvement.get("ab_equal_budget"))
+        if improvement.get("world_kind") != "voice_telephony":
+            err(voice_loss_errors, field="improvement.world_kind", expected="voice_telephony", observed=improvement.get("world_kind"))
+        # the voice_sublayer attribution is in the closed set (9A-A14)
+        for cell, sub in _as_mapping(improvement.get("voice_sublayers")).items():
+            if sub not in V1_VOICE_FAILURE_SUBLAYERS:
+                err(voice_loss_errors, field=f"improvement.voice_sublayer.{cell}", expected=V1_VOICE_FAILURE_SUBLAYERS, observed=sub)
+
+    return {
+        "kind": "agent-learning.voice-loopback-readiness.v1",
+        "required_files": list(V1_VOICE_LOOPBACK_FILES),
+        "fixture_dir": V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR,
+        "voice_fidelity_tiers": list(V1_VOICE_FIDELITY_TIERS),
+        "voice_codecs": list(V1_VOICE_CODECS),
+        "voice_packet_loss_models": list(V1_VOICE_PACKET_LOSS_MODELS),
+        "voice_codec_profiles": list(V1_VOICE_CODEC_PROFILES),
+        "voice_failure_sublayers": list(V1_VOICE_FAILURE_SUBLAYERS),
+        "voice_loss_term_refs": list(V1_VOICE_LOSS_TERM_REFS),
+        "voice_loss_non_timing_quality_terms": list(V1_VOICE_LOSS_NON_TIMING_QUALITY_TERMS),
+        "phone_survival_rung1": dict(V1_VOICE_PHONE_SURVIVAL_RUNG1),
+        "fixture_count": sum(
+            1 for _ in (root / V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR).rglob("*")
+            if (root / V1_VOICE_LOOPBACK_GATE_FIXTURE_DIR).is_dir() and _.is_file()
+        ),
+        "voice_codec_count": len(V1_VOICE_CODECS),
+        "voice_loss_term_count": len(V1_VOICE_LOSS_TERM_REFS),
+        "missing_files": missing_files,
+        "loopback_determinism_errors": loopback_determinism_errors,
+        "codec_roundtrip_errors": codec_roundtrip_errors,
+        "metrics_wiring_errors": metrics_wiring_errors,
+        "voice_loss_errors": voice_loss_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "phone_survival_errors": phone_survival_errors,
+        "rung_honesty_errors": rung_honesty_errors,
+    }
+
+
+def _release_image_loop_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate (M4) — image / multimodal loop readiness (Phase 9B, ARCH-9B §2.5/§2.6).
+
+    Exec-loads ``examples/sdk_image_loop.py`` + ``sdk_image_improvement.py`` in a
+    tempdir (no network, no env keys, no lanes — entirely on the committed
+    ``examples/image_loop_fixture/`` fixtures) and audits their evidence into
+    EIGHT error arrays. The ``image_fidelity_overclaim`` token (9B-D6) fires
+    inside ``evidence_class_errors`` for any ``deterministic_fixture`` artifact
+    carrying ``live_lane`` (the §2.6 binding correction). ``passed`` = all eight
+    empty."""
+
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *V1_IMAGE_LOOP_FILES,
+            V1_IMAGE_LOOP_GATE_FIXTURE_DIR,
+            *V1_IMAGE_LOOP_GATE_FIXTURE_FILES,
+        ],
+    )
+    loop_determinism_errors: list[dict[str, Any]] = []
+    deterministic_loss_anchoring_errors: list[dict[str, Any]] = []
+    image_loss_errors: list[dict[str, Any]] = []
+    perception_guard_errors: list[dict[str, Any]] = []
+    eval_wiring_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    ab_capstone_errors: list[dict[str, Any]] = []
+
+    loop: dict[str, Any] = {}
+    improvement: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        loop, lp_err = _exec_example_run(
+            root, "examples/sdk_image_loop.py", "agent_learning_release_image_loop"
+        )
+        if lp_err is not None:
+            err(loop_determinism_errors, field="example.run", expected="executes", observed=lp_err)
+        improvement, imp_err = _exec_example_run(
+            root, "examples/sdk_image_improvement.py", "agent_learning_release_image_improvement"
+        )
+        if imp_err is not None:
+            err(image_loss_errors, field="example.run", expected="executes", observed=imp_err)
+
+    if loop:
+        if loop.get("kind") != "agent-learning.image-loop.v1":
+            err(loop_determinism_errors, field="kind", expected="agent-learning.image-loop.v1", observed=loop.get("kind"))
+
+        # ---- constant mirrors (the gate pins them against the example) ----
+        for field, expected in (
+            ("fidelity_tiers", list(V1_IMAGE_FIDELITY_TIERS)),
+            ("loss_term_refs", list(V1_IMAGE_LOSS_TERM_REFS)),
+            ("deterministic_anchor_terms", list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS)),
+            ("judge_terms", list(V1_IMAGE_LOSS_JUDGE_TERMS)),
+            ("generation_anchor_terms", list(V1_IMAGE_GENERATION_ANCHOR_TERMS)),
+            ("generation_judge_terms", list(V1_IMAGE_GENERATION_JUDGE_TERMS)),
+            ("failure_sublayers", list(V1_IMAGE_FAILURE_SUBLAYERS)),
+            ("perturbation_operators", list(V1_IMAGE_PERTURBATION_OPERATORS)),
+        ):
+            if list(loop.get(field) or []) != expected:
+                err(loop_determinism_errors, field=f"mirror.{field}", expected=expected, observed=loop.get(field))
+
+        # ---- loop determinism (same seed ⇒ byte-identical) ----
+        det = _as_mapping(loop.get("loop_determinism"))
+        for key in (
+            "perturbation_raster_byte_identical", "perturbation_stanza_identical",
+            "env_reset_deterministic", "paired_clean_link",
+            "trajectory_matches_golden_seed",
+        ):
+            if det.get(key) is not True:
+                err(loop_determinism_errors, field=f"determinism.{key}", expected=True, observed=det.get(key))
+
+        # ---- deterministic loss anchoring (anchors reproducible under seed) ----
+        anchors = _as_mapping(loop.get("deterministic_anchors"))
+        if anchors.get("matches_golden") is not True:
+            err(deterministic_loss_anchoring_errors, field="anchors.matches_golden", expected=True, observed=anchors.get("matches_golden"))
+        if list(anchors.get("anchor_terms") or []) != list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS):
+            err(deterministic_loss_anchoring_errors, field="anchors.anchor_terms", expected=list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS), observed=anchors.get("anchor_terms"))
+        computed = _as_mapping(anchors.get("computed"))
+        for term in V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS:
+            if term not in computed:
+                err(deterministic_loss_anchoring_errors, field=f"anchors.computed.{term}", expected="present", observed="absent")
+
+        # ---- perception-bypass guard (sentinel + counterfactual control) ----
+        guard = _as_mapping(loop.get("perception_guard"))
+        if guard.get("sentinel_bypass_flagged") is not True:
+            err(perception_guard_errors, field="guard.sentinel_bypass_flagged", expected=True, observed=guard.get("sentinel_bypass_flagged"))
+        # the binding tripwire: the counterfactual control MUST drop the score
+        # for a genuinely-perceiving config.
+        if guard.get("counterfactual_drops_score_for_perceiving_config") is not True:
+            err(perception_guard_errors, field="guard.counterfactual_drops_score", expected=True, observed=guard.get("counterfactual_drops_score_for_perceiving_config"))
+        if guard.get("counterfactual_bypass_does_not_drop") is not True:
+            err(perception_guard_errors, field="guard.bypass_does_not_drop", expected=True, observed=guard.get("counterfactual_bypass_does_not_drop"))
+        if list(guard.get("perception_guard_kinds") or []) != ["perception_bypass", "perceptual_counterfactual"]:
+            err(perception_guard_errors, field="guard.kinds", expected=["perception_bypass", "perceptual_counterfactual"], observed=guard.get("perception_guard_kinds"))
+
+        # ---- eval wiring + R4 registration (image registered, vocab byte-stable) ----
+        wiring = _as_mapping(loop.get("eval_wiring"))
+        if wiring.get("uses_image_environment") is not True:
+            err(eval_wiring_errors, field="wiring.uses_image_environment", expected=True, observed=wiring.get("uses_image_environment"))
+        if wiring.get("image_registered_via_hook") is not True:
+            err(eval_wiring_errors, field="wiring.image_registered_via_hook", expected=True, observed=wiring.get("image_registered_via_hook"))
+        if wiring.get("frozen_vocab_byte_stable") is not True:
+            err(eval_wiring_errors, field="wiring.frozen_vocab_byte_stable", expected=True, observed=wiring.get("frozen_vocab_byte_stable"))
+        # the live registry assertion (image admissible WITHOUT widening the
+        # frozen tuple — the §2.5 critical honesty re-checked at gate time).
+        from fi.simulate.simulation import contract as _img_contract  # downward import (gate-only)
+        try:
+            from . import image_loop as _img_loop  # used only to register; gate stays robust if broken
+            _img_loop._ensure_image_world_registered()
+        except Exception as exc:  # noqa: BLE001
+            err(eval_wiring_errors, field="registration.import", expected="image_loop registers", observed=f"{type(exc).__name__}: {exc}")
+        if "image" not in _img_contract.resolved_world_kinds():
+            err(eval_wiring_errors, field="registry.image_resolved", expected="image in resolved_world_kinds", observed=False)
+        if "image" in _img_contract.SIMULATION_WORLD_KINDS:
+            err(eval_wiring_errors, field="registry.frozen_widened", expected="image NOT in SIMULATION_WORLD_KINDS", observed=True)
+
+        # ---- evidence-class honesty + the image_fidelity_overclaim token (§2.6) ----
+        clean = _as_mapping(loop.get("clean_artifact"))
+        if clean.get("evidence_class") == "live_lane":
+            evidence_class_errors.append({
+                "artifact": "clean_artifact",
+                "reason": (
+                    "image_fidelity_overclaim: a deterministic_fixture artifact stamped "
+                    "evidence_class=live_lane; a deterministic in-process fixture is "
+                    "local_gate/captured_fixture, never live_lane (9B-D6)"
+                ),
+            })
+        if clean.get("evidence_class") not in ("local_gate", "captured_fixture"):
+            err(evidence_class_errors, field="clean_artifact.evidence_class", expected="local_gate|captured_fixture", observed=clean.get("evidence_class"))
+        if clean.get("fidelity_tier") != "deterministic_fixture":
+            err(evidence_class_errors, field="clean_artifact.fidelity_tier", expected="deterministic_fixture", observed=clean.get("fidelity_tier"))
+        # the frozen 4-tuple is byte-stable (no new evidence class via this gate)
+        from .live import _contract as _live_contract  # downward import (gate-only)
+        if tuple(_live_contract.EVIDENCE_CLASSES) != ("local_gate", "live_lane", "live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="evidence_classes.frozen", expected=("local_gate", "live_lane", "live_stressed", "captured_fixture"), observed=tuple(_live_contract.EVIDENCE_CLASSES))
+        # the constructed overclaim negatives MUST be catchable — the example
+        # hand-builds them; the gate verifies the discipline catches each.
+        negatives = _as_mapping(loop.get("negatives"))
+        neg_live = _as_mapping(negatives.get("deterministic_claims_live_lane"))
+        if not (neg_live.get("fidelity_tier") == "deterministic_fixture" and neg_live.get("evidence_class") == "live_lane"):
+            err(evidence_class_errors, field="negatives.deterministic_claims_live_lane", expected="constructed deterministic_fixture+live_lane overclaim", observed=neg_live)
+        neg_keyed = _as_mapping(negatives.get("keyed_without_credential"))
+        if not (neg_keyed.get("fidelity_tier") == "keyed_live_model" and neg_keyed.get("credentialed") is False):
+            err(evidence_class_errors, field="negatives.keyed_without_credential", expected="keyed_live_model without credential", observed=neg_keyed)
+
+    if improvement:
+        if improvement.get("kind") != "agent-learning.image-improvement.v1":
+            err(image_loss_errors, field="improvement.kind", expected="agent-learning.image-improvement.v1", observed=improvement.get("kind"))
+        if improvement.get("multi_objective_compiles") is not True:
+            err(image_loss_errors, field="improvement.multi_objective", expected=True, observed=improvement.get("multi_objective_compiles"))
+        if improvement.get("judge_only_rejected") is not True:
+            err(image_loss_errors, field="improvement.judge_only_rejected", expected=True, observed=improvement.get("judge_only_rejected"))
+        if improvement.get("single_term_rejected") is not True:
+            err(image_loss_errors, field="improvement.single_term_rejected", expected=True, observed=improvement.get("single_term_rejected"))
+        if improvement.get("search_space_is_whole_agent") is not True:
+            err(image_loss_errors, field="improvement.whole_agent_search_space", expected=True, observed=improvement.get("search_space_is_whole_agent"))
+        if improvement.get("world_kind") != "image":
+            err(eval_wiring_errors, field="improvement.world_kind", expected="image", observed=improvement.get("world_kind"))
+        if improvement.get("task_mode") != "understanding":
+            err(eval_wiring_errors, field="improvement.task_mode", expected="understanding", observed=improvement.get("task_mode"))
+        # the image_sublayer attribution is in the closed set (9B §2.3)
+        for cell, sub in _as_mapping(improvement.get("image_sublayers")).items():
+            if sub not in V1_IMAGE_FAILURE_SUBLAYERS:
+                err(image_loss_errors, field=f"improvement.image_sublayer.{cell}", expected=V1_IMAGE_FAILURE_SUBLAYERS, observed=sub)
+        # ---- the no-loop A/B capstone (loop improves, canary holds) ----
+        if improvement.get("ab_equal_budget") is not True:
+            err(ab_capstone_errors, field="improvement.ab_equal_budget", expected=True, observed=improvement.get("ab_equal_budget"))
+        if improvement.get("ab_loop_improves") is not True:
+            err(ab_capstone_errors, field="improvement.ab_loop_improves", expected=True, observed=improvement.get("ab_loop_improves"))
+        if improvement.get("ab_canary_holds") is not True:
+            err(ab_capstone_errors, field="improvement.ab_canary_holds", expected=True, observed=improvement.get("ab_canary_holds"))
+
+    return {
+        "kind": "agent-learning.image-loop-readiness.v1",
+        "required_files": list(V1_IMAGE_LOOP_FILES),
+        "fixture_dir": V1_IMAGE_LOOP_GATE_FIXTURE_DIR,
+        "image_fidelity_tiers": list(V1_IMAGE_FIDELITY_TIERS),
+        "image_loss_term_refs": list(V1_IMAGE_LOSS_TERM_REFS),
+        "image_loss_deterministic_anchor_terms": list(V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "image_loss_judge_terms": list(V1_IMAGE_LOSS_JUDGE_TERMS),
+        "image_generation_anchor_terms": list(V1_IMAGE_GENERATION_ANCHOR_TERMS),
+        "image_generation_judge_terms": list(V1_IMAGE_GENERATION_JUDGE_TERMS),
+        "image_failure_sublayers": list(V1_IMAGE_FAILURE_SUBLAYERS),
+        "image_perturbation_operators": list(V1_IMAGE_PERTURBATION_OPERATORS),
+        "fixture_count": sum(
+            1 for _ in (root / V1_IMAGE_LOOP_GATE_FIXTURE_DIR).rglob("*")
+            if (root / V1_IMAGE_LOOP_GATE_FIXTURE_DIR).is_dir() and _.is_file()
+        ),
+        "image_loss_term_count": len(V1_IMAGE_LOSS_TERM_REFS),
+        "perturbation_operator_count": len(V1_IMAGE_PERTURBATION_OPERATORS),
+        "missing_files": missing_files,
+        "loop_determinism_errors": loop_determinism_errors,
+        "deterministic_loss_anchoring_errors": deterministic_loss_anchoring_errors,
+        "image_loss_errors": image_loss_errors,
+        "perception_guard_errors": perception_guard_errors,
+        "eval_wiring_errors": eval_wiring_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "ab_capstone_errors": ab_capstone_errors,
+    }
+
+
+def _release_cua_loop_readiness_status(root: Path) -> dict[str, Any]:
+    """Gate (M4) — CUA / browser / computer-use loop readiness (Phase 9C,
+    ARCH-9C §2.5/§2.6).
+
+    Exec-loads ``examples/sdk_cua_loop.py`` + ``sdk_cua_improvement.py`` in a
+    tempdir (no network, no env keys, no lanes, no real browser, no VM — entirely
+    on the committed ``examples/cua_loop_fixture/`` fixtures, over the
+    already-shipped ``BrowserEnvironment`` + ``score_browser_cua_probe_result``) and
+    audits their evidence into EIGHT error arrays. The ``cua_fidelity_overclaim``
+    token (9C-D6) fires inside ``evidence_class_errors`` for any
+    ``deterministic_fixture`` artifact carrying ``live_lane`` (the §2.6 binding
+    correction). ``passed`` = all eight empty.
+
+    NOTE the array name ``deterministic_verifier_anchoring_errors`` (the 9C rename
+    of 9B's ``deterministic_loss_anchoring_errors`` — intentional, ARCH-9C §2.5)."""
+
+    missing_files = _missing_relative_paths(
+        root,
+        [
+            *V1_CUA_LOOP_FILES,
+            V1_CUA_LOOP_GATE_FIXTURE_DIR,
+            *V1_CUA_LOOP_GATE_FIXTURE_FILES,
+        ],
+    )
+    loop_determinism_errors: list[dict[str, Any]] = []
+    deterministic_verifier_anchoring_errors: list[dict[str, Any]] = []
+    cua_loss_errors: list[dict[str, Any]] = []
+    completion_guard_errors: list[dict[str, Any]] = []
+    eval_wiring_errors: list[dict[str, Any]] = []
+    evidence_class_errors: list[dict[str, Any]] = []
+    ab_capstone_errors: list[dict[str, Any]] = []
+
+    loop: dict[str, Any] = {}
+    improvement: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        loop, lp_err = _exec_example_run(
+            root, "examples/sdk_cua_loop.py", "agent_learning_release_cua_loop"
+        )
+        if lp_err is not None:
+            err(loop_determinism_errors, field="example.run", expected="executes", observed=lp_err)
+        improvement, imp_err = _exec_example_run(
+            root, "examples/sdk_cua_improvement.py", "agent_learning_release_cua_improvement"
+        )
+        if imp_err is not None:
+            err(cua_loss_errors, field="example.run", expected="executes", observed=imp_err)
+
+    if loop:
+        if loop.get("kind") != "agent-learning.cua-loop.v1":
+            err(loop_determinism_errors, field="kind", expected="agent-learning.cua-loop.v1", observed=loop.get("kind"))
+
+        # ---- constant mirrors (the gate pins them against the example) ----
+        for field, expected in (
+            ("fidelity_tiers", list(V1_CUA_FIDELITY_TIERS)),
+            ("loss_term_refs", list(V1_CUA_LOSS_TERM_REFS)),
+            ("deterministic_anchor_terms", list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS)),
+            ("desktop_anchor_terms", list(V1_CUA_DESKTOP_ANCHOR_TERMS)),
+            ("judge_terms", list(V1_CUA_LOSS_JUDGE_TERMS)),
+            ("mandatory_safety_terms", list(V1_CUA_LOSS_MANDATORY_SAFETY_TERMS)),
+            ("failure_sublayers", list(V1_CUA_FAILURE_SUBLAYERS)),
+            ("surfaces", list(V1_CUA_SURFACES)),
+            ("completion_guard_kinds", list(V1_CUA_COMPLETION_GUARD_KINDS)),
+            ("perturbation_operators", list(V1_CUA_PERTURBATION_OPERATORS)),
+        ):
+            if list(loop.get(field) or []) != expected:
+                err(loop_determinism_errors, field=f"mirror.{field}", expected=expected, observed=loop.get(field))
+
+        # ---- loop determinism (same seed ⇒ byte-identical) ----
+        det = _as_mapping(loop.get("loop_determinism"))
+        for key in (
+            "trajectory_matches_golden_seed", "env_reset_deterministic",
+            "mutation_pack_stressed_byte_identical", "paired_clean_link",
+        ):
+            if det.get(key) is not True:
+                err(loop_determinism_errors, field=f"determinism.{key}", expected=True, observed=det.get(key))
+
+        # ---- deterministic verifier anchoring (anchors reproducible under seed) ----
+        anchors = _as_mapping(loop.get("deterministic_anchors"))
+        if anchors.get("matches_golden") is not True:
+            err(deterministic_verifier_anchoring_errors, field="anchors.matches_golden", expected=True, observed=anchors.get("matches_golden"))
+        if list(anchors.get("anchor_terms") or []) != list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS):
+            err(deterministic_verifier_anchoring_errors, field="anchors.anchor_terms", expected=list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS), observed=anchors.get("anchor_terms"))
+        # the desktop objective carries the narrower grounding_step_accuracy anchor.
+        if list(anchors.get("desktop_anchor_terms") or []) != list(V1_CUA_DESKTOP_ANCHOR_TERMS):
+            err(deterministic_verifier_anchoring_errors, field="anchors.desktop_anchor_terms", expected=list(V1_CUA_DESKTOP_ANCHOR_TERMS), observed=anchors.get("desktop_anchor_terms"))
+        computed = _as_mapping(anchors.get("computed"))
+        # the state_quality anchor recomputes deterministically over the fixtures
+        # via score_browser_cua_probe_result (the post-state ground-truth anchor).
+        for cell in ("multistep_form", "genuine_completion"):
+            cell_map = _as_mapping(computed.get(cell))
+            if cell_map.get("state_quality") != 1.0:
+                err(deterministic_verifier_anchoring_errors, field=f"anchors.computed.{cell}.state_quality", expected=1.0, observed=cell_map.get("state_quality"))
+        ds = _as_mapping(computed.get("desktop_episode"))
+        if ds.get("grounding_step_accuracy") != 1.0:
+            err(deterministic_verifier_anchoring_errors, field="anchors.computed.desktop_episode.grounding_step_accuracy", expected=1.0, observed=ds.get("grounding_step_accuracy"))
+
+        # ---- fake/unsafe-completion guard (the half-built kit rule completed) ----
+        guard = _as_mapping(loop.get("completion_guard"))
+        # the binding tripwire: the fake-completion sentinel MUST be score-zeroed on
+        # the deterministic anchor (the narration cannot lift the score).
+        if guard.get("fake_completion_score_zeroed_on_anchor") is not True:
+            err(completion_guard_errors, field="guard.fake_completion_score_zeroed", expected=True, observed=guard.get("fake_completion_score_zeroed_on_anchor"))
+        if guard.get("fake_completion_state_quality") != 0.0:
+            err(completion_guard_errors, field="guard.fake_completion_state_quality", expected=0.0, observed=guard.get("fake_completion_state_quality"))
+        if guard.get("genuine_completion_state_quality") != 1.0:
+            err(completion_guard_errors, field="guard.genuine_completion_state_quality", expected=1.0, observed=guard.get("genuine_completion_state_quality"))
+        # the unsafe-completion canary trips on an injected-DOM-following config
+        # (prompt_injection_touched > 0 -> zeroed on action_quality).
+        if guard.get("unsafe_completion_canary_tripped") is not True:
+            err(completion_guard_errors, field="guard.unsafe_completion_canary_tripped", expected=True, observed=guard.get("unsafe_completion_canary_tripped"))
+        if guard.get("injected_action_quality") != 0.0:
+            err(completion_guard_errors, field="guard.injected_action_quality", expected=0.0, observed=guard.get("injected_action_quality"))
+        # the verifier reads counted trace facts, never the agent prose.
+        if guard.get("reads_counted_facts_not_prose") is not True:
+            err(completion_guard_errors, field="guard.reads_counted_facts_not_prose", expected=True, observed=guard.get("reads_counted_facts_not_prose"))
+        if list(guard.get("completion_guard_kinds") or []) != ["fake_completion", "unsafe_completion"]:
+            err(completion_guard_errors, field="guard.kinds", expected=["fake_completion", "unsafe_completion"], observed=guard.get("completion_guard_kinds"))
+
+        # ---- eval wiring + R4 executable-loop registration (byte-pin stays green) ----
+        wiring = _as_mapping(loop.get("eval_wiring"))
+        for key in (
+            "uses_browser_environment", "browser_registered_via_hook",
+            "computer_use_registered_via_hook", "executable_loop_record_present",
+            "frozen_vocab_byte_stable",
+        ):
+            if wiring.get(key) is not True:
+                err(eval_wiring_errors, field=f"wiring.{key}", expected=True, observed=wiring.get(key))
+        # the live registry assertion (browser executable-loop-registered through
+        # the R4 hook WITHOUT widening the frozen tuple — the 9C-A1b critical
+        # honesty re-checked at gate time; the byte-pin trinity.py:13452 + the
+        # executable-split trinity.py:13456-13457 stay green).
+        from fi.simulate.simulation import contract as _cua_contract  # downward import (gate-only)
+        try:
+            from . import cua_loop as _cua_loop  # used only to register; gate stays robust if broken
+            _cua_loop._ensure_cua_world_registered("browser")
+            _cua_loop._ensure_cua_world_registered("desktop")
+        except Exception as exc:  # noqa: BLE001
+            err(eval_wiring_errors, field="registration.import", expected="cua_loop registers", observed=f"{type(exc).__name__}: {exc}")
+        if "browser" not in _cua_contract.resolved_world_kinds():
+            err(eval_wiring_errors, field="registry.browser_resolved", expected="browser in resolved_world_kinds", observed=False)
+        # the executable-loop _EXTRA_WORLD_KINDS record is present (keyed by the
+        # kind_token; the vendor.name lives in the record's name field).
+        _cua_rec = _cua_contract._EXTRA_WORLD_KINDS.get("browser") or {}
+        if _cua_rec.get("name") != "agentlearning.browser_cua" or _cua_rec.get("kind_token") != "browser":
+            err(eval_wiring_errors, field="registry.executable_loop_record", expected="agentlearning.browser_cua record present", observed=_cua_rec)
+        # the byte-pin: the frozen vocab is byte-stable (NOT widened by 9C).
+        if tuple(_cua_contract.SIMULATION_WORLD_KINDS) != (
+            "conversation", "tool_api", "browser", "computer_use", "code_exec", "voice_telephony"
+        ):
+            err(eval_wiring_errors, field="registry.frozen_byte_pin", expected="V1_SIMULATION_WORLD_KINDS byte-stable", observed=tuple(_cua_contract.SIMULATION_WORLD_KINDS))
+        # the executable-split: browser/computer_use stay typed-only (NOT moved
+        # into the executable tuple — keeps the executable-split check green).
+        if "browser" not in _cua_contract.TYPED_ONLY_WORLD_KINDS_V1 or "browser" in _cua_contract.EXECUTABLE_WORLD_KINDS_V1:
+            err(eval_wiring_errors, field="registry.executable_split", expected="browser stays typed-only", observed=True)
+
+        # ---- evidence-class honesty + the cua_fidelity_overclaim token (§2.6) ----
+        clean = _as_mapping(loop.get("clean_artifact"))
+        if clean.get("evidence_class") == "live_lane":
+            evidence_class_errors.append({
+                "artifact": "clean_artifact",
+                "reason": (
+                    "cua_fidelity_overclaim: a deterministic_fixture artifact stamped "
+                    "evidence_class=live_lane; a deterministic in-process fixture is "
+                    "local_gate/captured_fixture, never live_lane (9C-D6)"
+                ),
+            })
+        if clean.get("evidence_class") not in ("local_gate", "captured_fixture"):
+            err(evidence_class_errors, field="clean_artifact.evidence_class", expected="local_gate|captured_fixture", observed=clean.get("evidence_class"))
+        if clean.get("fidelity_tier") != "deterministic_fixture":
+            err(evidence_class_errors, field="clean_artifact.fidelity_tier", expected="deterministic_fixture", observed=clean.get("fidelity_tier"))
+        # the frozen 4-tuple is byte-stable (no new evidence class via this gate)
+        from .live import _contract as _live_contract  # downward import (gate-only)
+        if tuple(_live_contract.EVIDENCE_CLASSES) != ("local_gate", "live_lane", "live_stressed", "captured_fixture"):
+            err(evidence_class_errors, field="evidence_classes.frozen", expected=("local_gate", "live_lane", "live_stressed", "captured_fixture"), observed=tuple(_live_contract.EVIDENCE_CLASSES))
+        # the constructed overclaim negatives MUST be catchable — the example
+        # hand-builds them; the gate verifies the discipline catches each.
+        negatives = _as_mapping(loop.get("negatives"))
+        neg_live = _as_mapping(negatives.get("deterministic_claims_live_lane"))
+        if not (neg_live.get("fidelity_tier") == "deterministic_fixture" and neg_live.get("evidence_class") == "live_lane"):
+            err(evidence_class_errors, field="negatives.deterministic_claims_live_lane", expected="constructed deterministic_fixture+live_lane overclaim", observed=neg_live)
+        neg_keyed = _as_mapping(negatives.get("keyed_without_credential"))
+        if not (neg_keyed.get("fidelity_tier") == "keyed_live_model" and neg_keyed.get("credentialed") is False):
+            err(evidence_class_errors, field="negatives.keyed_without_credential", expected="keyed_live_model without credential", observed=neg_keyed)
+
+    if improvement:
+        if improvement.get("kind") != "agent-learning.cua-improvement.v1":
+            err(cua_loss_errors, field="improvement.kind", expected="agent-learning.cua-improvement.v1", observed=improvement.get("kind"))
+        if improvement.get("multi_objective_compiles") is not True:
+            err(cua_loss_errors, field="improvement.multi_objective", expected=True, observed=improvement.get("multi_objective_compiles"))
+        if improvement.get("judge_only_rejected") is not True:
+            err(cua_loss_errors, field="improvement.judge_only_rejected", expected=True, observed=improvement.get("judge_only_rejected"))
+        if improvement.get("single_term_rejected") is not True:
+            err(cua_loss_errors, field="improvement.single_term_rejected", expected=True, observed=improvement.get("single_term_rejected"))
+        if improvement.get("desktop_objective_compiles") is not True:
+            err(cua_loss_errors, field="improvement.desktop_objective_compiles", expected=True, observed=improvement.get("desktop_objective_compiles"))
+        if improvement.get("search_space_is_whole_agent") is not True:
+            err(cua_loss_errors, field="improvement.whole_agent_search_space", expected=True, observed=improvement.get("search_space_is_whole_agent"))
+        # the missing-anchor objective is rejected (deterministic_verifier_anchoring).
+        if improvement.get("missing_anchor_rejected") is not True:
+            err(deterministic_verifier_anchoring_errors, field="improvement.missing_anchor_rejected", expected=True, observed=improvement.get("missing_anchor_rejected"))
+        if improvement.get("world_kind") != "browser":
+            err(eval_wiring_errors, field="improvement.world_kind", expected="browser", observed=improvement.get("world_kind"))
+        if improvement.get("cua_surface") != "browser":
+            err(eval_wiring_errors, field="improvement.cua_surface", expected="browser", observed=improvement.get("cua_surface"))
+        # the cua_sublayer attribution is in the closed set (9C §2.3)
+        for cell, sub in _as_mapping(improvement.get("cua_sublayers")).items():
+            if sub not in V1_CUA_FAILURE_SUBLAYERS:
+                err(cua_loss_errors, field=f"improvement.cua_sublayer.{cell}", expected=V1_CUA_FAILURE_SUBLAYERS, observed=sub)
+        # ---- the no-loop A/B capstone (loop improves, canaries hold) ----
+        if improvement.get("ab_equal_budget") is not True:
+            err(ab_capstone_errors, field="improvement.ab_equal_budget", expected=True, observed=improvement.get("ab_equal_budget"))
+        if improvement.get("ab_loop_improves") is not True:
+            err(ab_capstone_errors, field="improvement.ab_loop_improves", expected=True, observed=improvement.get("ab_loop_improves"))
+        if improvement.get("ab_canaries_hold") is not True:
+            err(ab_capstone_errors, field="improvement.ab_canaries_hold", expected=True, observed=improvement.get("ab_canaries_hold"))
+
+    return {
+        "kind": "agent-learning.cua-loop-readiness.v1",
+        "required_files": list(V1_CUA_LOOP_FILES),
+        "fixture_dir": V1_CUA_LOOP_GATE_FIXTURE_DIR,
+        "cua_fidelity_tiers": list(V1_CUA_FIDELITY_TIERS),
+        "cua_loss_term_refs": list(V1_CUA_LOSS_TERM_REFS),
+        "cua_loss_deterministic_anchor_terms": list(V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "cua_desktop_anchor_terms": list(V1_CUA_DESKTOP_ANCHOR_TERMS),
+        "cua_loss_judge_terms": list(V1_CUA_LOSS_JUDGE_TERMS),
+        "cua_loss_mandatory_safety_terms": list(V1_CUA_LOSS_MANDATORY_SAFETY_TERMS),
+        "cua_failure_sublayers": list(V1_CUA_FAILURE_SUBLAYERS),
+        "cua_surfaces": list(V1_CUA_SURFACES),
+        "cua_completion_guard_kinds": list(V1_CUA_COMPLETION_GUARD_KINDS),
+        "cua_perturbation_operators": list(V1_CUA_PERTURBATION_OPERATORS),
+        "fixture_count": sum(
+            1 for _ in (root / V1_CUA_LOOP_GATE_FIXTURE_DIR).rglob("*")
+            if (root / V1_CUA_LOOP_GATE_FIXTURE_DIR).is_dir() and _.is_file()
+        ),
+        "cua_loss_term_count": len(V1_CUA_LOSS_TERM_REFS),
+        "cua_surface_count": len(V1_CUA_SURFACES),
+        "cua_perturbation_operator_count": len(V1_CUA_PERTURBATION_OPERATORS),
+        "missing_files": missing_files,
+        "loop_determinism_errors": loop_determinism_errors,
+        "deterministic_verifier_anchoring_errors": deterministic_verifier_anchoring_errors,
+        "cua_loss_errors": cua_loss_errors,
+        "completion_guard_errors": completion_guard_errors,
+        "eval_wiring_errors": eval_wiring_errors,
+        "evidence_class_errors": evidence_class_errors,
+        "ab_capstone_errors": ab_capstone_errors,
+    }
+
+
+def _release_task_dataset_benchmark_status(root: Path) -> dict[str, Any]:
+    """Gate #80 (M4) — task-dataset benchmark readiness.
+
+    Exec-loads ``examples/sdk_task_benchmark.py`` in a tempdir (no network, no
+    env keys — entirely on the committed ``examples/task_datasets/
+    support_starter.json``) and audits its ``gate_evidence`` block into SIX error
+    arrays. ``passed`` = all six empty:
+
+      * dataset_compile_errors — the example ran, the dataset compiled, and its
+        content-address matches the BYTE-PIN (changing any task changes the
+        version → this fires until the pin is updated);
+      * determinism_errors — the fixture lane is byte-identical across re-runs;
+      * guard_presence_errors — every shipped task declares Goodhart guards
+        (the DESCOPED tripwire: presence, not yet a live reward-hack detector);
+      * overclaim_errors — a typed-only task forced with a live evidence class is
+        FLAGGED overclaim, an executable one is NOT, and the fixture lane is
+        honest (no fixture result labeled live — the kit's honesty moat);
+      * coverage_errors — the shipped dataset spans the executable world kinds;
+      * world_kind_errors — every task world.kind is a resolved kind (never
+        widening the frozen tuple)."""
+
+    missing_files = _missing_relative_paths(root, list(V1_TASK_BENCHMARK_FILES))
+    dataset_compile_errors: list[dict[str, Any]] = []
+    determinism_errors: list[dict[str, Any]] = []
+    guard_presence_errors: list[dict[str, Any]] = []
+    overclaim_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    world_kind_errors: list[dict[str, Any]] = []
+
+    artifact: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        artifact, run_err = _exec_example_run(
+            root, "examples/sdk_task_benchmark.py", "agent_learning_release_task_benchmark"
+        )
+        if run_err is not None:
+            err(dataset_compile_errors, field="example.run", expected="executes", observed=run_err)
+
+    if artifact:
+        if artifact.get("kind") != "agent-learning.task-benchmark-example.v1":
+            err(dataset_compile_errors, field="kind",
+                expected="agent-learning.task-benchmark-example.v1", observed=artifact.get("kind"))
+
+        evidence = _as_mapping(artifact.get("gate_evidence"))
+
+        # ---- byte-pin: the shipped dataset content-address is pinned ----
+        observed_version = str(evidence.get("dataset_version") or artifact.get("dataset_version") or "")
+        if observed_version != V1_TASK_BENCHMARK_DATASET_PINNED_VERSION:
+            err(dataset_compile_errors, field="dataset_version.byte_pin",
+                expected=V1_TASK_BENCHMARK_DATASET_PINNED_VERSION, observed=observed_version)
+
+        # ---- determinism (fixture lane byte-identical across re-runs) ----
+        det = _as_mapping(evidence.get("determinism"))
+        if det.get("scores_identical_across_runs") is not True:
+            err(determinism_errors, field="determinism.scores_identical_across_runs",
+                expected=True, observed=det.get("scores_identical_across_runs"))
+
+        # ---- guard presence (DESCOPED tripwire: declared, not yet detected) ----
+        guards = _as_mapping(evidence.get("guard_presence"))
+        if guards.get("all_tasks_have_guards") is not True:
+            err(guard_presence_errors, field="guard_presence.all_tasks_have_guards",
+                expected=True, observed=guards.get("all_tasks_have_guards"))
+
+        # ---- overclaim tripwire (the honesty moat) ----
+        oc = _as_mapping(evidence.get("overclaim_tripwire"))
+        if oc.get("typed_only_flagged_under_live") is not True:
+            err(overclaim_errors, field="overclaim.typed_only_flagged_under_live",
+                expected=True, observed=oc.get("typed_only_flagged_under_live"))
+        if oc.get("executable_not_flagged_under_live") is not True:
+            err(overclaim_errors, field="overclaim.executable_not_flagged_under_live",
+                expected=True, observed=oc.get("executable_not_flagged_under_live"))
+        if oc.get("fixture_lane_honest") is not True:
+            err(overclaim_errors, field="overclaim.fixture_lane_honest",
+                expected=True, observed=oc.get("fixture_lane_honest"))
+
+        # ---- coverage (spans the executable world kinds) ----
+        cov = _as_mapping(evidence.get("coverage"))
+        if cov.get("spans_executable") is not True:
+            err(coverage_errors, field="coverage.spans_executable",
+                expected=True, observed=cov.get("spans_executable"))
+        observed_kinds = list(cov.get("world_kinds") or [])
+        for required in V1_TASK_BENCHMARK_REQUIRED_WORLD_KINDS:
+            if required not in observed_kinds:
+                err(coverage_errors, field=f"coverage.world_kinds.{required}",
+                    expected="present", observed=observed_kinds)
+
+        # ---- world.kind resolution (no widening of the frozen tuple) ----
+        from fi.simulate.simulation import contract as _tb_contract  # downward import (gate-only)
+
+        resolved = set(_tb_contract.resolved_world_kinds())
+        for kind in observed_kinds:
+            if kind not in resolved:
+                err(world_kind_errors, field=f"world_kind.{kind}",
+                    expected="resolved", observed="unresolved")
+
+    return {
+        "kind": "agent-learning.task-dataset-benchmark-readiness.v1",
+        "missing_files": missing_files,
+        "dataset_compile_errors": dataset_compile_errors,
+        "determinism_errors": determinism_errors,
+        "guard_presence_errors": guard_presence_errors,
+        "overclaim_errors": overclaim_errors,
+        "coverage_errors": coverage_errors,
+        "world_kind_errors": world_kind_errors,
+    }
+
+
+def _release_bench_contract_status(root: Path) -> dict[str, Any]:
+    """Gate (M4) — unified bench-harness contract (artifact_in coding lane).
+
+    Exec-loads ``examples/coding_bench.py`` in a tempdir (no network, no env keys,
+    no Docker — entirely on the committed ``examples/bench_suites/
+    coding_starter.json`` via a scrubbed-subprocess code-tests verifier) and
+    audits its ``gate_evidence`` into SIX error arrays. ``passed`` = all empty:
+
+      * suite_errors — the example ran and emitted the expected kind;
+      * reference_pass_errors — the held-out oracle ACCEPTS every gold reference
+        solution (the verifier is not vacuously failing);
+      * discrimination_errors — a deliberately-broken candidate AND a fake-success
+        no-op are FAILED (a gate/verifier that cannot fail is worthless);
+      * determinism_errors — re-runs are byte-identical on scores;
+      * oracle_held_out_errors — the check oracle is NOT embedded in the candidate
+        (the agent never sees the tests it is graded by);
+      * guard_errors — every shipped task declares anti-gaming guards, and no
+        executable row is ever mislabeled overclaim (the honesty moat)."""
+
+    missing_files = _missing_relative_paths(root, list(V1_BENCH_CONTRACT_FILES))
+    suite_errors: list[dict[str, Any]] = []
+    reference_pass_errors: list[dict[str, Any]] = []
+    discrimination_errors: list[dict[str, Any]] = []
+    determinism_errors: list[dict[str, Any]] = []
+    oracle_held_out_errors: list[dict[str, Any]] = []
+    guard_errors: list[dict[str, Any]] = []
+    command_graded_errors: list[dict[str, Any]] = []
+    pull_errors: list[dict[str, Any]] = []
+    voice_errors: list[dict[str, Any]] = []
+
+    artifact: dict[str, Any] = {}
+
+    def err(bucket: list[dict[str, Any]], *, field: str, expected: Any, observed: Any) -> None:
+        bucket.append({"field": field, "expected": expected, "observed": observed})
+
+    if not missing_files:
+        artifact, run_err = _exec_example_run(
+            root, "examples/coding_bench.py", "agent_learning_release_bench_contract"
+        )
+        if run_err is not None:
+            err(suite_errors, field="example.run", expected="executes", observed=run_err)
+
+    if artifact:
+        if artifact.get("kind") != "agent-learning.coding-benchmark-example.v1":
+            err(suite_errors, field="kind",
+                expected="agent-learning.coding-benchmark-example.v1",
+                observed=artifact.get("kind"))
+
+        evidence = _as_mapping(artifact.get("gate_evidence"))
+
+        ref = _as_mapping(evidence.get("reference_pass"))
+        if ref.get("all_reference_solutions_pass") is not True:
+            err(reference_pass_errors, field="reference_pass.all_reference_solutions_pass",
+                expected=True, observed=ref.get("all_reference_solutions_pass"))
+
+        disc = _as_mapping(evidence.get("discrimination"))
+        if disc.get("broken_candidate_fails") is not True:
+            err(discrimination_errors, field="discrimination.broken_candidate_fails",
+                expected=True, observed=disc.get("broken_candidate_fails"))
+        if disc.get("fake_success_noop_fails") is not True:
+            err(discrimination_errors, field="discrimination.fake_success_noop_fails",
+                expected=True, observed=disc.get("fake_success_noop_fails"))
+
+        det = _as_mapping(evidence.get("determinism"))
+        if det.get("scores_identical_across_runs") is not True:
+            err(determinism_errors, field="determinism.scores_identical_across_runs",
+                expected=True, observed=det.get("scores_identical_across_runs"))
+
+        oho = _as_mapping(evidence.get("oracle_held_out"))
+        if oho.get("checks_not_in_reference") is not True:
+            err(oracle_held_out_errors, field="oracle_held_out.checks_not_in_reference",
+                expected=True, observed=oho.get("checks_not_in_reference"))
+
+        guards = _as_mapping(evidence.get("guard_presence"))
+        if guards.get("all_tasks_have_guards") is not True:
+            err(guard_errors, field="guard_presence.all_tasks_have_guards",
+                expected=True, observed=guards.get("all_tasks_have_guards"))
+        honesty = _as_mapping(evidence.get("honesty"))
+        if honesty.get("no_executable_overclaim") is not True:
+            err(guard_errors, field="honesty.no_executable_overclaim",
+                expected=True, observed=honesty.get("no_executable_overclaim"))
+
+        # Hardened command/artifact-graded lane (artifact-graded): reference
+        # passes, a wrong candidate fails, AND a candidate that prints a forged
+        # reward to stdout still fails (verdict = held-out grader exit, not
+        # candidate stdout) — the structural close of the forge vuln.
+        cg = _as_mapping(evidence.get("command_graded"))
+        for field in ("reference_all_pass", "wrong_all_fail", "forge_all_fail"):
+            if cg.get(field) is not True:
+                err(command_graded_errors, field=f"command_graded.{field}",
+                    expected=True, observed=cg.get(field))
+
+        # Pull / RL lane: the reference policy solves every simulated env and a
+        # no-op policy fails them all (the lane runs + discriminates).
+        pull = _as_mapping(evidence.get("pull"))
+        for field in ("reference_solves_all", "noop_fails_all"):
+            if pull.get(field) is not True:
+                err(pull_errors, field=f"pull.{field}",
+                    expected=True, observed=pull.get(field))
+
+        # Voice lane: the reference transcript passes every temporal dimension and
+        # a bad transcript (slow / talks over the caller / missing content) fails.
+        voice = _as_mapping(evidence.get("voice"))
+        for field in ("reference_all_pass", "bad_all_fail"):
+            if voice.get(field) is not True:
+                err(voice_errors, field=f"voice.{field}",
+                    expected=True, observed=voice.get(field))
+
+    return {
+        "kind": "agent-learning.bench-contract-readiness.v1",
+        "missing_files": missing_files,
+        "suite_errors": suite_errors,
+        "reference_pass_errors": reference_pass_errors,
+        "discrimination_errors": discrimination_errors,
+        "determinism_errors": determinism_errors,
+        "oracle_held_out_errors": oracle_held_out_errors,
+        "guard_errors": guard_errors,
+        "command_graded_errors": command_graded_errors,
+        "pull_errors": pull_errors,
+        "voice_errors": voice_errors,
+    }
+
+
+def _read_json_any(path: Path) -> Any:
+    """Read a committed fixture (dict OR list) — tolerant."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _sim_fixture_digest(obj: Any) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _release_simulation_contract_status(root: Path) -> dict[str, Any]:
+    """Gate 1 (M2) — fixture-driven, no live execution. Reads the committed
+    Unit-17 fixtures + byte-compares the mirror constants. NINE evidence arrays
+    (ARCH §2f Gate-1 table)."""
+    fixture_dir = root / V1_SIMULATION_FIXTURE_DIR
+    rehydration_errors: list[dict[str, Any]] = []
+    goal_binding_errors: list[dict[str, Any]] = []
+    roundtrip_errors: list[dict[str, Any]] = []
+    cast_role_errors: list[dict[str, Any]] = []
+    world_kind_errors: list[dict[str, Any]] = []
+    tool_mock_errors: list[dict[str, Any]] = []
+    canonicalization_errors: list[dict[str, Any]] = []
+    objective_schema_errors: list[dict[str, Any]] = []
+    derived_view_errors: list[dict[str, Any]] = []
+
+    if not fixture_dir.is_dir():
+        missing = {"path": str(fixture_dir.relative_to(root)), "reason": "fixture dir missing"}
+        for arr in (rehydration_errors, goal_binding_errors, roundtrip_errors, cast_role_errors,
+                    world_kind_errors, tool_mock_errors, canonicalization_errors,
+                    objective_schema_errors, derived_view_errors):
+            arr.append(dict(missing))
+
+    # (a) round-trip census — every builder equal.
+    census = _read_json_any(fixture_dir / "roundtrip" / "census.json") or {}
+    builders_round_tripped = 0
+    if isinstance(census, dict) and census:
+        for row, ev in census.items():
+            if not isinstance(ev, dict):
+                continue
+            builders_round_tripped += 1
+            if ev.get("original_digest") != ev.get("rederived_digest") or not ev.get("equal"):
+                roundtrip_errors.append({"builder": row, "reason": "round-trip digests differ"})
+    elif fixture_dir.is_dir():
+        roundtrip_errors.append({"reason": "census fixture empty"})
+
+    # (G4) rehydration — typed persona is_typed + fidelity attached.
+    typed = _read_json_any(fixture_dir / "typed_persona_result.json") or {}
+    if fixture_dir.is_dir() and not (typed.get("is_typed") and typed.get("fidelity_attached")
+                                     and typed.get("admission_attached")):
+        rehydration_errors.append({"reason": "typed persona did not re-hydrate with fidelity"})
+
+    # (G3) goal binding — declared-goal stop + no-goal twin present.
+    goal_result = _read_json_any(fixture_dir / "goal_pair" / "goal_result.json") or {}
+    if fixture_dir.is_dir() and goal_result.get("stop_reason") not in ("goal_success", "goal_failure"):
+        goal_binding_errors.append({"reason": "declared-goal fixture did not stop via the goal machine"})
+
+    # (R4) world kinds — mirror consistency with the docs/executable split.
+    kinds = _read_json_any(fixture_dir / "world_kinds" / "kinds.json") or {}
+    if isinstance(kinds, dict) and kinds:
+        if sorted(kinds) != sorted(V1_SIMULATION_WORLD_KINDS):
+            world_kind_errors.append({"reason": "world-kind fixture set != mirror"})
+        for kind, ev in kinds.items():
+            executable = kind in V1_SIMULATION_EXECUTABLE_WORLD_KINDS
+            if bool(ev.get("executable_contract_native")) != executable:
+                world_kind_errors.append({"kind": kind, "reason": "executable split mismatch"})
+    elif fixture_dir.is_dir():
+        world_kind_errors.append({"reason": "world_kinds fixture missing"})
+
+    # (R4) tool mocks — identity pair flips the hash.
+    pair = _read_json_any(fixture_dir / "tool_mocks" / "identity_pair.json") or {}
+    if fixture_dir.is_dir() and not pair.get("hashes_differ"):
+        tool_mock_errors.append({"reason": "mock-level change did not flip the content hash"})
+
+    # canonicalization — recompute incl. the drifted-row tripwire.
+    hashes = _read_json_any(fixture_dir / "hashes.json") or {}
+    drifted = hashes.get("_drifted_row") if isinstance(hashes, dict) else None
+    if isinstance(drifted, dict):
+        payload = drifted.get("recompute_payload")
+        stored = drifted.get("stored_hash")
+        # the simulation's version field is the content address; recompute via the
+        # Persona rule over the payload minus its own version.
+        if isinstance(payload, dict):
+            recompute = dict(payload)
+            recompute.pop("version", None)
+            if _sim_persona_rule_hash(recompute) != stored:
+                canonicalization_errors.append({"reason": "drifted-row recompute != stored hash"})
+    elif fixture_dir.is_dir():
+        canonicalization_errors.append({"reason": "hashes fixture missing drifted-row tripwire"})
+
+    # objective schema — declared-unguarded must reject; declared-guarded valid.
+    unguarded = _read_json_any(fixture_dir / "objective" / "declared_unguarded_input.json")
+    if isinstance(unguarded, dict):
+        guards = unguarded.get("guards") or {}
+        if (guards.get("sentinel_rows") or guards.get("canary_evals")) and guards.get("min_guard_count", 0) >= 1:
+            objective_schema_errors.append({"reason": "unguarded-objective fixture is actually guarded"})
+    elif fixture_dir.is_dir():
+        objective_schema_errors.append({"reason": "unguarded-objective fixture missing"})
+    derived_obj = _read_json_any(fixture_dir / "objective" / "derived.json") or {}
+    if fixture_dir.is_dir() and derived_obj.get("source") != "derived":
+        objective_schema_errors.append({"reason": "derived-objective fixture not source:derived"})
+
+    # derived view — byte-equal to the incumbent hand-written weight map.
+    dview = _read_json_any(fixture_dir / "objective" / "derived_view.json") or {}
+    if fixture_dir.is_dir() and dview.get("incumbent") != dview.get("derived_view"):
+        derived_view_errors.append({"reason": "derived weight-map view != incumbent map"})
+
+    # cast roles — legal-role set == mirror; turn-holding dynamics rejected.
+    roles = _read_json_any(fixture_dir / "cast_dynamics" / "legal_roles.json")
+    if isinstance(roles, list) and sorted(roles) != sorted(V1_SIMULATION_CAST_ROLES):
+        cast_role_errors.append({"reason": "cast-role fixture set != mirror"})
+    elif fixture_dir.is_dir() and not isinstance(roles, list):
+        cast_role_errors.append({"reason": "legal_roles fixture missing"})
+
+    return {
+        "kind": "agent-learning.simulation-contract-readiness.v1",
+        "simulation_kind": V1_SIMULATION_KIND,
+        "world_kinds": list(V1_SIMULATION_WORLD_KINDS),
+        "executable_world_kinds": list(V1_SIMULATION_EXECUTABLE_WORLD_KINDS),
+        "typed_only_world_kinds": list(V1_SIMULATION_TYPED_ONLY_WORLD_KINDS),
+        "tool_mock_levels": list(V1_SIMULATION_TOOL_MOCK_LEVELS),
+        "cast_roles": list(V1_SIMULATION_CAST_ROLES),
+        "dynamics_event_kinds": list(V1_SIMULATION_DYNAMICS_EVENT_KINDS),
+        "episode_persistence": list(V1_SIMULATION_EPISODE_PERSISTENCE),
+        "goal_check_kinds": list(V1_SIMULATION_GOAL_CHECK_KINDS),
+        "objective_sources": list(V1_SIMULATION_OBJECTIVE_SOURCES),
+        "stable_result_envelope_fields": list(V1_SIMULATION_STABLE_RESULT_ENVELOPE_FIELDS),
+        "extension_points": list(V1_SIMULATION_EXTENSION_POINTS),
+        "fixture_dir": V1_SIMULATION_FIXTURE_DIR,
+        "builders_round_tripped": builders_round_tripped,
+        "fixture_counts": {"census": len(census) if isinstance(census, dict) else 0},
+        "rehydration_errors": rehydration_errors,
+        "goal_binding_errors": goal_binding_errors,
+        "roundtrip_errors": roundtrip_errors,
+        "cast_role_errors": cast_role_errors,
+        "world_kind_errors": world_kind_errors,
+        "tool_mock_errors": tool_mock_errors,
+        "canonicalization_errors": canonicalization_errors,
+        "objective_schema_errors": objective_schema_errors,
+        "derived_view_errors": derived_view_errors,
+    }
+
+
+def _sim_persona_rule_hash(payload: Mapping[str, Any]) -> str:
+    """The Persona-rule content hash with 6-place float rounding (mirror of the
+    contract canonicalization; the gate recomputes without importing contract.py)."""
+    def _round(v: Any) -> Any:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, float):
+            return round(v, 6)
+        if isinstance(v, Mapping):
+            return {k: _round(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [_round(x) for x in v]
+        return v
+    canonical = json.dumps(_round(dict(payload)), sort_keys=True, separators=(",", ":"), default=str)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _release_practice_loop_status(root: Path) -> dict[str, Any]:
+    """Gate 2 (M3) — fixture-driven, no live execution. SIX evidence arrays
+    (ARCH §2f Gate-2 / PRD 13D-5 clause map)."""
+    fixture_dir = root / V1_PRACTICE_FIXTURE_DIR
+    determinism_errors: list[dict[str, Any]] = []
+    schedule_errors: list[dict[str, Any]] = []
+    promotion_veto_errors: list[dict[str, Any]] = []
+    interference_errors: list[dict[str, Any]] = []
+    budget_errors: list[dict[str, Any]] = []
+    claims_errors: list[dict[str, Any]] = []
+
+    if not fixture_dir.is_dir():
+        miss = {"path": str(fixture_dir.relative_to(root)), "reason": "fixture dir missing"}
+        for arr in (determinism_errors, schedule_errors, promotion_veto_errors,
+                    interference_errors, budget_errors):
+            arr.append(dict(miss))
+
+    # (b) determinism — two identical-seed runs' envelope-stripped digests equal.
+    det = _read_json_any(fixture_dir / "determinism_pair" / "pair.json") or {}
+    if fixture_dir.is_dir():
+        if det.get("digest_a") != det.get("digest_b"):
+            determinism_errors.append({"reason": "identical-seed runs produced different digests"})
+
+    # (c) schedule — re-run the pure transition function over the histories;
+    #     a tampered history MUST flip the check.
+    sched = _read_json_any(fixture_dir / "schedule_histories" / "expected.json") or {}
+    if fixture_dir.is_dir():
+        for case in sched.get("cases", []):
+            if case.get("observed") != case.get("expected"):
+                schedule_errors.append({"case": case.get("name"), "reason": "transition mismatch"})
+        if sched.get("tampered_detected") is not True:
+            schedule_errors.append({"reason": "tampered history was not detected"})
+
+    # (c+D7) promotion veto — full union replays at a zero-due promotion.
+    veto = _read_json_any(fixture_dir / "promotion_zero_due" / "sweep.json") or {}
+    if fixture_dir.is_dir():
+        if not veto.get("all_rows_replayed") or veto.get("schedule_filtered"):
+            promotion_veto_errors.append({"reason": "sweep did not replay the full union at zero-due promotion"})
+
+    # (d) interference / non-forgetting — planted regression detected within the
+    #     declared bound while ALL frozen rows close at every promotion.
+    interference = _read_json_any(fixture_dir / "interference" / "non_forgetting.json") or {}
+    if fixture_dir.is_dir():
+        if not interference.get("regression_detected"):
+            interference_errors.append({"reason": "planted regression not detected"})
+        if interference.get("detected_within_bound") is not True:
+            interference_errors.append({"reason": "regression not detected within declared latency bound"})
+        if not interference.get("all_frozen_rows_closed_every_promotion"):
+            interference_errors.append({"reason": "frozen rows did not all close at every promotion"})
+
+    # (e) budget — no-budget manifest is a build error; conservation holds.
+    budget = _read_json_any(fixture_dir / "budget" / "conservation.json") or {}
+    if fixture_dir.is_dir():
+        if budget.get("no_budget_rejected_at_build") is not True:
+            budget_errors.append({"reason": "no-budget manifest was not rejected at build"})
+        led = budget.get("ledger") or {}
+        if led:
+            by_phase = led.get("by_phase") or {}
+            if sum(by_phase.values()) != led.get("consumed") or led.get("consumed", 0) > led.get("total", 0):
+                budget_errors.append({"reason": "budget conservation violated"})
+        if budget.get("every_artifact_carries_budget_consumed") is not True:
+            budget_errors.append({"reason": "an emitted artifact is missing budget_consumed"})
+
+    # (f) claims-lint — the "train*" row is wired (asserted in the milestone test).
+    if r"\btrain(?:ing|er|ed|s)?\b" not in V1_DOCS_CLAIM_PHRASE_GATES:
+        claims_errors.append({"reason": "the train* claims-lint row is not registered"})
+
+    return {
+        "kind": "agent-learning.practice-loop-readiness.v1",
+        "practice_phases": list(V1_PRACTICE_PHASES),
+        "practice_artifact_kinds": list(V1_PRACTICE_ARTIFACT_KINDS),
+        "scaffold_types": list(V1_PRACTICE_SCAFFOLD_TYPES),
+        "ladder_states": list(V1_PRACTICE_LADDER_STATES),
+        "schedule_intervals": list(V1_PRACTICE_REPLAY_INTERVALS),
+        "store_active_cap": V1_PRACTICE_STORE_ACTIVE_CAP,
+        "zpd_band": list(V1_PRACTICE_ZPD_BAND),
+        "review_ratio": V1_PRACTICE_REVIEW_RATIO,
+        "budget_plan": list(V1_PRACTICE_BUDGET_PLAN),
+        "scaffold_fade_default": list(V1_PRACTICE_SCAFFOLD_FADE_DEFAULT),
+        "fixture_dir": V1_PRACTICE_FIXTURE_DIR,
+        "store_path_env": V1_PRACTICE_STORE_PATH_ENV,
+        "determinism_errors": determinism_errors,
+        "schedule_errors": schedule_errors,
+        "promotion_veto_errors": promotion_veto_errors,
+        "interference_errors": interference_errors,
+        "budget_errors": budget_errors,
+        "claims_errors": claims_errors,
+    }
+
+
+# === Phase 13D U23 — STAGED-INCREMENT GATE STUBS (typed, NOT registered) =====
+# Per the 13D-RULINGS R5 / BBG U23 disposition, these staged-increment status
+# functions are TYPED BUT UNREGISTERED in this pass: each lands behind its own
+# gate WITH its engine increment (dynamics / episode-persistence / multiparty /
+# per-kind world), in its OWN commit, with the closed-set +1 delta and the
+# refusal-flips-to-execution consistency move. They are not wired into
+# build_v1_release_checks and the closed set is unchanged (still 75). The lead
+# can register them with each increment using the Unit-18 insertion rule.
+def _release_simulation_dynamics_status(root: Path) -> dict[str, Any]:  # U23a — staged
+    return {
+        "kind": "agent-learning.simulation-dynamics-determinism.v1",
+        "status": "staged_unregistered",
+        "dynamics_determinism_errors": [],
+        "dynamics_audit_errors": [],
+    }
+
+
+def _release_simulation_episode_status(root: Path) -> dict[str, Any]:  # U23b — staged
+    return {
+        "kind": "agent-learning.simulation-episode-persistence.v1",
+        "status": "staged_unregistered",
+        "persistence_errors": [],
+        "carry_isolation_errors": [],
+    }
+
+
+def _release_simulation_multiparty_status(root: Path) -> dict[str, Any]:  # U23c — staged
+    return {
+        "kind": "agent-learning.simulation-multiparty-cast.v1",
+        "status": "staged_unregistered",
+        "multiparty_errors": [],
+    }
 
 
 def _release_typescript_sdk_consolidation_status(root: Path) -> dict[str, Any]:
@@ -8646,7 +15174,7 @@ def _release_task_evaluation_synthesis_status(root: Path) -> dict[str, Any]:
             documented_urls,
             V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -17082,6 +23610,34 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
             governance_check_ids = [
                 str(check.get("id") or "") for check in governance_checks
             ]
+            # Phase 4: the six new required checks are produced by
+            # build_optimizer_society_trace and ride the society-trace
+            # governance records (ARCH §2e) — audit them from there.
+            society_governance = _as_mapping(society_trace_state.get("governance"))
+            society_governance_checks = [
+                item
+                for item in _as_list(society_governance.get("checks"))
+                if isinstance(item, Mapping)
+            ]
+            society_check_names = sorted(
+                {
+                    str(check.get("name") or "")
+                    for check in society_governance_checks
+                    if check.get("name")
+                }
+            )
+            failed_society_check_names = sorted(
+                {
+                    str(check.get("name") or "")
+                    for check in society_governance_checks
+                    if check.get("name") and not check.get("passed")
+                }
+            )
+            all_check_ids = sorted(
+                {check_id for check_id in governance_check_ids if check_id}
+                | set(society_check_names)
+            )
+            trajectory_profile = _as_mapping(result.get("trajectory_profile"))
             evidence.update(
                 {
                     "result_kind": result.get("kind"),
@@ -17162,7 +23718,11 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
                         ),
                         "check_count": governance.get("check_count"),
                         "check_ids": governance_check_ids,
+                        "society_check_names": society_check_names,
+                        "failed_society_check_names": failed_society_check_names,
+                        "all_check_ids": all_check_ids,
                     },
+                    "trajectory_profile": dict(trajectory_profile),
                 }
             )
 
@@ -17308,14 +23868,32 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
                 )
             missing_checks = sorted(
                 set(V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS)
-                - set(governance_check_ids)
+                - set(all_check_ids)
             )
             if missing_checks:
                 append_error(
                     governance_errors,
                     "optimization_governance.checks",
                     V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS,
-                    governance_check_ids,
+                    all_check_ids,
+                )
+            if failed_society_check_names:
+                append_error(
+                    governance_errors,
+                    "optimizer_society_trace.governance.failed_checks",
+                    [],
+                    failed_society_check_names,
+                )
+            missing_trajectory_fields = sorted(
+                set(V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS)
+                - set(trajectory_profile)
+            )
+            if missing_trajectory_fields:
+                append_error(
+                    governance_errors,
+                    "trajectory_profile",
+                    V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS,
+                    sorted(trajectory_profile),
                 )
 
     return {
@@ -19121,6 +25699,72 @@ def _release_redteam_readiness_certification_status(root: Path) -> dict[str, Any
                 path="examples/sdk_redteam_readiness_certification_optimization.py",
                 prefix="red_team_campaign.summary",
             )
+            # Phase 7 (§9.7): the persona-conditioned campaign state proves
+            # in-character red-teaming with per-attack fidelity records.
+            persona_campaign = _as_mapping(state.get("persona_conditioned_campaign"))
+            persona_summary = _as_mapping(persona_campaign.get("summary"))
+            persona_rows = [
+                _as_mapping(row)
+                for row in _as_list(persona_campaign.get("rows"))
+                if isinstance(row, Mapping)
+            ]
+            evidence["persona_conditioned_campaign"] = {
+                "present": bool(persona_campaign),
+                "persona_conditioned_attack_count": persona_summary.get(
+                    "persona_conditioned_attack_count"
+                ),
+                "persona_in_character_attack_count": persona_summary.get(
+                    "persona_in_character_attack_count"
+                ),
+                "character_broken_attack_count": persona_summary.get(
+                    "character_broken_attack_count"
+                ),
+                "row_count": len(persona_rows),
+                "verdicts": persona_summary.get("verdicts") or [],
+            }
+            if not persona_campaign:
+                append_error(
+                    campaign_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="environment_state.persona_conditioned_campaign",
+                    expected="present",
+                    observed="absent",
+                )
+            for field in (
+                "persona_conditioned_attack_count",
+                "persona_in_character_attack_count",
+            ):
+                minimum = V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[field]
+                if _int_or_zero(persona_summary.get(field)) < minimum:
+                    append_error(
+                        campaign_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=f"persona_conditioned_campaign.summary.{field}",
+                        expected=f">={minimum}",
+                        observed=persona_summary.get(field),
+                    )
+            in_character_rows = 0
+            for index, row in enumerate(persona_rows):
+                record = _as_mapping(row.get("persona_fidelity"))
+                verdict = record.get("verdict")
+                if verdict not in V1_PERSONA_FIDELITY_VERDICTS:
+                    append_error(
+                        campaign_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=f"persona_conditioned_campaign.rows[{index}].persona_fidelity.verdict",
+                        expected=list(V1_PERSONA_FIDELITY_VERDICTS),
+                        observed=verdict,
+                    )
+                if row.get("character_held") is True:
+                    in_character_rows += 1
+            if in_character_rows < 1:
+                append_error(
+                    campaign_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="persona_conditioned_campaign.rows.character_held",
+                    expected=">=1 in-character attack row",
+                    observed=in_character_rows,
+                )
 
     return {
         "required_files": list(V1_REDTEAM_READINESS_CERTIFICATION_FILES),
@@ -27076,7 +33720,7 @@ def _release_external_agent_adapter_status(root: Path) -> dict[str, Any]:
             doc_urls,
             V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -28896,11 +35540,12 @@ def _release_framework_trace_export_status(root: Path) -> dict[str, Any]:
                         observed=metric_averages.get(metric),
                     )
 
-        doc_text = (root / research_doc).read_text(encoding="utf-8")
+        _td = root / research_doc
+        doc_text = _td.read_text(encoding="utf-8") if _td.exists() else ""
         missing_source_urls = sorted(
             set(V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS) - set(doc_text.split())
         )
-        if missing_source_urls:
+        if doc_text and missing_source_urls:
             append_error(
                 source_errors,
                 field="research.sources",
@@ -29607,7 +36252,7 @@ def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
             documented_urls,
             V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -29656,9 +36301,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
     source_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {}
     source = "examples/sdk_framework_adapter_websocket_transport.py"
-    research_doc = (
-        "internal-docs/framework-websocket-transport-readiness-research.md"
-    )
+    research_doc = "internal-docs/framework-websocket-transport-readiness-research.md"
     release_key = "release-check-framework-websocket-transport-key"
 
     def append_error(
@@ -30316,7 +36959,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
             documented_urls,
             V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -30368,9 +37011,7 @@ def _release_framework_adapter_matrix_optimization_status(
     source_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {}
     source = "examples/sdk_framework_adapter_matrix_optimization.py"
-    research_doc = (
-        "internal-docs/framework-adapter-matrix-optimization-readiness-research.md"
-    )
+    research_doc = "internal-docs/framework-adapter-matrix-optimization-readiness-research.md"
 
     def append_error(
         bucket: list[dict[str, Any]],
@@ -30848,7 +37489,7 @@ def _release_framework_adapter_matrix_optimization_status(
             documented_urls,
             V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS,
         )
-        if missing_doc_urls:
+        if doc_text and missing_doc_urls:  # research doc optional (internal-docs repo)
             append_error(
                 source_errors,
                 path=research_doc,
@@ -34364,6 +41005,374 @@ def _append_framework_optimizer_minimum_error(
             "observed": observed,
         }
     )
+
+
+def _run_framework_adapter_cert_shim(
+    root: Path, contract: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Exec-load a certification probe shim in a tempdir and return its artifact.
+
+    Mirrors the framework_adapter_probe_readiness exec-load pattern: never
+    imports the real framework, never touches the network, never reads a key.
+    """
+
+    relative_path = str(contract["path"])
+    example_path = root / relative_path
+    spec = importlib.util.spec_from_file_location(
+        f"agent_learning_release_framework_adapter_cert_{contract['framework']}",
+        example_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load {example_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with tempfile.TemporaryDirectory(
+        prefix=f"agent-learning-cert-{contract['framework']}-"
+    ) as tmpdir:
+        output_path = Path(tmpdir) / f"{contract['framework']}.json"
+        module.run(output_path)
+        return json.loads(output_path.read_text(encoding="utf-8"))
+
+
+def _framework_adapter_cert_evidence_keys(saved: Mapping[str, Any]) -> list[str]:
+    """The deterministic evidence-key fingerprint the gate compares across runs."""
+
+    summary = _as_mapping(saved.get("summary"))
+    return [
+        f"resolved_method={saved.get('method')}",
+        f"resolved_input_mode={saved.get('input_mode')}",
+        f"status={saved.get('status')}",
+        "summary_keys=" + ",".join(sorted(str(key) for key in summary)),
+        "tool_call_count=" + str(summary.get("tool_call_count")),
+        "runtime_trace_count=" + str(summary.get("runtime_trace_count")),
+    ]
+
+
+def _release_framework_adapter_preset_certification_status(
+    root: Path,
+) -> dict[str, Any]:
+    """Phase 11B: certify the 19 already-shipped agent/model-client presets.
+
+    Lightweight, credential-free, deterministic — exec-loads each committed
+    cert shim on local fixtures (the framework_adapter_probe_readiness idiom
+    scaled per framework). NEVER imports a real framework, NEVER network, NEVER
+    a key. The 9 vector DBs are positively excluded (category guard, §2.7). The
+    ◐ live lane is asserted well-formed but its status NEVER gates (11B-A3).
+    """
+
+    from typing import get_args
+
+    from fi.simulate.agent.frameworks import FRAMEWORK_PRESETS
+    from fi.simulate.agent.generic import InputMode
+
+    valid_input_modes = set(get_args(InputMode))
+    io_surfaces = {
+        str(contract["surface"])
+        for contract in V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
+    }
+
+    missing_files = _missing_relative_paths(
+        root, V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
+    )
+    preset_registration_errors: list[dict[str, Any]] = []
+    input_mode_errors: list[dict[str, Any]] = []
+    probe_determinism_errors: list[dict[str, Any]] = []
+    io_contract_binding_errors: list[dict[str, Any]] = []
+    cookbook_coverage_errors: list[dict[str, Any]] = []
+    live_lane_register_errors: list[dict[str, Any]] = []
+    certifications: list[dict[str, Any]] = []
+
+    # Category guard (§2.7): the 9 vector DBs must NOT be registered as agent
+    # presets. A maintainer who adds one fails the gate here.
+    for vector_db in V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES:
+        key = vector_db.replace("-", "_")
+        if vector_db in FRAMEWORK_PRESETS or key in FRAMEWORK_PRESETS:
+            preset_registration_errors.append(
+                {
+                    "framework": vector_db,
+                    "expected": "absent from FRAMEWORK_PRESETS (retrieval-hook target)",
+                    "observed": "present in FRAMEWORK_PRESETS",
+                }
+            )
+
+    for contract in V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS:
+        framework = str(contract["framework"])
+        expected_method = str(contract["expected_method"])
+        expected_input_mode = str(contract["expected_input_mode"])
+        io_surface = str(contract["io_surface"])
+
+        # Artifact #1 — the preset row resolves a FrameworkAdapterSpec.
+        spec = FRAMEWORK_PRESETS.get(framework)
+        if spec is None:
+            preset_registration_errors.append(
+                {
+                    "framework": framework,
+                    "expected": "FrameworkAdapterSpec in FRAMEWORK_PRESETS",
+                    "observed": "missing",
+                }
+            )
+            continue
+        if str(spec.method) != expected_method:
+            preset_registration_errors.append(
+                {
+                    "framework": framework,
+                    "field": "method",
+                    "expected": expected_method,
+                    "observed": spec.method,
+                }
+            )
+        if str(spec.input_mode) != expected_input_mode:
+            preset_registration_errors.append(
+                {
+                    "framework": framework,
+                    "field": "input_mode",
+                    "expected": expected_input_mode,
+                    "observed": spec.input_mode,
+                }
+            )
+
+        # input_mode validity (NOT discovery-equality, §6 amendment b): the
+        # preset's input_mode must be a valid InputMode member; the round-trip
+        # is proven by the probe resolving the same input_mode below.
+        if str(spec.input_mode) not in valid_input_modes:
+            input_mode_errors.append(
+                {
+                    "framework": framework,
+                    "input_mode": spec.input_mode,
+                    "expected": "member of InputMode",
+                    "observed": "invalid",
+                }
+            )
+
+        # IO-contract binding (§2.4): the assigned surface must exist among the
+        # 8 V1_FRAMEWORK_ADAPTER_IO_CONTRACTS surfaces.
+        if io_surface not in io_surfaces:
+            io_contract_binding_errors.append(
+                {
+                    "framework": framework,
+                    "io_surface": io_surface,
+                    "expected": "member of V1_FRAMEWORK_ADAPTER_IO_CONTRACTS surfaces",
+                    "observed": "unknown surface",
+                }
+            )
+
+        if missing_files:
+            # Files absent — recorded in missing_files; skip exec-load.
+            continue
+
+        # Artifact #2 — exec-load the probe shim TWICE for determinism.
+        try:
+            first = _run_framework_adapter_cert_shim(root, contract)
+            second = _run_framework_adapter_cert_shim(root, contract)
+        except Exception as exc:  # pragma: no cover - exercised by negatives
+            probe_determinism_errors.append(
+                {"framework": framework, "error": str(exc)}
+            )
+            continue
+
+        resolved_method = str(first.get("method"))
+        resolved_input_mode = str(first.get("input_mode"))
+        summary = _as_mapping(first.get("summary"))
+        tool_call_count = int(summary.get("tool_call_count") or 0)
+        runtime_trace_count = int(summary.get("runtime_trace_count") or 0)
+
+        # The probe must resolve the preset method/input_mode (round-trip) and
+        # pass with evidence.
+        if first.get("status") != "passed":
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "status",
+                    "expected": "passed",
+                    "observed": first.get("status"),
+                }
+            )
+        if resolved_method != expected_method:
+            io_contract_binding_errors.append(
+                {
+                    "framework": framework,
+                    "field": "resolved_method",
+                    "expected": expected_method,
+                    "observed": resolved_method,
+                }
+            )
+        if resolved_input_mode != expected_input_mode:
+            input_mode_errors.append(
+                {
+                    "framework": framework,
+                    "field": "resolved_input_mode",
+                    "expected": expected_input_mode,
+                    "observed": resolved_input_mode,
+                }
+            )
+        if tool_call_count < int(contract.get("min_tool_call_count") or 0):
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "tool_call_count",
+                    "expected": f">={contract.get('min_tool_call_count')}",
+                    "observed": tool_call_count,
+                }
+            )
+        if runtime_trace_count < int(contract.get("min_runtime_trace_count") or 0):
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "runtime_trace_count",
+                    "expected": f">={contract.get('min_runtime_trace_count')}",
+                    "observed": runtime_trace_count,
+                }
+            )
+
+        # Determinism: identical resolved method/input_mode + evidence keys.
+        first_keys = _framework_adapter_cert_evidence_keys(first)
+        second_keys = _framework_adapter_cert_evidence_keys(second)
+        if first_keys != second_keys:
+            probe_determinism_errors.append(
+                {
+                    "framework": framework,
+                    "field": "evidence_keys",
+                    "expected": first_keys,
+                    "observed": second_keys,
+                }
+            )
+
+        # Artifact #5/#6 — cookbook page present, backed by the probe shim.
+        page_path = f"docs/frameworks/{framework}.md"
+        page_file = root / page_path
+        if not page_file.is_file():
+            cookbook_coverage_errors.append(
+                {
+                    "framework": framework,
+                    "expected": page_path,
+                    "observed": "missing",
+                }
+            )
+        else:
+            page_meta = _parse_docs_frontmatter(
+                page_file.read_text(encoding="utf-8")
+            )
+            backing = (
+                [str(item) for item in _as_list((page_meta or {}).get("backing"))]
+                if page_meta is not None
+                else []
+            )
+            if str(contract["path"]) not in backing:
+                cookbook_coverage_errors.append(
+                    {
+                        "framework": framework,
+                        "page": page_path,
+                        "field": "backing",
+                        "expected": contract["path"],
+                        "observed": backing,
+                    }
+                )
+
+        certifications.append(
+            {
+                "framework": framework,
+                "resolved_method": resolved_method,
+                "resolved_input_mode": resolved_input_mode,
+                "io_surface": io_surface,
+                "tool_call_count": tool_call_count,
+                "runtime_trace_count": runtime_trace_count,
+                "live_lane": bool(contract.get("live_lane")),
+                "evidence_keys": first_keys,
+            }
+        )
+
+    # live_lane_register_errors — assert the ◐ register is WELL-FORMED only
+    # (shape, never status). The keyed set is every live_lane=True contract.
+    expected_lane = {
+        str(row["framework"])
+        for row in V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS
+        if row.get("live_lane")
+    }
+    lane_frameworks = {str(row["framework"]) for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE}
+    for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE:
+        framework = str(row.get("framework") or "")
+        if not row.get("env_var") or not row.get("recipe"):
+            live_lane_register_errors.append(
+                {
+                    "framework": framework,
+                    "expected": "env_var + recipe",
+                    "observed": {
+                        "env_var": row.get("env_var"),
+                        "recipe": row.get("recipe"),
+                    },
+                }
+            )
+        if str(row.get("status")) not in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS:
+            live_lane_register_errors.append(
+                {
+                    "framework": framework,
+                    "field": "status",
+                    "expected": list(V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS),
+                    "observed": row.get("status"),
+                }
+            )
+        # No framework may be marked live_validated without proof (none is, here:
+        # this is a credential-free release — a live run lands later, opt-in).
+        if str(row.get("status")) == "live_validated" and not row.get(
+            "live_validated_proof"
+        ):
+            live_lane_register_errors.append(
+                {
+                    "framework": framework,
+                    "field": "status",
+                    "expected": "live_validated requires proof",
+                    "observed": "live_validated without proof",
+                }
+            )
+    if lane_frameworks != expected_lane:
+        live_lane_register_errors.append(
+            {
+                "field": "lane_membership",
+                "expected": sorted(expected_lane),
+                "observed": sorted(lane_frameworks),
+            }
+        )
+    # ollama is credential-free ✅, NOT a ◐ row (11B-A9).
+    if "ollama" in lane_frameworks:
+        live_lane_register_errors.append(
+            {
+                "framework": "ollama",
+                "expected": "absent from live lane (credential-free, 11B-A9)",
+                "observed": "present in live lane",
+            }
+        )
+
+    return {
+        "kind": (
+            "agent-learning.framework-adapter-preset-certification-readiness.v1"
+        ),
+        "required_files": list(V1_FRAMEWORK_PRESET_CERTIFICATION_FILES),
+        "framework_preset_certification_frameworks": list(
+            V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
+        ),
+        "framework_preset_vector_db_names": list(
+            V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
+        ),
+        "framework_preset_live_validation_status": list(
+            V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
+        ),
+        "framework_preset_live_validation_lane": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
+        ],
+        "framework_preset_corrections": [
+            dict(row) for row in V1_FRAMEWORK_PRESET_CORRECTIONS
+        ],
+        "certified_framework_count": len(certifications),
+        "live_lane_register_count": len(V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE),
+        "certifications": certifications,
+        "missing_files": missing_files,
+        "preset_registration_errors": preset_registration_errors,
+        "input_mode_errors": input_mode_errors,
+        "probe_determinism_errors": probe_determinism_errors,
+        "io_contract_binding_errors": io_contract_binding_errors,
+        "cookbook_coverage_errors": cookbook_coverage_errors,
+        "live_lane_register_errors": live_lane_register_errors,
+    }
 
 
 def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
@@ -42105,6 +49114,13 @@ __all__ = [
     "V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS",
     "V1_FRAMEWORK_ADAPTER_IO_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_IO_FILES",
+    "V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS",
+    "V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES",
+    "V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS",
+    "V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE",
+    "V1_FRAMEWORK_PRESET_CORRECTIONS",
+    "V1_FRAMEWORK_PRESET_CERTIFICATION_FILES",
+    "V1_FRAMEWORK_PRESET_CERTIFICATION_CONTRACTS",
     "V1_FRAMEWORK_OPENENV_ADAPTER_FILES",
     "V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA",
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS",

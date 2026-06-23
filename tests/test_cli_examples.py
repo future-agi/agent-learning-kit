@@ -5957,7 +5957,21 @@ def test_optimizer_governance_optimization_example_runs_society_trace(
         "has_dependency_audit",
     ):
         assert trace_summary[flag] is True
-    assert trace_summary["governance_check_count"] == 6
+    for flag in (
+        "has_guna_axes",
+        "has_two_chamber",
+        "has_nyaya_justifications",
+        "has_hetvabhasa_rejections",
+        "has_nirnaya",
+        "has_staged_conditioning",
+        "has_layer_locality",
+        "has_declared_budget",
+        "has_external_ranking",
+    ):
+        assert trace_summary[flag] is True
+    # Phase 4: the governed twin is engine-built — 11 computed checks plus
+    # the 6 conditional society checks (explicit checks dedupe in).
+    assert trace_summary["governance_check_count"] == 17
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
 
     assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")

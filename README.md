@@ -11,11 +11,15 @@
 <p align="center">
   <a href="LICENSE">Apache-2.0</a>
   ·
+  <a href="docs/index.md">Docs</a>
+  ·
   <a href="CONTRIBUTING.md">Contributing</a>
   ·
   <a href="SECURITY.md">Security</a>
   ·
-  <a href="V1_RELEASE_ROADMAP.md">V1 roadmap</a>
+  <a href="ROADMAP.md">V1 roadmap</a>
+  ·
+  <a href="LIBRARIES.md">Library inventory</a>
 </p>
 
 ![Agent Learning lifecycle blueprint](docs/assets/hero-agent-blueprint.jpg)
@@ -23,7 +27,9 @@
 Agent Learning Kit is the local-first SDK and CLI for testing, simulating,
 red-teaming, and optimizing AI agents.
 
-It brings the three core Future AGI engines into one public developer surface:
+It brings the three core Future AGI engines into one public developer surface —
+three engines, four workflows: red-teaming rides on the `simulate` and `evals`
+engines rather than being a fourth engine:
 
 - `simulate`: run local worlds, tasks, framework-shaped adapters, replays, and
   regression artifacts.
@@ -40,12 +46,24 @@ Use it when you want one reproducible loop:
 4. Promote the result into a replayable artifact.
 5. Prove release readiness with local gates.
 
-OpenEnv/Gymnasium remain compatibility input shapes, not product ownership.
-They are compatibility inputs, not the product center. Agent Learning Kit is the
-primary runtime and release contract.
+OpenEnv/Gymnasium shapes are compatibility inputs, not the product center.
+Agent Learning Kit is the primary runtime and release contract, and the bar is
+the executable `environment_10x_robustness` release gate.
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 ## Install
+
+PyPI and npm publishing land at the v1 launch. Today, install from source:
+
+```bash
+git clone https://github.com/future-agi/agent-learning-kit
+cd agent-learning-kit
+pip install -e .
+```
+
+(or `uv sync` for contributors)
+
+At launch:
 
 ```bash
 pip install agent-learning-kit
@@ -59,7 +77,8 @@ pip install "agent-learning-kit[nli]"
 pip install "agent-learning-kit[all]"
 ```
 
-TypeScript evaluation package:
+TypeScript evaluation package (npm at launch; today build from
+[`typescript/agent-learning-kit`](typescript/agent-learning-kit)):
 
 ```bash
 pnpm add @future-agi/agent-learning-kit
@@ -67,20 +86,17 @@ pnpm add @future-agi/agent-learning-kit
 
 ## Quickstart
 
-Configure once:
-
-```python
-from agent_learning import configure
-from agent_learning import evals, optimize, redteam, simulate, suite
-
-configure(api_key="...")
-```
-
-Run the local doctor:
+Everything below runs fully offline — no API key, no network. Start with the
+local doctor:
 
 ```bash
 agent-learn doctor
 ```
+
+Then run the golden path against the bundled example manifests. The
+`AGENT_LEARNING_*_EXAMPLE_KEY` prefixes satisfy each manifest's
+`required_env` list — that list is CI wiring metadata, not a provider
+credential, so any placeholder value works.
 
 Evaluate a suite:
 
@@ -92,7 +108,8 @@ agent-learn eval examples/eval_suite.json \
 Simulate a run manifest:
 
 ```bash
-agent-learn run examples/run_manifest.json \
+AGENT_LEARNING_RUN_EXAMPLE_KEY=offline-demo-key \
+  agent-learn run examples/run_manifest.json \
   --no-eval \
   --output artifacts/run.json
 ```
@@ -100,16 +117,27 @@ agent-learn run examples/run_manifest.json \
 Optimize an agent workflow:
 
 ```bash
-agent-learn optimize examples/optimization_manifest.json \
+AGENT_LEARNING_OPTIMIZE_EXAMPLE_KEY=offline-demo-key \
+  agent-learn optimize examples/optimization_manifest.json \
   --output artifacts/optimization.json
 ```
 
 Run a red-team campaign:
 
 ```bash
-agent-learn redteam examples/redteam_manifest.json \
+AGENT_LEARNING_REDTEAM_EXAMPLE_KEY=offline-demo-key \
+  agent-learn redteam examples/redteam_manifest.json \
   --output artifacts/redteam.json
 ```
+
+Each command prints a `wrote <path>` line; relative `--output` paths resolve
+against your current working directory.
+
+Optional platform mode: to use Future AGI platform-backed evaluation, set
+`AGENT_LEARNING_API_KEY` (it takes precedence over the `FUTURE_AGI_API_KEY`
+and `FI_API_KEY` aliases), or call `configure(api_key="...")` from
+`agent_learning`. See
+[docs/reference/configure.md](docs/reference/configure.md).
 
 Cut local release proof:
 
@@ -132,9 +160,11 @@ import { LocalEvaluator } from "@future-agi/agent-learning-kit/evals/local";
 
 - Prompt and response evaluations.
 - Local task and world simulations.
-- Framework adapter probes for LangChain, LangGraph, OpenAI Agents, AutoGen,
-  CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, MCP, A2A, and custom
-  orchestration objects.
+- Framework adapter probes (probe-promoted coverage) for LangChain, LangGraph,
+  LlamaIndex, AutoGen, CrewAI, LiveKit, Pipecat, Browser Use, MCP, A2A, and
+  custom orchestration objects.
+- Runtime-simulated coverage for PydanticAI (multi-framework runtime
+  simulation) and OpenAI Agents (handoff-transcript promotion).
 - Runtime-contract and trace-quality checks.
 - Multi-agent coordination and handoff tests.
 - Retrieval and memory quality checks.
@@ -153,15 +183,25 @@ The public SDK is `agent-learning-kit`, the Python namespace is
 `agent_learning`, the CLI is `agent-learn`, and the TypeScript package is
 `@future-agi/agent-learning-kit`.
 
+The active `ai-evaluation` code is included here under `src/fi/evals`, with its
+TypeScript SDK source under `typescript/agent-learning-kit/src`. The
+`simulate-sdk` and `agent-opt` engine code is included under `src/fi/simulate`
+and `src/fi/opt`. See [LIBRARIES.md](LIBRARIES.md) for the complete source map.
+The ai-evaluation source inventory used by `agent-learn release-check` lives at
+the ai-evaluation source inventory (maintained in the internal-docs repo).
+
 ## Repository Map
 
 - [`examples/`](examples): runnable cookbooks and manifests.
 - [`src/agent_learning`](src/agent_learning): public Python SDK facade and CLI.
-- [`src/fi`](src/fi): vendored simulation and evaluation engines.
+- [`src/fi/evals`](src/fi/evals): active `ai-evaluation` engine code.
+- [`src/fi/simulate`](src/fi/simulate): migrated `simulate-sdk` engine code.
+- [`src/fi/opt`](src/fi/opt): migrated `agent-opt` engine code.
 - [`typescript/agent-learning-kit`](typescript/agent-learning-kit): public
-  TypeScript package.
-- [`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md): executable v1 gate map.
-- [`internal-docs/`](internal-docs): handover, research, and release notes.
+  TypeScript package, including the active evaluation SDK source.
+- [`docs/index.md`](docs/index.md): full documentation index.
+- [`ROADMAP.md`](ROADMAP.md): public v1 roadmap and post-v1 extensions.
+- [`LIBRARIES.md`](LIBRARIES.md): source map for the consolidated engines.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): local development and PR workflow.
 - [`SECURITY.md`](SECURITY.md): vulnerability reporting policy.
 - [`LICENSE`](LICENSE): Apache-2.0 license.
@@ -207,9 +247,10 @@ kinds, packaging metadata, red-team corpus/campaign coverage, Future AGI
 UI/action/report artifacts, framework/provider compatibility, environment
 robustness, regression replay, and release proof.
 
-Current package labels may intentionally differ from the v1 release tag. See
-[`internal-docs/v1-release-candidate-notes.md`](internal-docs/v1-release-candidate-notes.md)
-before publishing.
+All v1 gates are green on the proved release commit (see the release-proof
+artifact). Roadmap milestones marked "mostly complete" or "in progress" are
+extend-only: the v1 contract those gates assert is frozen and proved; the named
+extensions land post-v1 without weakening any gate.
 
 ## Community
 
@@ -220,7 +261,5 @@ before publishing.
 
 ## Deep Dive
 
-The detailed CLI and SDK cookbook material lives in
-[internal-docs/agent-learning-kit-readme-deep-dive.md](internal-docs/agent-learning-kit-readme-deep-dive.md).
-Keep this README focused on public onboarding, install, quickstart, release
-proof, and contribution paths.
+The full documentation set — quickstarts, per-track guides, framework pages,
+and reference material — starts at [docs/index.md](docs/index.md).

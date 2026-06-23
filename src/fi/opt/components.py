@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Set
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 AgentComponent = Literal[
@@ -100,6 +100,32 @@ class AgentComponentSpec(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+HARNESS_LAYERS = (
+    "execution",
+    "tool_interface",
+    "context_memory",
+    "lifecycle",
+    "observability",
+    "verification",
+    "governance",
+)
+
+# Layer -> admissible search-path prefixes. Built from the SAME path families
+# COMPONENT_SPECS already uses (e.g. the "harness" spec's framework.runtime.*,
+# framework.lifecycle.*, framework.capabilities.* path groups) so layer scoping
+# and component scoping cannot disagree: every prefix below appears in some
+# spec's config_paths (asserted by the Phase-4 locality tests).
+HARNESS_LAYER_PATH_PREFIXES: Dict[str, tuple[str, ...]] = {
+    "execution": ("simulation", "harness", "framework.runtime", "framework.runtime.method"),
+    "tool_interface": ("tools", "framework.capabilities.tools", "framework.lifecycle.tool_registration"),
+    "context_memory": ("memory", "retrieval", "retriever", "framework.capabilities.memory"),
+    "lifecycle": ("framework.lifecycle", "framework.lifecycle.sessions", "framework.lifecycle.checkpoints"),
+    "observability": ("framework.trace", "framework.trace.export", "framework.import.event_streams"),
+    "verification": ("evaluation", "evaluation.trajectory_templates", "rubric"),
+    "governance": ("security", "policy", "framework.trust_boundary", "environment"),
+}
+
+
 class ComponentDiagnosis(BaseModel):
     """Evidence-backed route from observed failure to component-level patch space."""
 
@@ -110,7 +136,19 @@ class ComponentDiagnosis(BaseModel):
     suggested_paths: List[str] = Field(default_factory=list)
     suggested_metrics: List[str] = Field(default_factory=list)
     patch_strategy: Optional[str] = None
+    harness_layer: Optional[str] = None  # member of HARNESS_LAYERS or None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("harness_layer")
+    @classmethod
+    def _validate_harness_layer(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if value not in HARNESS_LAYERS:
+            raise ValueError(
+                f"harness_layer must be one of {HARNESS_LAYERS} or None, got {value!r}."
+            )
+        return value
 
 
 COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
@@ -2918,6 +2956,26 @@ def relevant_search_paths(
         for path in search_space
         if any(path == prefix or path.startswith(f"{prefix}.") for prefix in prefixes)
     }
+    # Harness-layer locality (Phase 4, HarnessFix anti-broad-patch rule): layer
+    # scoping NARROWS the component-scoped set; it never widens it, and an
+    # empty intersection degrades to the component-scoped set rather than to
+    # everything. Untagged diagnoses reproduce the legacy behavior exactly.
+    layers = {
+        getattr(diagnosis, "harness_layer", None)
+        for diagnosis in diagnoses
+        if getattr(diagnosis, "harness_layer", None)
+    }
+    if layers:
+        layer_prefixes: Set[str] = set()
+        for layer in layers:
+            layer_prefixes.update(HARNESS_LAYER_PATH_PREFIXES.get(layer, ()))
+        layer_matched = {
+            path
+            for path in matched
+            if any(path == p or path.startswith(f"{p}.") for p in layer_prefixes)
+        }
+        if layer_matched:
+            return layer_matched
     return matched or set(search_space.keys())
 
 

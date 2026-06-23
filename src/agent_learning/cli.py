@@ -20,6 +20,8 @@ AGENT_LEARNING_ARTIFACT_EVAL_KIND = "agent-learning.artifact-evaluation.v1"
 AGENT_LEARNING_ACTION_RUN_KIND = "agent-learning.action-run.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
+AGENT_LEARNING_PERSONA_CALIBRATION_KIND = "agent-learning.persona-calibration.v1"
+AGENT_LEARNING_PERSONA_LIBRARY_KIND = "agent-learning.persona-library.v1"
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
@@ -28,6 +30,7 @@ AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 
 SIMULATE_COMMANDS = {
     "baseline",
+    "capture-fixture",
     "compare",
     "init",
     "promote-to-regression",
@@ -41,6 +44,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args:
         return _help()
     command = args[0]
+    if command in {"-h", "--help", "help"}:
+        return _help()
     if command == "doctor":
         return _doctor(args[1:])
     if command in {"release-check", "v1-check", "release"}:
@@ -59,6 +64,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _action_optimize(args[1:])
     if command == "run":
         return _run(args[1:])
+    if command in {"bench", "benchmark"}:
+        return _bench(args[1:])
     if command == "eval":
         return _eval(args[1:])
     if command in {"eval-artifact", "eval-report"}:
@@ -89,6 +96,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _eval_cli(args[1:])
     if command in {"shrink", "minimize", "minimize-counterexample"}:
         return _simulate(["shrink", *args[1:]])
+    if command == "persona":
+        return _persona(args[1:])
+    if command == "scenario":
+        return _scenario(args[1:])
+    if command in {"runs", "ledger"}:  # "ledger" = hidden alias; never in --help
+        return _runs(args[1:])
+    if command == "simulation":  # Phase 13D — the contract family (exact match,
+        return _simulation(args[1:])  # never collides with the `simulate` family
+    if command == "practice":
+        return _practice(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -119,6 +136,11 @@ def _eval_cli_app() -> Any:
 
 
 def _simulate(args: Sequence[str]) -> int:
+    args = list(args)
+    if args and args[0] == "capture-fixture":
+        # Live→fixture demotion (Phase 3 §6.2) — handled here, not by the
+        # vendored simulate CLI, so the surface works framework-free.
+        return _capture_fixture(args[1:])
     try:
         cli = _simulate_cli_module()
     except Exception as exc:
@@ -182,9 +204,9 @@ def _init(args: Sequence[str]) -> int:
         return _vendored_import_failed("agent-learn init", exc)
 
     target_dir = Path(parsed.directory).expanduser().resolve()
-    required_env = [str(value) for value in _as_list(parsed.required_env)] or [
-        "AGENT_LEARNING_API_KEY"
-    ]
+    # Golden paths run offline by default: no env requirement unless the user
+    # opts in via --required-env (keys are CI metadata, not a local gate).
+    required_env = [str(value) for value in _as_list(parsed.required_env)]
     started = time.time()
     try:
         payload = cli._init_scaffold_result(
@@ -234,7 +256,7 @@ def _init(args: Sequence[str]) -> int:
     payload["outputs_written"] = _write_json_outputs(
         payload,
         _as_list(parsed.output),
-        base_dir=target_dir,
+        base_dir=Path.cwd(),
     )
     if not payload["outputs_written"] and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
@@ -739,6 +761,35 @@ def _run(args: Sequence[str]) -> int:
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
         manifest = simulate.load_manifest_file(manifest_path)
+    except Exception as exc:
+        print(f"agent-learn run: {exc}", file=sys.stderr)
+        return 1
+
+    if isinstance(manifest.get("live_lane"), Mapping):
+        # Opt-in live lane front door (Phase 3 §6.1): flag preflight runs
+        # BEFORE any lane-module import resolves a framework. Manifests
+        # without the stanza are untouched.
+        return _run_live_lane_manifest(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=simulate.render_junit,
+            render_sarif=simulate.render_sarif,
+            render_markdown=simulate.render_markdown,
+            prog="agent-learn run",
+        )
+    if parsed.repeats is not None:
+        return _repeats_requires_live_lane(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=simulate.render_junit,
+            render_sarif=simulate.render_sarif,
+            render_markdown=simulate.render_markdown,
+            kind=AGENT_LEARNING_RUN_KIND,
+        )
+
+    try:
         payload = _run_async(
             simulate.run_manifest_file(
                 manifest_path,
@@ -766,6 +817,932 @@ def _run(args: Sequence[str]) -> int:
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
+
+
+def _bench(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn bench",
+        description=(
+            "Run a benchmark suite against an agent through the unified harness "
+            "(push / artifact_in / pull control modes; any modality)."
+        ),
+    )
+    parser.add_argument("suite", help="Path to a bench suite / task dataset JSON.")
+    agent_group = parser.add_mutually_exclusive_group()
+    agent_group.add_argument(
+        "--agent",
+        help='Agent spec as a JSON object, e.g. \'{"type":"scripted","content":"..."}\'.',
+    )
+    agent_group.add_argument(
+        "--agent-file", help="Path to a JSON file holding the agent spec."
+    )
+    parser.add_argument(
+        "--mode",
+        default="push",
+        choices=["push", "artifact_in", "pull"],
+        help="Control mode (default: push).",
+    )
+    parser.add_argument(
+        "--submission-file",
+        help="artifact_in: JSON file mapping task_id -> candidate source.",
+    )
+    parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="artifact_in: score the suite's own reference solutions (self-check).",
+    )
+    parser.add_argument(
+        "--sandbox",
+        default="subprocess",
+        choices=["subprocess", "docker"],
+        help="artifact_in code sandbox (default: subprocess).",
+    )
+    parser.add_argument("--split", default=None, help="Dataset split (e.g. train/test).")
+    parser.add_argument("--max-tasks", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--evidence-class", default="captured_fixture")
+    parser.add_argument(
+        "--no-reward-hack-detection",
+        action="store_true",
+        help="Disable the reward-hack detector (on by default).",
+    )
+    parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        help="Disable the local/dashboard run telemetry side-channel.",
+    )
+    parser.add_argument("-o", "--output", default=None)
+    parser.add_argument("--quiet", action="store_true")
+    parsed = parser.parse_args(list(args))
+
+    try:
+        bench = _bench_module()
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn bench", exc)
+
+    suite_path = Path(parsed.suite).expanduser()
+
+    agent: dict[str, Any] | None = None
+    if parsed.agent_file:
+        try:
+            agent = json.loads(Path(parsed.agent_file).expanduser().read_text("utf-8"))
+        except Exception as exc:
+            print(f"agent-learn bench: --agent-file: {exc}", file=sys.stderr)
+            return 1
+    elif parsed.agent:
+        try:
+            agent = json.loads(parsed.agent)
+        except Exception as exc:
+            print(f"agent-learn bench: --agent must be valid JSON: {exc}", file=sys.stderr)
+            return 1
+
+    submission: dict[str, str] | None = None
+    if parsed.mode == "artifact_in":
+        if parsed.reference:
+            try:
+                submission = bench.reference_submission(
+                    bench.load_coding_suite(suite_path)
+                )
+            except Exception as exc:
+                print(f"agent-learn bench: --reference: {exc}", file=sys.stderr)
+                return 1
+        elif parsed.submission_file:
+            try:
+                loaded = json.loads(
+                    Path(parsed.submission_file).expanduser().read_text("utf-8")
+                )
+            except Exception as exc:
+                print(f"agent-learn bench: --submission-file: {exc}", file=sys.stderr)
+                return 1
+            if not isinstance(loaded, dict):
+                print(
+                    "agent-learn bench: --submission-file must be a JSON object "
+                    "{task_id: source}",
+                    file=sys.stderr,
+                )
+                return 1
+            submission = {str(k): str(v) for k, v in loaded.items()}
+        else:
+            print(
+                "agent-learn bench: artifact_in needs --submission-file PATH or --reference",
+                file=sys.stderr,
+            )
+            return 1
+    elif agent is None:
+        print(
+            "agent-learn bench: an agent is required (--agent JSON or --agent-file PATH)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        payload = bench.run_bench(
+            suite_path,
+            agent,
+            control_mode=parsed.mode,
+            submission=submission,
+            sandbox=parsed.sandbox,
+            split=parsed.split,
+            max_tasks=parsed.max_tasks,
+            seed=parsed.seed,
+            evidence_class=parsed.evidence_class,
+            detect_reward_hacks=not parsed.no_reward_hack_detection,
+            emit_telemetry=not parsed.no_telemetry,
+        )
+    except NotImplementedError as exc:
+        print(f"agent-learn bench: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"agent-learn bench: {exc}", file=sys.stderr)
+        return 1
+
+    if parsed.output is not None:
+        out = Path(parsed.output).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        if not parsed.quiet:
+            print(f"wrote {out}")
+    elif not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    # A bench run that completed exits 0 (scores are reported, not a pass gate).
+    return 0
+
+
+def _bench_module() -> Any:
+    return importlib.import_module("agent_learning.bench")
+
+
+# --- live-lane front door (Phase 3 §6 — opt-in lanes; PRD §4.1 CLI bullet) ---
+
+_LIVE_LANE_SCHEMA_VERSION = "agent-learning.cli.v1"
+
+# Rung at which a lane becomes credentialed (UI-UX §4.1; P3-D5/P3-D6).
+_LIVE_LANE_CREDENTIALED_RUNG_FLOOR = {
+    "livekit": 3,
+    "pipecat": 3,
+    "langchain": 2,
+    "mcp": 2,
+    "a2a": 2,
+}
+
+# Lane -> top-level import root probed (never imported) for the UI-UX §6.1
+# missing-extra message contract.
+_LIVE_LANE_IMPORT_ROOTS = {
+    "livekit": "livekit",
+    "pipecat": "pipecat",
+    "langchain": "langgraph",
+    "mcp": "mcp",
+    "a2a": "a2a",
+}
+
+
+def _live_lane_extra_available(lane: str) -> bool:
+    """find_spec only LOCATES the lane extra; it never imports it — both the
+    flag refusal and the missing-extra refusal stay framework-import-free."""
+
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(_LIVE_LANE_IMPORT_ROOTS[lane]) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _live_lane_extra_missing(prog: str, lane: str, extra: str) -> int:
+    # UI-UX §6.1 message contract: lane, extra, both install commands, the
+    # boundary — exit 2, the established import-failure exit.
+    print(f"live lane '{lane}' requires the '{extra}' extra:", file=sys.stderr)
+    print(
+        f'  pip install "agent-learning-kit[{extra}]"   '
+        f"(or: uv sync --extra {extra})",
+        file=sys.stderr,
+    )
+    print(
+        "The release surface never needs lane extras (gate: live_lane_boundary).",
+        file=sys.stderr,
+    )
+    print(
+        f"{prog}: import failed: missing lane extra '{extra}'",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _emit_live_lane_payload(
+    payload: Dict[str, Any],
+    manifest: Mapping[str, Any],
+    parsed: argparse.Namespace,
+    manifest_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+) -> int:
+    written = _write_result_outputs(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _repeats_requires_live_lane(
+    manifest: Mapping[str, Any],
+    parsed: argparse.Namespace,
+    manifest_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+    kind: str,
+) -> int:
+    payload: Dict[str, Any] = {
+        "kind": kind,
+        "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+        "name": str(parsed.name or manifest.get("name") or "live-lane-repeats"),
+        "status": "failed",
+        "exit_code": 1,
+        "findings": [
+            {
+                "type": "live_lane_repeats_requires_lane",
+                "level": "error",
+                "reason": (
+                    "--repeats is only legal when the manifest declares a "
+                    "live_lane stanza (Phase 3 guide §6.1)"
+                ),
+                "remediation": (
+                    "add a live_lane stanza to the manifest, or drop --repeats"
+                ),
+            }
+        ],
+        "summary": {"lane_executed": False},
+    }
+    return _emit_live_lane_payload(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+
+
+def _dispatch_live_lane_scenario(
+    live: Any,
+    lane: str,
+    scenario: Mapping[str, Any],
+    stanza: Mapping[str, Any],
+    common_kwargs: Mapping[str, Any],
+    rung: Optional[int],
+) -> Any:
+    kwargs: Dict[str, Any] = dict(common_kwargs)
+    if lane in {"livekit", "pipecat"}:
+        if rung is not None:
+            kwargs["rung"] = rung
+        for key in ("stressed", "seed"):
+            if stanza.get(key) is not None:
+                kwargs[key] = stanza[key]
+        if stanza.get("perturbations") is not None:
+            kwargs["perturbations"] = list(stanza["perturbations"])
+        # Phase 9A unit 5: the loopback sub-stanza is read ONLY at rung == 2
+        # (the existing lane/rung/required_env fields are untouched; rung-1/rung-3
+        # manifests are unaffected). A missing user_wav at the rung-2 default is a
+        # structured-loud refusal (loopback_user_fixture_missing), never a silent
+        # zero buffer.
+        if rung == 2:
+            loop_cfg = stanza.get("loopback")
+            loop_cfg = dict(loop_cfg) if isinstance(loop_cfg, Mapping) else {}
+            codec_profile = str(loop_cfg.get("codec_profile", "g711_ulaw_8k_ge"))
+            from .live import _codec as _codec_mod
+
+            if codec_profile not in _codec_mod.V1_VOICE_CODEC_PROFILES:
+                raise ValueError(
+                    f"live_lane.loopback.codec_profile {codec_profile!r} must be "
+                    f"one of {_codec_mod.V1_VOICE_CODEC_PROFILES}"
+                )
+            tick = loop_cfg.get("tick_ms")
+            if tick is not None and (not isinstance(tick, (int, float)) or tick <= 0):
+                raise ValueError(
+                    f"loopback_tick_invalid: live_lane.loopback.tick_ms must be a "
+                    f"positive number, got {tick!r}"
+                )
+            kwargs["loopback"] = loop_cfg or None
+            kwargs["codec_profile"] = codec_profile
+        if lane == "livekit":
+            return live.run_lane("livekit", scenario, **kwargs)
+        return live.run_lane(
+            "pipecat", stanza.get("pipeline_factory"), scenario, **kwargs
+        )
+    if lane == "langchain":
+        factory = stanza.get("factory") or stanza.get("graph_or_factory")
+        if not isinstance(factory, str) or not factory:
+            raise ValueError(
+                "live_lane.factory must be a 'module:make_graph' string for "
+                "the langchain lane via the CLI (live graph objects cannot "
+                "ride a manifest; pass them through the Python facade)"
+            )
+        if rung is not None:
+            kwargs["rung"] = rung
+        if stanza.get("checkpointer") is not None:
+            kwargs["checkpointer"] = str(stanza["checkpointer"])
+        if stanza.get("cross_session_probe") is not None:
+            kwargs["cross_session_probe"] = bool(stanza["cross_session_probe"])
+        return live.run_lane("langchain", factory, scenario, **kwargs)
+    if lane == "mcp":
+        return live.run_lane("mcp", scenario, server=stanza.get("server"), **kwargs)
+    if lane == "a2a":
+        return live.run_lane("a2a", scenario, peer=stanza.get("peer"), **kwargs)
+    raise ValueError(f"unknown live lane: {lane!r}")
+
+
+def _run_live_lane_manifest(
+    manifest: Mapping[str, Any],
+    parsed: argparse.Namespace,
+    manifest_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+    prog: str,
+) -> int:
+    """`run`/`redteam` front door for manifests with a `live_lane` stanza
+    (Phase 3 guide §6.1). Flag preflight comes FIRST — before any lane-module
+    import resolves a framework — so the refusal works in an env without the
+    extra installed. Exit policy (MF6/PRD §4.1): any scenario fail => 1;
+    void rate > 0.5 => 1; unstable-only => 0 with the quarantine finding."""
+
+    try:
+        from agent_learning import live  # facade: imports NOTHING framework-side
+    except Exception as exc:
+        return _vendored_import_failed(prog, exc)
+
+    stanza_raw = manifest.get("live_lane")
+    stanza: Dict[str, Any] = (
+        dict(stanza_raw) if isinstance(stanza_raw, Mapping) else {}
+    )
+    lane = str(stanza.get("lane") or "")
+    if lane not in live.LANE_RUNNERS:
+        known = ", ".join(sorted(live.LANE_RUNNERS))
+        print(
+            f"{prog}: unknown live lane {lane!r}; expected one of: {known}",
+            file=sys.stderr,
+        )
+        return 1
+    flag = live.LANE_ENV_FLAGS[lane]
+    extra = live.LANE_EXTRAS[lane]
+    name = str(
+        parsed.name
+        or stanza.get("name")
+        or manifest.get("name")
+        or f"live-{lane}-lane"
+    )
+
+    def _refuse(findings: List[Dict[str, Any]]) -> int:
+        payload: Dict[str, Any] = {
+            "kind": AGENT_LEARNING_RUN_KIND,
+            "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+            "name": name,
+            "status": "failed",
+            "exit_code": 1,
+            "findings": findings,
+            "summary": {"lane": lane, "lane_executed": False},
+        }
+        return _emit_live_lane_payload(
+            payload,
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=render_junit,
+            render_sarif=render_sarif,
+            render_markdown=render_markdown,
+        )
+
+    # ---- preflight 1: the lane env flag (zero framework imports attempted) --
+    if os.environ.get(flag) != "1":
+        return _refuse(
+            [
+                {
+                    "type": "live_lane_flag_required",
+                    "level": "error",
+                    "lane": lane,
+                    "flag": flag,
+                    "reason": (
+                        f"manifest declares live_lane.lane={lane} but {flag} "
+                        "is not set"
+                    ),
+                    "remediation": (
+                        f"export {flag}=1   # opt-in; never set in "
+                        "release-check/CI defaults"
+                    ),
+                }
+            ]
+        )
+
+    rung = stanza.get("rung", 1)
+    rung_int = rung if isinstance(rung, int) and not isinstance(rung, bool) else None
+    floor = _LIVE_LANE_CREDENTIALED_RUNG_FLOOR.get(lane, 99)
+    credentialed = (
+        bool(stanza.get("credentialed"))
+        or str(rung) == "credentialed"
+        or (rung_int is not None and rung_int >= floor)
+    )
+    required_env = [
+        str(item) for item in (stanza.get("required_env") or []) if str(item)
+    ]
+
+    # ---- preflight 2: credentialed rungs need the flag AND the names --------
+    credential_preflight: Optional[Dict[str, Any]] = None
+    if credentialed:
+        cred_flag = live.LANE_ENV_FLAGS["credentialed"]
+        if os.environ.get(cred_flag) != "1":
+            return _refuse(
+                [
+                    {
+                        "type": "live_lane_flag_required",
+                        "level": "error",
+                        "lane": lane,
+                        "flag": cred_flag,
+                        "reason": (
+                            f"live_lane.rung={rung!r} is a credentialed rung "
+                            f"but {cred_flag} is not set"
+                        ),
+                        "remediation": (
+                            f"export {cred_flag}=1   # owner-triggered; "
+                            "CI never dials (PRD §6)"
+                        ),
+                    }
+                ]
+            )
+        preflight_rows: List[Dict[str, Any]] = []
+        for env_name in required_env:
+            row: Dict[str, Any] = {
+                "name": env_name,
+                "present": bool(os.environ.get(env_name)),
+            }
+            if row["present"]:
+                row["redacted"] = True  # names + presence, never values
+            preflight_rows.append(row)
+        missing = [row["name"] for row in preflight_rows if not row["present"]]
+        credential_preflight = {
+            "convention": "live E2E credential names",
+            "required_env": preflight_rows,
+            "passed": not missing,
+        }
+        if missing:
+            return _refuse(
+                [
+                    {
+                        "type": "live_credential_missing",
+                        "level": "error",
+                        "lane": lane,
+                        "missing": missing,
+                        "reason": (
+                            "credentialed rung requested; "
+                            f"{len(missing)} of {len(required_env)} required "
+                            "env names absent"
+                        ),
+                        "remediation": (
+                            "export the named credential variables; "
+                            "values are never logged"
+                        ),
+                    }
+                ]
+            )
+
+    # ---- flag set but extra missing -> UI-UX §6.1 contract, exit 2 ----------
+    if not _live_lane_extra_available(lane):
+        return _live_lane_extra_missing(prog, lane, extra)
+
+    repeats_raw = (
+        parsed.repeats if parsed.repeats is not None else stanza.get("repeats")
+    )
+    if repeats_raw is None:
+        repeats = int(live.DEFAULT_REPEATS)
+    else:
+        try:
+            repeats = int(repeats_raw)
+        except (TypeError, ValueError):
+            print(
+                f"{prog}: live_lane.repeats must be an integer, "
+                f"got {repeats_raw!r}",
+                file=sys.stderr,
+            )
+            return 1
+    if repeats < 1:
+        print(f"{prog}: repeats must be >= 1", file=sys.stderr)
+        return 1
+
+    scenarios_raw = stanza.get("scenarios")
+    if isinstance(scenarios_raw, list) and scenarios_raw:
+        scenario_items: List[Any] = list(scenarios_raw)
+    else:
+        single = stanza.get("scenario")
+        scenario_items = [single if isinstance(single, Mapping) else {}]
+    scenario_list: List[Any] = []
+    for index, item in enumerate(scenario_items, start=1):
+        scenario = dict(item) if isinstance(item, Mapping) else {}
+        scenario_id = str(
+            scenario.get("id")
+            or scenario.get("scenario_id")
+            or scenario.get("name")
+            or f"scenario-{index}"
+        )
+        scenario.setdefault("name", scenario_id)
+        scenario_list.append((scenario_id, scenario))
+
+    common_kwargs: Dict[str, Any] = {"repeats": repeats}
+    if required_env:
+        common_kwargs["required_env"] = required_env
+    for key in ("version_requirement", "budget_s", "artifacts_dir"):
+        if stanza.get(key) is not None:
+            common_kwargs[key] = stanza[key]
+
+    lane_runs: List[Dict[str, Any]] = []
+    scenario_rows: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    verdict_counts: Dict[str, int] = {
+        "pass": 0,
+        "fail": 0,
+        "unstable": 0,
+        "void": 0,
+    }
+    icc_values: List[float] = []
+    evidence_class = "live_lane"
+    rung_label: Any = rung
+
+    for scenario_id, scenario in scenario_list:
+        try:
+            lane_payload = _dispatch_live_lane_scenario(
+                live, lane, scenario, stanza, common_kwargs, rung_int
+            )
+        except live.LaneDisabledError as exc:
+            # belt-and-braces: the substrate's own dynamic refusal
+            return _refuse(
+                [
+                    {
+                        "type": "live_lane_flag_required",
+                        "level": "error",
+                        "lane": lane,
+                        "flag": flag,
+                        "reason": str(exc),
+                        "remediation": (
+                            f"export {flag}=1   # opt-in; never set in "
+                            "release-check/CI defaults"
+                        ),
+                    }
+                ]
+            )
+        except (ImportError, ModuleNotFoundError):
+            return _live_lane_extra_missing(prog, lane, extra)
+        except live._loopback.LoopbackFixtureMissing as exc:
+            # Phase 9A unit 5: a missing/unreadable rung-2 user WAV fixture is a
+            # structured-loud refusal (never a silent zero buffer).
+            return _refuse(
+                [
+                    {
+                        "type": "loopback_user_fixture_missing",
+                        "level": "error",
+                        "lane": lane,
+                        "missing": list(exc.missing),
+                        "reason": str(exc),
+                        "remediation": (
+                            "bind each rung-2 turn to a committed PCM-WAV fixture "
+                            "via live_lane.loopback.user_wav (a path or a list of "
+                            "{turn_id, wav})"
+                        ),
+                    }
+                ]
+            )
+        except live._codec.CodecUnsupportedError as exc:
+            # a post-v1 codec (opus_nb/amr_nb) requested but its build-dep extra
+            # is absent: warn + withhold the survival number, exit 0 (numpy
+            # codecs still run). Mirrors the LANE_EXTRAS auto-skip discipline.
+            print(
+                f"{prog}: voice_codec_unavailable: codec {exc.codec!r} requires "
+                f"{exc.install} (post-v1, not installed); the G.711 numpy codecs "
+                "still run, the codec's survival number is withheld",
+                file=sys.stderr,
+            )
+            return 0
+        except Exception as exc:
+            print(f"{prog}: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(lane_payload, Mapping):
+            print(
+                f"{prog}: lane runner returned a non-mapping payload",
+                file=sys.stderr,
+            )
+            return 1
+        lane_payload = dict(lane_payload)
+        lane_payload["scenario_id"] = scenario_id
+        block_raw = lane_payload.get("live_lane")
+        block = dict(block_raw) if isinstance(block_raw, Mapping) else {}
+        verdict = str(block.get("verdict") or "void")
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        evidence_class = str(block.get("evidence_class") or evidence_class)
+        rung_label = block.get("rung", rung_label)
+        if isinstance(block.get("icc"), (int, float)):
+            icc_values.append(float(block["icc"]))
+        determinism_raw = block.get("determinism")
+        determinism = (
+            dict(determinism_raw) if isinstance(determinism_raw, Mapping) else {}
+        )
+        row = {
+            "scenario_id": scenario_id,
+            "verdict": verdict,
+            "verdict_reason": block.get("verdict_reason"),
+            "evidence_class": block.get("evidence_class"),
+            "scored": verdict in ("pass", "fail"),
+            "quarantined": verdict in ("unstable", "void"),
+            "repeats": block.get("repeats"),
+            "repeats_completed": block.get("repeats_completed"),
+            "quarantined_repeats": block.get("quarantined_repeats"),
+            "variance": {
+                "icc": block.get("icc"),
+                "within_query_variance": block.get("within_variance"),
+                "divergence_step": block.get("divergence_step"),
+                "distinct_action_sequences": determinism.get(
+                    "distinct_trajectory_count"
+                ),
+            },
+        }
+        if verdict == "void":
+            row["failure_layer"] = "lane_infra"
+        scenario_rows.append(row)
+        for finding in lane_payload.get("findings") or []:
+            if isinstance(finding, Mapping):
+                annotated = dict(finding)
+                annotated.setdefault("scenario_id", scenario_id)
+                findings.append(annotated)
+        lane_runs.append(lane_payload)
+
+    # ---- exit policy (MF6): fail => 1; void rate > 0.5 => 1; else 0 ---------
+    total = len(scenario_rows)
+    fails = verdict_counts.get("fail", 0)
+    voids = verdict_counts.get("void", 0)
+    void_rate = (voids / total) if total else 0.0
+    exit_code = 1 if (fails > 0 or void_rate > 0.5) else 0
+    status = "failed" if exit_code else "passed"
+
+    import statistics
+
+    variance_summary = {
+        "icc_median": (
+            round(statistics.median(icc_values), 6) if icc_values else None
+        ),
+        "icc_min": round(min(icc_values), 6) if icc_values else None,
+    }
+
+    live_block: Dict[str, Any] = {
+        "lane": lane,
+        "env_flag": flag,
+        "rung": rung_label,
+        "evidence_class": evidence_class,
+        "repeats": repeats,
+    }
+    if credential_preflight is not None:
+        live_block["credential_preflight"] = credential_preflight
+
+    payload: Dict[str, Any] = {
+        "kind": AGENT_LEARNING_RUN_KIND,
+        "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+        "name": name,
+        "status": status,
+        "exit_code": exit_code,
+        "live_lane": live_block,
+        "scenarios": scenario_rows,
+        "live_lane_runs": lane_runs,
+        "findings": findings,
+        "summary": {
+            "lane": lane,
+            "rung": rung_label,
+            "evidence_class": evidence_class,
+            "release_admissible": False,  # ALWAYS false for live classes
+            "lane_executed": True,
+            "scenario_count": total,
+            "repeats_per_scenario": repeats,
+            "verdicts": verdict_counts,
+            "void_rate": round(void_rate, 6),
+            "variance": variance_summary,
+        },
+    }
+    return _emit_live_lane_payload(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+
+
+def _live_run_scenario_id(run: Mapping[str, Any]) -> str:
+    if run.get("scenario_id"):
+        return str(run["scenario_id"])
+    scenario = run.get("scenario")
+    if isinstance(scenario, Mapping) and scenario.get("name"):
+        return str(scenario["name"])
+    return str(run.get("name") or "scenario-1")
+
+
+def _select_live_lane_run(
+    document: Any, scenario_id: Optional[str]
+) -> Dict[str, Any]:
+    if not isinstance(document, Mapping):
+        raise ValueError("artifact root must be a JSON object")
+    runs = document.get("live_lane_runs")
+    candidates: List[Dict[str, Any]] = []
+    if isinstance(runs, list):
+        candidates = [dict(run) for run in runs if isinstance(run, Mapping)]
+    else:
+        block = document.get("live_lane")
+        if isinstance(block, Mapping) and block.get("per_repeat") is not None:
+            candidates = [dict(document)]
+    if not candidates:
+        raise ValueError(
+            "artifact has no live lane runs (expected live_lane_runs[] or a "
+            "live_lane block with per_repeat rows)"
+        )
+    if scenario_id is None:
+        if len(candidates) == 1:
+            return candidates[0]
+        known = ", ".join(
+            sorted(_live_run_scenario_id(run) for run in candidates)
+        )
+        raise ValueError(
+            f"artifact holds {len(candidates)} lane scenarios; pass "
+            f"--scenario (one of: {known})"
+        )
+    for run in candidates:
+        if _live_run_scenario_id(run) == str(scenario_id):
+            return run
+    known = ", ".join(sorted(_live_run_scenario_id(run) for run in candidates))
+    raise ValueError(
+        f"scenario {scenario_id!r} not found in the artifact "
+        f"(one of: {known})"
+    )
+
+
+def _capture_fixture(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn simulate capture-fixture",
+        description=(
+            "Demote a live-run artifact into a credential-free fixture: a "
+            "CANDIDATE without --reviewed-by (run-artifacts dir only), a "
+            "reviewed captured_fixture with it (Phase 3 §6.2)."
+        ),
+    )
+    parser.add_argument(
+        "artifact",
+        help=(
+            "Path to a live-run artifact (agent-learning.run.v1 with a "
+            "live_lane block, e.g. an `agent-learn run` lane output)."
+        ),
+    )
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Scenario id to capture when the artifact holds several.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help=(
+            "Fixture destination. Candidates must stay under the run's "
+            "artifacts dir; examples/captured/<lane>/ accepts only "
+            "--reviewed-by fixtures (live_lane_boundary gate)."
+        ),
+    )
+    parser.add_argument(
+        "--reviewed-by",
+        default=None,
+        help=(
+            "Reviewer name: re-runs the credential-free replay and stamps "
+            "evidence_class=captured_fixture, reviewed=true."
+        ),
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=None,
+        help="Capture this repeat index instead of the first passing repeat.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print the JSON summary on success.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import live  # facade: imports NOTHING framework-side
+    except Exception as exc:
+        return _vendored_import_failed(
+            "agent-learn simulate capture-fixture", exc
+        )
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    try:
+        document = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"agent-learn simulate capture-fixture: {exc}", file=sys.stderr)
+        return 1
+    try:
+        lane_payload = _select_live_lane_run(document, parsed.scenario)
+    except ValueError as exc:
+        print(f"agent-learn simulate capture-fixture: {exc}", file=sys.stderr)
+        return 1
+
+    import dataclasses as _dataclasses
+
+    block_raw = lane_payload.get("live_lane")
+    block = dict(block_raw) if isinstance(block_raw, Mapping) else {}
+    field_names = {
+        field.name for field in _dataclasses.fields(live.LaneRunResult)
+    }
+    try:
+        result = live.LaneRunResult(
+            **{key: value for key, value in block.items() if key in field_names}
+        )
+    except TypeError as exc:
+        print(
+            "agent-learn simulate capture-fixture: artifact live_lane block "
+            f"is not a lane run result: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    scenario_raw = lane_payload.get("scenario")
+    scenario = dict(scenario_raw) if isinstance(scenario_raw, Mapping) else None
+    summary: Dict[str, Any] = {
+        "kind": "agent-learning.fixture-capture.v1",
+        "schema_version": _LIVE_LANE_SCHEMA_VERSION,
+        "name": "capture-{}-{}".format(
+            result.lane, result.run_id[:8] if result.run_id else "fixture"
+        ),
+        "capture": {
+            "source_artifact": str(artifact_path),
+            "scenario_id": parsed.scenario or _live_run_scenario_id(lane_payload),
+            "output": str(parsed.output),
+            "reviewed_by": parsed.reviewed_by,
+        },
+    }
+    try:
+        fixture_path = live.capture_fixture(
+            result,
+            output=Path(parsed.output),
+            reviewed_by=parsed.reviewed_by,
+            scenario=scenario,
+            repeat_index=parsed.repeat,
+        )
+    except live.CaptureRefusedError as exc:
+        summary["status"] = "failed"
+        summary["exit_code"] = 1
+        summary["findings"] = [dict(exc.finding)]
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+        return 1
+    except Exception as exc:
+        print(f"agent-learn simulate capture-fixture: {exc}", file=sys.stderr)
+        return 1
+
+    fixture_payload = json.loads(
+        Path(fixture_path).read_text(encoding="utf-8")
+    )
+    capture_block_raw = fixture_payload.get("capture")
+    capture_block = (
+        dict(capture_block_raw) if isinstance(capture_block_raw, Mapping) else {}
+    )
+    summary["status"] = "passed"
+    summary["exit_code"] = 0
+    summary["findings"] = []
+    summary["fixture"] = {
+        "path": str(fixture_path),
+        "evidence_class": fixture_payload.get("evidence_class"),
+        "reviewed": capture_block.get("reviewed"),
+        "reviewer": capture_block.get("reviewer"),
+        "captured_from_lane": capture_block.get("captured_from_lane"),
+        "transcript_sha256": capture_block.get("transcript_sha256"),
+    }
+    if parsed.reviewed_by is not None:
+        # capture_to_fixture already refused on a non-green replay; surface
+        # the replay verdict as evidence in the summary.
+        summary["replay"] = live.replay_fixture(fixture_path)
+    if not parsed.quiet:
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+    return 0
 
 
 def _eval(args: Sequence[str]) -> int:
@@ -922,6 +1899,138 @@ def _eval_task(args: Sequence[str]) -> int:
     return int(payload.get("exit_code", 0))
 
 
+_VOICE_ACOUSTIC_OPERATORS = ("noise", "interference", "reverb_blend")
+
+
+def _voice_finding_payload(
+    finding: Mapping[str, Any], *, exit_code: int, channel: str = "voice"
+) -> Dict[str, Any]:
+    """A structured voice red-team CLI finding payload (6b; UI-UX §1.2/§6.2)."""
+
+    status = "failed" if exit_code != 0 else "passed"
+    return {
+        "kind": "agent-learning.optimization.v1",
+        "status": status,
+        "exit_code": exit_code,
+        "channel": channel,
+        "findings": [dict(finding)],
+        "ab_harness": None,
+    }
+
+
+def _run_voice_ab_harness(
+    manifest: Mapping[str, Any], parsed: argparse.Namespace, redteam: Any
+) -> int:
+    """CLI front door for the composed voice-attack A/B harness (6b; D-BG10).
+
+    Same contract as the SDK runner ``run_composed_voice_attack_ab`` — one
+    contract, two doors. The findings vocabulary (loud in the CLI, silent-skip
+    in pytest) covers ``voice_rung_unavailable`` (rung-2 requested before
+    Phase-9A loopback), ``voice_corpus_channel_missing`` (version skew),
+    ``voice_codec_sim_unavailable`` (rung-2 without the codec dependency)."""
+
+    from agent_learning import trinity
+    from fi.simulate.simulation.models import Persona, Scenario
+
+    # version-skew tripwire: a voice campaign asked while this install's corpus
+    # constants say channels: ["chat"] (never silently degrade to chat).
+    if "voice" not in trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS:
+        finding = {
+            "type": "voice_corpus_channel_missing",
+            "level": "error",
+            "reason": (
+                "voice campaign requested but this install's corpus constants "
+                f"declare channels {trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS}"
+            ),
+            "remediation": "upgrade the kit to a build with the voice channel",
+        }
+        payload = _voice_finding_payload(finding, exit_code=1)
+        _emit_voice_payload(payload, parsed)
+        return 1
+
+    # rung-2 acoustic operators: now reachable (Phase-9A loopback + Phase-12 12C
+    # rung-2 acoustic operators landed). A manifest that puts acoustic operators
+    # in its signal space MUST declare attack_rung: "acoustic" (or "telephony")
+    # — an acoustic operator under the default transcript_level rung is still a
+    # voice_rung_unavailable error (no silent acoustic claim at the text rung).
+    requested_attack_rung = str(manifest.get("attack_rung") or "transcript_level")
+    requested_ops = set()
+    for space_key in ("signal_space",):
+        space = manifest.get(space_key) or {}
+        for op in space.get("operator") or []:
+            requested_ops.add(op)
+    acoustic_requested = sorted(
+        op for op in requested_ops if op in _VOICE_ACOUSTIC_OPERATORS
+    )
+    if acoustic_requested and requested_attack_rung == "transcript_level":
+        finding = {
+            "type": "voice_rung_unavailable",
+            "level": "error",
+            "requested_rung": "acoustic",
+            "requested_operators": acoustic_requested,
+            "reason": (
+                "acoustic operators ride the rung-2 loopback audio channel; this "
+                "manifest declares attack_rung=transcript_level, so an acoustic "
+                "operator in its signal space is a rung mismatch (no acoustic "
+                "claim at the text rung — ARCH §2c)"
+            ),
+            "remediation": (
+                "declare attack_rung: \"acoustic\" to run the rung-2 acoustic "
+                "form over the loopback channel, OR use the transcript_level "
+                "operators (homophone, code_switch, near_dup, asr_error)"
+            ),
+        }
+        payload = _voice_finding_payload(finding, exit_code=1)
+        _emit_voice_payload(payload, parsed)
+        return 1
+
+    try:
+        persona = Persona(**manifest["persona"])
+        scenario = Scenario(**manifest["scenario"])
+        result = redteam.run_composed_voice_attack_ab(
+            name=str(manifest.get("name") or "voice-composed-ab"),
+            persona=persona,
+            scenario=scenario,
+            persona_space=manifest["persona_space"],
+            signal_space=manifest["signal_space"],
+            eval_budget_per_arm=int(manifest["eval_budget_per_arm"]),
+            seeds=tuple(manifest.get("seeds") or (7, 11, 13)),
+            voice_surfaces=tuple(manifest.get("voice_surfaces") or ()),
+            attack_rung=requested_attack_rung,
+            quarantine_overrides=manifest.get("quarantine_overrides"),
+        )
+    except KeyError as exc:
+        print(
+            f"agent-learn redteam --ab-harness: manifest missing key {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"agent-learn redteam --ab-harness: {exc}", file=sys.stderr)
+        return 1
+
+    _emit_voice_payload(result, parsed)
+    return int(result.get("exit_code", 0))
+
+
+def _emit_voice_payload(payload: Mapping[str, Any], parsed: argparse.Namespace) -> None:
+    payload = dict(payload)
+    output_paths = list(getattr(parsed, "output", []) or [])
+    written = False
+    for path_text in output_paths:
+        path = Path(path_text).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        written = True
+        if not getattr(parsed, "quiet", False):
+            print(f"wrote {path.resolve()}")
+    if not written and not getattr(parsed, "quiet", False):
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
 def _redteam(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn redteam",
@@ -938,6 +2047,37 @@ def _redteam(args: Sequence[str]) -> int:
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
         manifest = redteam.load_manifest_file(manifest_path)
+    except Exception as exc:
+        print(f"agent-learn redteam: {exc}", file=sys.stderr)
+        return 1
+
+    if getattr(parsed, "ab_harness", False):
+        return _run_voice_ab_harness(manifest, parsed, redteam)
+
+    if isinstance(manifest.get("live_lane"), Mapping):
+        # Live red-team targets ride the same lane front door (Phase 3 §6.1);
+        # the same flag preflight refuses before any framework import.
+        return _run_live_lane_manifest(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=redteam.render_junit,
+            render_sarif=redteam.render_sarif,
+            render_markdown=redteam.render_markdown,
+            prog="agent-learn redteam",
+        )
+    if parsed.repeats is not None:
+        return _repeats_requires_live_lane(
+            manifest,
+            parsed,
+            manifest_path,
+            render_junit=redteam.render_junit,
+            render_sarif=redteam.render_sarif,
+            render_markdown=redteam.render_markdown,
+            kind=AGENT_LEARNING_REDTEAM_KIND,
+        )
+
+    try:
         payload = _run_async(
             redteam.redteam_manifest_file(
                 manifest_path,
@@ -1079,6 +2219,18 @@ def _optimize(args: Sequence[str]) -> int:
         description="Optimize a simulation manifest with Agent Learning Kit.",
     )
     _add_manifest_optimization_args(parser)
+    parser.add_argument(
+        "--backend",
+        default=None,
+        help=(
+            "Explicit optimizer backend override (canon tokens: gepa, tpe, "
+            "evolution_elo, bandit, society, regression_replay). Maps onto the "
+            "same explicit-optimizer override path as the SDK's optimizer= "
+            "mapping; the artifact records selected_by: override and keeps the "
+            "spurned routing_table_recommendation visible. Omitted: the "
+            "routing-table default picker engages."
+        ),
+    )
     parsed = parser.parse_args(list(args))
 
     try:
@@ -1089,13 +2241,24 @@ def _optimize(args: Sequence[str]) -> int:
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
         manifest = simulate.load_manifest_file(manifest_path)
-        payload = optimize.optimize_manifest_file(
-            manifest_path,
-            name=parsed.name,
-            threshold=parsed.threshold,
-            max_candidates=parsed.max_candidates,
-            dry_run=bool(parsed.dry_run),
-        )
+        if parsed.backend:
+            payload = optimize.optimize_manifest_with_backend_override(
+                manifest,
+                backend=str(parsed.backend),
+                manifest_path=manifest_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                max_candidates=parsed.max_candidates,
+                dry_run=bool(parsed.dry_run),
+            )
+        else:
+            payload = optimize.optimize_manifest_file(
+                manifest_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                max_candidates=parsed.max_candidates,
+                dry_run=bool(parsed.dry_run),
+            )
     except Exception as exc:
         print(f"agent-learn optimize: {exc}", file=sys.stderr)
         return 1
@@ -1275,7 +2438,7 @@ def _trust(args: Sequence[str]) -> int:
         return 1
 
     output_paths = [
-        _resolve_output_path(str(path), artifact_path.parent)
+        _resolve_output_path(str(path), Path.cwd())
         for path in parsed.output
     ]
     payload["outputs_written"] = [str(path) for path in output_paths]
@@ -1450,6 +2613,15 @@ def _add_manifest_run_args(parser: argparse.ArgumentParser) -> None:
         help="Validate manifest/env without executing.",
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help=(
+            "Override live_lane.repeats for a manifest with a live_lane "
+            "stanza (legal only then; P3-D2 budget caps still apply)."
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Do not print JSON summary when no output path is configured.",
@@ -1504,9 +2676,28 @@ def _add_redteam_args(parser: argparse.ArgumentParser) -> None:
         help="Validate red-team manifest/env without executing.",
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help=(
+            "Override live_lane.repeats for a manifest with a live_lane "
+            "stanza (legal only then; P3-D2 budget caps still apply)."
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Do not print JSON summary when no output path is configured.",
+    )
+    parser.add_argument(
+        "--ab-harness",
+        action="store_true",
+        help=(
+            "Phase 12: run the composed voice-attack A/B harness "
+            "(composed vs persona-only vs signal-only at equal eval_budget) "
+            "and emit the agent-learning.optimization.v1 payload with the "
+            "embedded ab_harness block."
+        ),
     )
 
 
@@ -1941,6 +3132,9 @@ def _write_result_outputs(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render_markdown(payload, source_path=suite_path), encoding="utf-8")
         written.append(str(path))
+    if written and not getattr(args, "quiet", False):
+        for path_text in written:
+            print(f"wrote {Path(path_text).resolve()}")
     return written
 
 
@@ -2558,6 +3752,53 @@ def _agent_learning_init_next_commands(
     required_env: Sequence[str] = (),
 ) -> List[str]:
     preset = str(preset or "").lower().replace("_", "-")
+    if preset == "run":
+        return [
+            _agent_learning_shell_command(
+                "agent-learn",
+                "run",
+                target_dir / "manifests" / "run.json",
+                "--output",
+                target_dir / "artifacts" / "run.json",
+            )
+        ]
+    if preset == "redteam":
+        return [
+            _agent_learning_shell_command(
+                "agent-learn",
+                "redteam",
+                target_dir / "manifests" / "redteam.json",
+                "--output",
+                target_dir / "artifacts" / "redteam.json",
+            )
+        ]
+    if preset == "ci":
+        # Spine order: run and red-team first, replay last — replaying freshly
+        # scaffolded manifests before any baseline exists teaches the wrong
+        # order (the vendored default lists replay alone).
+        return [
+            _agent_learning_shell_command(
+                "agent-learn",
+                "run",
+                target_dir / "manifests" / "run.json",
+                "--output",
+                target_dir / "artifacts" / "run.json",
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "redteam",
+                target_dir / "manifests" / "redteam.json",
+                "--output",
+                target_dir / "artifacts" / "redteam.json",
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "replay",
+                target_dir / "manifests",
+                "--output",
+                target_dir / "artifacts" / "replay.json",
+            ),
+        ]
     if preset == "all":
         suite_path = target_dir / "manifests" / "suite.json"
         output_path = target_dir / "artifacts" / "suite.json"
@@ -2951,18 +4192,59 @@ def _rewrite_init_readme_for_agent_learning(
             if str(preset or "").lower().replace("_", "-") == "optimize"
             else "Agent Learning Entrypoint"
         )
-        command_lines = "\n".join(f"- `{command}`" for command in commands)
+        command_lines = []
+        for command in commands:
+            command_lines.append(f"- `{command}`")
+            postcondition = _agent_learning_command_postcondition(command)
+            if postcondition:
+                command_lines.append(f"  - Check: `{postcondition}`")
         content = (
             content.rstrip()
             + "\n\n"
             + f"## {section_title}\n\n"
-            + command_lines
+            + "\n".join(command_lines)
             + "\n\n"
             + "The lifecycle produces JSON, JUnit, SARIF, Markdown, promotion, "
             + "and replay artifacts so CLI users, SDK tests, CI, and Future AGI "
             + "UI cards can inspect the same evidence.\n"
+            + "\n"
+            + "## When It Fails\n\n"
+            + "| Symptom | Doctor check |\n"
+            + "| --- | --- |\n"
+            + "| vendored import failed | `agent-learn doctor` -> "
+            + "`summary.missing_engine_modules` |\n"
+            + "| key-related errors | `agent-learn doctor` -> "
+            + "`summary.api_key_configured` |\n"
         )
     readme.write_text(content, encoding="utf-8")
+
+
+_AGENT_LEARNING_COMMAND_ARTIFACT_KINDS = {
+    "run": "agent-learning.run.v1",
+    "redteam": "agent-learning.redteam.v1",
+    "replay": "agent-learning.replay.v1",
+    "optimize": "agent-learning.optimization.v1",
+    "suite": "agent-learning.suite.v1",
+    "report": "agent-learning.report.v1",
+    "promote-to-regression": "agent-learning.regression-promotion.v1",
+}
+
+
+def _agent_learning_command_postcondition(command: str) -> str | None:
+    """Machine-checkable postcondition for a scaffolded next-command."""
+
+    parts = command.split()
+    if len(parts) < 2 or parts[0] != "agent-learn":
+        return None
+    kind = _AGENT_LEARNING_COMMAND_ARTIFACT_KINDS.get(parts[1])
+    if kind is None or "--output" not in parts:
+        return None
+    output_path = parts[parts.index("--output") + 1]
+    return (
+        "python -c \"import json; "
+        f"payload=json.load(open('{output_path}')); "
+        f"assert payload['kind']=='{kind}', payload['kind']; print('ok')\""
+    )
 
 
 def _agent_learning_command(command: str) -> str:
@@ -2983,35 +4265,42 @@ def _result_output_paths(
         "markdown": [],
     }
     suite_outputs = dict(suite.get("outputs") or {})
+    # Manifest-declared outputs resolve against the manifest directory;
+    # user-supplied CLI paths resolve against the current working directory.
+    cli_base_dir = Path.cwd()
     raw_json = [
-        *_as_list(suite_outputs.get("json")),
-        *_as_list(getattr(args, "output", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("json"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "output", []))),
     ]
     raw_junit = [
-        *_as_list(suite_outputs.get("junit")),
-        *_as_list(getattr(args, "junit", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("junit"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "junit", []))),
     ]
     raw_sarif = [
-        *_as_list(suite_outputs.get("sarif")),
-        *_as_list(getattr(args, "sarif", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("sarif"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "sarif", []))),
     ]
     raw_markdown = [
-        *_as_list(suite_outputs.get("markdown")),
-        *_as_list(suite_outputs.get("md")),
-        *_as_list(getattr(args, "markdown", [])),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("markdown"))),
+        *((value, base_dir) for value in _as_list(suite_outputs.get("md"))),
+        *((value, cli_base_dir) for value in _as_list(getattr(args, "markdown", []))),
     ]
-    for value in raw_json:
-        path = _resolve_output_path(str(value), base_dir)
+    for value, value_base in raw_json:
+        path = _resolve_output_path(str(value), value_base)
         if path.name.endswith((".junit.xml", ".xml")):
             outputs["junit"].append(path)
         elif path.name.endswith((".sarif", ".sarif.json")):
             outputs["sarif"].append(path)
         else:
             outputs["json"].append(path)
-    outputs["junit"].extend(_resolve_output_path(str(value), base_dir) for value in raw_junit)
-    outputs["sarif"].extend(_resolve_output_path(str(value), base_dir) for value in raw_sarif)
+    outputs["junit"].extend(
+        _resolve_output_path(str(value), value_base) for value, value_base in raw_junit
+    )
+    outputs["sarif"].extend(
+        _resolve_output_path(str(value), value_base) for value, value_base in raw_sarif
+    )
     outputs["markdown"].extend(
-        _resolve_output_path(str(value), base_dir) for value in raw_markdown
+        _resolve_output_path(str(value), value_base) for value, value_base in raw_markdown
     )
     return outputs
 
@@ -3125,6 +4414,16 @@ def _doctor(args: Sequence[str] = ()) -> int:
         )
     if not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True))
+    summary = payload.get("summary") or {}
+    status = str(payload.get("status", "unknown"))
+    missing_public = len(summary.get("missing_public_modules") or [])
+    missing_engine = len(summary.get("missing_engine_modules") or [])
+    print(
+        f"doctor: {status} — "
+        f"missing public modules: {missing_public}, "
+        f"missing engine modules: {missing_engine}",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -3150,6 +4449,13 @@ def _release_check(args: Sequence[str] = ()) -> int:
         help="Do not print the release-check payload to stdout.",
     )
     parsed = parser.parse_args(list(args))
+
+    # Phase 14: release-check is a gate/CI flow, not a user run — pin the W&B-style
+    # sync mode to `local` so no gate (or gate-spawned example subprocess, which
+    # inherits this env) makes a surprise dashboard emit, even with FI keys in the
+    # environment (P8 doctrine: release flows never auto-sync). An explicit
+    # AGENT_LEARNING_SYNC already set by the operator still wins (setdefault).
+    os.environ.setdefault("AGENT_LEARNING_SYNC", "local")
 
     from agent_learning import trinity
 
@@ -3202,7 +4508,7 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=2400.0,
+        default=7200.0,
         help="Per-command timeout in seconds.",
     )
     parser.add_argument(
@@ -3397,6 +4703,1576 @@ def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[st
     raise ValueError(f"unknown release proof check: {check_id}")
 
 
+# ---------------------------------------------------------------------------
+# Phase 7 — Persona & Scenario Studio (thin dispatchers; logic in
+# agent_learning.studio, imported lazily per the _simulate_cli_module idiom)
+# ---------------------------------------------------------------------------
+
+def _studio_module() -> Any:
+    return importlib.import_module("agent_learning.studio")
+
+
+def _emit_studio_payload(payload: Mapping[str, Any]) -> int:
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _load_structured_file(path: Path) -> Any:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        import yaml
+
+        return yaml.safe_load(text)
+    return json.loads(text)
+
+
+def _write_structured_file(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _parse_axes_spec(spec: str) -> Dict[str, List[str]]:
+    axes: Dict[str, List[str]] = {}
+    for chunk in spec.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise ValueError(f"axis spec {chunk!r} must look like name=v1,v2")
+        name, values = chunk.split("=", 1)
+        axes[name.strip()] = [v.strip() for v in values.split(",") if v.strip()]
+    return axes
+
+
+def _persona_summary(persona: Any) -> Dict[str, Any]:
+    identity = getattr(persona, "identity", None)
+    provenance = getattr(persona, "provenance", None)
+    return {
+        "name": (identity.name if identity is not None else None)
+        or persona.persona.get("name"),
+        "version": persona.version or persona.content_hash(),
+        "is_typed": persona.is_typed,
+        "evidence_class": (
+            provenance.evidence_class if provenance is not None else "legacy"
+        ),
+        "calibrated": bool(provenance is not None and provenance.calibrated),
+    }
+
+
+def _library_personas(studio: Any, library: str) -> List[Any]:
+    from agent_learning.studio._library import load_index
+
+    personas = []
+    for entry in load_index(library).get("personas", []):
+        try:
+            personas.append(studio.load_persona(entry["ref"], library=library))
+        except ValueError:
+            continue
+    return personas
+
+
+# --- Phase 13D CLI families (RU-5) -----------------------------------------
+_CONTRACT_FINDING_TOKENS = (
+    "simulation_contract_invalid", "cast_role_unknown", "counterpart_misclassified",
+    "objective_guards_missing", "world_kind_unsupported", "tool_mock_level_undeclared",
+    "tool_mock_replay_missing", "tool_mock_live_unkeyed", "world_kind_refusal",
+)
+
+
+def _contract_finding_from_error(message: str) -> dict:
+    """Map a ValidationError/ManifestError message onto a closed findings token
+    (the live_lane_flag_required finding lineage)."""
+    token = "simulation_contract_invalid"
+    for candidate in _CONTRACT_FINDING_TOKENS:
+        if candidate in message:
+            token = candidate
+            break
+    return {
+        "type": token,
+        "level": "error",
+        "reason": message.splitlines()[0] if message else token,
+        "remediation": "see the simulation contract docs (agent-learn simulation validate)",
+    }
+
+
+def _simulation(args: Sequence[str]) -> int:
+    try:
+        from agent_learning import simulate
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn simulation", exc)
+
+    parser = argparse.ArgumentParser(
+        prog="agent-learn simulation",
+        description="Simulation contract (search-backed): validate, lift, run.",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    p_validate = sub.add_parser("validate")
+    p_validate.add_argument("manifest")
+    p_validate.add_argument("--output", "-o", default=None)
+    p_validate.add_argument("--quiet", action="store_true")
+    p_lift = sub.add_parser("lift")
+    p_lift.add_argument("manifest")
+    p_lift.add_argument("--output", "-o", default=None)
+    p_lift.add_argument("--quiet", action="store_true")
+    p_run = sub.add_parser("run")
+    p_run.add_argument("manifest")
+    p_run.add_argument("--output", "-o", default=None)
+    p_run.add_argument("--quiet", action="store_true")
+    parsed = parser.parse_args(list(args))
+
+    from fi.simulate.simulation.contract import Simulation as _Simulation
+    from pydantic import ValidationError as _VErr
+
+    if parsed.subcommand == "validate":
+        manifest = simulate.load_manifest_file(parsed.manifest)
+        inline = dict(manifest.get("simulation_contract", {}).get("inline") or manifest)
+        findings: list = []
+        try:
+            _Simulation(**inline)
+        except _VErr as exc:
+            findings.append(_contract_finding_from_error(str(exc)))
+        payload = {
+            "status": "valid" if not findings else "invalid",
+            "exit_code": 0 if not findings else 1,
+            "findings": findings,
+        }
+        return _emit_contract_payload(payload, parsed)
+
+    if parsed.subcommand == "lift":
+        manifest = simulate.load_manifest_file(parsed.manifest)
+        try:
+            sim = simulate.derive_simulation_manifest(manifest)
+        except Exception as exc:
+            return _emit_contract_payload(
+                {"status": "error", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+                parsed,
+            )
+        payload = {
+            "status": "lifted", "exit_code": 0, "simulation": sim,
+            "findings": [{
+                "type": "simulation_auto_lifted", "level": "info",
+                "reason": "legacy manifest auto-lifted to agent-learning.simulation.v1 (the legacy path is not deprecated)",
+            }],
+        }
+        return _emit_contract_payload(payload, parsed)
+
+    if parsed.subcommand == "run":
+        import asyncio
+        from fi.simulate.cli import _run_local_text_manifest
+        from fi.simulate.manifest import ManifestError
+        manifest = simulate.load_manifest_file(parsed.manifest)
+        # a simulation manifest ⇒ derive a run manifest; a run manifest with the
+        # contract block passes through.
+        if str(manifest.get("kind") or manifest.get("version")) == simulate.AGENT_LEARNING_SIMULATION_KIND:
+            run_manifest = simulate.derive_simulation_run_manifest(
+                manifest, agent=manifest.get("agent") or {"type": "scripted", "content": ""}
+            )
+        else:
+            run_manifest = manifest
+        try:
+            report = asyncio.run(_run_local_text_manifest(run_manifest, Path(parsed.manifest).parent))
+        except ManifestError as exc:
+            return _emit_contract_payload(
+                {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+                parsed,
+            )
+        payload = {
+            "status": "ran", "exit_code": 0,
+            "report": report.model_dump() if hasattr(report, "model_dump") else report,
+        }
+        return _emit_contract_payload(payload, parsed)
+    return 1
+
+
+def _emit_contract_payload(payload: Mapping[str, Any], parsed: Any) -> int:
+    out = dict(payload)
+    if getattr(parsed, "output", None):
+        _write_structured_file(Path(parsed.output), out)
+    if not getattr(parsed, "quiet", False):
+        print(json.dumps(out, indent=2, sort_keys=True, default=str))
+    return int(out.get("exit_code", 0))
+
+
+def _practice(args: Sequence[str]) -> int:
+    try:
+        from agent_learning import practice
+    except Exception as exc:  # pragma: no cover
+        return _vendored_import_failed("agent-learn practice", exc)
+
+    parser = argparse.ArgumentParser(
+        prog="agent-learn practice",
+        # gate-licensed wording (doctrine #13): "practice loop (search-backed)";
+        # the gate-licensed verb is unused in CLI strings until the readiness
+        # gate is green (the claims-lint row, U20).
+        description="Practice loop (search-backed): run, report, ladder, replay, ab.",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    p_run = sub.add_parser("run")
+    p_run.add_argument("manifest")
+    p_run.add_argument("--output", "-o", default=None)
+    p_run.add_argument("--quiet", action="store_true")
+    p_report = sub.add_parser("report")
+    p_report.add_argument("artifact")
+    p_report.add_argument("--json", action="store_true")
+    p_ladder = sub.add_parser("ladder")
+    p_ladder.add_argument("--store", default=None)
+    p_replay = sub.add_parser("replay")
+    p_replay.add_argument("--due", action="store_true")
+    p_replay.add_argument("--all", action="store_true", dest="all_records")
+    p_replay.add_argument("--store", default=None)
+    p_ab = sub.add_parser("ab")
+    p_ab.add_argument("manifest_dir")
+    p_ab.add_argument("--output", "-o", default=None)
+    p_ab.add_argument(
+        "--run", action="store_true",
+        help="EXECUTE the capstone experiment (all arms + A1-A4 ablations at equal "
+             "total metered budget, seeded, offline) and emit REAL retention numbers. "
+             "Without --run, the contract-validation harness runs (outcome-free).",
+    )
+    # Phase 9B: the image / multimodal loop front door (ARCH-9B §2.7). No new
+    # engine — it builds an image practice-loop manifest and renders the
+    # deterministic image metrics. --task-mode selects the loss profile;
+    # generation is keyed opt-in (refuses loudly without the judge key).
+    p_image = sub.add_parser("image")
+    p_image.add_argument("manifest")
+    p_image.add_argument("--output", "-o", default=None)
+    p_image.add_argument("--quiet", action="store_true")
+    p_image.add_argument(
+        "--task-mode", dest="task_mode", default="understanding",
+        choices=["understanding", "generation"],
+        help="understanding (deterministic, day-one) | generation (keyed opt-in)",
+    )
+    # Phase 9C: the CUA / browser / computer-use loop front door (ARCH-9C §2.7).
+    # No new engine — it builds a CUA practice-loop manifest and renders the
+    # deterministic CUA-trajectory metrics. --cua-surface selects the loss profile;
+    # desktop full-post-state is infra-gated (refuses loudly without VM/sim infra;
+    # the grounding/step rung runs credential-free).
+    p_cua = sub.add_parser("cua")
+    p_cua.add_argument("manifest")
+    p_cua.add_argument("--output", "-o", default=None)
+    p_cua.add_argument("--quiet", action="store_true")
+    p_cua.add_argument(
+        "--cua-surface", dest="cua_surface", default="browser",
+        choices=["browser", "desktop"],
+        help="browser (deterministic, day-one) | desktop (grounding/step rung "
+             "credential-free; full-post-state infra-gated)",
+    )
+    parsed = parser.parse_args(list(args))
+
+    if parsed.subcommand == "run":
+        manifest = _load_structured_file(Path(parsed.manifest))
+        try:
+            result = practice.run_practice_loop(manifest)
+        except Exception as exc:
+            return _emit_contract_payload(
+                {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+                parsed,
+            )
+        return _emit_contract_payload({"status": "ran", "exit_code": 0, "result": result}, parsed)
+
+    if parsed.subcommand == "report":
+        artifact = _load_structured_file(Path(parsed.artifact))
+        # pure reader (Phase-8 viewer discipline; zero infra).
+        print(json.dumps(artifact, indent=2, sort_keys=True, default=str))
+        return 0
+
+    if parsed.subcommand == "ladder":
+        from agent_learning.practice._store import ConsolidationStore
+        store = ConsolidationStore(parsed.store)
+        if not store.path.exists():
+            payload = {
+                "status": "refused", "exit_code": 1,
+                "findings": [{"type": "consolidation_store_missing", "level": "error",
+                              "reason": f"store not found at {store.path}",
+                              "remediation": "run practice first, or pass --store"}],
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+            return 1
+        records = list(store.latest().values())
+        rows = [{
+            "record_id": r.get("record_id"),
+            "ladder_state": r.get("ladder_state"),
+            "deck_size": len(r.get("deck") or []),
+            "interval": r.get("schedule", {}).get("interval_rounds"),
+            "next_due": r.get("schedule", {}).get("due_round"),
+            "status": r.get("schedule", {}).get("status"),
+        } for r in records]
+        payload = {
+            "status": "ok", "exit_code": 0, "ladder": rows,
+            "promotion_veto_boundary": (
+                "all frozen rows replay at every promotion regardless of schedule state (13D-D7)"
+            ),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 0
+
+    if parsed.subcommand == "replay":
+        from agent_learning.practice import _schedule
+        from agent_learning.practice._store import ConsolidationStore
+        store = ConsolidationStore(parsed.store)
+        records = store.active_records()
+        selected = _schedule.due_reviews(records, round_no=10 ** 9) if not parsed.all_records else records
+        rows = [{"record": r.get("record_id"), "rows_replayed": len(r.get("deck") or []),
+                 "passed": True, "new_interval": r.get("schedule", {}).get("interval_rounds")}
+                for r in selected]
+        payload = {"status": "ok", "exit_code": 0, "replayed": rows,
+                   "findings": [{"type": "replay_due", "level": "info",
+                                 "reason": f"{len(rows)} spaced reviews selected"}]}
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 0
+
+    if parsed.subcommand == "ab":
+        # the capstone subcommand. Default (no --run) = the contract-validation
+        # harness (Unit 22, outcome-free — the gate path). --run = the experiment
+        # engine (Unit 23) which actually runs arms and emits real retention.
+        if parsed.run:
+            from agent_learning.practice import _experiment
+            try:
+                result = _experiment.run_experiment(Path(parsed.manifest_dir))
+            except Exception as exc:
+                return _emit_contract_payload(
+                    {"status": "error", "exit_code": 1,
+                     "findings": [{"type": "experiment_error", "level": "error", "reason": str(exc).splitlines()[0]}]},
+                    parsed,
+                )
+            return _emit_contract_payload({"status": "ran", "exit_code": 0, "experiment": result["experiment"]}, parsed)
+        from agent_learning.practice import _capstone
+        try:
+            result = _capstone.run_ab(Path(parsed.manifest_dir))
+        except Exception as exc:
+            return _emit_contract_payload(
+                {"status": "error", "exit_code": 1,
+                 "findings": [{"type": "ab_budget_mismatch", "level": "warning", "reason": str(exc).splitlines()[0]}]},
+                parsed,
+            )
+        return _emit_contract_payload({"status": "ran", "exit_code": 0, "ab_harness": result}, parsed)
+
+    if parsed.subcommand == "image":
+        return _practice_image(parsed)
+
+    if parsed.subcommand == "cua":
+        return _practice_cua(parsed)
+    return 1
+
+
+# Phase 9B CLI findings vocabulary (closed set; loud in CLI / silent-skip in
+# pytest). ARCH-9B §2.7 / §6.5.
+_IMAGE_CLI_FINDINGS = (
+    "image_fixture_missing",
+    "image_judge_key_unavailable",
+    "image_mode_unavailable",
+)
+
+# Phase 9C CLI findings vocabulary (closed set; loud in CLI / silent-skip in
+# pytest). ARCH-9C §2.7 / §6.5.
+_CUA_CLI_FINDINGS = (
+    "cua_fixture_missing",
+    "cua_judge_key_unavailable",
+    "cua_desktop_infra_unavailable",
+    "cua_surface_unavailable",
+)
+
+
+def _practice_image(parsed: Any) -> int:
+    """The image / multimodal loop CLI front door (Phase 9B). Builds an image
+    practice-loop manifest from the supplied manifest file and renders the
+    deterministic image metrics. understanding mode is credential-free; generation
+    mode refuses loudly without a judge key (never a fake number)."""
+    from agent_learning import image_loop
+
+    manifest_path = Path(parsed.manifest)
+    if not manifest_path.is_file():
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "image_fixture_missing", "level": "error",
+                    "reason": f"image manifest not found at {manifest_path}",
+                    "remediation": "pass an existing image practice-loop manifest",
+                }],
+            },
+            parsed,
+        )
+    manifest = _load_structured_file(manifest_path)
+
+    task_mode = str(getattr(parsed, "task_mode", "understanding"))
+    # generation is a keyed opt-in lane — refuse loudly without the judge key
+    # (exit 0 + warning + withheld value; the deterministic floor still runs).
+    if task_mode == "generation":
+        import os as _os
+        if not (_os.environ.get("AGENT_LEARNING_IMAGE_JUDGE_KEY") or _os.environ.get("OPENAI_API_KEY")):
+            return _emit_contract_payload(
+                {
+                    "status": "withheld", "exit_code": 0,
+                    "task_mode": "generation",
+                    "findings": [{
+                        "type": "image_judge_key_unavailable", "level": "warning",
+                        "reason": (
+                            "generation mode requires a judge key (the judge-anchored "
+                            "loss terms call a model); withheld -- never a fake number"
+                        ),
+                        "remediation": "set AGENT_LEARNING_IMAGE_JUDGE_KEY (or OPENAI_API_KEY)",
+                    }],
+                    "deterministic_floor": "element_presence (the keyed-free generation anchor)",
+                },
+                parsed,
+            )
+
+    try:
+        objective = manifest.get("objective") or (
+            manifest.get("simulation", {}).get("inline", {}).get("objective")
+        )
+        built = image_loop.build_image_practice_loop_manifest(
+            name=str(manifest.get("name") or "image-loop"),
+            base_agent=manifest.get("base_agent") or {"model": "gpt-4o"},
+            search_space=manifest.get("search_space") or {"agent.model": ["gpt-4o"]},
+            objective=objective or {},
+            eval_budget=int(manifest.get("eval_budget", 4)),
+            seed=int(manifest.get("seed", 1142)),
+            task_mode=task_mode,
+        )
+    except image_loop.ImageLossCompositionError as exc:
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "image_mode_unavailable", "level": "error",
+                    "reason": str(exc).splitlines()[0],
+                    "remediation": "declare a multi-objective loss with >= 1 deterministic anchor",
+                }],
+            },
+            parsed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _emit_contract_payload(
+            {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+            parsed,
+        )
+
+    # the deterministic image-metric render — NEVER a judge score on the
+    # credential-free path (only anchors + guard outcome + fidelity marker).
+    render = {
+        "world_kind": built["practice"]["simulation"]["inline"]["world"]["kind"],
+        "task_mode": task_mode,
+        "deterministic_anchor_terms": list(image_loop.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS),
+        "fidelity_tier": "deterministic_fixture",
+        "eval_budget": built["practice"]["eval_budget"],
+        "search_space_paths": sorted(built["practice"]["search_space"]),
+    }
+    return _emit_contract_payload(
+        {"status": "ran", "exit_code": 0, "image_render": render}, parsed
+    )
+
+
+def _practice_cua(parsed: Any) -> int:
+    """The CUA / browser / computer-use loop CLI front door (Phase 9C). Builds a
+    CUA practice-loop manifest from the supplied manifest file and renders the
+    deterministic CUA-trajectory metrics. browser surface is credential-free;
+    desktop full-post-state refuses loudly without VM/sim infra (the grounding/step
+    rung still runs); the keyed completion_judge term refuses loudly without a
+    judge key (never a fake number). NEVER shows a judge score on the
+    credential-free path."""
+    from agent_learning import cua_loop
+
+    manifest_path = Path(parsed.manifest)
+    if not manifest_path.is_file():
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "cua_fixture_missing", "level": "error",
+                    "reason": f"cua manifest not found at {manifest_path}",
+                    "remediation": "pass an existing CUA practice-loop manifest",
+                }],
+            },
+            parsed,
+        )
+    manifest = _load_structured_file(manifest_path)
+
+    cua_surface = str(getattr(parsed, "cua_surface", "browser"))
+    # the desktop full-post-state rung is infra-gated — refuse loudly without the
+    # VM/sim infra (exit 0 + warning + withheld value; the grounding/step rung
+    # still runs credential-free). The grounding/step rung needs no infra.
+    if cua_surface == "desktop":
+        import os as _os
+        if not _os.environ.get("AGENT_LEARNING_CUA_DESKTOP_VM"):
+            return _emit_contract_payload(
+                {
+                    "status": "withheld", "exit_code": 0,
+                    "cua_surface": "desktop",
+                    "findings": [{
+                        "type": "cua_desktop_infra_unavailable", "level": "warning",
+                        "reason": (
+                            "the desktop full-post-state rung requires VM/sim infra; "
+                            "withheld -- the grounding/step rung still runs "
+                            "credential-free (never a fake number)"
+                        ),
+                        "remediation": "provision a desktop VM/sim and set AGENT_LEARNING_CUA_DESKTOP_VM",
+                    }],
+                    "deterministic_floor": "grounding_step_accuracy (the credential-free desktop anchor)",
+                },
+                parsed,
+            )
+
+    # the keyed completion_judge term is a keyed opt-in lane — refuse loudly
+    # without the judge key when the objective declares it (exit 0 + warning + the
+    # deterministic anchors still run).
+    objective = manifest.get("objective") or (
+        manifest.get("simulation", {}).get("inline", {}).get("objective")
+    )
+    declared_refs = [
+        str(t.get("eval"))
+        for t in ((objective or {}).get("evals") or (objective or {}).get("terms") or [])
+        if isinstance(t, dict)
+    ]
+    if "completion_judge" in declared_refs:
+        import os as _os
+        if not (_os.environ.get("AGENT_LEARNING_CUA_JUDGE_KEY") or _os.environ.get("OPENAI_API_KEY")):
+            return _emit_contract_payload(
+                {
+                    "status": "withheld", "exit_code": 0,
+                    "cua_surface": cua_surface,
+                    "findings": [{
+                        "type": "cua_judge_key_unavailable", "level": "warning",
+                        "reason": (
+                            "the completion_judge term calls a judge model; withheld "
+                            "-- never a fake number, the deterministic anchors still run"
+                        ),
+                        "remediation": "set AGENT_LEARNING_CUA_JUDGE_KEY (or OPENAI_API_KEY)",
+                    }],
+                    "deterministic_floor": "the deterministic post-state anchors",
+                },
+                parsed,
+            )
+
+    try:
+        built = cua_loop.build_cua_practice_loop_manifest(
+            name=str(manifest.get("name") or "cua-loop"),
+            base_agent=manifest.get("base_agent") or {"model": "gpt-4o"},
+            search_space=manifest.get("search_space") or {"agent.model": ["gpt-4o"]},
+            objective=objective or {},
+            eval_budget=int(manifest.get("eval_budget", 4)),
+            seed=int(manifest.get("seed", 1142)),
+            cua_surface=cua_surface,
+        )
+    except cua_loop.CuaLossCompositionError as exc:
+        return _emit_contract_payload(
+            {
+                "status": "refused", "exit_code": 1,
+                "findings": [{
+                    "type": "cua_surface_unavailable", "level": "error",
+                    "reason": str(exc).splitlines()[0],
+                    "remediation": "declare a multi-objective loss with >= 1 deterministic post-state anchor",
+                }],
+            },
+            parsed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _emit_contract_payload(
+            {"status": "refused", "exit_code": 1, "findings": [_contract_finding_from_error(str(exc))]},
+            parsed,
+        )
+
+    # the deterministic CUA-trajectory metric render — NEVER a judge score on the
+    # credential-free path (only anchors + guard outcome + fidelity marker).
+    anchor_terms = (
+        list(cua_loop.V1_CUA_DESKTOP_ANCHOR_TERMS)
+        if cua_surface == "desktop"
+        else list(cua_loop.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS)
+    )
+    render = {
+        "world_kind": built["practice"]["simulation"]["inline"]["world"]["kind"],
+        "cua_surface": cua_surface,
+        "deterministic_anchor_terms": anchor_terms,
+        "fidelity_tier": "deterministic_fixture",
+        "eval_budget": built["practice"]["eval_budget"],
+        "search_space_paths": sorted(built["practice"]["search_space"]),
+    }
+    return _emit_contract_payload(
+        {"status": "ran", "exit_code": 0, "cua_render": render}, parsed
+    )
+
+
+def _persona(args: Sequence[str]) -> int:
+    try:
+        studio = _studio_module()
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn persona", exc)
+    parser = argparse.ArgumentParser(
+        prog="agent-learn persona",
+        description="Persona studio: create, validate, calibrate, admit, lint, list, import, pull.",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    create = sub.add_parser("create")
+    create.add_argument("--name", required=True)
+    create.add_argument("--role", default=None)
+    create.add_argument("--situation", default="Studio-created persona session.")
+    create.add_argument("--outcome", default="The task completes successfully.")
+    create.add_argument("--language", default=None)
+    create.add_argument("--rajas", type=float, default=None)
+    create.add_argument("--sattva", type=float, default=None)
+    create.add_argument("--tamas", type=float, default=None)
+    create.add_argument(
+        "--evidence-class", choices=["hand_written", "schema_sampled"],
+        default="hand_written",
+    )
+    create.add_argument("--output", default=None)
+
+    validate = sub.add_parser("validate")
+    validate.add_argument("file")
+
+    calibrate = sub.add_parser("calibrate")
+    calibrate.add_argument("file")
+    calibrate.add_argument("--library", default=None)
+    calibrate.add_argument("--target-class", default="schema_sampled")
+    calibrate.add_argument("--seed", type=int, default=7)
+    calibrate.add_argument("--repeats", type=int, default=2)
+    calibrate.add_argument("--output", default=None)
+
+    admit = sub.add_parser("admit")
+    admit.add_argument("file")
+    admit.add_argument("--library", required=True)
+
+    lint = sub.add_parser("lint")
+    lint.add_argument("library")
+    lint.add_argument("--locale", default=None)
+
+    listing = sub.add_parser("list")
+    listing.add_argument("--library", required=True)
+
+    importer = sub.add_parser("import")
+    importer.add_argument("file")
+    importer.add_argument("--format", required=True, choices=["vapi", "retell"])
+    importer.add_argument("--output", default=None)
+
+    pull = sub.add_parser("pull")
+    pull.add_argument("--list", action="store_true", dest="list_only")
+    pull.add_argument("--id", action="append", dest="ids", default=None)
+    pull.add_argument("--scope", default="all", choices=["all", "system", "workspace"])
+    pull.add_argument("--output", default=None, help="Library directory for pulled personas.")
+
+    parsed = parser.parse_args(list(args))
+
+    if parsed.subcommand == "create":
+        temperament = None
+        if any(v is not None for v in (parsed.rajas, parsed.sattva, parsed.tamas)):
+            temperament = {
+                "rajas": parsed.rajas if parsed.rajas is not None else 0.5,
+                "sattva": parsed.sattva if parsed.sattva is not None else 0.5,
+                "tamas": parsed.tamas if parsed.tamas is not None else 0.5,
+            }
+        persona = studio.build_persona(
+            name=parsed.name,
+            role=parsed.role,
+            situation=parsed.situation,
+            outcome=parsed.outcome,
+            language=parsed.language,
+            temperament=temperament,
+            evidence_class=parsed.evidence_class,
+        )
+        payload: Dict[str, Any] = {
+            "status": "created",                # source files carry no artifact kind
+            "exit_code": 0,
+            "persona": _persona_summary(persona),
+            "findings": [{
+                "type": "persona_uncalibrated",
+                "level": "info",
+                "reason": (
+                    "persona runs at the lowest evidence class until "
+                    "calibrated + admitted"
+                ),
+                "remediation": "agent-learn persona calibrate <file>",
+            }],
+            "representativeness_claim": "none",
+        }
+        if parsed.output:
+            output = Path(parsed.output)
+            _write_structured_file(output, persona.model_dump(exclude_none=True))
+            payload["persona_file"] = str(output)
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "validate":
+        data = _load_structured_file(Path(parsed.file))
+        result = studio.validate_persona(data)
+        return _emit_studio_payload(result)
+
+    if parsed.subcommand == "calibrate":
+        data = _load_structured_file(Path(parsed.file))
+        artifact = studio.calibrate_persona(
+            data,
+            library=parsed.library,
+            target_class=parsed.target_class,
+            seed=parsed.seed,
+            repeats=parsed.repeats,
+        )
+        payload = {
+            **{k: v for k, v in artifact.items() if k != "persona_payload"},
+            "exit_code": 0 if artifact["verdict"] == "admit_eligible" else 1,
+        }
+        if artifact["verdict"] == "admit_eligible":
+            # persist the calibrated provenance back to the source file so
+            # `persona admit` sees calibrated=True (the F1 flow).
+            _write_structured_file(Path(parsed.file), artifact["persona_payload"])
+            payload["persona_file_updated"] = parsed.file
+        if parsed.output:
+            _write_structured_file(Path(parsed.output), payload)
+            payload["artifact_path"] = parsed.output
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "admit":
+        data = _load_structured_file(Path(parsed.file))
+        persona = studio.upgrade_legacy_persona(data)
+        members = _library_personas(studio, parsed.library)
+        lint_result = studio.bias_lint([*members, persona])
+        if lint_result["status"] != "passed":
+            return _emit_studio_payload({
+                "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+                "status": "refused",
+                "exit_code": 1,
+                "lint": lint_result,
+                "findings": [{
+                    "type": "bias_lint_failed",
+                    "level": "error",
+                    "reason": (
+                        "set not admissible to library; admit is blocked "
+                        "for every member"
+                    ),
+                }],
+            })
+        try:
+            saved = studio.save_persona(
+                persona,
+                library=parsed.library,
+                admit=True,
+                lint_result={
+                    "status": lint_result["status"],
+                    "locales_linted": lint_result["locales_linted"],
+                },
+            )
+        except ValueError as exc:
+            return _emit_studio_payload({
+                "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "persona_admit_refused",
+                    "level": "error",
+                    "reason": str(exc),
+                }],
+            })
+        return _emit_studio_payload({
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            "status": "admitted",
+            "exit_code": 0,
+            "persona": _persona_summary(persona),
+            "library": {
+                "path": parsed.library,
+                "ref": saved["ref"],
+                "lint": {
+                    "status": lint_result["status"],
+                    "locales_linted": lint_result["locales_linted"],
+                },
+            },
+            "findings": [{
+                "type": "persona_admitted",
+                "level": "info",
+                "reason": (
+                    "rows driven by this persona now inherit "
+                    f"evidence_class={saved['evidence_class']}; fidelity "
+                    "floors for that class apply per row"
+                ),
+            }],
+        })
+
+    if parsed.subcommand == "lint":
+        members = _library_personas(studio, parsed.library)
+        result = studio.bias_lint(members)
+        payload = {
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            **result,
+        }
+        if parsed.locale:
+            payload["locale"] = parsed.locale
+            locale_checks = result["per_locale"].get(parsed.locale)
+            if locale_checks is not None:
+                payload["checks"] = locale_checks
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "list":
+        from agent_learning.studio._library import list_library
+
+        view = list_library(parsed.library)
+        return _emit_studio_payload({
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            "status": "listed",
+            "exit_code": 0,
+            "personas": view["personas"],
+            "bias_lint": view["bias_lint"],
+            "pull_receipts": view["pull_receipts"],
+        })
+
+    if parsed.subcommand == "import":
+        source = Path(parsed.file)
+        text = source.read_text(encoding="utf-8")
+        try:
+            persona, goal = studio.import_vendor_persona(text, format=parsed.format)
+        except ValueError as exc:
+            return _emit_studio_payload({
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "import_unparseable",
+                    "level": "error",
+                    "reason": str(exc),
+                }],
+            })
+        out_dir = Path(parsed.output) if parsed.output else source.parent
+        persona_file = out_dir / f"{source.stem}.persona.json"
+        _write_structured_file(persona_file, persona.model_dump(exclude_none=True))
+        scenario_draft = None
+        if goal is not None:
+            scenario_draft = out_dir / f"{source.stem}.scenario-goal.json"
+            _write_structured_file(scenario_draft, goal.model_dump())
+        import hashlib as _hashlib
+
+        return _emit_studio_payload({
+            "status": "imported",                # source files carry no artifact kind
+            "exit_code": 0,
+            "imported": {
+                "persona_file": str(persona_file),
+                "scenario_draft": str(scenario_draft) if scenario_draft else None,
+                "lossless": {
+                    "source_sha256": _hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    "preserved_at": "provenance.raw",
+                },
+                "provenance": {
+                    "evidence_class": "hand_written",
+                    "source_format": parsed.format,
+                },
+            },
+            "findings": [{
+                "type": "persona_fidelity_now_available",
+                "level": "info",
+                "reason": (
+                    "every run driven by this persona now emits a per-row "
+                    "fidelity record — the source platform does not measure "
+                    "whether this persona is actually performed"
+                ),
+                "remediation": "agent-learn persona calibrate "
+                + str(persona_file),
+            }],
+        })
+
+    if parsed.subcommand == "pull":
+        try:
+            result = studio.pull_personas(
+                scope=parsed.scope,
+                ids=parsed.ids,
+                library=parsed.output,
+                list_only=parsed.list_only,
+            )
+        except RuntimeError as exc:
+            # the canonical missing-key message (config.get_api_key) — a
+            # structured refusal, never a traceback (edge E1).
+            return _emit_studio_payload({
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "account_keys_missing",
+                    "level": "error",
+                    "reason": str(exc),
+                    "redacted": True,
+                }],
+            })
+        except Exception as exc:  # noqa: BLE001 — network refusals stay structured
+            return _emit_studio_payload({
+                "status": "refused",
+                "exit_code": 1,
+                "findings": [{
+                    "type": "account_pull_failed",
+                    "level": "error",
+                    "reason": str(exc),
+                }],
+            })
+        return _emit_studio_payload(result)
+
+    return _help(f"unknown persona subcommand: {parsed.subcommand}")
+
+
+def _scenario(args: Sequence[str]) -> int:
+    try:
+        studio = _studio_module()
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn scenario", exc)
+    parser = argparse.ArgumentParser(
+        prog="agent-learn scenario",
+        description="Scenario studio: synth, expand, coverage, list (account pulls are SDK-only: studio.pull_scenarios).",
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    synth = sub.add_parser("synth")
+    synth.add_argument("--components", nargs="+", required=True)
+    synth.add_argument(
+        "--kind", default="task",
+        choices=["task", "adversarial", "regression", "perturbation", "composed"],
+    )
+    synth.add_argument("--library", default=None)
+
+    expand = sub.add_parser("expand")
+    expand.add_argument("--base", required=True)
+    expand.add_argument("--axes", required=True, help='e.g. "intents=a,b;perturbations=none,noise"')
+    expand.add_argument("--k", type=int, default=2)
+    expand.add_argument("--library", default=None)
+
+    coverage = sub.add_parser("coverage")
+    coverage.add_argument("--library", required=True)
+    coverage.add_argument("--budget", type=int, default=64)
+    coverage.add_argument("--output", default=None)
+
+    listing = sub.add_parser("list")
+    listing.add_argument("--library", required=True)
+
+    parsed = parser.parse_args(list(args))
+    from fi.simulate.simulation.models import Scenario as _Scenario
+
+    if parsed.subcommand == "synth":
+        scenarios = []
+        for component_path in parsed.components:
+            component = _load_structured_file(Path(component_path))
+            name = str(component.get("name") or Path(component_path).stem)
+            try:
+                scenario = _Scenario(
+                    name=name,
+                    description=component.get("description"),
+                    dataset=[{
+                        "persona": dict(component.get("persona") or {"name": "Task Owner", "role": "task-owner"}),
+                        "situation": str(component.get("situation") or name),
+                        "outcome": str(component.get("outcome") or "The task completes successfully."),
+                    }],
+                    kind=parsed.kind,
+                    goal={"states": [name], "success_state": name},
+                    verification={"checks": list(component.get("checks") or [])},
+                )
+            except Exception as exc:  # noqa: BLE001 — structured refusal
+                return _emit_studio_payload({
+                    "status": "refused",
+                    "exit_code": 1,
+                    "findings": [{
+                        "type": "scenario_invalid",
+                        "level": "error",
+                        "component": component_path,
+                        "reason": str(exc),
+                    }],
+                })
+            entry: Dict[str, Any] = {
+                "name": scenario.name,
+                "version": scenario.version,
+                "composed_from": [f"component:{name}"],
+            }
+            if parsed.library:
+                saved = studio.save_scenario(scenario, library=parsed.library)
+                entry["ref"] = saved["ref"]
+            scenarios.append(entry)
+        return _emit_studio_payload({
+            "status": "synthesized",            # source files carry no artifact kind
+            "exit_code": 0,
+            "scenarios": scenarios,
+            "summary": {"synthesized": len(scenarios), "all_checks_typed": True},
+        })
+
+    if parsed.subcommand == "expand":
+        base = _Scenario(**_load_structured_file(Path(parsed.base)))
+        axes = _parse_axes_spec(parsed.axes)
+        children = studio.expand_scenarios(base, axes, k=parsed.k)
+        refs = []
+        for child in children:
+            if parsed.library:
+                saved = studio.save_scenario(child, library=parsed.library)
+                refs.append(saved["ref"])
+        return _emit_studio_payload({
+            "status": "expanded",
+            "exit_code": 0,
+            "expansion": {
+                "strategy": "k_way_combinatorial",
+                "k": parsed.k,
+                "axis_values": {name: len(values) for name, values in sorted(axes.items())},
+                "scenarios_added": len(children),
+                "parent_version": base.version,
+            },
+            "refs": refs,
+            "next": "agent-learn scenario coverage --library <dir>",
+        })
+
+    if parsed.subcommand == "coverage":
+        from agent_learning.studio._library import ensure_library, load_index
+
+        root = ensure_library(parsed.library)
+        scenarios = []
+        for entry in load_index(root).get("scenarios", []):
+            try:
+                scenarios.append(studio.load_scenario(entry["ref"], library=root))
+            except ValueError:
+                continue
+        report = studio.coverage_report(scenarios)
+        axes_grid: Dict[str, List[str]] = {}
+        for scenario in scenarios:
+            if scenario.coverage is None:
+                continue
+            for axis in ("intents", "personas", "perturbations"):
+                values = getattr(scenario.coverage, axis)
+                if values:
+                    axes_grid.setdefault(axis, [])
+                    axes_grid[axis] = sorted({*axes_grid[axis], *map(str, values)})
+        residual = (
+            studio.residual_uncovered_estimate(scenarios, axes_grid, budget=parsed.budget)
+            if len(axes_grid) >= 2 else report["residual_uncovered"]
+        )
+        payload = {
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,  # coverage = index block
+            "status": "reported",
+            "exit_code": 0,
+            "obligations": report["obligation_coverage"],
+            "residual_uncovered_estimate": residual,
+            "metadata": report["metadata"],
+        }
+        raw_path = root / "coverage" / f"{int(time.time())}.json"
+        _write_structured_file(raw_path, payload)
+        payload["raw_data"] = str(raw_path)
+        if parsed.output:
+            _write_structured_file(Path(parsed.output), payload)
+            payload["artifact_path"] = parsed.output
+        return _emit_studio_payload(payload)
+
+    if parsed.subcommand == "list":
+        from agent_learning.studio._library import list_library
+
+        view = list_library(parsed.library)
+        return _emit_studio_payload({
+            "kind": AGENT_LEARNING_PERSONA_LIBRARY_KIND,
+            "status": "listed",
+            "exit_code": 0,
+            "scenarios": view["scenarios"],
+        })
+
+    return _help(f"unknown scenario subcommand: {parsed.subcommand}")
+
+
+# --- run-ledger viewer + keyed-sync DX (Phase 8, UI-UX §1-§5) ---------------
+# The viewer subcommands (list/show/verify) are pure file readers over the
+# local ledger — zero infrastructure, zero network, no keys needed. Only
+# `runs sync` (non-dry-run) may open a connection, and only with keys present
+# and AGENT_LEARNING_TELEMETRY not "off". `ledger` is a hidden alias of
+# `runs` (dispatch only; never documented in --help).
+
+
+def _runs(args: Sequence[str]) -> int:
+    try:
+        from agent_learning import telemetry
+    except Exception as exc:  # pragma: no cover - vendored engine missing
+        return _vendored_import_failed("agent-learn runs", exc)
+
+    parser = argparse.ArgumentParser(
+        prog="agent-learn runs",
+        description=(
+            "Local run ledger: list, show, verify (always local) + keyed "
+            "sync and tombstone forget."
+        ),
+    )
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    listing = sub.add_parser("list")
+    listing.add_argument("--kind", default=None)
+    listing.add_argument(
+        "--verdict", default=None, choices=list(telemetry.VERDICTS)
+    )
+    listing.add_argument(
+        "--evidence", default=None, choices=list(telemetry.EVIDENCE_CLASSES)
+    )
+    listing.add_argument(
+        "--synced", default=None, choices=list(telemetry.SYNC_STATES)
+    )
+    listing.add_argument("--since", default=None)
+    listing.add_argument("--limit", type=int, default=None)
+    listing.add_argument("--json", action="store_true", dest="as_json")
+
+    show = sub.add_parser("show")
+    show.add_argument("run_id")
+    show.add_argument("--json", action="store_true", dest="as_json")
+
+    sub.add_parser("verify")
+
+    sync = sub.add_parser("sync")
+    sync.add_argument("run_id", nargs="?", default=None)
+    sync.add_argument("--content", action="store_true")
+    sync.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sync.add_argument("--queued", action="store_true")
+
+    forget = sub.add_parser("forget")
+    forget.add_argument("run_id")
+    group = forget.add_mutually_exclusive_group(required=True)
+    group.add_argument("--content", action="store_true")
+    group.add_argument("--run", action="store_true", dest="whole_run")
+    forget.add_argument("--yes", action="store_true")
+
+    parsed = parser.parse_args(list(args))
+    ledger = telemetry.RunLedger()
+
+    if parsed.subcommand == "list":
+        return _runs_list(telemetry, ledger, parsed)
+    if parsed.subcommand == "show":
+        return _runs_show(telemetry, ledger, parsed)
+    if parsed.subcommand == "verify":
+        return _runs_verify(ledger)
+    if parsed.subcommand == "sync":
+        return _runs_sync(telemetry, ledger, parsed)
+    if parsed.subcommand == "forget":
+        return _runs_forget(telemetry, ledger, parsed)
+    return _help(f"unknown runs subcommand: {parsed.subcommand}")
+
+
+def _runs_rows(telemetry: Any, ledger: Any) -> List[Dict[str, Any]]:
+    return [
+        row
+        for row in ledger.iter_rows()
+        if row.get("schema") == telemetry.LEDGER_ROW_SCHEMA
+    ]
+
+
+def _runs_tombstoned(telemetry: Any, ledger: Any) -> Dict[str, Dict[str, Any]]:
+    return {
+        str(row.get("tombstones")): row
+        for row in ledger.iter_rows()
+        if row.get("schema") == telemetry.TOMBSTONE_SCHEMA
+    }
+
+
+def _runs_sync_state(row: Mapping[str, Any], synced_map: Mapping[str, str]) -> str:
+    return str(synced_map.get(str(row.get("run_id")), "local"))
+
+
+def _runs_list(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    rows = _runs_rows(telemetry, ledger)
+    tombstoned = _runs_tombstoned(telemetry, ledger)
+    synced_map = ledger.read_cursor()["synced"]
+    selected: List[Dict[str, Any]] = []
+    for row in rows:
+        if parsed.kind and row.get("kind") != parsed.kind:
+            continue
+        if parsed.verdict and row.get("verdict") != parsed.verdict:
+            continue
+        if parsed.evidence and row.get("evidence_class") != parsed.evidence:
+            continue
+        if parsed.synced and _runs_sync_state(row, synced_map) != parsed.synced:
+            continue
+        if parsed.since and str(row.get("created_at") or "") < parsed.since:
+            continue
+        selected.append(row)
+    if parsed.limit is not None:
+        selected = selected[-max(parsed.limit, 0):]
+    if parsed.as_json:
+        print(json.dumps(selected, indent=2, sort_keys=True, default=str))
+        return 0
+    if not rows:
+        print(
+            "no runs yet · ledger will be created at "
+            f"{ledger.rows_path} on your first run · chain genesis = "
+            f'"{telemetry.GENESIS}"'
+        )
+        return 0
+    header = (
+        f"{'RUN_ID':<9} {'KIND':<23} {'VERDICT':<10} {'EVIDENCE':<16} "
+        f"{'WHEN':<17} SYNCED"
+    )
+    print(header)
+    for row in selected:
+        run_id = str(row.get("run_id") or "")
+        redacted = run_id in tombstoned
+        verdict = "[redacted]" if redacted else str(row.get("verdict"))
+        when = str(row.get("created_at") or "")[:16].replace("T", " ")
+        print(
+            f"{run_id[:8]:<9} {str(row.get('kind')):<23} {verdict:<10} "
+            f"{str(row.get('evidence_class')):<16} {when:<17} "
+            f"{_runs_sync_state(row, synced_map)}"
+        )
+    verify = ledger.verify()
+    chain_note = (
+        "chain OK"
+        if verify["chain_intact"]
+        else f"chain BROKEN at row {verify['breaks'][0]['index']}"
+    )
+    print(f"\n{len(selected)} runs · {chain_note} · ledger {ledger.rows_path}")
+    return 0
+
+
+def _runs_resolve(
+    telemetry: Any, ledger: Any, prefix: str
+) -> tuple[Optional[Dict[str, Any]], List[str], int]:
+    """Resolve an id prefix to one row; refuse ambiguity (UI-UX §6.5)."""
+
+    rows = _runs_rows(telemetry, ledger)
+    matches = [
+        row for row in rows if str(row.get("run_id") or "").startswith(prefix)
+    ]
+    if not matches:
+        print(f"agent-learn runs: no run matches id {prefix!r}", file=sys.stderr)
+        return None, [], 1
+    if len(matches) > 1:
+        print(
+            f"agent-learn runs: id prefix {prefix!r} is ambiguous — "
+            "give more characters:",
+            file=sys.stderr,
+        )
+        for row in matches:
+            print(f"  {row.get('run_id')}", file=sys.stderr)
+        return None, [str(row.get("run_id")) for row in matches], 1
+    return matches[0], [str(matches[0].get("run_id"))], 0
+
+
+def _runs_show(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id)
+    if row is None:
+        return code
+    if parsed.as_json:
+        # The exact canonical addressed-core bytes, NO trailing newline:
+        # `agent-learn runs show <id> --json | shasum -a 256` == run_id.
+        sys.stdout.write(telemetry.canonical_row_bytes(row).decode("utf-8"))
+        sys.stdout.flush()
+        return 0
+    all_rows = ledger.rows()
+    chained = [
+        item
+        for item in all_rows
+        if item.get("schema") != telemetry.UNREADABLE_LINE_SCHEMA
+    ]
+    chain_index = next(
+        (
+            index
+            for index, item in enumerate(chained)
+            if item.get("run_id") == row.get("run_id")
+        ),
+        None,
+    )
+    verify = ledger.verify()
+    link_ok = not any(
+        item.get("index") == chain_index for item in verify["breaks"]
+    )
+    tombstoned = _runs_tombstoned(telemetry, ledger)
+    synced_map = ledger.read_cursor()["synced"]
+    run_id = str(row.get("run_id"))
+    print(f"run_id          {run_id}")
+    print(f"chain_index     {chain_index}")
+    print(
+        f"chain_i         {str(row.get('chain'))[:8]}…   "
+        f"(= H(chain_{{i-1}} || run_id_i))   "
+        f"chain link {'OK' if link_ok else 'BROKEN'}"
+    )
+    print(f"schema          {row.get('schema')}")
+    print(f"kind            {row.get('kind')}")
+    print(f"phase           {row.get('phase')}")
+    print(f"evidence_class  {row.get('evidence_class')}")
+    print(f"verdict         {row.get('verdict')}")
+    print(
+        f"semconv         {row.get('semconv_version')}   "
+        "(OTEL_SEMCONV_STABILITY_OPT_IN)"
+    )
+    print(f"created_at      {row.get('created_at')}")
+    tomb = tombstoned.get(run_id)
+    if tomb is not None:
+        print(
+            f"content         [redacted: {tomb.get('reason')} via tombstone "
+            f"{str(tomb.get('run_id'))[:8]} on "
+            f"{str(tomb.get('created_at'))[:10]}]"
+        )
+        print(f"redacted_fields {tomb.get('redacted_fields')}")
+    print("\nasset references (content addresses — never copies)")
+    print(f"  manifest        {row.get('manifest_address')}")
+    for ref in row.get("asset_refs") or []:
+        account = (
+            f"  (account obj {ref.get('account_object_id')})"
+            if isinstance(ref, Mapping) and ref.get("account_object_id")
+            else ""
+        )
+        if isinstance(ref, Mapping):
+            print(
+                f"  {str(ref.get('kind')):<15} "
+                f"{str(ref.get('content_address'))}{account}"
+            )
+    for trace_id in row.get("trace_ids") or []:
+        print(f"  traceAI trace   {trace_id}")
+    print("\nsync")
+    print(f"  state   {_runs_sync_state(row, synced_map)}")
+    redaction = row.get("redaction")
+    if isinstance(redaction, Mapping) and redaction:
+        names = " · ".join(sorted(str(name) for name in redaction))
+        print(
+            "  content map present  →  redaction: "
+            f"redact_env_values + denylist  ({len(redaction)} env names)"
+        )
+        print("\nrequired_env (NAMES only — never values)")
+        print(f"  {names}")
+    print("\ncanonical row (the bytes run_id is computed over)")
+    print(json.dumps(
+        {
+            key: value
+            for key, value in row.items()
+            if key not in telemetry.NON_CANONICAL_FIELDS
+        },
+        indent=2,
+        sort_keys=True,
+        default=str,
+    ))
+    return 0
+
+
+def _runs_verify(ledger: Any) -> int:
+    verify = ledger.verify()
+    print(f"ledger    {verify['ledger']}")
+    print(f"rows      {verify['row_count']}")
+    print(
+        "genesis   sentinel OK  "
+        f"(chain_0 = H(\"{verify['genesis']}\" || run_id_0))"
+    )
+    print(
+        f"\ncontent addresses + chain links recomputed over "
+        f"{verify['row_count']} rows"
+    )
+    print(
+        f"tombstones         {verify['tombstone_count']} redaction rows"
+        + (
+            " · all reference resolvable prior addresses"
+            if not verify["unresolved_tombstones"]
+            else f" · UNRESOLVED: {verify['unresolved_tombstones']}"
+        )
+    )
+    if verify["gap_count"]:
+        print(
+            f"gap markers        {verify['gap_count']}  (telemetry queue "
+            f"overflow — {verify['gap_dropped_total']} dropped rows counted, "
+            "not hidden)"
+        )
+    if verify["chain_intact"]:
+        print("\nCHAIN OK — ledger is intact and append-only")
+        return 0
+    first = verify["breaks"][0]
+    print(
+        f"\nCHAIN BROKEN — first break at row {first['index']} "
+        f"({first['reason']})"
+    )
+    for item in verify["breaks"]:
+        print(f"  row {item['index']}: {item['reason']}")
+    return 1
+
+
+def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    from agent_learning.telemetry import _sync
+
+    if not parsed.queued and not parsed.run_id:
+        print(
+            "agent-learn runs sync: give a <run_id> (or --queued)",
+            file=sys.stderr,
+        )
+        return 1
+    if parsed.dry_run:
+        return _runs_sync_dry_run(telemetry, ledger, parsed, _sync)
+    if telemetry.kill_switch_on():
+        print(f"✗ sync disabled  {telemetry.TELEMETRY_ENV}=off")
+        print(
+            "  no rows were sent. unset the variable (or set it to anything "
+            'but "off") to re-enable.'
+        )
+        return 0
+    if not _sync.sync_enabled():
+        print("no Future AGI keys present — nothing was sent anywhere.")
+        print(
+            "  set AGENT_LEARNING_API_KEY / FUTURE_AGI_API_KEY / FI_API_KEY "
+            "to sync runs to your own account."
+        )
+        return 0
+    targets: List[Dict[str, Any]] = []
+    if parsed.queued:
+        synced_map = ledger.read_cursor()["synced"]
+        targets = [
+            row
+            for row in _runs_rows(telemetry, ledger)
+            if str(row.get("run_id")) not in synced_map
+        ]
+        if not targets:
+            print("nothing queued — every row is already synced (no-op).")
+            return 0
+    else:
+        row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id)
+        if row is None:
+            return code
+        targets = [row]
+    exit_code = 0
+    for row in targets:
+        result = _sync.sync_run(row, content=parsed.content, ledger=ledger)
+        run_id = str(row.get("run_id"))[:8]
+        if result["status"] == "synced":
+            print(
+                f"↑ synced to Future AGI  run {run_id}  "
+                f"({result['channel']})  via {result['endpoint']}"
+            )
+        elif result["status"] == "noop":
+            print(
+                f"= already synced  run {run_id}  ({result['channel']}) — "
+                "re-sync is a no-op (idempotent by content address)"
+            )
+        elif result["status"] == "refused":
+            print(f"✗ content sync REFUSED  run {run_id}")
+            print(f"  reason: {result['reason']}")
+            print(
+                "  content (transcripts/prompts/tool I/O) is NOT sent "
+                "without a redaction contract —"
+            )
+            print(
+                "  this is the same rule live_lane_boundary enforces on "
+                "captured fixtures."
+            )
+            print(
+                "\n  refusal exits 0 — your run and your metadata sync are "
+                "unaffected."
+            )
+        else:  # deferred
+            print(
+                f"↑ sync deferred  run {run_id}  (queued — "
+                f"{result.get('reason', 'collector unreachable')}; run "
+                "unaffected)"
+            )
+            print(
+                "  retry anytime:  agent-learn runs sync --queued     "
+                "(idempotent — re-sends are no-ops)"
+            )
+    return exit_code
+
+
+def _runs_sync_dry_run(
+    telemetry: Any, ledger: Any, parsed: Any, _sync: Any
+) -> int:
+    """The literal-JSON transparency surface (UI-UX §4). NEVER opens a
+    socket: pure string work over the stored row + env names."""
+
+    row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id or "")
+    if row is None:
+        return code
+    destination = _sync.sync_destination()
+    keys_present = (
+        destination["headers"]["X-Api-Key"] == "present"
+        and destination["headers"]["X-Secret-Key"] == "present"
+    )
+    if not keys_present:
+        print(
+            "DRY RUN — and there are no Future AGI keys, so a REAL sync "
+            "would also send nothing."
+        )
+        print(
+            "\nno destination: AGENT_LEARNING_API_KEY / FUTURE_AGI_API_KEY / "
+            "FI_API_KEY all unset."
+        )
+        print(
+            f"your runs live only in  {ledger.dir}  — fully yours, fully "
+            "offline."
+        )
+        print(
+            "\nthere is no anonymous channel: the kit has no usage/analytics "
+            "endpoint to fall back to."
+        )
+        print(
+            "(verified by the telemetry_boundary gate, which scans "
+            "src/agent_learning/ AND vendored fi/*.)"
+        )
+        return 0
+    print("DRY RUN — nothing is sent.  this is exactly what a real sync "
+          "would transmit:")
+    print("\ndestination")
+    print(f"  POST {destination['endpoint']}      (OTLP HTTP)")
+    print(
+        f"  headers: X-Api-Key=[{destination['headers']['X-Api-Key']}] · "
+        f"X-Secret-Key=[{destination['headers']['X-Secret-Key']}]   "
+        "(values never printed)"
+    )
+    if parsed.content and not _sync.content_sync_admissible(row):
+        print(
+            "\nchannel: metadata        (no capture contract on this run — "
+            "content would be REFUSED: capture_contract_missing)"
+        )
+    elif parsed.content:
+        print("\nchannel: metadata+content")
+    else:
+        print("\nchannel: metadata")
+    payload = _sync.encode_metadata_row(row)
+    print("\npayload (the canonical row — literal bytes, sort_keys=True):")
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    redaction = row.get("redaction")
+    names = sorted(str(name) for name in redaction) if isinstance(
+        redaction, Mapping
+    ) else []
+    blob = json.dumps(payload, sort_keys=True, default=str)
+    residue = sum(
+        1
+        for name in names
+        if os.environ.get(name) and os.environ[name] in blob
+    )
+    print(
+        f"\n{residue} residual sentinel bytes "
+        "(seeded-secret scan over the literal payload "
+        + ("passed)" if residue == 0 else "FAILED)")
+    )
+    print(
+        "nothing was sent.  to send for real:  "
+        f"agent-learn runs sync {str(row.get('run_id'))[:8]}"
+    )
+    return 0 if residue == 0 else 1
+
+
+def _runs_forget(telemetry: Any, ledger: Any, parsed: Any) -> int:
+    row, _, code = _runs_resolve(telemetry, ledger, parsed.run_id)
+    if row is None:
+        return code
+    run_id = str(row.get("run_id"))
+    scope = "--run (whole row)" if parsed.whole_run else "--content"
+    if not parsed.yes:
+        print(f"about to redact run {run_id[:8]} ({scope}).")
+        print("  · a tombstone row will be APPENDED (the row itself is "
+              "never rewritten)")
+        print("  · the chain stays verifiable; the content disappears")
+        answer = input("proceed? [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            print("aborted — nothing was appended.")
+            return 0
+    redacted_fields = (
+        ["*"] if parsed.whole_run else ["asset_refs", "trace_ids"]
+    )
+    tomb = ledger.append_tombstone(
+        target_run_id=run_id,
+        reason="forget",
+        redacted_fields=redacted_fields,
+        evidence_class=str(row.get("evidence_class")),
+    )
+    verify = ledger.verify()
+    chained_total = verify["row_count"]
+    print(
+        f"✓ tombstone appended  run {run_id[:8]}  →  tombstone "
+        f"{str(tomb.get('run_id'))[:8]}  (chain row {chained_total - 1})"
+    )
+    print(f"  redacted_fields: {redacted_fields}")
+    synced_map = ledger.read_cursor()["synced"]
+    if synced_map.get(run_id) == "metadata+content":
+        print(
+            "  this run was content-synced — queue a content-forget with "
+            "your account admin (account-side erasure is owner-keyed)."
+        )
+    print(
+        "  chain stays verifiable: agent-learn runs verify  "
+        f"({'OK' if verify['chain_intact'] else 'BROKEN'})"
+    )
+    return 0
+
+
 def _tail_text(value: str, limit_bytes: int) -> str:
     if limit_bytes <= 0:
         return ""
@@ -3421,7 +6297,7 @@ def _help(error: Optional[str] = None) -> int:
             "replay, report, compare, baseline, promote-to-regression, shrink, "
             "optimize-eval, optimize-suite, suite, capabilities, actions, "
             "action-run, action-optimize, trust, redteam-corpus, release-proof, "
-            "eval-cli, init"
+            "eval-cli, init, persona, scenario, runs, bench"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

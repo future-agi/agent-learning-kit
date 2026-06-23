@@ -4,6 +4,112 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 
 from .types import OptimizationResult
 
+# Canon vocabularies live in council.py (single home); imported here for
+# governance-record validation. Safe: council does not import this module.
+from .optimizers.council import (
+    CHAMBER_TOKENS,
+    GUNA_AXES,
+    HETVABHASA_REJECTION_CLASSES,
+    PANCA_AVAYAVA_MEMBERS,
+    _validate_justification,
+)
+
+OPTIMIZER_TRAJECTORY_PROFILE_KIND = "agent-learning.optimizer-trajectory-profile.v1"
+
+_CRITIQUE_KIND_BY_ROLE_KIND = {
+    "critic": "vada",
+    "adversary": "jalpa",
+}
+
+
+def optimizer_trajectory_profile(result: OptimizationResult) -> dict[str, Any]:
+    """Trajectory fitness profile (ACL-Findings 2026, arXiv:2604.19440):
+    trajectory shape, not endpoint score, as backend-routing evidence.
+
+    Computed post-hoc from ``OptimizationResult.history`` — no backend loop
+    changes, every backend gets it for free.
+    """
+
+    history = list(result.history or [])
+    metadata = dict(result.metadata or {})
+
+    running_best: Optional[float] = None
+    improvements = 0
+    locality_terms: list[float] = []
+    regression_count = 0
+    scores_by_candidate: Dict[str, float] = {}
+    previous_score: Optional[float] = None
+    candidate_keys: list[str] = []
+
+    for index, item in enumerate(history):
+        score = float(getattr(item, "average_score", 0.0) or 0.0)
+        item_metadata = dict(getattr(item, "metadata", {}) or {})
+        candidate_id = str(
+            getattr(item, "candidate_id", None)
+            or item_metadata.get("candidate_id")
+            or f"iteration-{index}"
+        )
+        candidate_keys.append(candidate_id)
+
+        improved = running_best is None or score > running_best
+        if improved and index > 0:
+            improvements += 1
+        if improved:
+            running_best = score
+            patch = item_metadata.get("patch") or item_metadata.get(
+                "candidate_patch"
+            )
+            paths_touched = len(patch) if isinstance(patch, Mapping) else 1
+            locality_terms.append(1.0 / max(1, paths_touched))
+
+        parent_ids = [
+            str(parent)
+            for parent in _as_list(
+                item_metadata.get("proposal_parent_ids")
+                or item_metadata.get("evolution_parent_ids")
+            )
+            if str(parent)
+        ]
+        parent_scores = [
+            scores_by_candidate[parent]
+            for parent in parent_ids
+            if parent in scores_by_candidate
+        ]
+        if parent_scores:
+            if score < max(parent_scores):
+                regression_count += 1
+        elif previous_score is not None and score < previous_score:
+            regression_count += 1
+
+        scores_by_candidate.setdefault(candidate_id, score)
+        previous_score = score
+
+    iteration_count = len(history)
+    comparable = max(1, iteration_count - 1)
+    return {
+        # Embedded payload, not a top-level artifact kind.
+        "kind": OPTIMIZER_TRAJECTORY_PROFILE_KIND,
+        "improvement_frequency": round(improvements / comparable, 4)
+        if iteration_count > 1
+        else (1.0 if iteration_count == 1 else 0.0),
+        "semantic_locality": round(
+            sum(locality_terms) / len(locality_terms), 4
+        )
+        if locality_terms
+        else 0.0,
+        "dedupe_rate": round(
+            1.0 - (len(set(candidate_keys)) / iteration_count), 4
+        )
+        if iteration_count
+        else 0.0,
+        "regression_count": regression_count,
+        "iterations": iteration_count,
+        "evaluations": int(result.total_evaluations or 0),
+        "early_stopped": bool(result.early_stopped),
+        "selection": metadata.get("selection"),
+        "eval_budget": metadata.get("eval_budget"),
+    }
+
 
 def build_optimizer_society_trace(
     result: OptimizationResult,
@@ -17,6 +123,10 @@ def build_optimizer_society_trace(
     roles = _role_records(result_metadata)
     proposals = [_proposal_record(item) for item in result.history]
     proposals = [item for item in proposals if item]
+    for proposal in proposals:
+        justification = dict(proposal.get("metadata") or {}).get("justification")
+        if justification is not None:
+            _validate_justification(justification)
     search_paths = sorted(str(path) for path in result_metadata.get("search_paths", []) if str(path))
     diagnostics = [
         dict(item)
@@ -56,6 +166,11 @@ def build_optimizer_society_trace(
         rounds=_as_list(result_metadata.get("rounds")),
         governance=governance,
     )
+    ledger_records = [
+        dict(item)
+        for item in _as_list(result_metadata.get("ledger_rounds"))
+        if isinstance(item, Mapping)
+    ]
     return {
         "kind": "optimizer_society_trace",
         "name": name or str(result_metadata.get("target_name") or "optimizer-society-trace"),
@@ -68,6 +183,7 @@ def build_optimizer_society_trace(
         "search_paths": search_paths,
         "role_credit": role_credit,
         "governance": governance,
+        "ledger": ledger_records,
         "best_candidate_id": best_candidate_id or None,
         "final_score": final_score,
         "signals": sorted(signals),
@@ -249,6 +365,16 @@ def _summary(
         "has_rollback",
         "has_locality",
         "has_dependency_audit",
+        # Phase 4 society/contract flags (additive)
+        "has_guna_axes",
+        "has_two_chamber",
+        "has_nyaya_justifications",
+        "has_hetvabhasa_rejections",
+        "has_nirnaya",
+        "has_staged_conditioning",
+        "has_layer_locality",
+        "has_declared_budget",
+        "has_external_ranking",
     ):
         if key in governance_summary:
             summary[key] = governance_summary[key]
@@ -388,6 +514,216 @@ def _governance_records(
             reason="multi-backend runs should expose dependency or backend-lineage evidence",
         ),
     ]
+    # ---- Phase 4 additive governance records (conditional: emitted only when
+    # the producing metadata is present, so legacy traces keep their exact
+    # pre-Phase-4 check census). ----
+    rejection_records = [
+        dict(item)
+        for item in _as_list(result_metadata.get("rejections"))
+        if isinstance(item, Mapping)
+    ]
+    nirnaya_records = [
+        dict(item)
+        for item in _as_list(result_metadata.get("nirnaya"))
+        if isinstance(item, Mapping)
+    ]
+    selected_by_round: Dict[Any, set[str]] = {}
+    for record in nirnaya_records:
+        selected = record.get("selected_candidate_id")
+        if selected:
+            seen_round = selected_by_round.setdefault(record.get("round"), set())
+            seen_round.add(str(selected))
+            if len(seen_round) > 1:
+                raise ValueError(
+                    "nirnaya records more than one selected candidate for round "
+                    f"{record.get('round')!r}: selection is single-lineage and "
+                    "proposals are never averaged."
+                )
+        justification = record.get("justification")
+        if justification is not None:
+            _validate_justification(justification)
+    chambers_meta = result_metadata.get("chambers")
+    chambers_meta = dict(chambers_meta) if isinstance(chambers_meta, Mapping) else None
+    ledger_round_records = [
+        dict(item)
+        for item in _as_list(result_metadata.get("ledger_rounds"))
+        if isinstance(item, Mapping)
+    ]
+    strategy_metadata = result_metadata.get("strategy_metadata")
+    strategy_metadata = (
+        dict(strategy_metadata) if isinstance(strategy_metadata, Mapping) else {}
+    )
+
+    proposal_author_counts: Dict[str, int] = {}
+    for proposal in proposals:
+        author = _normalize(proposal.get("role"))
+        if author and author not in {"seed", "unknown"}:
+            proposal_author_counts[author] = proposal_author_counts.get(author, 0) + 1
+    critique_operators: list[Dict[str, Any]] = []
+    for role in roles:
+        role_kind = _normalize(role.get("proposal_kind"))
+        critique_kind = _normalize(role.get("critique_kind")) or (
+            _CRITIQUE_KIND_BY_ROLE_KIND.get(role_kind, "")
+        )
+        if not critique_kind:
+            continue
+        role_name = _normalize(role.get("name") or role.get("role"))
+        authored = proposal_author_counts.get(role_name, 0)
+        operator: Dict[str, Any] = {
+            "role": str(role.get("name") or role.get("role") or ""),
+            "critique_kind": critique_kind,
+            "proposals_authored": authored,
+        }
+        if critique_kind == "vitanda" and authored:
+            # Refutation-only operators may reject; they must never appear as
+            # a proposal author.
+            operator["error"] = "vitanda_operator_authored_proposal"
+        critique_operators.append(operator)
+
+    role_prefixes = {
+        _normalize(role.get("name") or role.get("role")): [
+            str(prefix) for prefix in _as_list(role.get("path_prefixes")) if str(prefix)
+        ]
+        for role in roles
+    }
+    role_kinds_by_name = {
+        _normalize(role.get("name") or role.get("role")): _normalize(
+            role.get("proposal_kind")
+        )
+        for role in roles
+    }
+    authority_weights: list[Dict[str, Any]] = []
+    for proposal in proposals:
+        role_name = _normalize(proposal.get("role"))
+        prefixes = role_prefixes.get(role_name) or [
+            str(prefix)
+            for prefix in _as_list(
+                dict(proposal.get("metadata") or {}).get("role_path_prefixes")
+            )
+            if str(prefix)
+        ]
+        role_kind = role_kinds_by_name.get(role_name) or _normalize(
+            proposal.get("role_kind")
+        )
+        if role_kind != "specialist" and not prefixes:
+            continue
+        patch_paths = [str(path) for path in _as_list(proposal.get("search_paths"))]
+        in_scope = bool(prefixes) and all(
+            any(path == prefix or path.startswith(f"{prefix}.") for prefix in prefixes)
+            for path in patch_paths
+        )
+        authority_weights.append(
+            {
+                "candidate_id": proposal.get("candidate_id"),
+                "role": proposal.get("role"),
+                "weight": 1.0 if in_scope else 0.5,
+                "in_scope": in_scope,
+            }
+        )
+
+    if chambers_meta is not None and any(
+        isinstance(entry, Mapping) and entry.get("declared_budget") is not None
+        for entry in chambers_meta.values()
+    ):
+        checks.append(
+            _governance_check(
+                "chamber_budgets_declared",
+                all(
+                    isinstance(entry, Mapping)
+                    and entry.get("declared_budget") is not None
+                    for entry in chambers_meta.values()
+                ),
+                evidence={"chambers": chambers_meta},
+                reason="every chamber declares its evaluation budget per round",
+            )
+        )
+    if rejection_records:
+        checks.append(
+            _governance_check(
+                "rejections_classed",
+                all(
+                    str(record.get("hetvabhasa_class"))
+                    in HETVABHASA_REJECTION_CLASSES
+                    for record in rejection_records
+                ),
+                evidence={
+                    "rejection_count": len(rejection_records),
+                    "classes": sorted(
+                        {
+                            str(record.get("hetvabhasa_class"))
+                            for record in rejection_records
+                        }
+                    ),
+                },
+                reason="every recorded rejection carries a closed-vocabulary class",
+            )
+        )
+    if nirnaya_records:
+        checks.append(
+            _governance_check(
+                "nirnaya_recorded",
+                all(
+                    record.get("selected_candidate_id")
+                    and isinstance(record.get("justification"), Mapping)
+                    and all(
+                        str(record["justification"].get(member) or "").strip()
+                        for member in PANCA_AVAYAVA_MEMBERS
+                    )
+                    for record in nirnaya_records
+                ),
+                evidence={"nirnaya_count": len(nirnaya_records)},
+                reason="the steward decision is recorded with a complete justification",
+            )
+        )
+        checks.append(
+            _governance_check(
+                "proposals_never_averaged",
+                all(
+                    isinstance(record.get("selected_candidate_id"), str)
+                    and record.get("selected_candidate_id")
+                    for record in nirnaya_records
+                )
+                and all(len(selected) == 1 for selected in selected_by_round.values()),
+                evidence={
+                    "selected_candidates": sorted(
+                        str(record.get("selected_candidate_id"))
+                        for record in nirnaya_records
+                    )
+                },
+                reason="selection is single-lineage: one decided candidate, never an average",
+            )
+        )
+    if authority_weights:
+        checks.append(
+            _governance_check(
+                "specialist_authority_respected",
+                all(
+                    record["weight"] == (1.0 if record["in_scope"] else 0.5)
+                    for record in authority_weights
+                ),
+                evidence={"authority_weight_count": len(authority_weights)},
+                reason=(
+                    "specialist proposals inside their path prefixes carry full "
+                    "authority; out-of-scope counter-proposals carry half"
+                ),
+            )
+        )
+    if ledger_round_records:
+        checks.append(
+            _governance_check(
+                "society_ledger_pooled_across_candidates",
+                any(
+                    int(record.get("pooled_from_candidates") or 0) > 1
+                    for record in ledger_round_records
+                ),
+                evidence={"ledger_rounds": ledger_round_records},
+                reason=(
+                    "the round ledger pools diagnoses across all evaluated "
+                    "candidates, not just the round winner"
+                ),
+            )
+        )
+
     checks.extend(_normalize_governance_check(item) for item in explicit_checks)
     checks = [check for check in checks if check]
     seen: Dict[str, int] = {}
@@ -410,6 +746,31 @@ def _governance_records(
     }
     passed_count = sum(1 for check in deduped_checks if check.get("passed"))
     check_count = len(deduped_checks)
+
+    def _valid_guna(value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        if set(str(key) for key in value) != set(GUNA_AXES):
+            return False
+        try:
+            return all(0.0 <= float(value[axis]) <= 1.0 for axis in GUNA_AXES)
+        except (TypeError, ValueError):
+            return False
+
+    non_seed_proposals = [
+        proposal
+        for proposal in proposals
+        if _normalize(proposal.get("role")) not in {"seed", "unknown", ""}
+    ]
+    guna_mix = result_metadata.get("guna_mix") or strategy_metadata.get("guna_mix")
+    staged_conditioning = result_metadata.get(
+        "staged_conditioning"
+    ) or strategy_metadata.get("staged_conditioning")
+    layer_locality = result_metadata.get("layer_locality")
+    declared_chamber_budget = chambers_meta is not None and any(
+        isinstance(entry, Mapping) and entry.get("declared_budget") is not None
+        for entry in chambers_meta.values()
+    )
     summary = {
         "governance_check_count": check_count,
         "governance_passed_count": passed_count,
@@ -421,11 +782,51 @@ def _governance_records(
         "has_rollback": _governance_passed(deduped_checks, "rollback_check"),
         "has_locality": _governance_passed(deduped_checks, "search_locality"),
         "has_dependency_audit": _governance_passed(deduped_checks, "dependency_audit"),
+        # ---- Phase 4 society/contract flags (additive) ----
+        "has_guna_axes": bool(roles)
+        and all(_valid_guna(role.get("guna")) for role in roles)
+        and isinstance(guna_mix, Mapping),
+        "has_two_chamber": bool(roles)
+        and all(str(role.get("chamber")) in CHAMBER_TOKENS for role in roles)
+        and chambers_meta is not None,
+        "has_nyaya_justifications": bool(non_seed_proposals)
+        and all(
+            isinstance(
+                dict(proposal.get("metadata") or {}).get("justification"), Mapping
+            )
+            and all(
+                str(
+                    dict(proposal.get("metadata") or {})["justification"].get(member)
+                    or ""
+                ).strip()
+                for member in PANCA_AVAYAVA_MEMBERS
+            )
+            for proposal in non_seed_proposals
+        ),
+        "has_hetvabhasa_rejections": bool(rejection_records)
+        and _governance_passed(deduped_checks, "rejections_classed"),
+        "has_nirnaya": bool(nirnaya_records)
+        and _governance_passed(deduped_checks, "nirnaya_recorded"),
+        "has_staged_conditioning": isinstance(staged_conditioning, Mapping)
+        and bool(staged_conditioning),
+        "has_layer_locality": bool(layer_locality)
+        or any(
+            str(diagnostic.get("harness_layer") or "")
+            for diagnostic in diagnostics
+        ),
+        "has_declared_budget": result_metadata.get("eval_budget") is not None
+        or declared_chamber_budget,
+        "has_external_ranking": str(result_metadata.get("ranking_source") or "")
+        in {"evaluation_suite", "evaluator"},
     }
     return {
         "checks": deduped_checks,
         "signals": sorted(signal for signal in signals if signal),
         "summary": summary,
+        "nirnaya": nirnaya_records,
+        "critique_operators": critique_operators,
+        "authority_weights": authority_weights,
+        "rejections": rejection_records,
     }
 
 

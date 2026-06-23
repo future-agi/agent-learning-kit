@@ -57,6 +57,23 @@ def normalize_public_payload(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def _emit_run_ledger(run_payload: Mapping[str, Any]) -> None:
+    """Out-of-critical-path, never-propagating ledger+sync hook (Phase 8;
+    PRD §4.3, R§3.5). One hook at the single shared ``run.v1`` normalization
+    boundary covers every workflow with zero per-workflow edits (ARCH
+    Decision 7). The ``telemetry`` import stays lazy so this module carries
+    nothing network-capable at module scope (gate #72 check 1). A telemetry
+    failure must NEVER alter a workflow verdict — proven by the gate's
+    fault-injection check."""
+
+    try:
+        from .telemetry import record_run  # ledger append + optional keyed sync
+
+        record_run(run_payload)
+    except BaseException:  # noqa: BLE001 — telemetry must never escape
+        return  # degrade to silence; the run is unaffected
+
+
 def public_payload(payload: Mapping[str, Any], *, kind: str | None = None) -> dict[str, Any]:
     """Return a normalized public mapping, optionally forcing its top-level kind."""
 
@@ -65,6 +82,8 @@ def public_payload(payload: Mapping[str, Any], *, kind: str | None = None) -> di
         result = dict(payload)
     if kind is not None:
         result["kind"] = kind
+    if kind == "agent-learning.run.v1":  # the ONE run kind (no parallel kind)
+        _emit_run_ledger(result)  # never raises; out of critical path
     return result
 
 

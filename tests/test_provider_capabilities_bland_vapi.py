@@ -1,4 +1,4 @@
-"""Bland.ai and Vapi must be first-class providers in the simulation layer (TH-5642).
+"""Bland.ai and Vapi must be first-class providers in the simulation layer.
 
 They were missing from AGENT_INTEGRATION_PROVIDER_CAPABILITIES, so the common
 simulation layer didn't know their voice/phone capabilities when normalizing an
