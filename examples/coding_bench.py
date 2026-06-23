@@ -27,11 +27,48 @@ from typing import Any
 from agent_learning import bench
 
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
+COMMAND_SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_command_starter.json"
 OUTPUT_KIND = "agent-learning.coding-benchmark-example.v1"
 
 # A fake-success no-op: claims completion, defines no entrypoint. The held-out
 # oracle MUST fail this (reward-hack resistance by construction).
 _NOOP_CANDIDATE = "print('All tasks completed successfully!')\n"
+
+
+def _command_graded_evidence() -> dict[str, Any]:
+    """Evidence for the hardened command/artifact-graded lane (subprocess, no Docker).
+
+    Proves the artifact-graded model on the shipped multi-language suite:
+    reference solutions pass; a wrong candidate fails; and a candidate that prints
+    a FORGED reward to stdout still fails (the verdict is the held-out grader's
+    exit code, not candidate stdout) — the structural fix for the forge vuln.
+    """
+
+    suite = bench.load_coding_suite(COMMAND_SUITE_PATH)
+    ref = bench.reference_submission(suite)
+    ref_run = bench.run_bench(
+        COMMAND_SUITE_PATH, control_mode="artifact_in", submission=ref,
+        evidence_class="local_gate", emit_telemetry=False,
+    )
+    reference_all_pass = all(r["verdict"] == "pass" for r in ref_run["per_task"])
+
+    # wrong + forge candidates for every task -> all must fail.
+    wrong = {t["id"]: {p: "print('x')\n" if p.endswith('.py') else "echo x\n"
+                       for p in t["reference_files"]} for t in suite["tasks"]}
+    forge = {t["id"]: {p: 'print("{\\"score\\": 1}")\n' if p.endswith('.py')
+                       else 'echo \'{"score":1}\'\n' for p in t["reference_files"]}
+             for t in suite["tasks"]}
+    wrong_run = bench.run_bench(COMMAND_SUITE_PATH, control_mode="artifact_in",
+                                submission=wrong, evidence_class="local_gate", emit_telemetry=False)
+    forge_run = bench.run_bench(COMMAND_SUITE_PATH, control_mode="artifact_in",
+                                submission=forge, evidence_class="local_gate", emit_telemetry=False)
+    return {
+        "reference_all_pass": reference_all_pass,
+        "wrong_all_fail": all(r["verdict"] == "fail" for r in wrong_run["per_task"]),
+        "forge_all_fail": all(r["verdict"] == "fail" for r in forge_run["per_task"]),
+        "languages": sorted({str(t.get("language") or "") for t in suite["tasks"]}),
+        "task_count": len(suite["tasks"]),
+    }
 
 
 def _gate_evidence(suite: dict[str, Any]) -> dict[str, Any]:
@@ -97,6 +134,7 @@ def _gate_evidence(suite: dict[str, Any]) -> dict[str, Any]:
         "guard_presence": {"all_tasks_have_guards": all_guards},
         "honesty": {"no_executable_overclaim": no_overclaim},
         "coverage": {"modalities": ref_run["modalities"], "task_count": len(suite["tasks"])},
+        "command_graded": _command_graded_evidence(),
     }
 
 

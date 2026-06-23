@@ -22,10 +22,18 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ._codeexec import run_code_tests
+from ._grader import GRADING_COMMAND, run_command_graded
 
 BENCH_SUITE_KIND = "agent-learning.bench-suite.v1"
 
-_REQUIRED_TASK_FIELDS = ("id", "instruction", "checks", "reference_solution")
+# A task is graded one of two ways:
+#  * "checks" (default, convenience tier): held-out check_* functions import the
+#    candidate in-process. Trusted / accidental-gaming only.
+#  * "command" (hardened tier): the candidate produces files/output, a held-out
+#    grader runs AFTER and emits the verdict via exit code + reward file. Robust
+#    against forge + oracle-read; multi-language. See _grader.py.
+_CHECKS_FIELDS = ("id", "instruction", "checks", "reference_solution")
+_COMMAND_FIELDS = ("id", "instruction", "grader_cmd", "grader_files", "reference_files")
 
 
 class CodingSuiteError(ValueError):
@@ -34,6 +42,16 @@ class CodingSuiteError(ValueError):
 
 def is_bench_suite(obj: Any) -> bool:
     return isinstance(obj, Mapping) and obj.get("kind") == BENCH_SUITE_KIND
+
+
+def _task_grading(task: Mapping[str, Any]) -> str:
+    """The grading mode of a task: 'command' (hardened) or 'checks' (convenience)."""
+
+    mode = task.get("grading")
+    if mode in (GRADING_COMMAND, "checks"):
+        return str(mode)
+    # infer: a grader_cmd ⇒ command-graded; otherwise the legacy checks tier.
+    return GRADING_COMMAND if task.get("grader_cmd") else "checks"
 
 
 def load_coding_suite(obj: Mapping[str, Any] | str | Path) -> dict[str, Any]:
@@ -50,9 +68,12 @@ def load_coding_suite(obj: Mapping[str, Any] | str | Path) -> dict[str, Any]:
     for i, task in enumerate(tasks):
         if not isinstance(task, Mapping):
             raise CodingSuiteError(f"task #{i} is not an object")
-        for field in _REQUIRED_TASK_FIELDS:
+        required = _COMMAND_FIELDS if _task_grading(task) == GRADING_COMMAND else _CHECKS_FIELDS
+        for field in required:
             if not task.get(field):
-                raise CodingSuiteError(f"task #{i} missing required field {field!r}")
+                raise CodingSuiteError(
+                    f"task #{i} ({_task_grading(task)}-graded) missing required field {field!r}"
+                )
         tid = str(task["id"])
         if tid in seen:
             raise CodingSuiteError(f"duplicate task id {tid!r}")
@@ -118,7 +139,7 @@ def _void_row(task: Mapping[str, Any], reason: str, *, evidence_class: str) -> d
 
 def run_coding_artifact_in(
     suite: Mapping[str, Any],
-    submission: Mapping[str, str],
+    submission: Mapping[str, Any],
     *,
     sandbox: str = "subprocess",
     evidence_class: str = "captured_fixture",
@@ -127,10 +148,11 @@ def run_coding_artifact_in(
 ) -> list[dict[str, Any]]:
     """Score each task's submitted artifact against its held-out oracle.
 
-    ``submission`` maps ``task_id -> candidate source``. A task with no submission
-    is recorded ``void`` (never silently passed). Pass ``submission`` mapping each
-    id to its ``reference_solution`` to verify the suite itself (what the gate
-    does).
+    ``submission`` maps ``task_id -> candidate``. For ``checks``-graded tasks the
+    candidate is a source string; for ``command``-graded (hardened) tasks it is a
+    ``{path: content}`` file map. A task with no submission is recorded ``void``
+    (never silently passed); an infra failure is recorded ``void`` too. Pass the
+    :func:`reference_submission` to verify the suite itself (what the gate does).
     """
 
     language = str(suite.get("language", "python"))
@@ -149,13 +171,18 @@ def run_coding_artifact_in(
         if candidate is None:
             rows.append(_void_row(task, "no submission provided", evidence_class=evidence_class))
             continue
-        verdict_obj = run_code_tests(
-            str(candidate),
-            str(task["checks"]),
-            language=language,
-            timeout_s=float(task.get("timeout_s", default_timeout_s)),
-            sandbox=sandbox,
-        )
+        timeout_s = float(task.get("timeout_s", default_timeout_s))
+        if _task_grading(task) == GRADING_COMMAND:
+            files = candidate if isinstance(candidate, Mapping) else {"solution": str(candidate)}
+            verdict_obj = run_command_graded(
+                task, {str(k): str(v) for k, v in files.items()},
+                sandbox=sandbox, timeout_s=timeout_s,
+            )
+        else:
+            verdict_obj = run_code_tests(
+                str(candidate), str(task["checks"]),
+                language=language, timeout_s=timeout_s, sandbox=sandbox,
+            )
         # An infra/config failure (no Docker daemon, image pull failure, bad
         # sandbox/language) means the lane never ran — record it as VOID, never as
         # a real "fail". Conflating "the daemon was missing" with "the agent was
@@ -170,7 +197,17 @@ def run_coding_artifact_in(
     return rows
 
 
-def reference_submission(suite: Mapping[str, Any]) -> dict[str, str]:
-    """The gold submission: every task id -> its ``reference_solution``."""
+def reference_submission(suite: Mapping[str, Any]) -> dict[str, Any]:
+    """The gold submission: every task id -> its reference.
 
-    return {str(t["id"]): str(t["reference_solution"]) for t in suite["tasks"]}
+    ``checks``-graded tasks map to a ``reference_solution`` string; ``command``-
+    graded tasks map to a ``reference_files`` ``{path: content}`` map.
+    """
+
+    out: dict[str, Any] = {}
+    for t in suite["tasks"]:
+        if _task_grading(t) == GRADING_COMMAND:
+            out[str(t["id"])] = {str(k): str(v) for k, v in (t["reference_files"] or {}).items()}
+        else:
+            out[str(t["id"])] = str(t["reference_solution"])
+    return out

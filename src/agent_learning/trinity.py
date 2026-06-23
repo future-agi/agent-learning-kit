@@ -2520,6 +2520,7 @@ V1_TASK_BENCHMARK_REQUIRED_WORLD_KINDS = ("conversation", "tool_api")
 V1_BENCH_CONTRACT_FILES = (
     "examples/coding_bench.py",
     "examples/bench_suites/coding_starter.json",
+    "examples/bench_suites/coding_command_starter.json",
 )
 
 # === Phase 9C: CUA / browser / computer-use improvement loop (closed sets, gate-pinned) ===
@@ -8043,6 +8044,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not bench_contract["determinism_errors"]
             and not bench_contract["oracle_held_out_errors"]
             and not bench_contract["guard_errors"]
+            and not bench_contract["command_graded_errors"]
         ),
         milestone="M4",
         evidence=bench_contract,
@@ -13910,6 +13912,7 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
     determinism_errors: list[dict[str, Any]] = []
     oracle_held_out_errors: list[dict[str, Any]] = []
     guard_errors: list[dict[str, Any]] = []
+    command_graded_errors: list[dict[str, Any]] = []
 
     artifact: dict[str, Any] = {}
 
@@ -13963,6 +13966,16 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
             err(guard_errors, field="honesty.no_executable_overclaim",
                 expected=True, observed=honesty.get("no_executable_overclaim"))
 
+        # Hardened command/artifact-graded lane (artifact-graded): reference
+        # passes, a wrong candidate fails, AND a candidate that prints a forged
+        # reward to stdout still fails (verdict = held-out grader exit, not
+        # candidate stdout) — the structural close of the forge vuln.
+        cg = _as_mapping(evidence.get("command_graded"))
+        for field in ("reference_all_pass", "wrong_all_fail", "forge_all_fail"):
+            if cg.get(field) is not True:
+                err(command_graded_errors, field=f"command_graded.{field}",
+                    expected=True, observed=cg.get(field))
+
     return {
         "kind": "agent-learning.bench-contract-readiness.v1",
         "missing_files": missing_files,
@@ -13972,6 +13985,7 @@ def _release_bench_contract_status(root: Path) -> dict[str, Any]:
         "determinism_errors": determinism_errors,
         "oracle_held_out_errors": oracle_held_out_errors,
         "guard_errors": guard_errors,
+        "command_graded_errors": command_graded_errors,
     }
 
 

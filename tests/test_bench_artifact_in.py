@@ -142,6 +142,7 @@ def test_bench_contract_gate_clean() -> None:
         "determinism_errors",
         "oracle_held_out_errors",
         "guard_errors",
+        "command_graded_errors",
     ):
         assert st[bucket] == [], f"{bucket}: {st[bucket]}"
 
@@ -156,6 +157,9 @@ def _good_artifact() -> dict:
             "oracle_held_out": {"checks_not_in_reference": True},
             "guard_presence": {"all_tasks_have_guards": True},
             "honesty": {"no_executable_overclaim": True},
+            "command_graded": {
+                "reference_all_pass": True, "wrong_all_fail": True, "forge_all_fail": True,
+            },
         },
     }
 
@@ -198,6 +202,11 @@ _BUCKET_FIRES = [
         "overclaim",
         lambda a: a["gate_evidence"]["honesty"].update(no_executable_overclaim=False),
         "guard_errors",
+    ),
+    (
+        "command_forge",
+        lambda a: a["gate_evidence"]["command_graded"].update(forge_all_fail=False),
+        "command_graded_errors",
     ),
 ]
 
