@@ -65,7 +65,7 @@ SDK (same operation):
 ```python
 import asyncio
 import os
-from agent_learning import simulate
+from fi.alk import simulate
 
 os.environ.setdefault("AGENT_LEARNING_RUN_EXAMPLE_KEY", "offline-demo-key")
 result = asyncio.run(simulate.run_manifest_file("examples/run_manifest.json"))

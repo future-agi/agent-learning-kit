@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import image_loop
+from fi.alk import image_loop
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURES = EXAMPLE_DIR / "image_loop_fixture"

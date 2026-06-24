@@ -14,8 +14,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from agent_learning.live import _loopback
-from agent_learning.live._stats import derive_channel_evidence
+from fi.alk.live import _loopback
+from fi.alk.live._stats import derive_channel_evidence
 
 _TURNS = [
     {"user": "Hello, can you hear me clearly on this call?"},

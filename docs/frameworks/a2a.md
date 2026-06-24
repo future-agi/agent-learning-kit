@@ -91,7 +91,7 @@ the page stays true or the release fails.
 
 For the deeper A2A protocol surfaces, two existing artifacts go beyond preset
 certification: the A2A live lane
-([`src/agent_learning/live/a2a_lane.py`](../../src/agent_learning/live/a2a_lane.py))
+([`src/fi/alk/live/a2a_lane.py`](../../src/fi/alk/live/a2a_lane.py))
 and the protocol-trace example
 ([`examples/sdk_framework_adapter_a2a_protocol_trace.py`](../../examples/sdk_framework_adapter_a2a_protocol_trace.py),
 admitted by `protocol_adapter_readiness`), which export the agent card, the A2A

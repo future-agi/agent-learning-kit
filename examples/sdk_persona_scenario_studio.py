@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import redteam, studio
+from fi.alk import redteam, studio
 
 # Engine-side closed vocabularies — reported as OBSERVED values so the gate can
 # pin them to the trinity V1_* constants (import-free duplication per gate
@@ -46,23 +46,23 @@ from fi.simulate.simulation.models import (
     TestCaseResult,
     TestReport,
 )
-from agent_learning.studio._bias import PERSONA_BIAS_LINT_CHECKS
-from agent_learning.studio._calibration import (
+from fi.alk.studio._bias import PERSONA_BIAS_LINT_CHECKS
+from fi.alk.studio._calibration import (
     PERSONA_CALIBRATION_PROBES,
     PERSONA_CALIBRATION_STAGES,
 )
-from agent_learning.studio._coverage import (
+from fi.alk.studio._coverage import (
     COVERAGE_FORBIDDEN_HEADLINE_KEYS,
     SCENARIO_COVERAGE_AXES,
 )
-from agent_learning.studio._download import (
+from fi.alk.studio._download import (
     PERSONA_DOWNLOAD_PIN_FIELDS,
     validate_download,
     verify_pin,
 )
-from agent_learning.studio._library import load_persona
-from agent_learning.studio._scan import CONTENT_SCAN_RESULTS, DownloadRejected
-from agent_learning.studio._vendor import PERSONA_VENDOR_IMPORT_FORMATS
+from fi.alk.studio._library import load_persona
+from fi.alk.studio._scan import CONTENT_SCAN_RESULTS, DownloadRejected
+from fi.alk.studio._vendor import PERSONA_VENDOR_IMPORT_FORMATS
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURES = EXAMPLE_DIR / "persona_library"
@@ -286,7 +286,7 @@ def _download(library: Path) -> dict[str, Any]:
         validate_download(injection_payload, source="api.futureagi.com")
     except DownloadRejected as rejection:
         injection_flagged = True
-        from agent_learning.studio._library import quarantine_payload
+        from fi.alk.studio._library import quarantine_payload
 
         path = quarantine_payload(
             "persona-injection", injection_payload, rejection.findings, library=library

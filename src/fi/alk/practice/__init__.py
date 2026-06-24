@@ -1,6 +1,6 @@
 """Phase 13D — the Practice Loop trainer (facade only; mirrors live/ style).
 
-Lazy exports so ``import agent_learning.practice`` stays cheap. The trainer
+Lazy exports so ``import fi.alk.practice`` stays cheap. The trainer
 employs the existing 13C operators; it adds no new step API and emits standard
 ``agent-learning.run.v1`` rows through ``run_manifest``/``public_payload`` so
 every episode lands a telemetry ledger row with zero new telemetry code.

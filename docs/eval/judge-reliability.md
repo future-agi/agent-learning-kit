@@ -90,7 +90,7 @@ the verdict, not just the verdict.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `import agent_learning` fails | infra | `agent-learn doctor` → `summary.missing_public_modules` |
+| `import fi.alk` fails | infra | `agent-learn doctor` → `summary.missing_public_modules` |
 | `judge agreement drift exceeded tolerance` | real catch | your judge moved more than the tolerance under a surface change |
 | paraphrase deltas large, others zero | rubric fault | rubric anchors are phrasings, not facts — the paraphrase rewords them away |
 

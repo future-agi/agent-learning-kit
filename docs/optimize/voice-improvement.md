@@ -54,7 +54,7 @@ python examples/sdk_voice_improvement.py artifacts/voice-improvement.json
 SDK (the operation the twin performs):
 
 ```python
-from agent_learning import voice_loop
+from fi.alk import voice_loop
 
 manifest = voice_loop.build_voice_practice_loop_manifest(
     name="voice-improvement",

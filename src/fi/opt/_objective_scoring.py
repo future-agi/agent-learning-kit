@@ -3,8 +3,8 @@ benchmark score (B2), the reward-hack detector (B6), the Task objective (B1), AN
 the optimizer's candidate scoring (bug #2 fix).
 
 Lives in ``fi`` (the vendored engine) so the engine's optimizer integration can
-use it WITHOUT importing the public ``agent_learning`` package — respecting the
-vendored_engine_boundary. ``agent_learning.tasks`` re-exports these so its public
+use it WITHOUT importing the public ``fi.alk`` package — respecting the
+vendored_engine_boundary. ``fi.alk.tasks`` re-exports these so its public
 call sites are unchanged. Pure functions, no kit/engine cross-deps.
 
 Why this exists: the engine's all-metrics mean (``summary.evaluation_score``) pins

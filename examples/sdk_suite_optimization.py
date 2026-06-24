@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, suite
+from fi.alk import configure, suite
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_SUITE_OPT_EXAMPLE_KEY"

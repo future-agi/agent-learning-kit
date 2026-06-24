@@ -5,7 +5,7 @@ backing: []
 artifact_kinds: []
 commands:
   - agent-learn doctor
-postcondition: python -c "from agent_learning import cli; assert callable(cli.main); print('ok')"
+postcondition: python -c "from fi.alk import cli; assert callable(cli.main); print('ok')"
 claims: []
 doctor_checks:
   - missing_public_modules
@@ -15,7 +15,7 @@ opt_in_lane: false
 # CLI Reference
 
 > **Twin:** none — reference page (`backing: []`). The dispatch below is read
-> directly from `main()` in `src/agent_learning/cli.py`.
+> directly from `main()` in `src/fi/alk/cli.py`.
 
 ## 1. What you are testing
 
@@ -38,7 +38,7 @@ agent-learn doctor
 ```
 
 ```python
-from agent_learning import trinity
+from fi.alk import trinity
 payload = trinity.trinity_status()
 print(payload["summary"]["public_boundary_passed"])
 ```
@@ -46,7 +46,7 @@ print(payload["summary"]["public_boundary_passed"])
 ## 3. What you built
 
 ```bash
-python -c "from agent_learning import cli; assert callable(cli.main); print('ok')"
+python -c "from fi.alk import cli; assert callable(cli.main); print('ok')"
 ```
 
 The command surface, one row per command (aliases from the `main()` dispatch):
@@ -98,7 +98,7 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 ## 5. Prove it / keep it
 
 The release gate pins this surface: `V1_REQUIRED_CLI_COMMANDS` in
-`src/agent_learning/trinity.py` lists the commands `release-check` requires,
+`src/fi/alk/trinity.py` lists the commands `release-check` requires,
 so a removed or renamed command is a red gate, not a silent doc rot. Continue
 with [prove/release-check-in-your-ci.md](../prove/release-check-in-your-ci.md)
 to run that check in your pipeline, or start producing artifacts with the

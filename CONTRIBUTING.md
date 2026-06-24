@@ -26,7 +26,7 @@ pnpm --dir typescript --filter @future-agi/agent-learning-kit test -- --runInBan
 For release-candidate changes:
 
 ```bash
-uv run python -m agent_learning.cli release-proof \
+uv run python -m fi.alk.cli release-proof \
   --project-root . \
   --output /tmp/agent-learning-release-proof.json \
   --quiet
@@ -40,7 +40,7 @@ uv run python -m agent_learning.cli release-proof \
 - Use imperative commit messages, for example
   `Harden release proof timeout handling`.
 - Prefer small, deterministic changes with focused tests.
-- Keep public APIs under `agent_learning.*`, `agent-learn`, and
+- Keep public APIs under `fi.alk.*`, `agent-learn`, and
   `@future-agi/agent-learning-kit`.
 - Do not add hosted-service requirements to release-gated examples.
 - Keep OpenEnv/Gymnasium as compatibility input shapes, not the product center.

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning.practice import _contract
-from agent_learning.practice._budget import BudgetExhausted, BudgetMeter
+from fi.alk.practice import _contract
+from fi.alk.practice._budget import BudgetExhausted, BudgetMeter
 
 
 def test_constants_byte_table():
@@ -66,6 +66,6 @@ def test_store_path_env_override(monkeypatch, tmp_path):
 
 
 def test_lazy_facade():
-    from agent_learning import practice
+    from fi.alk import practice
     assert practice.PRACTICE_PHASES == _contract.PRACTICE_PHASES
     assert practice.BudgetMeter is BudgetMeter

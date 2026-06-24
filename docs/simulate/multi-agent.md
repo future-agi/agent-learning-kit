@@ -65,7 +65,7 @@ SDK (the probe-then-promote operation the twin performs):
 
 ```python
 import asyncio
-from agent_learning import optimize, simulate
+from fi.alk import optimize, simulate
 
 probe = optimize.optimize_multi_agent_room_probe(
     name="room-probe",

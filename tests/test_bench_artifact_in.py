@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import bench, trinity
-from agent_learning.bench import _coding
-from agent_learning.bench._codeexec import run_code_tests
+from fi.alk import bench, trinity
+from fi.alk.bench import _coding
+from fi.alk.bench._codeexec import run_code_tests
 
 ROOT = Path(__file__).parent.parent
 SUITE = ROOT / "examples" / "bench_suites" / "coding_starter.json"
@@ -257,7 +257,7 @@ def test_run_bench_rejects_bad_sandbox_and_evidence_class() -> None:
 def test_docker_unavailable_is_infra_void_not_fail(monkeypatch) -> None:
     # BH-03/BH-13: a missing Docker daemon must VOID (lane never ran), never report
     # a correct agent as 0% — and must never raise. Credential-free (monkeypatched).
-    import agent_learning.bench._docker as dk
+    import fi.alk.bench._docker as dk
 
     monkeypatch.setattr(dk, "docker_available", lambda: False)
     suite = _coding.load_coding_suite(SUITE)
@@ -274,7 +274,7 @@ def test_docker_unavailable_is_infra_void_not_fail(monkeypatch) -> None:
 
 
 def test_run_code_tests_docker_unavailable_returns_honest_failure(monkeypatch) -> None:
-    import agent_learning.bench._docker as dk
+    import fi.alk.bench._docker as dk
 
     monkeypatch.setattr(dk, "docker_available", lambda: False)
     r = run_code_tests("def f(x):\n    return x\n", _CHECKS, sandbox="docker")
@@ -286,7 +286,7 @@ def test_run_code_tests_docker_unavailable_returns_honest_failure(monkeypatch) -
 def test_docker_argv_has_hardening_flags() -> None:
     # BH-04/BH-12: credential-free assertion of the isolation flags (a docker-gated
     # test would never run on no-docker CI).
-    from agent_learning.bench._docker import _build_docker_argv
+    from fi.alk.bench._docker import _build_docker_argv
 
     argv = _build_docker_argv("name", "img", "256m", "1.0", "print(1)")
     for token in ("--network", "none", "--cap-drop", "ALL",

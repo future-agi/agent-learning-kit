@@ -69,7 +69,7 @@ AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY=local-dev-key \
 SDK, the probe operation:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_memory_layer_probe(
     name="sdk-memory-layer-probe-optimization",

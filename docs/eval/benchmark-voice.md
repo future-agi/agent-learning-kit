@@ -75,7 +75,7 @@ dialogue is a list of turns. To grade **your** captured transcript instead of th
 gold reference, build the submission map yourself and call the harness:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 # A transcript is a list of turns. Caller turns may carry interrupt=True.
 dialogue = [

@@ -67,7 +67,7 @@ agent-learn promote-to-regression artifacts/redteam-finding.json \
 SDK, same operation:
 
 ```python
-from agent_learning import simulate
+from fi.alk import simulate
 
 promotion = simulate.promote_to_regression_file(
     "artifacts/redteam-finding.json",

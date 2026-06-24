@@ -67,7 +67,7 @@ SDK, the same operation as the world-model example
 runs it:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_world_model(
     name="sdk-world-model-optimization",

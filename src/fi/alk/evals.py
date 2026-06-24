@@ -508,7 +508,7 @@ def behavior_entropy_report(
             }
         ],
         "metadata": {
-            "source": "agent_learning.evals.behavior_entropy_report",
+            "source": "fi.alk.evals.behavior_entropy_report",
             "local_only": True,
             "requires_external_service": False,
         },
@@ -612,7 +612,7 @@ def collaborative_competence_report(
             },
         ],
         "metadata": {
-            "source": "agent_learning.evals.collaborative_competence_report",
+            "source": "fi.alk.evals.collaborative_competence_report",
             "local_only": True,
             "requires_external_service": False,
         },
@@ -714,7 +714,7 @@ def redteam_adaptive_loop_report(
             },
         ],
         "metadata": {
-            "source": "agent_learning.evals.redteam_adaptive_loop_report",
+            "source": "fi.alk.evals.redteam_adaptive_loop_report",
             "local_only": True,
             "requires_external_service": False,
         },
@@ -836,7 +836,7 @@ def redteam_attack_evolution_report(
             },
         ],
         "metadata": {
-            "source": "agent_learning.evals.redteam_attack_evolution_report",
+            "source": "fi.alk.evals.redteam_attack_evolution_report",
             "local_only": True,
             "requires_external_service": False,
         },
@@ -975,7 +975,7 @@ def synthesize_task_evaluation_config(
     )
     synthesis = {
         "kind": AGENT_LEARNING_TASK_EVAL_SYNTHESIS_KIND,
-        "source": "agent_learning.evals.synthesize_task_evaluation_config",
+        "source": "fi.alk.evals.synthesize_task_evaluation_config",
         "local_only": True,
         "requires_external_service": False,
         "evidence_keys": sorted(str(key) for key in source),
@@ -1077,7 +1077,7 @@ def build_evaluation_hook_config(
                 if api_key_env
                 else {},
                 "metadata": {
-                    "source": "agent_learning.evals.build_evaluation_hook_config",
+                    "source": "fi.alk.evals.build_evaluation_hook_config",
                     **dict(metadata or {}),
                 },
             }
@@ -1243,7 +1243,7 @@ def probe_evaluation_hook(
         "evaluation": evaluation,
         "findings": findings,
         "metadata": {
-            "source": "agent_learning.evals.probe_evaluation_hook",
+            "source": "fi.alk.evals.probe_evaluation_hook",
             **_as_mapping(metadata),
         },
     }
@@ -1337,7 +1337,7 @@ def _evaluation_hook_spec(
         if api_key_env
         else {},
         "metadata": {
-            "source": "agent_learning.evals.probe_evaluation_hook",
+            "source": "fi.alk.evals.probe_evaluation_hook",
             **_as_mapping(metadata),
         },
     }
@@ -1887,7 +1887,7 @@ def optimize_eval_suite_file(
 def __getattr__(name: str) -> Any:
     module_name = _EVAL_EXPORTS.get(name)
     if module_name is None:
-        raise AttributeError(f"module `agent_learning.evals` has no attribute `{name}`")
+        raise AttributeError(f"module `fi.alk.evals` has no attribute `{name}`")
     return getattr(optional_module(module_name, _EVAL_EXTRA), name)
 
 

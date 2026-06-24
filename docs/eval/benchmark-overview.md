@@ -73,7 +73,7 @@ The harness is one call per lane; only the control mode and the modality of the
 suite change:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 # artifact_in / coding — score a candidate against a held-out check oracle.
 coding_suite = bench.load_coding_suite("examples/bench_suites/coding_starter.json")
@@ -100,7 +100,7 @@ a real agent rather than a held-out artifact. The shape is identical — only th
 arguments differ:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 # push / text — the HARNESS drives the agent across a task dataset.
 result = bench.run_bench(

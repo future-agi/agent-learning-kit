@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import voice_loop
+from fi.alk import voice_loop
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURES = EXAMPLE_DIR / "voice_loopback_fixture"

@@ -65,7 +65,7 @@ own target):
 import asyncio
 import os
 
-from agent_learning import redteam
+from fi.alk import redteam
 
 os.environ.setdefault("AGENT_LEARNING_LONG_HORIZON_REDTEAM_KEY", "local-example")
 result = asyncio.run(

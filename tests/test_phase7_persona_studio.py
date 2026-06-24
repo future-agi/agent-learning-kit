@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning.cli import main
+from fi.alk.cli import main
 from fi.simulate.simulation.behavior_policy import (
     BEHAVIOR_POLICY_AXIS_FIELDS,
     PERSONA_BEHAVIOR_AXES,
@@ -136,7 +136,7 @@ def test_existing_manifest_personas_round_trip():
 
 
 def test_legacy_auto_upgrade_is_lossless_with_legacy_provenance():
-    from agent_learning import studio
+    from fi.alk import studio
 
     upgraded = studio.upgrade_legacy_persona(LEGACY_ROW)
     assert upgraded.provenance is not None
@@ -179,7 +179,7 @@ def test_content_hash_stable_and_mutation_sensitive():
 
 
 def test_manifest_facade_accepts_model_instances():
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     scenario = Scenario(name="typed", dataset=[_typed_persona()], kind="task")
     manifest = simulate.build_task_run_manifest(
@@ -373,7 +373,7 @@ def test_local_text_engine_attaches_fidelity_only_for_typed():
 # ---------------------------------------------------------------------------
 
 def test_calibration_lifecycle_green_and_monotone_upgrade(tmp_path):
-    from agent_learning import studio
+    from fi.alk import studio
 
     persona = studio.build_persona(
         name="Amrita", situation="disputes a recharge", outcome="resolved",
@@ -399,7 +399,7 @@ def test_calibration_lifecycle_green_and_monotone_upgrade(tmp_path):
 
 
 def test_calibration_retest_divergence_fails_and_class_unchanged():
-    from agent_learning import studio
+    from fi.alk import studio
 
     jittery = studio.build_persona(
         name="Jit", situation="s", outcome="o",
@@ -418,7 +418,7 @@ def test_calibration_retest_divergence_fails_and_class_unchanged():
 
 
 def test_calibration_rejects_provenance_fact_targets_and_no_downgrade():
-    from agent_learning import studio
+    from fi.alk import studio
 
     with pytest.raises(ValueError, match="provenance facts"):
         studio.calibrate_persona(_typed_persona(), target_class="cloud_downloaded")
@@ -435,7 +435,7 @@ def test_calibration_rejects_provenance_fact_targets_and_no_downgrade():
 # ---------------------------------------------------------------------------
 
 def test_library_content_addressing_round_trip_and_overwrite_refusal(tmp_path):
-    from agent_learning import studio
+    from fi.alk import studio
 
     persona = _typed_persona()
     saved = studio.save_persona(persona, library=tmp_path)
@@ -459,8 +459,8 @@ def test_library_content_addressing_round_trip_and_overwrite_refusal(tmp_path):
 
 
 def test_library_tamper_rejection_and_quarantine_refusal(tmp_path):
-    from agent_learning import studio
-    from agent_learning.studio._library import quarantine_payload
+    from fi.alk import studio
+    from fi.alk.studio._library import quarantine_payload
 
     persona = _typed_persona()
     saved = studio.save_persona(persona, library=tmp_path)
@@ -482,7 +482,7 @@ def test_library_tamper_rejection_and_quarantine_refusal(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_scan_clean_and_flagged_tokens():
-    from agent_learning.studio._scan import CONTENT_SCAN_RESULTS, scan_content
+    from fi.alk.studio._scan import CONTENT_SCAN_RESULTS, scan_content
 
     assert CONTENT_SCAN_RESULTS == ("clean", "flagged")  # two-level encoding
     clean = scan_content({"name": "billing caller", "notes": ["polite", "firm"]})
@@ -525,7 +525,7 @@ Calm at first, shows impatience if conversation runs long.
 
 
 def test_vendor_import_vapi_round_trip_byte_exact():
-    from agent_learning import studio
+    from fi.alk import studio
 
     persona, goal = studio.import_vendor_persona(VAPI_TEXT, format="vapi")
     assert studio.render_vendor_text(persona) == VAPI_TEXT  # byte-exact parity
@@ -547,7 +547,7 @@ def test_vendor_import_vapi_round_trip_byte_exact():
 
 
 def test_vendor_import_retell_trajectory_spec_executable():
-    from agent_learning import studio
+    from fi.alk import studio
 
     persona, goal = studio.import_vendor_persona(RETELL_TEXT, format="retell")
     assert studio.render_vendor_text(persona) == RETELL_TEXT
@@ -583,13 +583,13 @@ FLAGGED_PLATFORM_PERSONA = {
 
 
 def test_validate_download_pure_pin_tamper_unpinned():
-    from agent_learning.studio._download import (
+    from fi.alk.studio._download import (
         PERSONA_DOWNLOAD_PIN_FIELDS,
         checksum_payload,
         validate_download,
         verify_pin,
     )
-    from agent_learning.studio._scan import DownloadRejected
+    from fi.alk.studio._scan import DownloadRejected
 
     pin = validate_download(CLEAN_PLATFORM_PERSONA)
     assert sorted(pin) == sorted(PERSONA_DOWNLOAD_PIN_FIELDS)
@@ -661,8 +661,8 @@ def stub_account(monkeypatch):
 
 
 def test_pull_personas_from_stub_server(tmp_path, stub_account):
-    from agent_learning import studio
-    from agent_learning.studio._download import checksum_payload
+    from fi.alk import studio
+    from fi.alk.studio._download import checksum_payload
 
     result = studio.pull_personas(library=tmp_path)
     assert result["status"] == "pulled" and result["exit_code"] == 0
@@ -688,7 +688,7 @@ def test_pull_personas_from_stub_server(tmp_path, stub_account):
 
 
 def test_pull_flagged_quarantined_and_scenarios_sdk_pull(tmp_path, stub_account):
-    from agent_learning import studio
+    from fi.alk import studio
 
     refused = studio.pull_personas(ids=["ev1l"], library=tmp_path)
     assert refused["status"] == "quarantined" and refused["exit_code"] == 1
@@ -713,7 +713,7 @@ def test_pull_flagged_quarantined_and_scenarios_sdk_pull(tmp_path, stub_account)
 # ---------------------------------------------------------------------------
 
 def _lint_persona(name, *, tamas=0.2, age=None, language=None, policy=None):
-    from agent_learning import studio
+    from fi.alk import studio
 
     return studio.build_persona(
         name=name, situation="s", outcome="o",
@@ -725,8 +725,8 @@ def _lint_persona(name, *, tamas=0.2, age=None, language=None, policy=None):
 
 
 def test_bias_lint_clean_set_passes_with_locale_stamps():
-    from agent_learning import studio
-    from agent_learning.studio._bias import PERSONA_BIAS_LINT_CHECKS
+    from fi.alk import studio
+    from fi.alk.studio._bias import PERSONA_BIAS_LINT_CHECKS
 
     clean_set = [
         _lint_persona("a", tamas=0.2, language="en-IN"),
@@ -742,7 +742,7 @@ def test_bias_lint_clean_set_passes_with_locale_stamps():
 
 
 def test_bias_lint_stereotyped_set_fails():
-    from agent_learning import studio
+    from fi.alk import studio
 
     stereotyped = [
         # tamas extreme applied ONLY to the 65+ personas (2604.23600 cell)
@@ -781,8 +781,8 @@ def _typed_scenario(name, *, kind="task", intents=(), personas=(), perturbations
 
 
 def test_coverage_report_residual_and_forbidden_headline_keys():
-    from agent_learning import studio
-    from agent_learning.studio._coverage import (
+    from fi.alk import studio
+    from fi.alk.studio._coverage import (
         COVERAGE_FORBIDDEN_HEADLINE_KEYS,
         SCENARIO_COVERAGE_AXES,
     )
@@ -815,7 +815,7 @@ def test_coverage_report_residual_and_forbidden_headline_keys():
 
 
 def test_expand_scenarios_lineage_and_determinism():
-    from agent_learning import studio
+    from fi.alk import studio
 
     base = _typed_scenario("base", intents=["billing"])
     axes = {"intents": ["billing", "plan_change"], "perturbations": ["none", "noise"]}
@@ -914,7 +914,7 @@ def test_cli_scenario_synth_and_coverage(tmp_path, capsys, monkeypatch):
 
 
 def test_cli_persona_pull_unkeyed_and_vendor_import(tmp_path, capsys, monkeypatch):
-    import agent_learning.config as config_module
+    import fi.alk.config as config_module
 
     monkeypatch.chdir(tmp_path)
     for name in (*config_module.API_KEY_ENV_NAMES, *config_module.SECRET_KEY_ENV_NAMES):
@@ -935,7 +935,7 @@ def test_cli_persona_pull_unkeyed_and_vendor_import(tmp_path, capsys, monkeypatc
     assert imported["imported"]["lossless"]["preserved_at"] == "provenance.raw"
     persona_file = Path(imported["imported"]["persona_file"])
     assert persona_file.exists()
-    from agent_learning import studio
+    from fi.alk import studio
 
     round_trip = studio.load_persona(persona_file)
     assert studio.render_vendor_text(round_trip) == VAPI_TEXT

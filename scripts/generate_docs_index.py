@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_learning import trinity  # noqa: E402
+from fi.alk import trinity  # noqa: E402
 
 
 def build_page_records(root: Path) -> list[dict[str, object]]:

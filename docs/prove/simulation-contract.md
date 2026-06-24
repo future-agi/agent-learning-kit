@@ -55,7 +55,7 @@ agent-learn simulation validate artifacts/lifted-simulation.json
 The same flow from the SDK:
 
 ```python
-from agent_learning import simulate
+from fi.alk import simulate
 
 run_manifest = simulate.load_manifest_file("examples/run_manifest.json")
 simulation = simulate.derive_simulation_manifest(run_manifest)

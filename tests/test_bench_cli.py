@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_learning.cli import main
+from fi.alk.cli import main
 
 ROOT = Path(__file__).parent.parent
 CODING = str(ROOT / "examples" / "bench_suites" / "coding_starter.json")

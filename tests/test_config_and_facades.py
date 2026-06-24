@@ -15,9 +15,9 @@ from typing import Any
 
 import pytest
 
-from agent_learning import actions, configure, current_config, get_api_key
-from agent_learning._facade import optional_module
-from agent_learning.cli import main
+from fi.alk import actions, configure, current_config, get_api_key
+from fi.alk._facade import optional_module
+from fi.alk.cli import main
 from fi.simulate.manifest import ManifestError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -89,8 +89,8 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 
 def test_facades_expose_unified_agent_learning_modules():
-    import agent_learning
-    from agent_learning import (
+    import fi.alk
+    from fi.alk import (
         actions,
         capabilities,
         evals,
@@ -116,8 +116,8 @@ def test_facades_expose_unified_agent_learning_modules():
         "simulate",
         "suite",
         "trinity",
-    } <= set(agent_learning.__all__)
-    assert {name for name in dir(agent_learning) if name in agent_learning.__all__} >= {
+    } <= set(fi.alk.__all__)
+    assert {name for name in dir(fi.alk) if name in fi.alk.__all__} >= {
         "actions",
         "capabilities",
         "evals",
@@ -656,30 +656,30 @@ def test_facades_expose_unified_agent_learning_modules():
 
 
 def test_eval_facade_exposes_public_deep_submodule_aliases():
-    from agent_learning.evals.autoeval import AutoEvalPipeline
-    from agent_learning.evals.core.prompt_generator import generate_grading_criteria
-    from agent_learning.evals.feedback import FeedbackCollector
-    from agent_learning.evals.framework import blocking_evaluator
-    from agent_learning.evals.framework.backends import ThreadPoolBackend
-    from agent_learning.evals.framework.backends.thread_pool import (
+    from fi.alk.evals.autoeval import AutoEvalPipeline
+    from fi.alk.evals.core.prompt_generator import generate_grading_criteria
+    from fi.alk.evals.feedback import FeedbackCollector
+    from fi.alk.evals.framework import blocking_evaluator
+    from fi.alk.evals.framework.backends import ThreadPoolBackend
+    from fi.alk.evals.framework.backends.thread_pool import (
         ThreadPoolBackend as LeafThreadPoolBackend,
     )
-    from agent_learning.evals.framework.resilience import RetryConfig
-    from agent_learning.evals.guardrails import Guardrails
-    from agent_learning.evals.guardrails.scanners import RegexPattern, RegexScanner
-    from agent_learning.evals.guardrails.scanners.base import BaseScanner
-    from agent_learning.evals.guardrails.scanners.regex import (
+    from fi.alk.evals.framework.resilience import RetryConfig
+    from fi.alk.evals.guardrails import Guardrails
+    from fi.alk.evals.guardrails.scanners import RegexPattern, RegexScanner
+    from fi.alk.evals.guardrails.scanners.base import BaseScanner
+    from fi.alk.evals.guardrails.scanners.regex import (
         RegexScanner as LeafRegexScanner,
     )
-    from agent_learning.evals.llm import LiteLLMProvider
-    from agent_learning.evals.local import LocalEvaluator
-    from agent_learning.evals.metrics.agents.report import evaluate_agent_report
-    from agent_learning.evals.metrics.base_metric import BaseMetric
-    from agent_learning.evals.metrics.code_security import CodeSecurityScore
-    from agent_learning.evals.metrics.structured.json_validation import JSONValidation
-    from agent_learning.evals.otel import setup_tracing
-    from agent_learning.evals.streaming import StreamingEvaluator
-    from agent_learning.evals import (
+    from fi.alk.evals.llm import LiteLLMProvider
+    from fi.alk.evals.local import LocalEvaluator
+    from fi.alk.evals.metrics.agents.report import evaluate_agent_report
+    from fi.alk.evals.metrics.base_metric import BaseMetric
+    from fi.alk.evals.metrics.code_security import CodeSecurityScore
+    from fi.alk.evals.metrics.structured.json_validation import JSONValidation
+    from fi.alk.evals.otel import setup_tracing
+    from fi.alk.evals.streaming import StreamingEvaluator
+    from fi.alk.evals import (
         coherence_scorer,
         pii_scorer,
         toxicity_scorer,
@@ -741,8 +741,8 @@ def test_optional_module_error_uses_unified_install_guidance():
 
 
 def test_optimize_facade_exposes_advanced_governance_surfaces():
-    from agent_learning import optimize
-    from agent_learning.optimize import (
+    from fi.alk import optimize
+    from fi.alk.optimize import (
         AgentFeedbackOptimizer,
         build_optimizer_society_trace,
     )
@@ -960,7 +960,7 @@ def test_agent_report_scores_framework_adapter_call_contract_and_observed_io():
 
 
 def test_agent_report_scores_framework_adapter_capability_profile():
-    from agent_learning import simulate
+    from fi.alk import simulate
     from fi.evals.metrics.agents.report import AgentReportEvaluator
 
     profile = simulate.framework_adapter_capability_profile(
@@ -1034,7 +1034,7 @@ def test_agent_report_scores_framework_adapter_capability_profile():
 
 
 def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY",
@@ -1406,7 +1406,7 @@ def test_sdk_framework_adapter_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_optimize_framework_adapter_probe_selects_working_adapter():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     class LocalRefundOrchestrator:
         def run(self, text):
@@ -1506,7 +1506,7 @@ def test_optimize_framework_adapter_probe_selects_working_adapter():
 
 
 def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     class LocalRefundOrchestrator:
         def run(self, text):
@@ -1581,7 +1581,7 @@ def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
 def test_streaming_framework_adapter_discovery_promotes_streaming_manifest(
     tmp_path,
 ):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_streaming.py"
     spec = importlib.util.spec_from_file_location(
@@ -1641,7 +1641,7 @@ def test_streaming_framework_adapter_discovery_promotes_streaming_manifest(
 
 
 def test_typed_framework_adapter_output_preserves_structured_state(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_typed_output.py"
     spec = importlib.util.spec_from_file_location(
@@ -1685,7 +1685,7 @@ def test_typed_framework_adapter_output_preserves_structured_state(tmp_path):
 
 
 def test_keyword_input_framework_adapter_promotes_input_key(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_keyword_inputs.py"
     spec = importlib.util.spec_from_file_location(
@@ -1742,7 +1742,7 @@ def test_keyword_input_framework_adapter_promotes_input_key(tmp_path):
 
 
 def test_side_kwarg_framework_adapter_promotes_call_contract(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_side_kwargs.py"
     spec = importlib.util.spec_from_file_location(
@@ -1799,7 +1799,7 @@ def test_side_kwarg_framework_adapter_promotes_call_contract(tmp_path):
 
 
 def test_nested_method_framework_adapter_promotes_method_path(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_nested_method.py"
     spec = importlib.util.spec_from_file_location(
@@ -1860,7 +1860,7 @@ def test_nested_method_framework_adapter_promotes_method_path(tmp_path):
 
 
 def test_provider_response_framework_adapter_preserves_nested_tool_evidence(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = (
         PROJECT_ROOT / "examples" / "sdk_framework_adapter_provider_response.py"
@@ -1976,7 +1976,7 @@ def test_provider_response_framework_adapter_preserves_nested_tool_evidence(tmp_
 
 
 def test_message_history_framework_adapter_preserves_transcript_evidence(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_message_history.py"
     spec = importlib.util.spec_from_file_location(
@@ -2051,7 +2051,7 @@ def test_message_history_framework_adapter_preserves_transcript_evidence(tmp_pat
 
 
 def test_handoff_transcript_framework_adapter_preserves_coordination(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = (
         PROJECT_ROOT / "examples" / "sdk_framework_adapter_handoff_transcript.py"
@@ -2133,7 +2133,7 @@ def test_handoff_transcript_framework_adapter_preserves_coordination(tmp_path):
 
 
 def test_realtime_trace_framework_adapter_preserves_frames_and_session_events(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_realtime_trace.py"
     spec = importlib.util.spec_from_file_location(
@@ -2265,7 +2265,7 @@ def test_realtime_trace_framework_adapter_preserves_frames_and_session_events(tm
 
 
 def test_framework_memory_adapter_preserves_lineage_and_retrieval_state(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_memory_trace.py"
     spec = importlib.util.spec_from_file_location(
@@ -2413,7 +2413,7 @@ def test_framework_memory_adapter_preserves_lineage_and_retrieval_state(tmp_path
 
 
 def test_browser_cua_framework_adapter_preserves_visual_action_trace(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_browser_cua_trace.py"
     spec = importlib.util.spec_from_file_location(
@@ -2593,7 +2593,7 @@ def test_browser_cua_framework_adapter_preserves_visual_action_trace(tmp_path):
 
 
 def test_workflow_framework_adapter_preserves_graph_execution_trace(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_workflow_trace.py"
     spec = importlib.util.spec_from_file_location(
@@ -2741,7 +2741,7 @@ def test_workflow_framework_adapter_preserves_graph_execution_trace(tmp_path):
 
 
 def test_workflow_framework_adapter_accepts_nested_trace_export():
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     class NestedWorkflowAgent:
         def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2841,7 +2841,7 @@ def test_workflow_framework_adapter_accepts_nested_trace_export():
 
 
 def test_workflow_trace_manifest_environment_preserves_native_graph_state(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_workflow_target_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -2909,7 +2909,7 @@ def test_workflow_trace_manifest_environment_preserves_native_graph_state(tmp_pa
 
 
 def test_lifecycle_framework_adapter_preserves_recovery_trace(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_lifecycle_trace.py"
     spec = importlib.util.spec_from_file_location(
@@ -3018,7 +3018,7 @@ def test_lifecycle_framework_adapter_preserves_recovery_trace(tmp_path):
 
 
 def test_mcp_framework_adapter_preserves_tool_session_trace(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_mcp_tool_session.py"
     spec = importlib.util.spec_from_file_location(
@@ -3111,7 +3111,7 @@ def test_mcp_framework_adapter_preserves_tool_session_trace(tmp_path):
 
 
 def test_a2a_framework_adapter_preserves_protocol_trace(tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_a2a_protocol_trace.py"
     spec = importlib.util.spec_from_file_location(
@@ -3198,7 +3198,7 @@ def test_a2a_framework_adapter_preserves_protocol_trace(tmp_path):
 
 
 def test_agent_control_plane_framework_adapter_preserves_runtime_governance(tmp_path):
-    from agent_learning import simulate, trinity
+    from fi.alk import simulate, trinity
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_agent_control_plane.py"
     spec = importlib.util.spec_from_file_location(
@@ -3309,7 +3309,7 @@ def test_agent_control_plane_framework_adapter_preserves_runtime_governance(tmp_
 
 
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     target = (
         f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
@@ -3346,7 +3346,7 @@ def test_probe_optimization_promotes_to_framework_run_manifest(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_probe_promotion.py"
     spec = importlib.util.spec_from_file_location(
@@ -3433,7 +3433,7 @@ def test_probe_optimization_promotes_to_framework_run_manifest(
 
 
 def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     shim_path = (
         PROJECT_ROOT / "examples" / "sdk_framework_adapter_auto_discovery_promotion.py"
@@ -3500,7 +3500,7 @@ def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
 
 
 def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_one_call_promotion.py"
     spec = importlib.util.spec_from_file_location(
@@ -3554,7 +3554,7 @@ def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes(
 
 
 def test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs(tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     target = (
         f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
@@ -3606,7 +3606,7 @@ def test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs(tm
 
 
 def test_framework_adapter_trinity_suite_workspace_runs(tmp_path):
-    from agent_learning import suite
+    from fi.alk import suite
 
     target = (
         f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
@@ -3670,7 +3670,7 @@ def test_framework_adapter_trinity_suite_workspace_runs(tmp_path):
 def test_framework_adapter_trinity_suite_optimization_workspace_selects_trinity(
     tmp_path,
 ):
-    from agent_learning import suite
+    from fi.alk import suite
 
     target = (
         f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
@@ -3724,7 +3724,7 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     key = "real-local-sdk-social-memory-framework-key"
     monkeypatch.setenv(
@@ -3955,7 +3955,7 @@ def test_sdk_social_memory_framework_simulation_example_runs(
     ] is True
     assert eval_config["required_tools"] == ["framework_trace_status"]
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_social_memory_framework_run_manifest(
         name="custom-social-memory-framework-simulation",
@@ -4070,7 +4070,7 @@ def test_sdk_social_memory_framework_simulation_example_runs(
 
 
 def test_optimize_facade_builds_and_runs_generic_target_manifest(monkeypatch):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TARGET_OPT_KEY",
@@ -4201,7 +4201,7 @@ def test_optimize_facade_builds_and_runs_generic_target_manifest(monkeypatch):
     ]
     assert manifest["optimization"]["optimizer"]["max_candidates"] == 3
     assert manifest["optimization"]["target"]["metadata"]["source"] == (
-        "agent_learning.optimize.build_target_optimization_manifest"
+        "fi.alk.optimize.build_target_optimization_manifest"
     )
 
     no_agent_manifest = optimize.build_target_optimization_manifest(
@@ -4455,7 +4455,7 @@ def test_sdk_memory_target_optimization_example_runs(
     assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
     target = manifest["optimization"]["target"]
     assert target["metadata"]["source"] == (
-        "agent_learning.optimize.build_target_optimization_manifest"
+        "fi.alk.optimize.build_target_optimization_manifest"
     )
     assert target["metadata"]["task_kind"] == "generic_target"
     assert target["metadata"]["optimized_surface"] == (
@@ -4576,7 +4576,7 @@ def test_sdk_orchestration_target_optimization_example_runs(
     assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
     target = manifest["optimization"]["target"]
     assert target["metadata"]["source"] == (
-        "agent_learning.optimize.build_target_optimization_manifest"
+        "fi.alk.optimize.build_target_optimization_manifest"
     )
     assert target["metadata"]["task_kind"] == "generic_target"
     assert target["metadata"]["optimized_surface"] == "framework_trace_spans"
@@ -4705,7 +4705,7 @@ def test_sdk_workflow_target_optimization_example_runs(monkeypatch, tmp_path):
     assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
     target = manifest["optimization"]["target"]
     assert target["metadata"]["source"] == (
-        "agent_learning.optimize.build_target_optimization_manifest"
+        "fi.alk.optimize.build_target_optimization_manifest"
     )
     assert target["metadata"]["task_kind"] == "generic_target"
     assert target["metadata"]["optimized_surface"] == "workflow_trace_graph"
@@ -5023,7 +5023,7 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
 
 
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TASK_WORLD_OPT_KEY",
@@ -5224,7 +5224,7 @@ def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_behavior_entropy_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals, simulate
+    from fi.alk import evals, simulate
 
     key = "real-local-sdk-behavior-entropy-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY", key)
@@ -5321,7 +5321,7 @@ def test_sdk_behavior_entropy_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_collaborative_competence_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals, simulate
+    from fi.alk import evals, simulate
 
     key = "real-local-sdk-collaborative-competence-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_COLLABORATIVE_COMPETENCE_KEY", key)
@@ -5438,7 +5438,7 @@ def test_sdk_collaborative_competence_optimization_example_runs(monkeypatch, tmp
 
 
 def test_component_optimization_manifest_routes_diagnosed_search_paths():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     manifest = optimize.build_component_optimization_manifest(
         name="component-routing-test",
@@ -5490,7 +5490,7 @@ def test_component_optimization_manifest_routes_diagnosed_search_paths():
 
 
 def test_sdk_component_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY",
@@ -5671,7 +5671,7 @@ def test_sdk_optimization_lifecycle_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     key = "real-local-sdk-orchestration-example-key"
     monkeypatch.setenv(
@@ -6197,7 +6197,7 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_world_framework_memory_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     key = "real-local-sdk-world-framework-memory-key"
     monkeypatch.setenv(
@@ -6387,7 +6387,7 @@ def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
         "critic",
     ]
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_orchestration_stack_run_manifest(
         name="custom-orchestration-simulation",
@@ -6584,7 +6584,7 @@ def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
 def test_optimize_facade_builds_and_runs_multi_agent_coordination_manifest(
     monkeypatch,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_MULTI_AGENT_OPT_KEY",
@@ -6877,7 +6877,7 @@ def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
 def test_optimize_multi_agent_room_probe_selects_and_promotes_strong_pair(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_multi_agent_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -7010,7 +7010,7 @@ def test_sdk_multi_agent_simulation_example_runs(monkeypatch, tmp_path):
         "accepted_source"
     ] == "critic"
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_multi_agent_coordination_run_manifest(
         name="custom-multi-agent-simulation",
@@ -7295,7 +7295,7 @@ def test_sdk_multi_agent_framework_handoff_simulation_example_runs(
         "required_checkpoint_ids"
     ] == ["ckpt-retrieval"]
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_multi_agent_framework_handoff_run_manifest(
         name="custom-multi-agent-framework-handoff-simulation",
@@ -7419,7 +7419,7 @@ def test_sdk_optimizer_governance_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY",
@@ -7638,7 +7638,7 @@ def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path)
         "dharma_steward"
     )
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_optimizer_governance_run_manifest(
         name="custom-optimizer-governance-simulation",
@@ -7762,7 +7762,7 @@ def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):
 def test_optimize_realtime_stack_probe_selects_and_promotes_strong_candidate(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_realtime_voice_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -7840,7 +7840,7 @@ def test_optimize_realtime_stack_probe_selects_and_promotes_strong_candidate(
 def test_optimize_orchestration_stack_probe_selects_and_promotes_strong_candidate(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -7938,7 +7938,7 @@ def test_optimize_orchestration_stack_probe_selects_and_promotes_strong_candidat
 def test_optimize_trinity_stack_probe_composes_stack_and_evaluator(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_trinity_stack_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -8130,7 +8130,7 @@ def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
 def test_optimize_memory_layer_probe_selects_and_promotes_strong_candidate(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_memory_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -8272,7 +8272,7 @@ def test_sdk_memory_simulation_example_runs(monkeypatch, tmp_path):
         "recall",
     ]
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_memory_layer_run_manifest(
         name="custom-memory-simulation",
@@ -8453,7 +8453,7 @@ def test_sdk_artifact_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_task_evaluation_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals
+    from fi.alk import evals
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TASK_EVAL_KEY",
@@ -8503,7 +8503,7 @@ def test_sdk_task_evaluation_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_task_evaluation_synthesis_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals
+    from fi.alk import evals
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TASK_EVAL_SYNTHESIS_KEY",
@@ -8733,7 +8733,7 @@ def test_sdk_realtime_voice_simulation_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
-    from agent_learning import suite as suite_api
+    from fi.alk import suite as suite_api
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TRINITY_SUITE_KEY",
@@ -9431,7 +9431,7 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REDTEAM_OPT_KEY",
@@ -9602,7 +9602,7 @@ def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
 
 
 def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     key = "real-local-sdk-redteam-example-key"
     monkeypatch.setenv(
@@ -9928,7 +9928,7 @@ def test_sdk_redteam_autogen_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_adaptive_redteam_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_ADAPTIVE_REDTEAM_OPT_KEY",
@@ -10050,7 +10050,7 @@ def test_sdk_adaptive_redteam_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_redteam_adaptive_loop_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals, simulate
+    from fi.alk import evals, simulate
 
     key = "real-local-sdk-redteam-adaptive-loop-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY", key)
@@ -10140,7 +10140,7 @@ def test_sdk_redteam_adaptive_loop_optimization_example_runs(monkeypatch, tmp_pa
 
 
 def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals, simulate, suite
+    from fi.alk import evals, simulate, suite
 
     key = "real-local-sdk-redteam-attack-evolution-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY", key)
@@ -10570,7 +10570,7 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_path):
-    from agent_learning import redteam, simulate
+    from fi.alk import redteam, simulate
 
     assert simulate.PersistentStateRedTeamEnvironment is not None
     assert simulate.normalize_persistent_state_attack_manifest is not None
@@ -10655,7 +10655,7 @@ def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_p
 
 
 def test_sdk_persistent_state_redteam_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     assert optimize.build_persistent_state_redteam_optimization_manifest is not None
     assert optimize.optimize_persistent_state_redteam is not None
@@ -11315,7 +11315,7 @@ def test_sdk_redteam_causal_attribution_optimization_example_runs(
 
 
 def test_sdk_report_repair_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REPORT_REPAIR_EXAMPLE_KEY",
@@ -11423,7 +11423,7 @@ def test_sdk_framework_import_repair_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_FRAMEWORK_IMPORT_REPAIR_EXAMPLE_KEY",
@@ -11560,7 +11560,7 @@ def test_framework_import_probe_records_runtime_import_evidence(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     module_dir = tmp_path / "probe_modules"
     module_dir.mkdir()
@@ -11629,7 +11629,7 @@ def build_agent():
 
 
 def test_sdk_framework_import_probe_simulation_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_FRAMEWORK_IMPORT_PROBE_KEY",
@@ -11859,7 +11859,7 @@ def test_sdk_agent_control_plane_simulation_example_runs(monkeypatch, tmp_path):
     assert len(config["agent_trust_boundary_quality"]["required_controls"]) == 11
     assert len(config["agent_control_plane_quality"]["required_controls"]) == 11
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_agent_control_plane_run_manifest(
         name="custom-agent-control-plane-simulation",
@@ -11958,7 +11958,7 @@ def test_sdk_agent_control_plane_simulation_example_runs(monkeypatch, tmp_path):
 def test_optimize_browser_cua_probe_selects_and_promotes_hardened_candidate(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     result = optimize.optimize_browser_cua_probe(
         name="sdk-browser-cua-probe-optimization",
@@ -12333,7 +12333,7 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
         "optimize_agent_integration_readiness",
     }
 
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     candidate = optimize.AgentCandidate.from_config(
         result["optimization"]["best_config"],
@@ -12517,7 +12517,7 @@ def test_sdk_agent_integration_simulation_example_runs(monkeypatch, tmp_path):
     assert "### Provider Matrix" in report_markdown
     assert "### Agent Integration Actions" in report_markdown
 
-    from agent_learning import actions
+    from fi.alk import actions
 
     catalog = actions.action_catalog(written_result, source_path=output_path)
     assert {
@@ -12547,7 +12547,7 @@ def test_sdk_framework_certification_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     key = "real-local-sdk-framework-certification-key"
     monkeypatch.setenv(
@@ -12661,7 +12661,7 @@ def test_sdk_framework_certification_optimization_example_runs(
     assert lifecycle["phase_count"] == 10
     assert lifecycle["recovered_error_count"] == 1
 
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     target = manifest["optimization"]["target"]
     candidate = optimize.AgentCandidate.from_config(
@@ -12914,7 +12914,7 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     key = "real-local-sdk-framework-matrix-opt-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_MATRIX_OPT_KEY", key)
@@ -13120,7 +13120,7 @@ def test_sdk_framework_adapter_websocket_transport_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     key = "real-local-sdk-framework-websocket-transport-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY", key)
@@ -13145,7 +13145,7 @@ def test_sdk_framework_adapter_websocket_transport_example_runs(
         "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
     ]
     assert manifest["agent"]["type"] == "websocket"
-    assert manifest["agent"]["protocol"] == "agent_learning"
+    assert manifest["agent"]["protocol"] == "fi.alk"
     assert manifest["agent"]["api_key_env"] == (
         "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
     )
@@ -13313,7 +13313,7 @@ def test_sdk_optimizer_portfolio_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     key = "real-local-sdk-optimizer-portfolio-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY", key)
@@ -13513,7 +13513,7 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert len(config["framework_probe_quality"]["required_operations"]) == 12
     assert len(config["framework_portability_quality"]["required_mappings"]) == 10
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_framework_certification_run_manifest(
         name="custom-framework-certification-simulation",
@@ -13663,7 +13663,7 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert "## Framework Readiness" in report_markdown
     assert "### Framework Actions" in report_markdown
 
-    from agent_learning import actions, optimize
+    from fi.alk import actions, optimize
 
     catalog = actions.action_catalog(saved, source_path=output_path)
     assert catalog["kind"] == "agent-learning.actions.v1"
@@ -14205,7 +14205,7 @@ def test_sdk_autonomous_redteam_task_world_simulation_example_runs(
         "refund-redteam-runbook"
     )
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_autonomous_redteam_task_world_run_manifest(
         name="custom-autonomous-redteam-task-world-simulation",
@@ -14469,7 +14469,7 @@ def test_sdk_multimodal_image_simulation_example_runs(
         "support_terms"
     ] == ["Contoso", "$42.00", "paid"]
 
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     custom_manifest = simulate.build_multimodal_image_run_manifest(
         name="custom-multimodal-image-simulation",
@@ -14660,7 +14660,7 @@ def test_sdk_workspace_import_certification_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY",
@@ -14790,7 +14790,7 @@ def test_sdk_redteam_readiness_certification_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY",
@@ -14920,7 +14920,7 @@ def test_sdk_redteam_readiness_certification_optimization_example_runs(
 
 
 def test_sdk_redteam_corpus_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REDTEAM_CORPUS_KEY",
@@ -15388,7 +15388,7 @@ def test_agent_learning_kit_does_not_depend_on_legacy_sdk_distributions():
 
 
 def test_openenv_compatibility_boundary_current_checkout_has_no_drift():
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     status = trinity._release_openenv_compatibility_boundary_status(PROJECT_ROOT)
 
@@ -15413,7 +15413,7 @@ def test_openenv_compatibility_boundary_current_checkout_has_no_drift():
 def test_openenv_compatibility_boundary_rejects_dependency_import_and_doc_drift(
     tmp_path,
 ):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     for relative_path in trinity.V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES:
         path = tmp_path / relative_path
@@ -15494,11 +15494,11 @@ def test_openenv_compatibility_boundary_rejects_dependency_import_and_doc_drift(
 
 
 def test_public_runtime_dispatch_uses_agent_learning_aliases():
-    from agent_learning import cli as public_cli
-    from agent_learning import suite as public_suite
+    from fi.alk import cli as public_cli
+    from fi.alk import suite as public_suite
 
-    public_simulate_cli = importlib.import_module("agent_learning.simulate.cli")
-    public_eval_cli = importlib.import_module("agent_learning.evals.cli.main")
+    public_simulate_cli = importlib.import_module("fi.alk.simulate.cli")
+    public_eval_cli = importlib.import_module("fi.alk.evals.cli.main")
     vendored_eval_cli = importlib.import_module("fi.cli.main")
 
     assert public_cli._simulate_cli_module() is public_simulate_cli
@@ -15508,7 +15508,7 @@ def test_public_runtime_dispatch_uses_agent_learning_aliases():
 
 
 def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
-    from agent_learning import capabilities
+    from fi.alk import capabilities
 
     catalog = capabilities.capability_catalog(
         required_capabilities={
@@ -15520,7 +15520,7 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
             "command_policies": ["agent_learn_only", "legacy_commands_rejected"],
             "sdk_boundaries": [
                 "agent_learning_kit",
-                "agent_learning",
+                "fi.alk",
                 "agent_learn",
                 "vendored_engine_modules",
             ],
@@ -15561,7 +15561,7 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
         "unified_public_boundary",
     ]
     assert {
-        "agent_learning",
+        "fi.alk",
         "agent_learning_kit",
         "agent_learn",
         "public_console_script_agent_learn",
@@ -15587,7 +15587,7 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
         "--require",
         "command_policies=agent_learn_only,legacy_commands_rejected",
         "--require",
-        "sdk_boundaries=agent_learning_kit,agent_learning,agent_learn,vendored_engine_modules",
+        "sdk_boundaries=agent_learning_kit,fi.alk,agent_learn,vendored_engine_modules",
         "--output",
         str(output_path),
         "--markdown",
@@ -15632,7 +15632,7 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
 
 
 def test_public_action_surfaces_reject_legacy_agent_simulate_commands(tmp_path):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     artifact = {
         "kind": "agent-learning.test.v1",
@@ -16800,7 +16800,7 @@ def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp
 
 
 def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     exit_code = main(["doctor"])
 
@@ -16809,7 +16809,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     assert exit_code == 0
     assert payload["consolidation"] == {
         "public_package": "agent-learning-kit",
-        "public_import": "agent_learning",
+        "public_import": "fi.alk",
         "public_cli": "agent-learn",
         "public_console_scripts": ["agent-learn"],
         "new_development_home": True,
@@ -16824,12 +16824,12 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
             "agent-opt",
         ],
         "unified_python_modules": [
-            "agent_learning.capabilities",
-            "agent_learning.simulate",
-            "agent_learning.evals",
-            "agent_learning.redteam",
-            "agent_learning.optimize",
-            "agent_learning.suite",
+            "fi.alk.capabilities",
+            "fi.alk.simulate",
+            "fi.alk.evals",
+            "fi.alk.redteam",
+            "fi.alk.optimize",
+            "fi.alk.suite",
         ],
         "vendored_engine_modules": [
             "fi.simulate",
@@ -16865,11 +16865,11 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
                 "status": "passed",
                 "claim": (
                     "simulate, evals, and optimize engines are vendored behind "
-                    "agent_learning."
+                    "fi.alk."
                 ),
                 "evidence": (
                     "fi.* modules remain engine internals; public imports use "
-                    "agent_learning.*."
+                    "fi.alk.*."
                 ),
             },
         ],
@@ -16932,7 +16932,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
 
 
 def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     output_path = tmp_path / "release-check.json"
     exit_code = main([
@@ -18569,8 +18569,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert active_ai_evaluation["source_inventory_python_py_file_count"] == 0
     assert active_ai_evaluation["source_inventory_typescript_file_count"] == 0
     assert active_ai_evaluation["source_inventory_typescript_ts_file_count"] == 0
+    # fi.alk nests under the fi namespace package, so the single src/fi wheel root
+    # ships both fi.evals and fi.alk (a separate src/fi/alk entry would double-add
+    # files to the wheel and fail the build).
     assert "src/fi" in active_ai_evaluation["package_paths"]
-    assert "src/agent_learning" in active_ai_evaluation["package_paths"]
     for relative_path, phrases in (
         trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES.items()
     ):
@@ -18987,7 +18989,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert sim_contract["dynamics_event_kinds"] == list(_sim_contract_mod.DYNAMICS_EVENT_KINDS)
     assert sim_contract["episode_persistence"] == list(_sim_contract_mod.EPISODE_PERSISTENCE)
     assert sim_contract["goal_check_kinds"] == list(_sim_contract_mod.GOAL_CHECK_KINDS)
-    from agent_learning import simulate as _sim_facade
+    from fi.alk import simulate as _sim_facade
     assert sim_contract["stable_result_envelope_fields"] == list(_sim_facade.STABLE_RESULT_ENVELOPE_FIELDS)
     assert sim_contract["objective_sources"] == ["declared", "derived"]
     assert sim_contract["builders_round_tripped"] >= 1
@@ -19005,7 +19007,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     practice_loop = checks["practice_loop_readiness"]["evidence"]
     assert practice_loop["kind"] == "agent-learning.practice-loop-readiness.v1"
     assert checks["practice_loop_readiness"]["milestone"] == "M3"
-    from agent_learning.practice import _contract as _prac
+    from fi.alk.practice import _contract as _prac
     assert practice_loop["practice_phases"] == list(_prac.PRACTICE_PHASES)
     assert practice_loop["practice_artifact_kinds"] == list(_prac.PRACTICE_ARTIFACT_KINDS)
     assert practice_loop["scaffold_types"] == list(_prac.SCAFFOLD_TYPES)
@@ -19057,19 +19059,19 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert voice_loopback["phone_survival_errors"] == []
     assert voice_loopback["rung_honesty_errors"] == []
     # no new evidence class — the frozen 4-tuple is byte-stable (R5/A18)
-    from agent_learning.live import _contract as _live_contract
+    from fi.alk.live import _contract as _live_contract
     assert tuple(_live_contract.EVIDENCE_CLASSES) == (
         "local_gate", "live_lane", "live_stressed", "captured_fixture"
     )
     # cross-pin: trinity mirrors == the voice_loop / _codec canon (GUNA_AXES pattern)
-    from agent_learning import voice_loop as _voice_loop
-    from agent_learning.live import _codec as _live_codec
+    from fi.alk import voice_loop as _voice_loop
+    from fi.alk.live import _codec as _live_codec
     assert tuple(trinity.V1_VOICE_LOSS_TERM_REFS) == _voice_loop.V1_VOICE_LOSS_TERM_REFS
     assert tuple(trinity.V1_VOICE_FAILURE_SUBLAYERS) == _voice_loop.V1_VOICE_FAILURE_SUBLAYERS
     assert tuple(trinity.V1_VOICE_CODECS) == _live_codec.V1_VOICE_CODECS
     assert tuple(trinity.V1_VOICE_CODEC_PROFILES) == _live_codec.V1_VOICE_CODEC_PROFILES
     # cross-pin: the rung-1 phone_survival pin is byte-equal to the live constant
-    from agent_learning.live import voice_redteam as _vrt
+    from fi.alk.live import voice_redteam as _vrt
     assert (
         tuple(trinity.V1_VOICE_PHONE_SURVIVAL_RUNG1.items())
         == tuple(_vrt.PHONE_SURVIVAL_RUNG1.items())
@@ -19117,8 +19119,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     # cross-pin: trinity mirrors == the image_loop / image_perturb canon
     # (GUNA_AXES pattern — trinity never imports the modules)
-    from agent_learning import image_loop as _image_loop
-    from agent_learning import image_perturb as _image_perturb
+    from fi.alk import image_loop as _image_loop
+    from fi.alk import image_perturb as _image_perturb
     assert tuple(trinity.V1_IMAGE_LOSS_TERM_REFS) == _image_loop.V1_IMAGE_LOSS_TERM_REFS
     assert tuple(trinity.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS) == (
         _image_loop.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS
@@ -19200,7 +19202,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert checks["simulation_contract_readiness"]["status"] == "passed"
     # cross-pin: trinity mirrors == the cua_loop canon (GUNA_AXES pattern —
     # trinity never imports the module)
-    from agent_learning import cua_loop as _cua_loop
+    from fi.alk import cua_loop as _cua_loop
     assert tuple(trinity.V1_CUA_LOSS_TERM_REFS) == _cua_loop.V1_CUA_LOSS_TERM_REFS
     assert tuple(trinity.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS) == (
         _cua_loop.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS
@@ -23381,7 +23383,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     ]
     assert http_transport_evidence["manifest_agent"] == {
         "type": "http",
-        "protocol": "agent_learning",
+        "protocol": "fi.alk",
         "api_key_env": "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
         "include_tools": True,
         "endpoint_host_local": True,
@@ -23445,7 +23447,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert transport["kind"] == "agent-learning.framework-http-transport.v1"
     assert transport["framework"] == "langgraph"
     assert transport["transport"] == "http"
-    assert transport["protocol"] == "agent_learning"
+    assert transport["protocol"] == "fi.alk"
     assert transport["status_code"] == 200
     assert transport["success"] is True
     assert transport["requires_external_service"] is False
@@ -23456,7 +23458,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     external_trace = http_transport_evidence["external_trace"]
     assert external_trace["kind"] == "external_agent_http_trace"
-    assert external_trace["protocol"] == "agent_learning"
+    assert external_trace["protocol"] == "fi.alk"
     assert external_trace["status_code"] == 200
     assert external_trace["success"] is True
     assert external_trace["error"] is None
@@ -23544,7 +23546,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     ]
     assert websocket_transport_evidence["manifest_agent"] == {
         "type": "websocket",
-        "protocol": "agent_learning",
+        "protocol": "fi.alk",
         "api_key_env": "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY",
         "include_tools": True,
         "endpoint_host_local": True,
@@ -23616,7 +23618,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert websocket_transport["framework"] == "livekit"
     assert websocket_transport["transport"] == "websocket"
-    assert websocket_transport["protocol"] == "agent_learning"
+    assert websocket_transport["protocol"] == "fi.alk"
     assert websocket_transport["status_code"] == 101
     assert websocket_transport["success"] is True
     assert websocket_transport["requires_external_service"] is False
@@ -23629,7 +23631,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     websocket_external_trace = websocket_transport_evidence["external_trace"]
     assert websocket_external_trace["kind"] == "external_agent_websocket_trace"
-    assert websocket_external_trace["protocol"] == "agent_learning"
+    assert websocket_external_trace["protocol"] == "fi.alk"
     assert websocket_external_trace["status_code"] == 101
     assert websocket_external_trace["success"] is True
     assert websocket_external_trace["error"] is None
@@ -23761,7 +23763,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert http_transport_axis_evidence["output_roundtrip"] is True
     assert http_transport_axis_evidence["transport"]["framework"] == "langgraph"
     assert http_transport_axis_evidence["transport"]["transport"] == "http"
-    assert http_transport_axis_evidence["transport"]["protocol"] == "agent_learning"
+    assert http_transport_axis_evidence["transport"]["protocol"] == "fi.alk"
     assert http_transport_axis_evidence["transport"]["success"] is True
     assert http_transport_axis_evidence["transport"]["status_code"] == 200
     assert http_transport_axis_evidence["transport"][
@@ -23795,7 +23797,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "websocket"
     )
     assert websocket_transport_axis_evidence["transport"]["protocol"] == (
-        "agent_learning"
+        "fi.alk"
     )
     assert websocket_transport_axis_evidence["transport"]["success"] is True
     assert websocket_transport_axis_evidence["transport"]["status_code"] == 101
@@ -27954,7 +27956,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
 
 
 def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     output_path = tmp_path / "release-proof.json"
     exit_code = main(
@@ -28004,7 +28006,7 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
     assert checks["release_check"]["evidence"]["command"][:3] == [
         sys.executable,
         "-m",
-        "agent_learning.cli",
+        "fi.alk.cli",
     ]
     assert checks["git_diff_check"]["status"] == "passed"
     assert checks["git_diff_check"]["exit_code"] == 0
@@ -28025,7 +28027,7 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
 
 
 def test_release_proof_command_timeout_returns_captured_evidence(monkeypatch, tmp_path):
-    from agent_learning import cli as cli_module
+    from fi.alk import cli as cli_module
 
     script = "import time; print('started', flush=True); time.sleep(30)"
 
@@ -28088,7 +28090,7 @@ def test_agent_learn_release_proof_dry_run_emits_plan(tmp_path, capsys):
         "release_check": [
             sys.executable,
             "-m",
-            "agent_learning.cli",
+            "fi.alk.cli",
             "release-check",
             "--project-root",
             str(PROJECT_ROOT),
@@ -28136,7 +28138,7 @@ def test_agent_learn_release_proof_dry_run_emits_plan(tmp_path, capsys):
 
 
 def test_release_proof_status_rejects_unknown_sdk_check_id():
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     payload = trinity.release_proof_status(
         project_root=PROJECT_ROOT,
@@ -28160,7 +28162,7 @@ def test_release_proof_status_rejects_unknown_sdk_check_id():
 
 
 def test_openenv_manifest_builds_executable_replay_candidates(monkeypatch, tmp_path):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     monkeypatch.setenv("AGENT_LEARNING_SDK_OPENENV_KEY", "local-openenv-key")
     manifest = optimize.build_openenv_optimization_manifest(
@@ -28288,7 +28290,7 @@ def test_openenv_manifest_builds_executable_replay_candidates(monkeypatch, tmp_p
 
 
 def test_stateful_tool_world_manifest_builds_research_backed_candidates():
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     manifest = optimize.build_stateful_tool_world_optimization_manifest(
         name="sdk-stateful-tool-world-optimization",
@@ -28345,7 +28347,7 @@ def test_stateful_tool_world_manifest_builds_research_backed_candidates():
 
 
 def test_world_model_manifest_builds_internal_research_backed_candidates():
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     manifest = optimize.build_world_model_optimization_manifest(
         name="sdk-world-model-optimization",
@@ -28411,7 +28413,7 @@ def test_world_model_manifest_builds_internal_research_backed_candidates():
 
 
 def test_world_hooks_alias_uses_native_world_model_arena():
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     manifest = optimize.build_world_hooks_optimization_manifest(
         name="sdk-world-hooks-optimization",
@@ -28423,7 +28425,7 @@ def test_world_hooks_alias_uses_native_world_model_arena():
     assert manifest["metadata"]["world_hooks"]["requires_external_service"] is False
     target = manifest["optimization"]["target"]
     assert target["metadata"]["source"] == (
-        "agent_learning.optimize.build_world_hooks_optimization_manifest"
+        "fi.alk.optimize.build_world_hooks_optimization_manifest"
     )
     assert target["metadata"]["cookbook"] == "native-world-hooks-arena"
     assert target["metadata"]["task_kind"] == "world_hooks"
@@ -28462,7 +28464,7 @@ def test_world_hooks_optimization_emits_native_world_hook_proof(
     monkeypatch,
     tmp_path,
 ):
-    from agent_learning import configure, optimize
+    from fi.alk import configure, optimize
 
     key = "real-local-sdk-world-hooks-proof-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_HOOKS_KEY", key)
@@ -28515,7 +28517,7 @@ def test_world_hooks_optimization_emits_native_world_hook_proof(
 
 
 def test_external_http_agent_manifest_builds_research_backed_adapter_candidates():
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     endpoint = "http://127.0.0.1:8765/v1/chat/completions"
     manifest = optimize.build_external_agent_adapter_optimization_manifest(
@@ -28625,7 +28627,7 @@ def test_sdk_external_http_agent_optimization_example_runs(monkeypatch, tmp_path
 
 
 def test_framework_http_transport_manifest_and_example_run(monkeypatch, tmp_path):
-    from agent_learning import simulate, trinity
+    from fi.alk import simulate, trinity
 
     key = "real-local-sdk-framework-http-transport-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY", key)
@@ -28648,7 +28650,7 @@ def test_framework_http_transport_manifest_and_example_run(monkeypatch, tmp_path
     assert manifest["metadata"]["task_kind"] == "framework_http_transport"
     assert manifest["metadata"]["requires_external_service"] is False
     assert manifest["agent"]["type"] == "http"
-    assert manifest["agent"]["protocol"] == "agent_learning"
+    assert manifest["agent"]["protocol"] == "fi.alk"
     assert manifest["agent"]["endpoint"] == endpoint
     assert manifest["agent"]["api_key_env"] == (
         "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
@@ -28714,7 +28716,7 @@ def test_framework_http_transport_manifest_and_example_run(monkeypatch, tmp_path
     assert transport["kind"] == "agent-learning.framework-http-transport.v1"
     assert transport["framework"] == "langgraph"
     assert transport["transport"] == "http"
-    assert transport["protocol"] == "agent_learning"
+    assert transport["protocol"] == "fi.alk"
     assert transport["requires_external_service"] is False
     assert transport["auth"]["redacted"] is True
     assert transport["auth"]["api_key_env"] == (
@@ -28722,7 +28724,7 @@ def test_framework_http_transport_manifest_and_example_run(monkeypatch, tmp_path
     )
     external_trace = state["external_agent_trace"]
     assert external_trace["kind"] == "external_agent_http_trace"
-    assert external_trace["protocol"] == "agent_learning"
+    assert external_trace["protocol"] == "fi.alk"
     assert external_trace["success"] is True
     assert external_trace["status_code"] == 200
     assert external_trace["auth"]["redacted"] is True
@@ -28747,7 +28749,7 @@ def test_framework_http_transport_manifest_and_example_run(monkeypatch, tmp_path
 
 
 def test_workflow_hook_manifest_builds_research_backed_environment_candidates():
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     endpoint = "http://127.0.0.1:8766/workflow/refund"
     manifest = optimize.build_workflow_hook_optimization_manifest(
@@ -28801,7 +28803,7 @@ def test_workflow_hook_manifest_builds_research_backed_environment_candidates():
 
 
 def test_retrieval_hook_manifest_builds_research_backed_environment_candidates():
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     endpoint = "http://127.0.0.1:8767/retrieval/query"
     manifest = optimize.build_retrieval_hook_optimization_manifest(
@@ -28860,7 +28862,7 @@ def test_retrieval_hook_manifest_builds_research_backed_environment_candidates()
 
 
 def test_evaluation_hook_manifest_builds_research_backed_agent_candidates():
-    from agent_learning import evals, optimize, simulate
+    from fi.alk import evals, optimize, simulate
 
     endpoint = "http://127.0.0.1:8768/eval/task"
     manifest = optimize.build_evaluation_hook_optimization_manifest(
@@ -28922,7 +28924,7 @@ def test_evaluation_hook_manifest_builds_research_backed_agent_candidates():
 
 
 def test_evaluation_hook_probe_scores_local_hook_and_rejects_external_endpoint():
-    from agent_learning import evals
+    from fi.alk import evals
 
     example_path = PROJECT_ROOT / "examples" / "sdk_evaluation_hook_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -28993,7 +28995,7 @@ def test_evaluation_hook_probe_scores_local_hook_and_rejects_external_endpoint()
 def test_optimize_evaluation_hook_probe_selects_and_promotes_strong_candidate(
     tmp_path,
 ):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     example_path = PROJECT_ROOT / "examples" / "sdk_evaluation_hook_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -29575,7 +29577,7 @@ def test_sdk_stateful_tool_world_optimization_example_runs(monkeypatch, tmp_path
     assert summary["utility_under_attack_score"] == pytest.approx(0.94)
     assert state["world_contract"]["summary"]["terminal_status"] == "success"
 
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     candidate = optimize.AgentCandidate.from_config(
         result["optimization"]["best_config"],
@@ -29729,7 +29731,7 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     key = "real-local-sdk-world-hooks-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_HOOKS_KEY", key)
@@ -30037,7 +30039,7 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_distribution_member_findings_flags_leaks_and_missing(tmp_path):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     sdist_path = tmp_path / "hygiene_fixture-0.0.1.tar.gz"
     clean_members = [
@@ -30050,7 +30052,7 @@ def test_distribution_member_findings_flags_leaks_and_missing(tmp_path):
         "SECURITY.md",
         "CODE_OF_CONDUCT.md",
         "ROADMAP.md",
-        "src/agent_learning/__init__.py",
+        "src/fi/alk/__init__.py",
         "src/fi/__init__.py",
         "tests/test_x.py",
         "examples/run.json",
@@ -30065,7 +30067,7 @@ def test_distribution_member_findings_flags_leaks_and_missing(tmp_path):
 
     wheel_path = tmp_path / "hygiene_fixture-0.0.1-py3-none-any.whl"
     with zipfile.ZipFile(wheel_path, "w") as archive:
-        archive.writestr("agent_learning/__init__.py", "")
+        archive.writestr("fi/alk/__init__.py", "")
         archive.writestr("fi/__init__.py", "")
         archive.writestr("hygiene_fixture-0.0.1.dist-info/METADATA", "")
         archive.writestr("typescript/leak.ts", "")  # must be flagged
@@ -30083,7 +30085,7 @@ def test_distribution_member_findings_flags_leaks_and_missing(tmp_path):
 
 
 def test_release_package_distribution_hygiene_status_detects_fixture_leak(tmp_path):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     only_include = [*trinity.V1_SDIST_ONLY_INCLUDE, "internal-docs"]  # the leak
     include_toml = ",\n  ".join(f'"{item}"' for item in only_include)
@@ -30095,7 +30097,7 @@ def test_release_package_distribution_hygiene_status_detects_fixture_leak(tmp_pa
         'name = "hygiene-fixture"\n'
         'version = "0.0.1"\n\n'
         "[tool.hatch.build.targets.wheel]\n"
-        'packages = ["src/agent_learning", "src/fi"]\n\n'
+        'packages = ["src/fi"]\n\n'
         "[tool.hatch.build.targets.sdist]\n"
         f"only-include = [\n  {include_toml},\n]\n",
         encoding="utf-8",
@@ -30109,7 +30111,7 @@ def test_release_package_distribution_hygiene_status_detects_fixture_leak(tmp_pa
         "SECURITY.md",
         "CODE_OF_CONDUCT.md",
         "ROADMAP.md",
-        "src/agent_learning/__init__.py",
+        "src/fi/alk/__init__.py",
         "src/fi/__init__.py",
         "tests/test_x.py",
         "examples/run.json",
@@ -30164,7 +30166,7 @@ def _write_docs_page(path, *, track, backing, artifact_kinds, prose, claims=()):
 def test_release_docs_executability_status_admission_and_claims(
     tmp_path, monkeypatch
 ):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     (tmp_path / "examples").mkdir()
     (tmp_path / "examples" / "covered_module.py").write_text(
@@ -30255,7 +30257,7 @@ NON_ARTIFACT_REGISTRY_VALUES = {
 
 
 def test_docs_allowed_artifact_kinds_cover_schema_registry():
-    from agent_learning import _schema, trinity
+    from fi.alk import _schema, trinity
 
     derived = set(trinity.V1_REQUIRED_SCHEMA_KINDS)
     derived |= {
@@ -30291,7 +30293,7 @@ def test_docs_allowed_artifact_kinds_cover_schema_registry():
 def test_persona_scenario_studio_status_arrays_empty():
     from pathlib import Path
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     status = trinity._release_persona_scenario_studio_status(Path(PROJECT_ROOT))
     assert status["kind"] == "agent-learning.persona-scenario-studio-readiness.v1"
@@ -30315,7 +30317,7 @@ def test_persona_scenario_studio_status_arrays_empty():
 
 
 def test_persona_fidelity_admission_quarantine(tmp_path):
-    from agent_learning import studio, trinity
+    from fi.alk import studio, trinity
     from fi.simulate.simulation.models import (
         EscalationArc,
         EscalationStep,
@@ -30384,7 +30386,7 @@ def test_persona_fidelity_admission_quarantine(tmp_path):
 
 
 def test_persona_conditioned_redteam_manifest_and_attack_quality(tmp_path):
-    from agent_learning import redteam, studio
+    from fi.alk import redteam, studio
     from fi.simulate.simulation.models import (
         EscalationArc,
         EscalationStep,
@@ -30432,7 +30434,7 @@ def test_persona_conditioned_redteam_manifest_and_attack_quality(tmp_path):
 
 
 def test_optimizer_profile_matrix_constants_mirror_facade():
-    from agent_learning import optimize, trinity
+    from fi.alk import optimize, trinity
 
     assert trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
@@ -30483,7 +30485,7 @@ def test_optimizer_profile_matrix_constants_mirror_facade():
 
 
 def test_scan_forbidden_aggregate_keys_flags_nested_aggregates():
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     payload = {
         "summary": {"cell_count": 3},
@@ -30502,7 +30504,7 @@ def test_scan_forbidden_aggregate_keys_flags_nested_aggregates():
 
 
 def test_release_optimizer_profile_matrix_status_flags_missing_files(tmp_path):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     status = trinity._release_optimizer_profile_matrix_status(tmp_path)
     assert sorted(status["missing_files"]) == sorted(
@@ -30527,7 +30529,7 @@ def test_release_optimizer_profile_matrix_status_flags_missing_files(tmp_path):
 
 
 def test_release_capability_profile_freeze_status_flags_missing_files(tmp_path):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     status = trinity._release_capability_profile_freeze_status(tmp_path)
     assert sorted(status["missing_files"]) == sorted(
@@ -30548,7 +30550,7 @@ def test_release_capability_profile_freeze_status_flags_missing_files(tmp_path):
 
 
 def test_expected_frozen_profile_row_id_matches_facade_content_addressing():
-    from agent_learning import optimize, trinity
+    from fi.alk import optimize, trinity
 
     frozen = optimize.freeze_capability_profile(
         {"profiles": [{"framework": "langgraph", "capabilities": ["run"]}]},
@@ -30563,7 +30565,7 @@ def test_expected_frozen_profile_row_id_matches_facade_content_addressing():
 
 
 def test_parse_docs_frontmatter_rejects_malformed_blocks():
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     assert trinity._parse_docs_frontmatter("# no frontmatter\n") is None
     assert trinity._parse_docs_frontmatter("---\n: not yaml [\n---\n") is None
@@ -30574,9 +30576,9 @@ def test_parse_docs_frontmatter_rejects_malformed_blocks():
 
 
 def test_release_live_lane_boundary_status_flags_unguarded_imports(tmp_path):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
-    live = tmp_path / "src" / "agent_learning" / "live"
+    live = tmp_path / "src" / "fi" / "alk" / "live"
     workers = live / "_workers"
     workers.mkdir(parents=True)
     (workers / "livekit_worker.py").write_text(
@@ -30584,12 +30586,12 @@ def test_release_live_lane_boundary_status_flags_unguarded_imports(tmp_path):
     )
     (live / "livekit_lane.py").write_text(
         "def run_livekit_lane():\n"
-        "    from agent_learning.live._contract import require_lane_enabled\n"
+        "    from fi.alk.live._contract import require_lane_enabled\n"
         "    require_lane_enabled('livekit')\n"
         "    import livekit.agents\n",
         encoding="utf-8",
     )
-    (tmp_path / "src" / "agent_learning" / "evals.py").write_text(
+    (tmp_path / "src" / "fi" / "alk" / "evals.py").write_text(
         "import pipecat\n", encoding="utf-8"
     )
     fi_dir = tmp_path / "src" / "fi" / "simulate"
@@ -30601,16 +30603,16 @@ def test_release_live_lane_boundary_status_flags_unguarded_imports(tmp_path):
         "    StateGraph = None\n",
         encoding="utf-8",
     )
-    (tmp_path / "src" / "agent_learning" / "simulate.py").write_text(
-        "from agent_learning.live import livekit_lane\n", encoding="utf-8"
+    (tmp_path / "src" / "fi" / "alk" / "simulate.py").write_text(
+        "from fi.alk.live import livekit_lane\n", encoding="utf-8"
     )
 
     status = trinity._release_live_lane_boundary_status(tmp_path)
 
     flagged_paths = sorted(error["path"] for error in status["import_errors"])
     assert flagged_paths == [
-        "src/agent_learning/evals.py",
-        "src/agent_learning/simulate.py",
+        "src/fi/alk/evals.py",
+        "src/fi/alk/simulate.py",
         "src/fi/simulate/rogue.py",
     ]
     assert status["env_flag_errors"] == []
@@ -30621,7 +30623,7 @@ def test_release_live_lane_boundary_status_flags_unguarded_imports(tmp_path):
 def test_release_live_lane_boundary_status_audits_evidence_and_redaction(
     tmp_path,
 ):
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     def capture_block(run_id, *, reviewed=True, reviewer="nikhil"):
         return {
@@ -30708,12 +30710,12 @@ def test_release_live_lane_boundary_status_audits_evidence_and_redaction(
 def test_release_telemetry_boundary_flags_planted_analytics_endpoint(tmp_path):
     """A planted analytics endpoint MUST fail the gate (P8-D1 doctrine)."""
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
-    al = tmp_path / "src" / "agent_learning"
+    al = tmp_path / "src" / "fi" / "alk"
     al.mkdir(parents=True)
-    fi = tmp_path / "src" / "fi"
-    fi.mkdir(parents=True)
+    fi = tmp_path / "src" / "fi"  # already created by the alk mkdir above (alk nests under fi)
+    fi.mkdir(parents=True, exist_ok=True)
     # the planted leak — a posthog endpoint smuggled into VENDORED fi/* (the
     # VS Code "bind everything incl. fi/*" test):
     (fi / "rogue_telemetry.py").write_text(
@@ -30736,7 +30738,7 @@ def test_release_telemetry_boundary_flags_planted_analytics_endpoint(tmp_path):
         error.get("import") for error in status["analytics_denylist_errors"]
     }
     assert "posthog" in imports
-    # proves the scan reached src/fi, not just src/agent_learning:
+    # proves the scan reached src/fi, not just src/fi/alk:
     assert any(
         error["path"].startswith("src/fi/")
         for error in status["analytics_denylist_errors"]
@@ -30749,7 +30751,7 @@ def test_release_telemetry_boundary_flags_network_import_in_no_key_path(
     """A network-capable import in the no-key telemetry path MUST fail the
     zero-emission check; the sanctioned sync module may import lazily."""
 
-    tele = tmp_path / "src" / "agent_learning" / "telemetry"
+    tele = tmp_path / "src" / "fi" / "alk" / "telemetry"
     tele.mkdir(parents=True)
     (tele / "_ledger.py").write_text(
         "import urllib.request\nX = 1\n", encoding="utf-8"
@@ -30765,7 +30767,7 @@ def test_release_telemetry_boundary_flags_network_import_in_no_key_path(
         encoding="utf-8",
     )
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     status = trinity._release_telemetry_boundary_status(tmp_path)
 
@@ -30774,12 +30776,12 @@ def test_release_telemetry_boundary_flags_network_import_in_no_key_path(
         for error in status["network_emission_errors"]
     }
     assert (
-        "src/agent_learning/telemetry/_ledger.py",
+        "src/fi/alk/telemetry/_ledger.py",
         "urllib.request",
     ) in flagged
     # the lazy in-function import in the sanctioned sync module is legal:
     assert not any(
-        path == "src/agent_learning/telemetry/_sync.py"
+        path == "src/fi/alk/telemetry/_sync.py"
         for path, _ in flagged
     )
 
@@ -30788,7 +30790,7 @@ def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
     """A correctly-redacted ledger (sentinel value never on disk) passes
     check 3; the seeded sentinel scan and marker scan find nothing."""
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
     fixtures.mkdir(parents=True)
@@ -30823,7 +30825,7 @@ def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
 def test_release_telemetry_boundary_tampered_chain_breaks(tmp_path):
     """A rewritten row body MUST break the gate (chain integrity, check 4)."""
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
     fixtures.mkdir(parents=True)

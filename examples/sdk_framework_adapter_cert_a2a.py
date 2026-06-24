@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_learning import simulate
+from fi.alk import simulate
 
 
 class LocalA2ASession:
@@ -60,7 +60,7 @@ def run(output_path: str | Path) -> dict:
             # Cross-links (11B-A11): the redundant cert probe keeps the closed
             # required set homogeneous; the live lane + protocol-trace example
             # remain the deeper A2A surfaces.
-            "live_lane": "src/agent_learning/live/a2a_lane.py",
+            "live_lane": "src/fi/alk/live/a2a_lane.py",
             "protocol_trace": "examples/sdk_framework_adapter_a2a_protocol_trace.py",
         },
     )

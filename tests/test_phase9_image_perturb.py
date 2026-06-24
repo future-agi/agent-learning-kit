@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from agent_learning import image_perturb as ip
+from fi.alk import image_perturb as ip
 
 
 def _raster(seed: int = 7, h: int = 24, w: int = 24) -> np.ndarray:

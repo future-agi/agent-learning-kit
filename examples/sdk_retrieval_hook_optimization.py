@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-from agent_learning import configure, optimize
+from fi.alk import configure, optimize
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"

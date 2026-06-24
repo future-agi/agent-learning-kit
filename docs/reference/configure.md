@@ -5,7 +5,7 @@ backing: []
 artifact_kinds: []
 commands:
   - agent-learn doctor
-postcondition: python -c "from agent_learning.config import API_KEY_ENV_NAMES; assert API_KEY_ENV_NAMES[0] == 'AGENT_LEARNING_API_KEY'; print('ok')"
+postcondition: python -c "from fi.alk.config import API_KEY_ENV_NAMES; assert API_KEY_ENV_NAMES[0] == 'AGENT_LEARNING_API_KEY'; print('ok')"
 claims: []
 doctor_checks:
   - api_key_configured
@@ -15,7 +15,7 @@ opt_in_lane: false
 # Configuration Reference
 
 > **Twin:** none — reference page (`backing: []`). All semantics below are
-> read directly from `src/agent_learning/config.py`.
+> read directly from `src/fi/alk/config.py`.
 
 ## 1. What you are testing
 
@@ -39,8 +39,8 @@ agent-learn doctor
 ```
 
 ```python
-from agent_learning import configure
-from agent_learning.config import current_config, get_api_key
+from fi.alk import configure
+from fi.alk.config import current_config, get_api_key
 
 configure(api_key="...")          # optional override of AGENT_LEARNING_API_KEY
 print(current_config().api_url)   # https://api.futureagi.com by default
@@ -53,7 +53,7 @@ print(bool(get_api_key()))        # False in offline mode — and that is fine
 ## 3. What you built
 
 ```bash
-python -c "from agent_learning.config import API_KEY_ENV_NAMES; assert API_KEY_ENV_NAMES[0] == 'AGENT_LEARNING_API_KEY'; print('ok')"
+python -c "from fi.alk.config import API_KEY_ENV_NAMES; assert API_KEY_ENV_NAMES[0] == 'AGENT_LEARNING_API_KEY'; print('ok')"
 ```
 
 Alias precedence, exactly as coded (first non-empty value wins):

@@ -86,7 +86,7 @@ The gate itself is one reduction over the aggregate — clear the pass_rate bar 
 carry no overclaim:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 suite = bench.load_coding_suite("examples/bench_suites/coding_starter.json")
 result = bench.run_bench(

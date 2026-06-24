@@ -68,7 +68,7 @@ python examples/sdk_cua_improvement.py artifacts/cua-improvement.json
 SDK (the operation the twin performs):
 
 ```python
-from agent_learning import cua_loop
+from fi.alk import cua_loop
 
 manifest = cua_loop.build_cua_practice_loop_manifest(
     name="cua-improvement",

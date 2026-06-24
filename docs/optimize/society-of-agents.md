@@ -91,7 +91,7 @@ agent-learn optimize examples/redteam_society_optimization.json \
 SDK, the same operation as the twin runs it:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_redteam_society(
     name="sdk-redteam-society-optimization",

@@ -27,7 +27,7 @@ _SCRIPTED_SCENARIO = {
 def test_lane_refuses_without_env_flag(monkeypatch):
     # The dynamic half of the env-flag discipline (gate checks the static half).
     # This test itself is skipped unless the flag is set, so flip it OFF inside:
-    from agent_learning.live import _contract, livekit_lane
+    from fi.alk.live import _contract, livekit_lane
 
     monkeypatch.delenv("AGENT_LEARNING_LIVE_LIVEKIT", raising=False)
     with pytest.raises(_contract.LaneDisabledError):
@@ -35,7 +35,7 @@ def test_lane_refuses_without_env_flag(monkeypatch):
 
 
 def test_rung1_virtual_clock_session_repeats_and_attributes():
-    from agent_learning.live import _contract, livekit_lane
+    from fi.alk.live import _contract, livekit_lane
 
     result = livekit_lane.run_livekit_lane(_SCRIPTED_SCENARIO, rung=1, repeats=8)
     assert result["live_lane"]["evidence_class"] == "live_lane"
@@ -64,7 +64,7 @@ def test_rung3_livekit_cloud_session():
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         pytest.skip(f"credentialed rung needs: {', '.join(missing)}")
-    from agent_learning.live import livekit_lane
+    from fi.alk.live import livekit_lane
 
     try:
         result = livekit_lane.run_livekit_lane(

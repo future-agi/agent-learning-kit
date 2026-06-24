@@ -24,7 +24,7 @@ _SCRIPTED_SCENARIO = {
 
 
 def test_lane_refuses_without_env_flag(monkeypatch):
-    from agent_learning.live import _contract, pipecat_lane
+    from fi.alk.live import _contract, pipecat_lane
 
     monkeypatch.delenv("AGENT_LEARNING_LIVE_PIPECAT", raising=False)
     with pytest.raises(_contract.LaneDisabledError):
@@ -32,7 +32,7 @@ def test_lane_refuses_without_env_flag(monkeypatch):
 
 
 def test_rung1_frame_injection_repeats_and_attributes():
-    from agent_learning.live import _contract, pipecat_lane
+    from fi.alk.live import _contract, pipecat_lane
 
     result = pipecat_lane.run_pipecat_lane(
         None, _SCRIPTED_SCENARIO, rung=1, repeats=2

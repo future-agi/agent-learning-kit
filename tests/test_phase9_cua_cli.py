@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_learning.cli import main
+from fi.alk.cli import main
 
 
 def _manifest() -> dict:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning import tasks
+from fi.alk import tasks
 
 
 # --- fixtures ---------------------------------------------------------------

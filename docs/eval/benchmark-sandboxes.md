@@ -83,8 +83,8 @@ In Python, the sandbox is one argument; the example inspects the hardened argv v
 the **pure** builder, so it never contacts a daemon:
 
 ```python
-from agent_learning import bench
-from agent_learning.bench import _docker
+from fi.alk import bench
+from fi.alk.bench import _docker
 
 # Convenience lane: trusted shipped code, scored in a scrubbed subprocess.
 suite = bench.load_coding_suite("examples/bench_suites/coding_starter.json")

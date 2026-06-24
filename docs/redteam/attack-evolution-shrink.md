@@ -68,7 +68,7 @@ agent-learn shrink artifacts/attack-evolution.json \
 SDK, same operation:
 
 ```python
-from agent_learning import simulate
+from fi.alk import simulate
 
 shrunk = simulate.shrink_attack_evolution_file("artifacts/attack-evolution.json")
 assert shrunk["kind"] == "agent-learning.attack-evolution-shrink.v1"

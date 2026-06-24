@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import live, redteam, trinity
-from agent_learning.cli import main
+from fi.alk import live, redteam, trinity
+from fi.alk.cli import main
 from fi.simulate.simulation.models import Persona, Scenario
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

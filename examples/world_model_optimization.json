@@ -176,7 +176,7 @@
   },
   "metadata": {
     "cookbook": "sdk-world-model-optimization",
-    "source": "agent_learning.optimize.build_world_model_optimization_manifest",
+    "source": "fi.alk.optimize.build_world_model_optimization_manifest",
     "task_kind": "world_model",
     "world_model": {
       "law_regimes": [
@@ -633,7 +633,7 @@
             "year": 2026
           }
         ],
-        "source": "agent_learning.optimize.build_world_model_optimization_manifest",
+        "source": "fi.alk.optimize.build_world_model_optimization_manifest",
         "task_kind": "world_model",
         "world_model": {
           "law_regimes": [

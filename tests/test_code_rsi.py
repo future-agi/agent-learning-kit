@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import improve, tasks
+from fi.alk import improve, tasks
 
 BUGGY = Path(__file__).parent.parent / "examples" / "rsi_fixtures" / "buggy_tool_agent.py"
 
@@ -56,7 +56,7 @@ def _dataset() -> dict:
 
 # --- the detector signal that makes the no-tool bug detectable ---------------
 def test_tool_anchor_unmet_signal_fires() -> None:
-    from agent_learning import rewardhack
+    from fi.alk import rewardhack
     obj = {"evals": [{"eval": "tool_selection_accuracy", "anchor": True}]}
     # tool-anchored objective + ZERO tool calls -> caught (vacuous tool_selection
     # _accuracy=1.0 would otherwise hide it)

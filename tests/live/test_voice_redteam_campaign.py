@@ -27,7 +27,7 @@ def _scenario() -> dict:
 
 
 def test_compile_arc_turns_determinism_and_dial_conditioning():
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     scenario = _scenario()
     turns_a = voice_redteam.compile_arc_turns(scenario)
@@ -42,7 +42,7 @@ def test_compile_arc_turns_determinism_and_dial_conditioning():
 
 
 def test_timing_fidelity_is_a_labeled_rung1_proxy():
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     scenario = _scenario()
     turns = voice_redteam.compile_arc_turns(scenario)
@@ -54,7 +54,7 @@ def test_timing_fidelity_is_a_labeled_rung1_proxy():
 
 
 def test_simulator_hardening_voids_on_persona_jailbreak():
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     held = voice_redteam.simulator_hardening(
         [{"counter_pressure": True}, {"text": "ok"}]
@@ -68,7 +68,7 @@ def test_simulator_hardening_voids_on_persona_jailbreak():
 
 
 def test_campaign_refuses_without_lane_flag(monkeypatch):
-    from agent_learning.live import _contract, voice_redteam
+    from fi.alk.live import _contract, voice_redteam
 
     monkeypatch.delenv("AGENT_LEARNING_LIVE_LIVEKIT", raising=False)
     scenario = _scenario()
@@ -77,7 +77,7 @@ def test_campaign_refuses_without_lane_flag(monkeypatch):
 
 
 def test_campaign_rung_wall_and_authorization_ordering(monkeypatch):
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     scenario = _scenario()
     # acoustic operator raises at text rung (before any lane dispatch)
@@ -107,7 +107,7 @@ def test_campaign_rung_wall_and_authorization_ordering(monkeypatch):
 def _stub_lane_runner(monkeypatch, *, channels=None):
     """Replace the campaign's lane runner with a deterministic stub so the
     rung-aware stanza logic can be tested without an env flag / framework."""
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     def runner(scenario, *, rung=1, repeats=4, stressed=False, perturbations=None,
                seed=0, required_env=None, artifacts_dir=None, **kw):
@@ -172,7 +172,7 @@ def test_rung2_campaign_computes_phone_survival_and_flips_attack_rung(monkeypatc
     assert payload["voice_redteam"]["attack_rung"] == "acoustic"
     assert payload["attack_rung"] == "acoustic"
     # "acoustic" is in the canonical Phase-12 attack-rung vocabulary
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     assert "acoustic" in trinity.V1_VOICE_ATTACK_RUNGS
     # the legacy 9A token is retained as a back-compat alias only
@@ -184,7 +184,7 @@ def test_rung2_campaign_computes_phone_survival_and_flips_attack_rung(monkeypatc
 def test_rung1_acoustic_operator_raises_rung2_passes(monkeypatch):
     # Phase-12 12C rung-2: an acoustic operator raises at rung-1 (no audio
     # channel) but is accepted at rung-2 and forwarded to the lane runner.
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     scenario = _scenario()
     # rung-1: acoustic operator hits the campaign rung wall
@@ -246,7 +246,7 @@ pytestmark = []
 @pytest.mark.live_lane
 @pytest.mark.live_livekit
 def test_full_clean_stressed_campaign_over_livekit_rung1(tmp_path):
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     scenario = _scenario()
     scenario["responses"] = ["sure", "confirmed", "done", "ok"]

@@ -76,7 +76,7 @@ agent-learn simulate replay examples/regression_artifacts/regression-suite-promo
 SDK (same operations):
 
 ```python
-from agent_learning import simulate
+from fi.alk import simulate
 
 compare = simulate.compare_result_files(
     "examples/regression_artifacts/regression-baseline.json",

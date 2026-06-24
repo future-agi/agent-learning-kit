@@ -15,7 +15,7 @@ Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
 
 ### Core: one SDK, one CLI, three engines
 
-- Single public surface: `agent_learning` (Python), `agent-learn` (CLI),
+- Single public surface: `fi.alk` (Python), `agent-learn` (CLI),
   `@future-agi/agent-learning-kit` (TypeScript, evaluation-focused).
 - Three engines, four workflows — `simulate`, `evals`, `optimize`, with
   red-teaming riding on simulate + evals.
@@ -106,7 +106,7 @@ Status date: 2026-06-22. Release candidate: tag `v1.0.0-rc.1`
 
 ### Benchmark harness (run a benchmark against any agent, any modality)
 
-- One harness surface — `agent_learning.bench.run_bench(...)` / `agent-learn
+- One harness surface — `fi.alk.bench.run_bench(...)` / `agent-learn
   bench` — over a fixed **Task↔Verifier** contract with a pluggable Environment
   and Agent-adapter, emitting a unified `Result` (`scalar` / `components` /
   `pass_fail` / `explanation`) every modality projects into.

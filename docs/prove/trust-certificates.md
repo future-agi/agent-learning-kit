@@ -78,7 +78,7 @@ commands. By default `trust` requires verdict
 The same verification from the SDK:
 
 ```python
-from agent_learning import suite
+from fi.alk import suite
 
 verdict = suite.verify_trust_certificate_file("artifacts/suite.json")
 assert verdict["status"] == "passed", verdict["findings"]

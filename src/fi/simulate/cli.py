@@ -1115,7 +1115,7 @@ def _build_http_agent_callback(
 
     wrapper = HTTPAgentWrapper(
         endpoint=endpoint,
-        protocol=protocol or "agent_learning",
+        protocol=protocol or "fi.alk",
         model=_optional_string(agent.get("model")),
         api_key=_optional_string(agent.get("api_key")),
         api_key_env=_optional_string(agent.get("api_key_env")),
@@ -1143,7 +1143,7 @@ def _build_websocket_agent_callback(agent: Mapping[str, Any]) -> Callable[..., A
 
     wrapper = WebSocketAgentWrapper(
         endpoint=endpoint,
-        protocol=_optional_string(agent.get("protocol")) or "agent_learning",
+        protocol=_optional_string(agent.get("protocol")) or "fi.alk",
         model=_optional_string(agent.get("model")),
         api_key=_optional_string(agent.get("api_key")),
         api_key_env=_optional_string(agent.get("api_key_env")),
@@ -13603,7 +13603,7 @@ def _init_redteam_campaign(name: str, attack_id: str) -> Dict[str, Any]:
         "runs": [
             {
                 "id": "agent-learning-local",
-                "framework": "agent_learning",
+                "framework": "fi.alk",
                 "status": "passed",
                 "taxonomies": ["owasp_llm_top_10", "owasp_agentic_ai"],
                 "attack_types": ["prompt_injection"],

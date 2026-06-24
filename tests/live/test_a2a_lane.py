@@ -18,7 +18,7 @@ _SCRIPTED_SCENARIO = {
 
 
 def test_lane_refuses_without_env_flag(monkeypatch):
-    from agent_learning.live import _contract, a2a_lane
+    from fi.alk.live import _contract, a2a_lane
 
     monkeypatch.delenv("AGENT_LEARNING_LIVE_A2A", raising=False)
     with pytest.raises(_contract.LaneDisabledError):
@@ -26,7 +26,7 @@ def test_lane_refuses_without_env_flag(monkeypatch):
 
 
 def test_rung1_loopback_peer_protocol_stages(tmp_path):
-    from agent_learning.live import _contract, a2a_lane
+    from fi.alk.live import _contract, a2a_lane
 
     result = a2a_lane.run_a2a_lane(
         _SCRIPTED_SCENARIO, repeats=2, artifacts_dir=tmp_path / "artifacts"

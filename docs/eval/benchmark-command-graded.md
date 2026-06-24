@@ -76,7 +76,7 @@ To grade **your** agent instead of the gold reference, pass a submission map of
 files the candidate wrote), not a source string:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 suite = bench.load_coding_suite("examples/bench_suites/coding_command_starter.json")
 submission = {

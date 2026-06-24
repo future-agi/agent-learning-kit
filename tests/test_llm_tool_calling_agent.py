@@ -67,7 +67,7 @@ def test_llm_tool_calling_live_loop(tmp_path) -> None:
     executes it, the result feeds back. Key-gated."""
     if not (os.environ.get("OPENAI_API_KEY") or "").strip():
         pytest.skip("OPENAI_API_KEY not set")
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     agent = {"type": "llm_tool_calling", "model": "gpt-4o-mini",
              "instructions": "You are a weather assistant. When asked about weather you MUST "

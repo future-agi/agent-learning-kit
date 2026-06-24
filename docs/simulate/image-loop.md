@@ -59,7 +59,7 @@ python examples/sdk_image_loop.py artifacts/image-loop.json
 SDK (the operation the twin performs):
 
 ```python
-from agent_learning import image_loop, image_perturb
+from fi.alk import image_loop, image_perturb
 from fi.simulate.environment import ImageEnvironment
 
 image_loop._ensure_image_world_registered()

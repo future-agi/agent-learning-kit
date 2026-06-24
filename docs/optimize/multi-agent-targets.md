@@ -64,7 +64,7 @@ AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY=local-dev-key \
 SDK, the same operation in the explicit-target form:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_target(
     name="sdk-multi-agent-target-optimization",

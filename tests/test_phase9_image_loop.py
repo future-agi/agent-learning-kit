@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import image_loop as il
-from agent_learning import trinity
+from fi.alk import image_loop as il
+from fi.alk import trinity
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _GATE_ARRAYS = (
@@ -133,7 +133,7 @@ def test_image_loss_unknown_ref_rejected() -> None:
 
 def test_image_loss_guard_unconditional() -> None:
     # a multi-term objective WITHOUT a guard block still raises (unedited loss.py).
-    from agent_learning import loss as _loss
+    from fi.alk import loss as _loss
 
     with pytest.raises(_loss.ObjectiveError):
         il.compile_image_objective(

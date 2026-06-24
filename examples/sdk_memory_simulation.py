@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, simulate
+from fi.alk import configure, simulate
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY"

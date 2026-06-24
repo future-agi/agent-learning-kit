@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from agent_learning import cli, optimize
+from fi.alk import cli, optimize
 from fi.opt.components import (
     COMPONENT_SPECS,
     HARNESS_LAYER_PATH_PREFIXES,

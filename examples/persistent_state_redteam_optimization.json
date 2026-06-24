@@ -599,7 +599,7 @@
         ]
       },
       "metadata": {
-        "source": "agent_learning.examples.persistent_state_redteam_optimization",
+        "source": "fi.alk.examples.persistent_state_redteam_optimization",
         "task_kind": "persistent_state_redteam_defense",
         "research_sources": [
           {

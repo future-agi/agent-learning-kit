@@ -5,15 +5,15 @@ evaluation, red teaming, and optimization.
 
 All new public SDK work should land here first:
 
-- Public Python imports belong under `agent_learning.*`.
+- Public Python imports belong under `fi.alk.*`.
 - Public TypeScript package work belongs under `typescript/agent-learning-kit`
   and publishes as `@future-agi/agent-learning-kit`.
 - Public CLI commands belong under `agent-learn`.
 - Public examples and cookbooks should use `agent-learning-kit` install commands.
 - Runtime implementation should live under this repo, either in
-  `agent_learning.*` for public APIs or vendored `fi.*` engine packages while
+  `fi.alk.*` for public APIs or vendored `fi.*` engine packages while
   migration is in progress.
-- Shared configuration and keys should flow through `agent_learning.configure()`
+- Shared configuration and keys should flow through `fi.alk.configure()`
   and `AGENT_LEARNING_*` environment variables. Vendored engine aliases
   (`FI_API_KEY`, `FI_SECRET_KEY`, and Future AGI variants) are synced from that
   public config for compatibility only; new public code should not introduce a
@@ -38,12 +38,12 @@ For the current source map, see [LIBRARIES.md](LIBRARIES.md). In short:
 - `ai-evaluation` TypeScript source lives under `typescript/agent-learning-kit/src`.
 - `simulate-sdk` lives under `src/fi/simulate`.
 - `agent-opt` lives under `src/fi/opt`.
-- Public Python APIs live under `src/agent_learning`.
+- Public Python APIs live under `src/fi/alk`.
 
 When moving an existing surface:
 
 1. Move or add the implementation code under this repository.
-2. Add or update the `agent_learning.*` API/CLI.
+2. Add or update the `fi.alk.*` API/CLI.
 3. For TypeScript surfaces, add/update the package under
    `typescript/agent-learning-kit` and verify `pnpm --dir typescript --filter
    @future-agi/agent-learning-kit build` plus the package test command.

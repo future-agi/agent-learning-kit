@@ -66,7 +66,7 @@ so the artifacts land in `artifacts/`.
 The same operation from the SDK:
 
 ```python
-from agent_learning import suite
+from fi.alk import suite
 
 result = suite.run_suite_file("examples/agent_learning_suite.json")
 print(result["trust_certificate"]["verdict"])

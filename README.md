@@ -136,7 +136,7 @@ against your current working directory.
 Optional platform mode: to use Future AGI platform-backed evaluation, set
 `AGENT_LEARNING_API_KEY` (it takes precedence over the `FUTURE_AGI_API_KEY`
 and `FI_API_KEY` aliases), or call `configure(api_key="...")` from
-`agent_learning`. See
+`fi.alk`. See
 [docs/reference/configure.md](docs/reference/configure.md).
 
 Cut local release proof:
@@ -180,7 +180,7 @@ model so a developer can inspect what happened, score it, improve it, and replay
 it in CI.
 
 The public SDK is `agent-learning-kit`, the Python namespace is
-`agent_learning`, the CLI is `agent-learn`, and the TypeScript package is
+`fi.alk`, the CLI is `agent-learn`, and the TypeScript package is
 `@future-agi/agent-learning-kit`.
 
 The active `ai-evaluation` code is included here under `src/fi/evals`, with its
@@ -193,7 +193,7 @@ the ai-evaluation source inventory (maintained in the internal-docs repo).
 ## Repository Map
 
 - [`examples/`](examples): runnable cookbooks and manifests.
-- [`src/agent_learning`](src/agent_learning): public Python SDK facade and CLI.
+- [`src/fi/alk`](src/fi/alk): public Python SDK facade and CLI.
 - [`src/fi/evals`](src/fi/evals): active `ai-evaluation` engine code.
 - [`src/fi/simulate`](src/fi/simulate): migrated `simulate-sdk` engine code.
 - [`src/fi/opt`](src/fi/opt): migrated `agent-opt` engine code.
@@ -228,7 +228,7 @@ local proof stack.
 Before a release:
 
 ```bash
-uv run python -m agent_learning.cli release-proof \
+uv run python -m fi.alk.cli release-proof \
   --project-root . \
   --output /tmp/agent-learning-release-proof.json \
   --quiet

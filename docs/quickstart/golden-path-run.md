@@ -57,7 +57,7 @@ SDK, same operation:
 
 ```python
 import asyncio
-from agent_learning import simulate
+from fi.alk import simulate
 
 result = asyncio.run(simulate.run_manifest_file("manifests/run.json"))
 assert result["kind"] == "agent-learning.run.v1"

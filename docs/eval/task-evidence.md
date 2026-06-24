@@ -61,7 +61,7 @@ agent-learn eval-task examples/task_evidence.json \
 SDK — the synthesis path the twin takes (no config file at all):
 
 ```python
-from agent_learning import evals
+from fi.alk import evals
 
 evidence = evals.load_artifact_file("examples/task_evidence.json")
 config = evals.synthesize_task_evaluation_config(evidence)

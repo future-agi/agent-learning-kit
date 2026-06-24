@@ -67,7 +67,7 @@ python examples/sdk_image_improvement.py artifacts/image-improvement.json
 SDK (the operation the twin performs):
 
 ```python
-from agent_learning import image_loop
+from fi.alk import image_loop
 
 manifest = image_loop.build_image_practice_loop_manifest(
     name="image-improvement",

@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, simulate, suite
+from fi.alk import configure, simulate, suite
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY"

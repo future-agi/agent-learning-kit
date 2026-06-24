@@ -61,7 +61,7 @@ SDK, same operation (export the same placeholder env first):
 
 ```python
 import asyncio
-from agent_learning import simulate
+from fi.alk import simulate
 
 result = asyncio.run(
     simulate.run_manifest_file("examples/framework_livekit_manifest.json")

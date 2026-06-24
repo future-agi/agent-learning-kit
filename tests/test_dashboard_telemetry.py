@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from opentelemetry.sdk.trace.export import SpanExportResult
 
-from agent_learning import tasks
-from agent_learning.config import AgentLearningConfig
-from agent_learning.telemetry import _emit, _run, _sync, _url
+from fi.alk import tasks
+from fi.alk.config import AgentLearningConfig
+from fi.alk.telemetry import _emit, _run, _sync, _url
 
 
 # --- AC2/AC3: the export-result-aware recorder is the source of truth ----------
@@ -156,8 +156,8 @@ def test_sync_run_reports_export_failed_not_synced(monkeypatch, tmp_path) -> Non
         _emit, "keyed_emit",
         lambda **kw: {"status": "export_failed", "trace_id": None, "reason": "export_rejected"},
     )
-    from agent_learning.telemetry import build_ledger_row
-    from agent_learning.telemetry._ledger import RunLedger
+    from fi.alk.telemetry import build_ledger_row
+    from fi.alk.telemetry._ledger import RunLedger
 
     row = build_ledger_row({"status": "passed", "summary": {"verdict": "pass"},
                             "manifest": {"name": "regress"}})
@@ -179,8 +179,8 @@ def test_sync_run_synced_only_on_observed_success(monkeypatch, tmp_path) -> None
         _emit, "keyed_emit",
         lambda **kw: {"status": "synced", "trace_id": "a" * 32, "reason": None},
     )
-    from agent_learning.telemetry import build_ledger_row
-    from agent_learning.telemetry._ledger import RunLedger
+    from fi.alk.telemetry import build_ledger_row
+    from fi.alk.telemetry._ledger import RunLedger
 
     row = build_ledger_row({"status": "passed", "summary": {"verdict": "pass"},
                             "manifest": {"name": "good"}})

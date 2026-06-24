@@ -63,7 +63,7 @@ SDK, same operation:
 ```python
 import os
 
-from agent_learning import optimize
+from fi.alk import optimize
 
 os.environ.setdefault(
     "AGENT_LEARNING_REDTEAM_CAUSAL_ATTRIBUTION_OPT_EXAMPLE_KEY", "local-example"

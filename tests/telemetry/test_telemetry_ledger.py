@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import telemetry
-from agent_learning._schema import public_payload
-from agent_learning.cli import main
-from agent_learning.telemetry import _sync
-from agent_learning.telemetry._queue import TelemetryQueue
+from fi.alk import telemetry
+from fi.alk._schema import public_payload
+from fi.alk.cli import main
+from fi.alk.telemetry import _sync
+from fi.alk.telemetry._queue import TelemetryQueue
 
 RUN_KIND = "agent-learning.run.v1"
 

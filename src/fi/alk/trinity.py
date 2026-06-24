@@ -21,12 +21,12 @@ from .config import current_config
 
 
 PUBLIC_MODULES: Mapping[str, str] = {
-    "capabilities": "agent_learning.capabilities",
-    "simulate": "agent_learning.simulate",
-    "evaluation": "agent_learning.evals",
-    "redteam": "agent_learning.redteam",
-    "optimize": "agent_learning.optimize",
-    "suite": "agent_learning.suite",
+    "capabilities": "fi.alk.capabilities",
+    "simulate": "fi.alk.simulate",
+    "evaluation": "fi.alk.evals",
+    "redteam": "fi.alk.redteam",
+    "optimize": "fi.alk.optimize",
+    "suite": "fi.alk.suite",
 }
 
 ENGINE_MODULES: Mapping[str, str] = {
@@ -225,7 +225,7 @@ V1_SDIST_REQUIRED_PATHS = [
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
     "ROADMAP.md",
-    "src/agent_learning/",
+    "src/fi/alk/",
     "src/fi/",
     "tests/",
     "examples/",
@@ -247,7 +247,8 @@ V1_SDIST_FORBIDDEN_PATHS = [
 ]
 
 V1_WHEEL_ALLOWED_TOP_LEVEL = [
-    "agent_learning",
+    # fi.alk ships as a subpackage of the fi namespace, so `fi` is the only
+    # importable wheel top-level (plus the dist-info metadata directory).
     "fi",
     "*.dist-info",
 ]
@@ -513,11 +514,11 @@ V1_LIVE_LANE_EXTRA_PACKAGES = [
 ]
 
 V1_LIVE_LANE_MODULES = [
-    "src/agent_learning/live/livekit_lane.py",
-    "src/agent_learning/live/pipecat_lane.py",
-    "src/agent_learning/live/langgraph_lane.py",
-    "src/agent_learning/live/mcp_lane.py",
-    "src/agent_learning/live/a2a_lane.py",
+    "src/fi/alk/live/livekit_lane.py",
+    "src/fi/alk/live/pipecat_lane.py",
+    "src/fi/alk/live/langgraph_lane.py",
+    "src/fi/alk/live/mcp_lane.py",
+    "src/fi/alk/live/a2a_lane.py",
 ]
 
 V1_LIVE_LANE_ENV_FLAGS = {
@@ -848,24 +849,24 @@ V1_TELEMETRY_CONTENT_BEARING_REQUIRES = ["redaction"]  # row-level contract fiel
 
 # --- modules in the no-key telemetry path (scanned for network emission) ---
 V1_TELEMETRY_LOCAL_PATH_MODULES = [
-    "src/agent_learning/telemetry/__init__.py",
-    "src/agent_learning/telemetry/_contract.py",
-    "src/agent_learning/telemetry/_row.py",
-    "src/agent_learning/telemetry/_ledger.py",
-    "src/agent_learning/telemetry/_queue.py",
-    "src/agent_learning/_schema.py",  # hosts the emission hook
+    "src/fi/alk/telemetry/__init__.py",
+    "src/fi/alk/telemetry/_contract.py",
+    "src/fi/alk/telemetry/_row.py",
+    "src/fi/alk/telemetry/_ledger.py",
+    "src/fi/alk/telemetry/_queue.py",
+    "src/fi/alk/_schema.py",  # hosts the emission hook
 ]
 V1_TELEMETRY_SYNC_MODULE = (
-    "src/agent_learning/telemetry/_sync.py"  # the original sanctioned network home
+    "src/fi/alk/telemetry/_sync.py"  # the original sanctioned network home
 )
 # Sanctioned network homes (Phase 14 adds the W&B-cloud emit + URL resolver).
 # Each MUST keep its network-capable imports lazy (in-function), after the kill
 # switch + key gates — the gate enforces lazy-ness on every home below, exactly
 # as it did for _sync alone. The no-key path remains zero-emission.
 V1_TELEMETRY_NETWORK_HOME_MODULES = [
-    "src/agent_learning/telemetry/_sync.py",
-    "src/agent_learning/telemetry/_emit.py",  # export-result-aware OTLP emit (P14)
-    "src/agent_learning/telemetry/_url.py",   # dashboard URL resolve (P14)
+    "src/fi/alk/telemetry/_sync.py",
+    "src/fi/alk/telemetry/_emit.py",  # export-result-aware OTLP emit (P14)
+    "src/fi/alk/telemetry/_url.py",   # dashboard URL resolve (P14)
 ]
 
 # --- ledger disk layout (ARCH §2a) ------------------------------------------
@@ -876,7 +877,7 @@ V1_TELEMETRY_LEDGER_PATHS = [
 ]
 
 # --- scan scope: BOTH trees (the VS Code "bind everything incl. fi/*" lesson) ---
-V1_TELEMETRY_SCAN_ROOTS = ["src/agent_learning", "src/fi"]
+V1_TELEMETRY_SCAN_ROOTS = ["src/fi"]
 
 # --- forbidden analytics-endpoint denylist (anywhere in kit source) --------
 # P8-D1: no anonymous analytics channel exists. Any hostname/SDK below ANYWHERE
@@ -937,7 +938,7 @@ V1_RELEASE_HANDOVER_COMMANDS = [
     {
         "id": "release_check",
         "command": (
-            "uv run python -m agent_learning.cli release-check "
+            "uv run python -m fi.alk.cli release-check "
             "--project-root . --quiet"
         ),
         "proof_check_id": "release_check",
@@ -970,7 +971,7 @@ V1_RELEASE_HANDOVER_COMMANDS = [
     {
         "id": "release_proof",
         "command": (
-            "uv run python -m agent_learning.cli release-proof "
+            "uv run python -m fi.alk.cli release-proof "
             "--project-root . --output /tmp/agent-learning-release-proof.json "
             "--quiet"
         ),
@@ -1380,7 +1381,7 @@ V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE = {
 }
 
 V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
-    "agent_learning.optimize.build_target_optimization_manifest"
+    "fi.alk.optimize.build_target_optimization_manifest"
 )
 
 V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
@@ -1433,7 +1434,7 @@ V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD = "execute_task"
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE = "dict"
 
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
-    "agent_learning.optimize.build_target_optimization_manifest"
+    "fi.alk.optimize.build_target_optimization_manifest"
 )
 
 V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
@@ -1509,7 +1510,7 @@ V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS = [
 ]
 
 V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
-    "agent_learning.optimize.build_target_optimization_manifest"
+    "fi.alk.optimize.build_target_optimization_manifest"
 )
 
 V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
@@ -1583,7 +1584,7 @@ V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL = (
 )
 
 V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
-    "agent_learning.optimize.build_target_optimization_manifest"
+    "fi.alk.optimize.build_target_optimization_manifest"
 )
 
 V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
@@ -1690,7 +1691,7 @@ V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL = (
 )
 
 V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
-    "agent_learning.optimize.build_target_optimization_manifest"
+    "fi.alk.optimize.build_target_optimization_manifest"
 )
 
 V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
@@ -1775,7 +1776,7 @@ V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE = "intake"
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE = "finalize"
 
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
-    "agent_learning.optimize.build_target_optimization_manifest"
+    "fi.alk.optimize.build_target_optimization_manifest"
 )
 
 V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
@@ -6641,13 +6642,13 @@ def consolidation_metadata() -> dict[str, Any]:
         {
             "id": "vendored_engine_boundary",
             "status": "passed",
-            "claim": "simulate, evals, and optimize engines are vendored behind agent_learning.",
-            "evidence": "fi.* modules remain engine internals; public imports use agent_learning.*.",
+            "claim": "simulate, evals, and optimize engines are vendored behind fi.alk.",
+            "evidence": "fi.* modules remain engine internals; public imports use fi.alk.*.",
         },
     ]
     return {
         "public_package": "agent-learning-kit",
-        "public_import": "agent_learning",
+        "public_import": "fi.alk",
         "public_cli": "agent-learn",
         "public_console_scripts": list(PUBLIC_CONSOLE_SCRIPTS),
         "new_development_home": True,
@@ -9828,7 +9829,11 @@ def _release_active_ai_evaluation_source_status(root: Path) -> dict[str, Any]:
     targets = _as_mapping(build.get("targets"))
     wheel = _as_mapping(targets.get("wheel"))
     package_paths = [str(item) for item in _as_list(wheel.get("packages"))]
-    for required_package in ("src/agent_learning", "src/fi"):
+    # `fi.alk` (the public SDK) nests under the `fi` namespace package, so a single
+    # `src/fi` wheel root ships both the active AI-evaluation engine (`fi.evals`)
+    # and `fi.alk`. Listing `src/fi/alk` separately would double-add its files to
+    # the wheel archive (a hatchling build error), so `src/fi` is the sole root.
+    for required_package in ("src/fi",):
         if required_package not in package_paths:
             package_errors.append(
                 {
@@ -9955,7 +9960,7 @@ def _release_active_ai_evaluation_source_status(root: Path) -> dict[str, Any]:
             }
         )
 
-    for module in ("fi.evals", "agent_learning.evals"):
+    for module in ("fi.evals", "fi.alk.evals"):
         try:
             spec = importlib.util.find_spec(module)
         except Exception as exc:
@@ -10610,13 +10615,13 @@ def _release_live_lane_boundary_status(root: Path) -> dict[str, Any]:
     redaction_errors: list[dict[str, Any]] = []
     scanned_module_count = 0
     scanned_artifact_count = 0
-    live_prefix = "src/agent_learning/live/"
+    live_prefix = "src/fi/alk/live/"
     workers_prefix = live_prefix + "_workers/"
 
     # Check 1: static import-graph scan — framework imports may live only in
     # workers (top-level), lane modules (lazy in-function), or listed guarded
     # vendored sites; release modules may never import the live package.
-    for base in ("src/agent_learning", "src/fi"):
+    for base in ("src/fi",):  # fi.alk nests under fi; one root avoids double-scanning
         base_dir = root / base
         if not base_dir.is_dir():
             continue
@@ -10682,7 +10687,7 @@ def _release_live_lane_boundary_status(root: Path) -> dict[str, Any]:
                                 ),
                             }
                         )
-                    if not in_live and full_name.startswith("agent_learning.live"):
+                    if not in_live and full_name.startswith("fi.alk.live"):
                         import_errors.append(
                             {
                                 "path": relative,
@@ -10949,14 +10954,14 @@ def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
     scanned_module_count = 0
     sync_module = V1_TELEMETRY_SYNC_MODULE
     network_home_modules = set(V1_TELEMETRY_NETWORK_HOME_MODULES)
-    telemetry_prefix = "src/agent_learning/telemetry/"
+    telemetry_prefix = "src/fi/alk/telemetry/"
     local_path_modules = set(V1_TELEMETRY_LOCAL_PATH_MODULES)
     # The gate module itself declares the denylist (these literal hostnames)
     # so the substring scan skips it; the AST import scan still covers it.
-    denylist_home = "src/agent_learning/trinity.py"
+    denylist_home = "src/fi/alk/trinity.py"
 
     # ---- CHECK 1: zero-emission (no-key path) + analytics denylist, BOTH
-    # trees (src/agent_learning AND src/fi — the P8-D6 "bind everything"
+    # trees (src/fi/alk AND src/fi — the P8-D6 "bind everything"
     # scope). Network-capable imports are forbidden anywhere in the declared
     # no-key telemetry path (V1_TELEMETRY_LOCAL_PATH_MODULES + the telemetry
     # package); telemetry/_sync.py is the only sanctioned network home, and
@@ -11071,7 +11076,7 @@ def _release_telemetry_boundary_status(root: Path) -> dict[str, Any]:
             # analogue): every emission front door routes through the one
             # guard that honors AGENT_LEARNING_TELEMETRY=off.
             if relative in (
-                "src/agent_learning/telemetry/__init__.py",
+                "src/fi/alk/telemetry/__init__.py",
                 sync_module,
             ):
                 calls = {
@@ -22316,7 +22321,7 @@ def _release_evaluation_hook_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize, simulate
+            from fi.alk import optimize, simulate
 
             with module._local_evaluation_hook() as endpoint:
                 result = module.build_probe_optimization(endpoint)
@@ -24928,7 +24933,7 @@ def _release_redteam_corpus_execution_status(root: Path) -> dict[str, Any]:
             parse_errors[corpus_file] = "corpus contains no mapping rows"
         else:
             try:
-                from agent_learning import redteam
+                from fi.alk import redteam
 
                 raw_campaign = redteam.build_redteam_corpus_campaign(
                     name="release-check-redteam-corpus",
@@ -27862,7 +27867,7 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
     artifacts: list[dict[str, Any]] = []
 
     try:
-        from agent_learning import actions, simulate
+        from fi.alk import actions, simulate
     except Exception as exc:
         return {
             "required_artifacts": copy.deepcopy(V1_UI_ACTION_REPORT_ARTIFACTS),
@@ -28569,7 +28574,7 @@ def _release_harness_diagnosis_status(root: Path) -> dict[str, Any]:
     rollout: Mapping[str, Any] = {}
     proof: Mapping[str, Any] = {}
     try:
-        from agent_learning import actions, optimize, simulate
+        from fi.alk import actions, optimize, simulate
 
         result = optimize.optimize_retrospective_harness(
             name="release-harness-diagnosis-readiness",
@@ -29608,7 +29613,7 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
     matrix_summary: Mapping[str, Any] = {}
 
     try:
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         raw_matrix = simulate.framework_adapter_contract_matrix(required_frameworks)
         if isinstance(raw_matrix, Mapping):
@@ -35909,7 +35914,7 @@ def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
                 ["AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"],
             ),
             ("agent.type", agent.get("type"), "http"),
-            ("agent.protocol", agent.get("protocol"), "agent_learning"),
+            ("agent.protocol", agent.get("protocol"), "fi.alk"),
             (
                 "agent.api_key_env",
                 agent.get("api_key_env"),
@@ -36089,7 +36094,7 @@ def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
             (
                 "framework_http_transport.protocol",
                 transport_state.get("protocol"),
-                "agent_learning",
+                "fi.alk",
             ),
             ("framework_http_transport.status_code", transport_state.get("status_code"), 200),
             ("framework_http_transport.success", transport_state.get("success"), True),
@@ -36109,7 +36114,7 @@ def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
                 "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
             ),
             ("external_agent_trace.kind", external_trace.get("kind"), "external_agent_http_trace"),
-            ("external_agent_trace.protocol", external_trace.get("protocol"), "agent_learning"),
+            ("external_agent_trace.protocol", external_trace.get("protocol"), "fi.alk"),
             ("external_agent_trace.status_code", external_trace.get("status_code"), 200),
             ("external_agent_trace.success", external_trace.get("success"), True),
             ("external_agent_trace.error", external_trace.get("error"), None),
@@ -36632,7 +36637,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
                 ["AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"],
             ),
             ("agent.type", agent.get("type"), "websocket"),
-            ("agent.protocol", agent.get("protocol"), "agent_learning"),
+            ("agent.protocol", agent.get("protocol"), "fi.alk"),
             (
                 "agent.api_key_env",
                 agent.get("api_key_env"),
@@ -36780,7 +36785,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
             (
                 "framework_websocket_transport.protocol",
                 transport_state.get("protocol"),
-                "agent_learning",
+                "fi.alk",
             ),
             (
                 "framework_websocket_transport.status_code",
@@ -36814,7 +36819,7 @@ def _release_framework_websocket_transport_status(root: Path) -> dict[str, Any]:
                 external_trace.get("kind"),
                 "external_agent_websocket_trace",
             ),
-            ("external_agent_trace.protocol", external_trace.get("protocol"), "agent_learning"),
+            ("external_agent_trace.protocol", external_trace.get("protocol"), "fi.alk"),
             ("external_agent_trace.status_code", external_trace.get("status_code"), 101),
             ("external_agent_trace.success", external_trace.get("success"), True),
             ("external_agent_trace.error", external_trace.get("error"), None),
@@ -38361,7 +38366,7 @@ def _release_environment_10x_robustness_status(
             and framework_http_transport_state.get("framework")
             == V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK
             and framework_http_transport_state.get("transport") == "http"
-            and framework_http_transport_state.get("protocol") == "agent_learning"
+            and framework_http_transport_state.get("protocol") == "fi.alk"
             and framework_http_transport_state.get("success") is True
             and framework_http_transport_state.get("requires_external_service")
             is False
@@ -38390,7 +38395,7 @@ def _release_environment_10x_robustness_status(
         expected={
             "framework": V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
             "transport": "http",
-            "protocol": "agent_learning",
+            "protocol": "fi.alk",
             "status_code": 200,
             "success": True,
             "requires_external_service": False,
@@ -38459,7 +38464,7 @@ def _release_environment_10x_robustness_status(
             and framework_websocket_transport_state.get("framework")
             == V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK
             and framework_websocket_transport_state.get("transport") == "websocket"
-            and framework_websocket_transport_state.get("protocol") == "agent_learning"
+            and framework_websocket_transport_state.get("protocol") == "fi.alk"
             and framework_websocket_transport_state.get("success") is True
             and framework_websocket_transport_state.get("requires_external_service")
             is False
@@ -38494,7 +38499,7 @@ def _release_environment_10x_robustness_status(
         expected={
             "framework": V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK,
             "transport": "websocket",
-            "protocol": "agent_learning",
+            "protocol": "fi.alk",
             "status_code": 101,
             "success": True,
             "requires_external_service": False,
@@ -39909,9 +39914,9 @@ def _release_framework_optimizer_status(root: Path) -> dict[str, Any]:
 
     if not missing_files:
         try:
-            from agent_learning import optimize
+            from fi.alk import optimize
         except Exception as exc:
-            errors.append({"path": "agent_learning.optimize", "error": str(exc)})
+            errors.append({"path": "fi.alk.optimize", "error": str(exc)})
             optimize = None  # type: ignore[assignment]
 
         if optimize is not None:
@@ -44583,7 +44588,7 @@ def _release_browser_cua_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize, simulate
+            from fi.alk import optimize, simulate
 
             result = module.build_probe_optimization()
             manifest = optimize.build_browser_cua_run_manifest_from_probe_optimization(
@@ -45333,7 +45338,7 @@ def _release_realtime_stack_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize, simulate
+            from fi.alk import optimize, simulate
 
             realtime_example = module._realtime_example()
             result = module.build_probe_optimization()
@@ -45913,7 +45918,7 @@ def _release_memory_layer_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize, simulate
+            from fi.alk import optimize, simulate
 
             memory_example = module._memory_example()
             result = module.build_probe_optimization()
@@ -47241,7 +47246,7 @@ def _release_orchestration_stack_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize, simulate
+            from fi.alk import optimize, simulate
 
             orchestration_example = module._orchestration_example()
             result = module.build_probe_optimization()
@@ -48355,7 +48360,7 @@ def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize, simulate
+            from fi.alk import optimize, simulate
 
             with module._local_trinity_evaluation_hook() as endpoint:
                 result = module.build_probe_optimization(endpoint)

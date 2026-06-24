@@ -61,7 +61,7 @@ SDK, same operation:
 ```python
 import json
 
-from agent_learning import redteam
+from fi.alk import redteam
 
 rows = json.load(open("examples/redteam_corpus.json"))["rows"]
 campaign = redteam.build_redteam_corpus_campaign(

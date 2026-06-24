@@ -65,7 +65,7 @@ SDK, same operations:
 
 ```python
 import asyncio
-from agent_learning import redteam, simulate
+from fi.alk import redteam, simulate
 
 run_result = asyncio.run(simulate.run_manifest_file("manifests/run.json"))
 rt_result = asyncio.run(redteam.redteam_manifest_file("manifests/redteam.json"))

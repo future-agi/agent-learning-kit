@@ -25,7 +25,7 @@ class HTTPAgentWrapper(AgentWrapper):
         self,
         *,
         endpoint: str,
-        protocol: str = "agent_learning",
+        protocol: str = "fi.alk",
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         api_key_env: Optional[str] = None,
@@ -211,17 +211,17 @@ class HTTPAgentWrapper(AgentWrapper):
 
 
 def _normalize_protocol(value: str) -> str:
-    protocol = str(value or "agent_learning").lower().replace("-", "_")
+    protocol = str(value or "fi.alk").lower().replace("-", "_")
     aliases = {
         "openai": "openai_chat",
         "openai_compatible": "openai_chat",
         "chat_completions": "openai_chat",
-        "agent_learning_http": "agent_learning",
-        "http": "agent_learning",
+        "agent_learning_http": "fi.alk",
+        "http": "fi.alk",
     }
     protocol = aliases.get(protocol, protocol)
-    if protocol not in {"agent_learning", "openai_chat"}:
-        raise ValueError("protocol must be one of: agent_learning, openai_chat")
+    if protocol not in {"fi.alk", "openai_chat"}:
+        raise ValueError("protocol must be one of: fi.alk, openai_chat")
     return protocol
 
 

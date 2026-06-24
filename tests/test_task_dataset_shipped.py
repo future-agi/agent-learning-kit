@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import tasks
+from fi.alk import tasks
 
 DATASET_PATH = Path(__file__).parent.parent / "examples" / "task_datasets" / "support_starter.json"
 EXAMPLE_PATH = Path(__file__).parent.parent / "examples" / "sdk_task_benchmark.py"

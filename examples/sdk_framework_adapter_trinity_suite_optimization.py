@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import suite
+from fi.alk import suite
 
 
 TARGET = f"{Path(__file__).resolve()}:LocalRefundOrchestrator"

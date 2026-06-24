@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 
-from agent_learning import trinity
+from fi.alk import trinity
 
 REPO = Path(__file__).resolve().parents[1].parent
 SIM_FIX = REPO / "examples" / "simulation_contract_fixtures"

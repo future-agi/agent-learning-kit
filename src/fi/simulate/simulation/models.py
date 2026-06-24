@@ -70,7 +70,7 @@ class AttackConditioning(BaseModel):
     """Optional red-team conditioning (PCAP). Values must be members of the
     gate-enforced 10x6 taxonomy — membership is asserted FACADE-side
     (studio.validate_persona) and by the gate, not here (fi.simulate must not
-    import agent_learning.trinity)."""
+    import fi.alk.trinity)."""
     strategies: List[str] = Field(default_factory=list)   # ⊆ V1_REDTEAM_RESEARCH_ATTACK_TYPES
     surfaces: List[str] = Field(default_factory=list)     # ⊆ V1_REDTEAM_RESEARCH_SURFACES
     in_character_floor: float = Field(0.6, ge=0.0, le=1.0)

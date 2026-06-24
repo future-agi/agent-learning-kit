@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning import loss as L
-from agent_learning.optimize import build_practice_loop_manifest
+from fi.alk import loss as L
+from fi.alk.optimize import build_practice_loop_manifest
 
 
 def _objective(source="declared"):

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, optimize
+from fi.alk import configure, optimize
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_COLLABORATIVE_COMPETENCE_KEY"

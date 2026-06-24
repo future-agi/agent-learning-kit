@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning.cli import main
+from fi.alk.cli import main
 
 
 def _run_scaffold_commands(target_dir: Path) -> list[str]:

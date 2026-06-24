@@ -480,10 +480,10 @@ _VOICE_AB_QUARANTINE_EPIDEMIC_RATE = 0.5
 
 def _text_rung_operators() -> tuple[str, ...]:
     """Lazy lookup of the live._perturb text-rung operator tuple via the
-    sanctioned ``from agent_learning import live`` idiom (D-BG4) — never a
-    top-level ``agent_learning.live`` import."""
+    sanctioned ``from fi.alk import live`` idiom (D-BG4) — never a
+    top-level ``fi.alk.live`` import."""
 
-    from agent_learning import live  # facade: imports nothing framework-side
+    from fi.alk import live  # facade: imports nothing framework-side
 
     return tuple(live._perturb.TEXT_RUNG_OPERATORS)
 
@@ -494,7 +494,7 @@ def _acoustic_rung_operators() -> tuple[str, ...]:
     to the loopback PCM channel; a composed search that declares
     ``attack_rung="acoustic"`` may put them in its signal space."""
 
-    from agent_learning import live  # facade: imports nothing framework-side
+    from fi.alk import live  # facade: imports nothing framework-side
 
     return tuple(live._perturb.ACOUSTIC_RUNG_OPERATORS)
 
@@ -542,7 +542,7 @@ def build_composed_voice_attack_search_manifest(
     """Composed persona x signal voice-attack search manifest (12D; ARCH §2d).
 
     ONE search space over persona dials x signal params, delegating to
-    :func:`agent_learning.optimize.build_task_optimization_manifest` (it IS a
+    :func:`fi.alk.optimize.build_task_optimization_manifest` (it IS a
     search — Decision 3 / D-BG5). The base agent is the attack configuration
     (typed persona dump + a clean ``attack_signal`` stanza). Arms freeze the
     complementary path family (the P12-D3 ablations stay runnable). Semantic
@@ -551,7 +551,7 @@ def build_composed_voice_attack_search_manifest(
     set). NO new artifact kind: the result is agent-learning.optimization.v1.
     """
 
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     if not name:
         raise ValueError("name is required")
@@ -594,7 +594,7 @@ def build_composed_voice_attack_search_manifest(
 
     # Semantic surfaces stay the frozen 6 (validated facade-side by the studio);
     # the orthogonal voice surfaces are validated against the trinity vocabulary.
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     voice_surface_list = _unique_strings(voice_surfaces)
     bad_voice = [
@@ -694,7 +694,7 @@ def voice_attack_quality_score(
     through. A successful out-of-character attack stays a finding, just
     down-weighted (the kit's halving contract; there is NO fidelity floor)."""
 
-    from agent_learning import studio
+    from fi.alk import studio
 
     quality = studio.attack_quality(fidelity_record, attack_outcome)
     return {
@@ -720,7 +720,7 @@ def voice_detection_evidence(
     'passed', or 'pass' key may appear; the gate asserts this). Evidence
     accompanies the attack; deciding is the consumer's job."""
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     declared = trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS.get(family)
     if declared is None:
@@ -1574,7 +1574,7 @@ def build_redteam_corpus_campaign(
             else [_redteam_corpus_required_cell(row) for row in rows]
         ),
         "metadata": {
-            "source": "agent_learning.redteam.build_redteam_corpus_campaign",
+            "source": "fi.alk.redteam.build_redteam_corpus_campaign",
             "cookbook": "redteam-corpus-import",
             "row_count": len(rows),
             "frameworks": framework_values,
@@ -1696,7 +1696,7 @@ def build_redteam_corpus_hook_campaign(
         required_providers=required_providers,
         observability=observability,
         metadata={
-            "source": "agent_learning.redteam.build_redteam_corpus_hook_campaign",
+            "source": "fi.alk.redteam.build_redteam_corpus_hook_campaign",
             "cookbook": "redteam-corpus-hook",
             "hook_trace": hook["trace"],
             "original_synthesis": (
@@ -1905,7 +1905,7 @@ def validate_manifest_env(manifest: Mapping[str, Any]) -> None:
 def __getattr__(name: str) -> Any:
     module_name = _REDTEAM_EXPORTS.get(name)
     if module_name is None:
-        raise AttributeError(f"module `agent_learning.redteam` has no attribute `{name}`")
+        raise AttributeError(f"module `fi.alk.redteam` has no attribute `{name}`")
     return getattr(optional_module(module_name, _REDTEAM_EXTRA), name)
 
 

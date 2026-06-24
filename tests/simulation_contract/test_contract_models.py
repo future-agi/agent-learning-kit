@@ -135,7 +135,7 @@ def test_clock_simulated_requires_step_s():
 
 
 def test_studio_lazy_import():
-    from agent_learning.studio import Simulation as S
+    from fi.alk.studio import Simulation as S
     assert S is Simulation
 
 

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from agent_learning import optimize, simulate
+from fi.alk import optimize, simulate
 
 
 TARGET = f"{Path(__file__).resolve()}:LocalStreamingGraphAgent"

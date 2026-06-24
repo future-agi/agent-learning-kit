@@ -72,7 +72,7 @@ SDK, same operation:
 import asyncio
 import os
 
-from agent_learning import simulate
+from fi.alk import simulate
 
 os.environ.setdefault("AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY", "local-example")
 result = asyncio.run(

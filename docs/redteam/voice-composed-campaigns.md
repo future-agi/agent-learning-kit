@@ -58,7 +58,7 @@ agent-learn redteam examples/voice_redteam/composed_ab_manifest.json \
 SDK, same operation:
 
 ```python
-from agent_learning import redteam
+from fi.alk import redteam
 
 result = redteam.run_composed_voice_attack_ab(
     name="voice-composed-ab",

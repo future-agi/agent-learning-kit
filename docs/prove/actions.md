@@ -76,7 +76,7 @@ commands. Drop `--dry-run` to execute; add
 The same operations from the SDK:
 
 ```python
-from agent_learning import actions
+from fi.alk import actions
 
 artifact = actions.load_artifact_file("artifacts/agent-integration.json")
 catalog = actions.action_catalog(artifact, source_path="artifacts/agent-integration.json")

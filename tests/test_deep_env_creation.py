@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from agent_learning import simulate
+from fi.alk import simulate
 
 
 # --- the honest env-creation partition (contract-pinned) --------------------

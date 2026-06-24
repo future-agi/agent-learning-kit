@@ -59,7 +59,7 @@ agent-learn eval examples/eval_suite.json --output artifacts/eval-suite.json
 SDK — the same operation:
 
 ```python
-from agent_learning import evals
+from fi.alk import evals
 
 suite = evals.load_eval_suite_file("examples/eval_suite.json")
 result = evals.run_eval_suite_file("examples/eval_suite.json")

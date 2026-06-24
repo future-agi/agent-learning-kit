@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import bench
-from agent_learning.bench._voice import score_voice_episode
+from fi.alk import bench
+from fi.alk.bench._voice import score_voice_episode
 
 ROOT = Path(__file__).parent.parent
 VOICE_SUITE = ROOT / "examples" / "bench_suites" / "voice_starter.json"

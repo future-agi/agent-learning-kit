@@ -67,7 +67,7 @@ AGENT_LEARNING_LEDGER_PATH=examples/telemetry_ledger_fixture agent-learn runs ve
 The same flow from the SDK:
 
 ```python
-from agent_learning import telemetry
+from fi.alk import telemetry
 
 ledger = telemetry.RunLedger()          # ~/.agent-learning/ledger by default
 for row in ledger.iter_rows():

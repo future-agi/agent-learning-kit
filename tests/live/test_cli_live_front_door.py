@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import cli
+from fi.alk import cli
 
 # Framework roots no sanctioned release-surface import may pull in. livekit /
 # langchain / langchain_core are excluded: the four pre-existing vendored
@@ -103,7 +103,7 @@ def _stub_lane_payload(verdict: str, *, findings=(), scenario=None):
 
 
 def _install_lane_stub(monkeypatch: pytest.MonkeyPatch, payload_by_scenario):
-    import agent_learning.live as live
+    import fi.alk.live as live
 
     calls = []
 
@@ -449,7 +449,7 @@ def _live_run_artifact(tmp_path: Path, *, complete: bool = True) -> Path:
     """A REAL single-scenario lane artifact built through run_repeated with a
     synthetic run_once (extras-free, flag-free)."""
 
-    from agent_learning.live._stats import lane_run_payload, run_repeated
+    from fi.alk.live._stats import lane_run_payload, run_repeated
 
     def run_once(index, transcript):
         transcript.record("user", "message", {"turn": 0, "text": "hello"})
@@ -498,7 +498,7 @@ _LIVEKIT_RUNG2_STANZA = {
 def test_dispatch_rung2_loopback_stanza_reaches_lane():
     # the dispatch reads the loopback sub-stanza ONLY at rung == 2 and passes
     # loopback= + codec_profile= into the lane runner (the unit-2 signature).
-    import agent_learning.live as live
+    import fi.alk.live as live
 
     captured = {}
 
@@ -522,7 +522,7 @@ def test_dispatch_rung2_loopback_stanza_reaches_lane():
 
 def test_dispatch_rung1_ignores_loopback_stanza():
     # rung-1 manifests are unaffected: the loopback stanza is NOT read.
-    import agent_learning.live as live
+    import fi.alk.live as live
 
     captured = {}
 
@@ -541,7 +541,7 @@ def test_dispatch_rung1_ignores_loopback_stanza():
 
 
 def test_dispatch_rung2_invalid_codec_profile_raises():
-    import agent_learning.live as live
+    import fi.alk.live as live
 
     with pytest.raises(ValueError):
         cli._dispatch_live_lane_scenario(
@@ -551,7 +551,7 @@ def test_dispatch_rung2_invalid_codec_profile_raises():
 
 
 def test_dispatch_rung2_invalid_tick_raises():
-    import agent_learning.live as live
+    import fi.alk.live as live
 
     with pytest.raises(ValueError):
         cli._dispatch_live_lane_scenario(

@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import inspect
 
-from agent_learning.practice import _update
-from agent_learning.practice._budget import BudgetMeter
-from agent_learning.practice._store import ConsolidationStore, build_record
+from fi.alk.practice import _update
+from fi.alk.practice._budget import BudgetMeter
+from fi.alk.practice._store import ConsolidationStore, build_record
 
 
 def _store_with_records(tmp_path, decks):

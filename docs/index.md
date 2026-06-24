@@ -5,7 +5,7 @@ backing: []
 artifact_kinds: []
 commands:
   - agent-learn doctor
-postcondition: python -c "import agent_learning; print('ok')"
+postcondition: python -c "import fi.alk; print('ok')"
 claims: []
 doctor_checks:
   - public_boundary_passed

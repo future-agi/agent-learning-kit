@@ -1238,7 +1238,7 @@ def _public_eval_suite_runner() -> Callable[[Mapping[str, Any], AgentCandidate],
 
 def _agent_learning_suite_attr(name: str) -> Any:
     try:
-        from agent_learning import suite as agent_learning_suite
+        from fi.alk import suite as agent_learning_suite
     except Exception as exc:  # pragma: no cover - optional dependency clarity
         raise RuntimeError(
             "agent-learning-kit is required for Agent Learning suite optimization."
@@ -1247,7 +1247,7 @@ def _agent_learning_suite_attr(name: str) -> Any:
         return getattr(agent_learning_suite, name)
     except AttributeError as exc:  # pragma: no cover - version clarity
         raise RuntimeError(
-            f"agent-learning-kit with `agent_learning.suite.{name}` is required."
+            f"agent-learning-kit with `fi.alk.suite.{name}` is required."
         ) from exc
 
 

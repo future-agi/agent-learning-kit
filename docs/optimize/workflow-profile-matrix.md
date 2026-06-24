@@ -74,7 +74,7 @@ AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY=local-dev-key \
 SDK, the single-profile operation both examples build on:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_target(
     name="sdk-workflow-target-optimization",

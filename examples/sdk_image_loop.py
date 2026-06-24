@@ -32,7 +32,7 @@ from typing import Any
 
 import numpy as np
 
-from agent_learning import image_loop, image_perturb
+from fi.alk import image_loop, image_perturb
 from fi.simulate.environment import ImageEnvironment
 from fi.simulate.simulation import contract
 

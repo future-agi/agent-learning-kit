@@ -23,11 +23,11 @@ import json
 import sys
 from pathlib import Path
 
-from agent_learning import loss as L
-from agent_learning.optimize import build_practice_loop_manifest
-from agent_learning.practice import _schedule, _update
-from agent_learning.practice._store import ConsolidationStore, build_record, record_id
-from agent_learning.practice._trainer import run_practice_loop
+from fi.alk import loss as L
+from fi.alk.optimize import build_practice_loop_manifest
+from fi.alk.practice import _schedule, _update
+from fi.alk.practice._store import ConsolidationStore, build_record, record_id
+from fi.alk.practice._trainer import run_practice_loop
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURE_DIR = EXAMPLE_DIR / "practice_loop_fixture"
@@ -204,7 +204,7 @@ def run(output_path: str | None = None) -> dict:
 
     # --- store_fixture + id-recipe agreement -------------------------------
     body = {"x": 1, "y": [2, 3]}
-    from agent_learning.optimize import _sorted_json_digest as opt_digest
+    from fi.alk.optimize import _sorted_json_digest as opt_digest
     rid = record_id(body)
     _write(FIXTURE_DIR / "store_fixture" / "id_recipe.json", {
         "lesson_id": rid,

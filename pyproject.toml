@@ -95,7 +95,7 @@ all = [
 ]
 
 [project.scripts]
-agent-learn = "agent_learning.cli:main"
+agent-learn = "fi.alk.cli:main"
 
 [project.urls]
 Homepage = "https://futureagi.com"
@@ -105,7 +105,7 @@ Issues = "https://github.com/future-agi/agent-learning-kit/issues"
 Changelog = "https://github.com/future-agi/agent-learning-kit/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_learning", "src/fi"]
+packages = ["src/fi"]
 
 [tool.hatch.build.targets.sdist]
 only-include = [

@@ -64,7 +64,7 @@ AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY=local-demo-key \
 SDK — the same operation against a hook you run:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_evaluation_hooks(
     name="my-hook-optimization",

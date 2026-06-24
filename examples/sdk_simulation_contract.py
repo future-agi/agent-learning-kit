@@ -21,8 +21,8 @@ import json
 import sys
 from pathlib import Path
 
-from agent_learning import loss as L
-from agent_learning import simulate as S
+from fi.alk import loss as L
+from fi.alk import simulate as S
 from fi.simulate.cli import _run_local_text_manifest, load_manifest
 from fi.simulate.simulation.models import Persona
 

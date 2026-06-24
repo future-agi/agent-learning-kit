@@ -72,7 +72,7 @@ agent-learn promote-to-regression artifacts/lifecycle-optimization.json \
 SDK — the whole journey as one call, exactly as the lifecycle example does:
 
 ```python
-from agent_learning import suite
+from fi.alk import suite
 
 result = suite.run_optimization_lifecycle_file(
     "manifests/optimize.json",

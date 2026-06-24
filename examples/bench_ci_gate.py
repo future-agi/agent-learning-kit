@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import bench
+from fi.alk import bench
 
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
 OUTPUT_KIND = "agent-learning.bench-ci-gate.v1"

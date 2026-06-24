@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, optimize, simulate
+from fi.alk import configure, optimize, simulate
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"

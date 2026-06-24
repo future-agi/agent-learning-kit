@@ -7,7 +7,7 @@ import json
 import sys
 from dotenv import load_dotenv
 load_dotenv("/Users/nikhilpareek/Documents/futureAGI/code/core/future-agi/futureagi/.env", override=False)
-from agent_learning import tasks  # noqa: E402
+from fi.alk import tasks  # noqa: E402
 
 PROVIDERS = [
     ("openai", "gpt-4o-mini"),

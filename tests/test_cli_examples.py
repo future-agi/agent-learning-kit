@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import actions, trinity
-from agent_learning.cli import main
+from fi.alk import actions, trinity
+from fi.alk.cli import main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1078,7 +1078,7 @@ def test_agent_learn_simulate_init_uses_unified_engine_defaults(tmp_path):
     )
     run = campaign["data"]["runs"][0]
     assert run["id"] == "agent-learning-local"
-    assert run["framework"] == "agent_learning"
+    assert run["framework"] == "fi.alk"
 
 
 def test_agent_learn_init_all_scaffold_runs_trinity_suite(
@@ -4640,7 +4640,7 @@ def test_redteam_campaign_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
@@ -5612,7 +5612,7 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
     tmp_path,
     monkeypatch,
 ):
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     monkeypatch.setenv(
         "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",

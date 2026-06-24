@@ -64,7 +64,7 @@ agent-learn optimize-eval examples/eval_suite_optimization.json \
 SDK, the same operation:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_eval_suite_response(
     name="sdk-eval-suite-optimization",

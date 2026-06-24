@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import cua_loop, optimize
+from fi.alk import cua_loop, optimize
 from fi.simulate.environment import BrowserEnvironment
 from fi.simulate.simulation import contract
 

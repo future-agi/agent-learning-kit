@@ -128,11 +128,11 @@ def _vendored_import_failed(command: str, exc: Exception) -> int:
 
 
 def _simulate_cli_module() -> Any:
-    return importlib.import_module("agent_learning.simulate.cli")
+    return importlib.import_module("fi.alk.simulate.cli")
 
 
 def _eval_cli_app() -> Any:
-    return importlib.import_module("agent_learning.evals.cli.main").app
+    return importlib.import_module("fi.alk.evals.cli.main").app
 
 
 def _simulate(args: Sequence[str]) -> int:
@@ -317,7 +317,7 @@ def _actions(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import actions, simulate
+        from fi.alk import actions, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn actions", exc)
 
@@ -409,7 +409,7 @@ def _capabilities(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import actions, capabilities, simulate
+        from fi.alk import actions, capabilities, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn capabilities", exc)
 
@@ -521,7 +521,7 @@ def _action_run(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import actions, simulate
+        from fi.alk import actions, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn action-run", exc)
 
@@ -642,7 +642,7 @@ def _action_optimize(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import actions, optimize, simulate, suite
+        from fi.alk import actions, optimize, simulate, suite
     except Exception as exc:
         return _vendored_import_failed("agent-learn action-optimize", exc)
 
@@ -754,7 +754,7 @@ def _run(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import simulate
+        from fi.alk import simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn run", exc)
 
@@ -972,7 +972,7 @@ def _bench(args: Sequence[str]) -> int:
 
 
 def _bench_module() -> Any:
-    return importlib.import_module("agent_learning.bench")
+    return importlib.import_module("fi.alk.bench")
 
 
 # --- live-lane front door (Phase 3 §6 — opt-in lanes; PRD §4.1 CLI bullet) ---
@@ -1183,7 +1183,7 @@ def _run_live_lane_manifest(
     void rate > 0.5 => 1; unstable-only => 0 with the quarantine finding."""
 
     try:
-        from agent_learning import live  # facade: imports NOTHING framework-side
+        from fi.alk import live  # facade: imports NOTHING framework-side
     except Exception as exc:
         return _vendored_import_failed(prog, exc)
 
@@ -1648,7 +1648,7 @@ def _capture_fixture(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import live  # facade: imports NOTHING framework-side
+        from fi.alk import live  # facade: imports NOTHING framework-side
     except Exception as exc:
         return _vendored_import_failed(
             "agent-learn simulate capture-fixture", exc
@@ -1754,7 +1754,7 @@ def _eval(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import evals, simulate
+        from fi.alk import evals, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn eval", exc)
 
@@ -1799,7 +1799,7 @@ def _eval_artifact(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import evals, simulate
+        from fi.alk import evals, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn eval-artifact", exc)
 
@@ -1844,7 +1844,7 @@ def _eval_task(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import evals, simulate
+        from fi.alk import evals, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn eval-task", exc)
 
@@ -1929,7 +1929,7 @@ def _run_voice_ab_harness(
     Phase-9A loopback), ``voice_corpus_channel_missing`` (version skew),
     ``voice_codec_sim_unavailable`` (rung-2 without the codec dependency)."""
 
-    from agent_learning import trinity
+    from fi.alk import trinity
     from fi.simulate.simulation.models import Persona, Scenario
 
     # version-skew tripwire: a voice campaign asked while this install's corpus
@@ -2040,7 +2040,7 @@ def _redteam(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import redteam
+        from fi.alk import redteam
     except Exception as exc:
         return _vendored_import_failed("agent-learn redteam", exc)
 
@@ -2120,7 +2120,7 @@ def _redteam_corpus(args: Sequence[str]) -> int:
         parser.error("provide exactly one of --corpus/--corpus-file or --hook")
 
     try:
-        from agent_learning import redteam
+        from fi.alk import redteam
     except Exception as exc:
         return _vendored_import_failed("agent-learn redteam-corpus", exc)
 
@@ -2133,7 +2133,7 @@ def _redteam_corpus(args: Sequence[str]) -> int:
                 name=parsed.name,
                 corpus_rows=corpus_rows,
                 metadata={
-                    "source": "agent_learning.cli.redteam_corpus_file",
+                    "source": "fi.alk.cli.redteam_corpus_file",
                     "cookbook": "redteam-corpus-local-file",
                     "corpus_source": {
                         "path": str(corpus_path),
@@ -2234,7 +2234,7 @@ def _optimize(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import optimize, simulate
+        from fi.alk import optimize, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn optimize", exc)
 
@@ -2297,7 +2297,7 @@ def _optimize_eval(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import evals, optimize, simulate
+        from fi.alk import evals, optimize, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn optimize-eval", exc)
 
@@ -2343,7 +2343,7 @@ def _suite(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import suite
+        from fi.alk import suite
     except Exception as exc:
         return _vendored_import_failed("agent-learn suite", exc)
 
@@ -2419,7 +2419,7 @@ def _trust(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import suite
+        from fi.alk import suite
     except Exception as exc:
         return _vendored_import_failed("agent-learn trust", exc)
 
@@ -2466,7 +2466,7 @@ def _optimize_suite(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import simulate, suite
+        from fi.alk import simulate, suite
     except Exception as exc:
         return _vendored_import_failed("agent-learn optimize-suite", exc)
 
@@ -3370,7 +3370,7 @@ def _agent_learning_eval_suite_optimization_manifest(name: str) -> Dict[str, Any
                 ]
             },
             "metadata": {
-                "source": "agent_learning.cli.init",
+                "source": "fi.alk.cli.init",
                 "task_kind": "eval_suite_optimization",
             },
         },
@@ -3405,7 +3405,7 @@ def _agent_learning_world_model_optimization_manifest(
     )
     manifest["metadata"] = {
         **dict(manifest.get("metadata") or {}),
-        "source": "agent_learning.cli.init",
+        "source": "fi.alk.cli.init",
     }
     return manifest
 
@@ -4044,7 +4044,7 @@ def _agent_learning_task_world_optimize_manifest(
                     ],
                 },
                 "metadata": {
-                    "source": "agent_learning.cli.init",
+                    "source": "fi.alk.cli.init",
                     "task_kind": "task_world",
                 },
             },
@@ -4401,7 +4401,7 @@ def _doctor(args: Sequence[str] = ()) -> int:
     )
     parsed = parser.parse_args(list(args))
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     payload = trinity.trinity_status()
     if parsed.output:
@@ -4457,7 +4457,7 @@ def _release_check(args: Sequence[str] = ()) -> int:
     # AGENT_LEARNING_SYNC already set by the operator still wins (setdefault).
     os.environ.setdefault("AGENT_LEARNING_SYNC", "local")
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     payload = trinity.release_status(project_root=parsed.project_root)
     if parsed.output:
@@ -4530,7 +4530,7 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     )
     parsed = parser.parse_args(list(args))
 
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     root = (
         Path(parsed.project_root).expanduser().resolve()
@@ -4665,7 +4665,7 @@ def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[st
         return [
             python,
             "-m",
-            "agent_learning.cli",
+            "fi.alk.cli",
             "release-check",
             "--project-root",
             str(project_root),
@@ -4705,11 +4705,11 @@ def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[st
 
 # ---------------------------------------------------------------------------
 # Phase 7 — Persona & Scenario Studio (thin dispatchers; logic in
-# agent_learning.studio, imported lazily per the _simulate_cli_module idiom)
+# fi.alk.studio, imported lazily per the _simulate_cli_module idiom)
 # ---------------------------------------------------------------------------
 
 def _studio_module() -> Any:
-    return importlib.import_module("agent_learning.studio")
+    return importlib.import_module("fi.alk.studio")
 
 
 def _emit_studio_payload(payload: Mapping[str, Any]) -> int:
@@ -4763,7 +4763,7 @@ def _persona_summary(persona: Any) -> Dict[str, Any]:
 
 
 def _library_personas(studio: Any, library: str) -> List[Any]:
-    from agent_learning.studio._library import load_index
+    from fi.alk.studio._library import load_index
 
     personas = []
     for entry in load_index(library).get("personas", []):
@@ -4800,7 +4800,7 @@ def _contract_finding_from_error(message: str) -> dict:
 
 def _simulation(args: Sequence[str]) -> int:
     try:
-        from agent_learning import simulate
+        from fi.alk import simulate
     except Exception as exc:  # pragma: no cover - vendored engine missing
         return _vendored_import_failed("agent-learn simulation", exc)
 
@@ -4898,7 +4898,7 @@ def _emit_contract_payload(payload: Mapping[str, Any], parsed: Any) -> int:
 
 def _practice(args: Sequence[str]) -> int:
     try:
-        from agent_learning import practice
+        from fi.alk import practice
     except Exception as exc:  # pragma: no cover
         return _vendored_import_failed("agent-learn practice", exc)
 
@@ -4980,7 +4980,7 @@ def _practice(args: Sequence[str]) -> int:
         return 0
 
     if parsed.subcommand == "ladder":
-        from agent_learning.practice._store import ConsolidationStore
+        from fi.alk.practice._store import ConsolidationStore
         store = ConsolidationStore(parsed.store)
         if not store.path.exists():
             payload = {
@@ -5010,8 +5010,8 @@ def _practice(args: Sequence[str]) -> int:
         return 0
 
     if parsed.subcommand == "replay":
-        from agent_learning.practice import _schedule
-        from agent_learning.practice._store import ConsolidationStore
+        from fi.alk.practice import _schedule
+        from fi.alk.practice._store import ConsolidationStore
         store = ConsolidationStore(parsed.store)
         records = store.active_records()
         selected = _schedule.due_reviews(records, round_no=10 ** 9) if not parsed.all_records else records
@@ -5029,7 +5029,7 @@ def _practice(args: Sequence[str]) -> int:
         # harness (Unit 22, outcome-free — the gate path). --run = the experiment
         # engine (Unit 23) which actually runs arms and emits real retention.
         if parsed.run:
-            from agent_learning.practice import _experiment
+            from fi.alk.practice import _experiment
             try:
                 result = _experiment.run_experiment(Path(parsed.manifest_dir))
             except Exception as exc:
@@ -5039,7 +5039,7 @@ def _practice(args: Sequence[str]) -> int:
                     parsed,
                 )
             return _emit_contract_payload({"status": "ran", "exit_code": 0, "experiment": result["experiment"]}, parsed)
-        from agent_learning.practice import _capstone
+        from fi.alk.practice import _capstone
         try:
             result = _capstone.run_ab(Path(parsed.manifest_dir))
         except Exception as exc:
@@ -5081,7 +5081,7 @@ def _practice_image(parsed: Any) -> int:
     practice-loop manifest from the supplied manifest file and renders the
     deterministic image metrics. understanding mode is credential-free; generation
     mode refuses loudly without a judge key (never a fake number)."""
-    from agent_learning import image_loop
+    from fi.alk import image_loop
 
     manifest_path = Path(parsed.manifest)
     if not manifest_path.is_file():
@@ -5175,7 +5175,7 @@ def _practice_cua(parsed: Any) -> int:
     rung still runs); the keyed completion_judge term refuses loudly without a
     judge key (never a fake number). NEVER shows a judge score on the
     credential-free path."""
-    from agent_learning import cua_loop
+    from fi.alk import cua_loop
 
     manifest_path = Path(parsed.manifest)
     if not manifest_path.is_file():
@@ -5503,7 +5503,7 @@ def _persona(args: Sequence[str]) -> int:
         return _emit_studio_payload(payload)
 
     if parsed.subcommand == "list":
-        from agent_learning.studio._library import list_library
+        from fi.alk.studio._library import list_library
 
         view = list_library(parsed.library)
         return _emit_studio_payload({
@@ -5708,7 +5708,7 @@ def _scenario(args: Sequence[str]) -> int:
         })
 
     if parsed.subcommand == "coverage":
-        from agent_learning.studio._library import ensure_library, load_index
+        from fi.alk.studio._library import ensure_library, load_index
 
         root = ensure_library(parsed.library)
         scenarios = []
@@ -5748,7 +5748,7 @@ def _scenario(args: Sequence[str]) -> int:
         return _emit_studio_payload(payload)
 
     if parsed.subcommand == "list":
-        from agent_learning.studio._library import list_library
+        from fi.alk.studio._library import list_library
 
         view = list_library(parsed.library)
         return _emit_studio_payload({
@@ -5771,7 +5771,7 @@ def _scenario(args: Sequence[str]) -> int:
 
 def _runs(args: Sequence[str]) -> int:
     try:
-        from agent_learning import telemetry
+        from fi.alk import telemetry
     except Exception as exc:  # pragma: no cover - vendored engine missing
         return _vendored_import_failed("agent-learn runs", exc)
 
@@ -6068,7 +6068,7 @@ def _runs_verify(ledger: Any) -> int:
 
 
 def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
-    from agent_learning.telemetry import _sync
+    from fi.alk.telemetry import _sync
 
     if not parsed.queued and not parsed.run_id:
         print(
@@ -6183,7 +6183,7 @@ def _runs_sync_dry_run(
         )
         print(
             "(verified by the telemetry_boundary gate, which scans "
-            "src/agent_learning/ AND vendored fi/*.)"
+            "src/fi/alk/ AND vendored fi/*.)"
         )
         return 0
     print("DRY RUN — nothing is sent.  this is exactly what a real sync "

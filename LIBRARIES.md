@@ -10,8 +10,8 @@ TypeScript package.
 
 | Surface | Path | Purpose |
 | --- | --- | --- |
-| Python SDK | [`src/agent_learning`](src/agent_learning) | Public facade for configuration, evaluation, simulation, optimization, red teaming, suites, and release gates. |
-| CLI | [`src/agent_learning/cli.py`](src/agent_learning/cli.py) | `agent-learn` command surface for doctor, eval, simulate/run, redteam, optimize, report, release-check, and release-proof. |
+| Python SDK | [`src/fi/alk`](src/fi/alk) | Public facade for configuration, evaluation, simulation, optimization, red teaming, suites, and release gates. |
+| CLI | [`src/fi/alk/cli.py`](src/fi/alk/cli.py) | `agent-learn` command surface for doctor, eval, simulate/run, redteam, optimize, report, release-check, and release-proof. |
 | TypeScript SDK | [`typescript/agent-learning-kit`](typescript/agent-learning-kit) | Public TypeScript package published as `@future-agi/agent-learning-kit`, including the migrated `ai-evaluation` TypeScript source. |
 | Examples | [`examples`](examples) | Runnable cookbooks and manifests that use the consolidated public package. |
 
@@ -29,10 +29,10 @@ namespace:
 
 ```toml
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_learning", "src/fi"]
+packages = ["src/fi/alk", "src/fi"]
 ```
 
-That means a built wheel contains the public `agent_learning.*` API and the
+That means a built wheel contains the public `fi.alk.*` API and the
 engine implementations under `fi.evals`, `fi.simulate`, and `fi.opt`.
 
 ## Import Direction
@@ -40,8 +40,8 @@ engine implementations under `fi.evals`, `fi.simulate`, and `fi.opt`.
 New public code should use the consolidated package:
 
 ```python
-from agent_learning import configure
-from agent_learning import evals, optimize, simulate
+from fi.alk import configure
+from fi.alk import evals, optimize, simulate
 
 configure(api_key="...")
 ```
@@ -73,7 +73,7 @@ the release branch:
 2. [`typescript/agent-learning-kit/src`](typescript/agent-learning-kit/src) for the TypeScript evaluation SDK source.
 3. [`src/fi/simulate`](src/fi/simulate) for simulation, framework adapters, and reports.
 4. [`src/fi/opt`](src/fi/opt) for optimizer primitives and agent optimizers.
-5. [`src/agent_learning`](src/agent_learning) for the public SDK facade that ties them together.
+5. [`src/fi/alk`](src/fi/alk) for the public SDK facade that ties them together.
 6. [`examples`](examples) for runnable trinity cookbooks.
 7. [`pyproject.toml`](pyproject.toml) for package inclusion and the `agent-learn` CLI entry point.
 

@@ -72,7 +72,7 @@ SDK, same operation:
 import asyncio
 import os
 
-from agent_learning import redteam
+from fi.alk import redteam
 
 os.environ.setdefault("AGENT_LEARNING_REDTEAM_EXAMPLE_KEY", "local-example")
 result = asyncio.run(redteam.redteam_manifest_file("examples/redteam_manifest.json"))

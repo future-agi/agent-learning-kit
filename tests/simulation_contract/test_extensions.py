@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning import extensions as E
-from agent_learning.extensions import ExtensionError
+from fi.alk import extensions as E
+from fi.alk.extensions import ExtensionError
 from fi.simulate.simulation import contract as C
 
 

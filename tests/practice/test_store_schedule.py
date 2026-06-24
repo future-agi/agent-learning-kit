@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 
-from agent_learning.practice import _schedule
-from agent_learning.practice._store import ConsolidationStore, build_record, record_id
+from fi.alk.practice import _schedule
+from fi.alk.practice._store import ConsolidationStore, build_record, record_id
 
 
 def _record(round_no=0, interval=1, ladder="episodic", deck=("row_a",), cells=("c1",)):
@@ -21,7 +21,7 @@ def _record(round_no=0, interval=1, ladder="episodic", deck=("row_a",), cells=("
 
 # --- id recipe agreement ---------------------------------------------------
 def test_id_recipe_agreement_with_frozen_row():
-    from agent_learning.optimize import _sorted_json_digest as opt
+    from fi.alk.optimize import _sorted_json_digest as opt
     body = {"x": 1, "y": [2, 3]}
     rid = record_id(body)
     assert rid.startswith("lesson_")

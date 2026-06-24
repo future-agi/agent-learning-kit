@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import bench
-from agent_learning.bench import _coding
-from agent_learning.bench._docker import docker_available
-from agent_learning.bench._grader import run_command_graded
+from fi.alk import bench
+from fi.alk.bench import _coding
+from fi.alk.bench._docker import docker_available
+from fi.alk.bench._grader import run_command_graded
 
 ROOT = Path(__file__).parent.parent
 COMMAND_SUITE = ROOT / "examples" / "bench_suites" / "coding_command_starter.json"

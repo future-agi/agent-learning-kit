@@ -41,8 +41,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import bench
-from agent_learning.bench import _docker
+from fi.alk import bench
+from fi.alk.bench import _docker
 
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
 OUTPUT_KIND = "agent-learning.bench-sandboxes.v1"

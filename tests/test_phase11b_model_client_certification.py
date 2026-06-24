@@ -90,7 +90,7 @@ def test_model_client_input_mode_validity_not_equality():
 
 
 def test_ollama_credential_free_no_daemon():
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     lane = {row["framework"] for row in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE}
     assert "ollama" not in lane  # 11B-A9: local daemon is not a credential

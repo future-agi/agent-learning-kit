@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import bench
+from fi.alk import bench
 
 OUTPUT_KIND = "agent-learning.bench-custom-suite.v1"
 

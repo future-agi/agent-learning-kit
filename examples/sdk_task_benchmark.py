@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import tasks
+from fi.alk import tasks
 
 DATASET_PATH = Path(__file__).parent / "task_datasets" / "support_starter.json"
 OUTPUT_KIND = "agent-learning.task-benchmark-example.v1"

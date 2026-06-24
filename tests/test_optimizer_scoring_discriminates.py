@@ -7,7 +7,7 @@ so the vendored_engine_boundary holds.
 
 from __future__ import annotations
 
-from agent_learning import optimize, tasks
+from fi.alk import optimize, tasks
 
 
 def _scores(o):
@@ -65,8 +65,8 @@ def test_scorer_lives_in_fi_and_tasks_reexports() -> None:
 
     assert tasks.objective_score is _objective_scoring.objective_score
     assert tasks.resolve_metric is _objective_scoring.resolve_metric
-    # the fi scorer module must not IMPORT agent_learning (boundary)
+    # the fi scorer module must not IMPORT fi.alk (boundary)
     import inspect
     for line in inspect.getsource(_objective_scoring).splitlines():
         stripped = line.strip()
-        assert not stripped.startswith(("import agent_learning", "from agent_learning")), stripped
+        assert not stripped.startswith(("import fi.alk", "from fi.alk")), stripped
