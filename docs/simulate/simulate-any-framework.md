@@ -64,7 +64,7 @@ SDK (same operation):
 
 ```python
 import os
-from agent_learning import suite
+from fi.alk import suite
 
 os.environ.setdefault("AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY", "offline-demo-key")
 result = suite.run_suite_file("examples/multi_framework_simulation_suite.json")

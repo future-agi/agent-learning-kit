@@ -489,7 +489,7 @@ def build_trinity_suite_manifest(
             "metrics": required_metrics,
         },
         metadata={
-            "source": "agent_learning.suite.build_trinity_suite_manifest",
+            "source": "fi.alk.suite.build_trinity_suite_manifest",
             **copy.deepcopy(dict(metadata or {})),
         },
         optimizer_governance_policy={
@@ -554,7 +554,7 @@ def build_framework_adapter_trinity_suite_manifest(
         threshold=threshold,
         fail_fast=fail_fast,
         metadata={
-            "source": "agent_learning.suite.build_framework_adapter_trinity_suite_manifest",
+            "source": "fi.alk.suite.build_framework_adapter_trinity_suite_manifest",
             "task_kind": "framework_adapter_trinity_suite",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -618,7 +618,7 @@ def write_framework_adapter_trinity_suite_workspace(
     selected_target = _suite_local_target_text(target, base_dir=target_base_dir)
     suite_metadata = copy.deepcopy(dict(metadata or {}))
 
-    from agent_learning import optimize, redteam
+    from fi.alk import optimize, redteam
 
     run_manifest = optimize.build_framework_run_manifest_from_local_adapter(
         name=f"{name}-run",
@@ -708,7 +708,7 @@ def write_framework_adapter_trinity_suite_workspace(
         required_frameworks=[framework],
         threshold=threshold,
         metadata={
-            "source": "agent_learning.suite.write_framework_adapter_trinity_suite_workspace",
+            "source": "fi.alk.suite.write_framework_adapter_trinity_suite_workspace",
             "framework": framework,
             "target": selected_target,
             **suite_metadata,
@@ -792,7 +792,7 @@ def build_framework_adapter_trinity_suite_optimization_manifest(
         },
         metadata={
             "source": (
-                "agent_learning.suite."
+                "fi.alk.suite."
                 "build_framework_adapter_trinity_suite_optimization_manifest"
             ),
             "task_kind": "framework_adapter_trinity_suite_optimization",
@@ -814,7 +814,7 @@ def build_framework_adapter_trinity_suite_optimization_manifest(
             },
             "metadata": {
                 "source": (
-                    "agent_learning.suite."
+                    "fi.alk.suite."
                     "build_framework_adapter_trinity_suite_optimization_manifest"
                 ),
                 "task_kind": "framework_adapter_trinity_suite_optimization",
@@ -867,7 +867,7 @@ def write_framework_adapter_trinity_suite_optimization_workspace(
         required_frameworks=[framework],
         metadata={
             "source": (
-                "agent_learning.suite."
+                "fi.alk.suite."
                 "write_framework_adapter_trinity_suite_optimization_workspace"
             ),
             "framework": framework,
@@ -992,7 +992,7 @@ def build_regression_artifact_suite_manifest(
             ],
         },
         metadata={
-            "source": "agent_learning.suite.build_regression_artifact_suite_manifest",
+            "source": "fi.alk.suite.build_regression_artifact_suite_manifest",
             "task_kind": "regression_artifact_lifecycle",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -1123,7 +1123,7 @@ def build_optimization_lifecycle_plan(
                         "-c",
                         (
                             "import json, pathlib; "
-                            "from agent_learning import optimize; "
+                            "from fi.alk import optimize; "
                             "result = json.loads(pathlib.Path("
                             f"{str(paths['optimization'])!r}"
                             ").read_text(encoding='utf-8')); "
@@ -1192,7 +1192,7 @@ def build_optimization_lifecycle_plan(
         "artifacts": {key: str(value) for key, value in paths.items()},
         "steps": steps,
         "metadata": {
-            "source": "agent_learning.suite.build_optimization_lifecycle_plan",
+            "source": "fi.alk.suite.build_optimization_lifecycle_plan",
             "research_synthesis": (
                 "Deterministic optimization transactions: diagnose/search, "
                 "export, promote, replay, and expose action cards over one "
@@ -1211,7 +1211,7 @@ def run_optimization_lifecycle_file(
 ) -> dict[str, Any]:
     """Run optimize, report, promote, replay, and report replay via SDK."""
 
-    from agent_learning import optimize, simulate
+    from fi.alk import optimize, simulate
 
     plan = build_optimization_lifecycle_plan(
         optimize_manifest_path=optimize_manifest_path,
@@ -1526,7 +1526,7 @@ def optimize_suite(
         }, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
     try:
-        from agent_learning import optimize as agent_optimize
+        from fi.alk import optimize as agent_optimize
     except Exception as exc:  # pragma: no cover - optional dependency clarity
         raise SuiteError(
             "Agent Learning Kit optimizer engine is required for suite optimization."
@@ -1846,8 +1846,8 @@ def _execute_child_payload(
     suite_options: SuiteRunOptions,
 ) -> dict[str, Any]:
     if command == "run":
-        from agent_learning import simulate
-        from agent_learning.cli import AGENT_LEARNING_RUN_KIND
+        from fi.alk import simulate
+        from fi.alk.cli import AGENT_LEARNING_RUN_KIND
 
         payload = _run_async(
             simulate.run_manifest_file(
@@ -1879,7 +1879,7 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_SUITE_KIND
         return payload
     if command == "action_run":
-        from agent_learning import actions
+        from fi.alk import actions
 
         artifact = actions.load_artifact_file(path)
         return actions.run_action(
@@ -1893,8 +1893,8 @@ def _execute_child_payload(
             artifact_output_path=_job_action_artifact_output(job),
         )
     if command == "eval":
-        from agent_learning import evals
-        from agent_learning.cli import AGENT_LEARNING_EVAL_KIND
+        from fi.alk import evals
+        from fi.alk.cli import AGENT_LEARNING_EVAL_KIND
 
         payload = evals.run_eval_suite_file(
             path,
@@ -1905,8 +1905,8 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_EVAL_KIND
         return payload
     if command == "eval_artifact":
-        from agent_learning import evals
-        from agent_learning.cli import AGENT_LEARNING_ARTIFACT_EVAL_KIND
+        from fi.alk import evals
+        from fi.alk.cli import AGENT_LEARNING_ARTIFACT_EVAL_KIND
 
         config_path = _job_optional_path(
             job,
@@ -1923,8 +1923,8 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_ARTIFACT_EVAL_KIND
         return payload
     if command == "eval_task":
-        from agent_learning import evals
-        from agent_learning.cli import AGENT_LEARNING_ARTIFACT_EVAL_KIND
+        from fi.alk import evals
+        from fi.alk.cli import AGENT_LEARNING_ARTIFACT_EVAL_KIND
 
         config_path = _job_optional_path(
             job,
@@ -1941,7 +1941,7 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_ARTIFACT_EVAL_KIND
         return payload
     if command == "redteam":
-        from agent_learning import redteam
+        from fi.alk import redteam
 
         payload = _run_async(
             redteam.redteam_manifest_file(
@@ -1953,8 +1953,8 @@ def _execute_child_payload(
         )
         return payload
     if command == "optimize":
-        from agent_learning import optimize
-        from agent_learning.cli import AGENT_LEARNING_OPTIMIZATION_KIND
+        from fi.alk import optimize
+        from fi.alk.cli import AGENT_LEARNING_OPTIMIZATION_KIND
 
         payload = optimize.optimize_manifest_file(
             path,
@@ -1966,8 +1966,8 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_OPTIMIZATION_KIND
         return payload
     if command == "optimize_eval":
-        from agent_learning import optimize
-        from agent_learning.cli import AGENT_LEARNING_EVAL_OPTIMIZATION_KIND
+        from fi.alk import optimize
+        from fi.alk.cli import AGENT_LEARNING_EVAL_OPTIMIZATION_KIND
 
         payload = optimize.optimize_eval_suite_file(
             path,
@@ -1979,8 +1979,8 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_EVAL_OPTIMIZATION_KIND
         return payload
     if command == "optimize_suite":
-        from agent_learning import optimize
-        from agent_learning.cli import AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
+        from fi.alk import optimize
+        from fi.alk.cli import AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
 
         payload = optimize.optimize_suite_file(
             path,
@@ -1992,14 +1992,14 @@ def _execute_child_payload(
         payload["kind"] = AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
         return payload
     if command == "baseline":
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         return simulate.create_baseline_file(
             path,
             name=_job_name(job),
         )
     if command == "compare":
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         return simulate.compare_result_files(
             _job_compare_baseline_path(job, base_dir=base_dir),
@@ -2020,14 +2020,14 @@ def _execute_child_payload(
             name=_job_name(job),
         )
     if command == "report":
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         return simulate.render_report_file(
             path,
             name=_job_name(job),
         )
     if command == "promote_to_regression":
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         return simulate.promote_to_regression_file(
             path,
@@ -2037,7 +2037,7 @@ def _execute_child_payload(
             required_env=_as_string_list(job.get("required_env")),
         )
     if command == "shrink":
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         return simulate.shrink_attack_evolution_file(
             path,
@@ -2051,7 +2051,7 @@ def _execute_child_payload(
             required_env=_as_string_list(job.get("required_env")),
         )
     if command == "replay":
-        from agent_learning import simulate
+        from fi.alk import simulate
 
         return simulate.replay_manifests(
             _job_replay_manifest_paths(job, base_dir=base_dir),
@@ -2106,7 +2106,7 @@ def _child_renderers(command: str) -> tuple[Any, Any, Any]:
     if command == "suite":
         return render_junit, render_sarif, render_markdown
     if command == "action_run":
-        from agent_learning import actions, simulate
+        from fi.alk import actions, simulate
 
         def render_action_run_markdown(
             payload: Mapping[str, Any],
@@ -2117,10 +2117,10 @@ def _child_renderers(command: str) -> tuple[Any, Any, Any]:
 
         return simulate.render_junit, simulate.render_sarif, render_action_run_markdown
     if command == "redteam":
-        from agent_learning import redteam
+        from fi.alk import redteam
 
         return redteam.render_junit, redteam.render_sarif, redteam.render_markdown
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     return simulate.render_junit, simulate.render_sarif, simulate.render_markdown
 
@@ -3891,7 +3891,7 @@ def _write_lifecycle_result_bundle(
     markdown_path: Path,
     source_path: Path,
 ) -> list[str]:
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     return [
         _write_json(json_path, result),
@@ -3911,7 +3911,7 @@ def _write_lifecycle_report_bundle(
     markdown_path: Path,
     source_path: Path,
 ) -> list[str]:
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     return [
         _write_json(json_path, report),
@@ -4047,7 +4047,7 @@ def _merge_optimization_options(
 def _optimization_cli() -> Any:
     import importlib
 
-    return importlib.import_module("agent_learning.simulate.cli")
+    return importlib.import_module("fi.alk.simulate.cli")
 
 
 def _load_json_or_yaml(path: Path) -> Any:

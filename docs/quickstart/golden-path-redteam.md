@@ -59,7 +59,7 @@ SDK, same operation:
 
 ```python
 import asyncio
-from agent_learning import redteam
+from fi.alk import redteam
 
 result = asyncio.run(redteam.redteam_manifest_file("manifests/redteam.json"))
 assert result["kind"] == "agent-learning.redteam.v1"

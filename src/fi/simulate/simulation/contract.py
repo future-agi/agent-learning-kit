@@ -3,7 +3,7 @@
 ``agent-learning.simulation.v1``: a typed, content-addressed world definition
 that sits ABOVE the adapters (13D-D6). Engine-side home (AD-A): this module
 imports only from ``.models`` / ``.goal_machine`` / stdlib and NEVER from
-``agent_learning`` (the studio one-way rule). Canonicalization is the Persona
+``fi.alk`` (the studio one-way rule). Canonicalization is the Persona
 rule verbatim (AD-D); ``world`` (incl. every tool-mock block) is inside the
 identity (R4/AD-O).
 
@@ -86,7 +86,7 @@ WORLD_EXECUTION_MODES = ("derived_legacy", "contract_native")
 
 # ===========================================================================
 # Extension registries (Appendix C-1): contract.py owns private tables with
-# narrow setters; agent_learning/extensions.py (facade) is their ONLY writer
+# narrow setters; fi/alk/extensions.py (facade) is their ONLY writer
 # (downward push). Built-ins shadow extensions at resolution; canon never
 # mutates.
 # ===========================================================================

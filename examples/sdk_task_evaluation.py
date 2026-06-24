@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, evals
+from fi.alk import configure, evals
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_TASK_EVAL_KEY"

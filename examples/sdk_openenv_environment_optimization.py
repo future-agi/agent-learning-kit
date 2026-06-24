@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from agent_learning import configure, optimize
+from fi.alk import configure, optimize
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_OPENENV_OPTIMIZATION_KEY"

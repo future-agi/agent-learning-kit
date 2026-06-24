@@ -148,7 +148,7 @@ def _rebuild(persona: Persona, **updates: Any) -> Persona:
 def _taxonomy() -> Tuple[List[str], List[str]]:
     # Lazy read of the EXISTING gate-enforced 10x6 taxonomy constants —
     # facade-side membership check (the engine never imports trinity).
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     return (
         list(trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES),

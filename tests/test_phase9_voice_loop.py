@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import trinity, voice_loop
+from fi.alk import trinity, voice_loop
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,7 +87,7 @@ def test_voice_loss_timing_only_multi_term_rejected():
 def test_voice_loss_guard_unconditional():
     # a valid multi-objective composition WITHOUT guards still raises (the
     # unedited loss.py:106-116 — "There is no override.")
-    from agent_learning.loss import ObjectiveError
+    from fi.alk.loss import ObjectiveError
 
     no_guards = _voice_objective()
     no_guards.pop("guards")

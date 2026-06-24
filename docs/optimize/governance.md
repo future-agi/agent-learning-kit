@@ -77,7 +77,7 @@ agent-learn optimize examples/optimizer_governance_optimization.json \
 SDK, the same operation as the twin runs it:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_optimizer_governance(
     name="sdk-optimizer-governance-optimization",

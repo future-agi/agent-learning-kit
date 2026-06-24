@@ -33,14 +33,14 @@ _SUBMODULES = {
 
 # lane name (LANE_ENV_FLAGS / LANE_EXTRAS key) → (module, entry point)
 LANE_RUNNERS = {
-    "livekit": ("agent_learning.live.livekit_lane", "run_livekit_lane"),
-    "pipecat": ("agent_learning.live.pipecat_lane", "run_pipecat_lane"),
-    "langchain": ("agent_learning.live.langgraph_lane", "run_langgraph_lane"),
-    "mcp": ("agent_learning.live.mcp_lane", "run_mcp_lane"),
-    "a2a": ("agent_learning.live.a2a_lane", "run_a2a_lane"),
+    "livekit": ("fi.alk.live.livekit_lane", "run_livekit_lane"),
+    "pipecat": ("fi.alk.live.pipecat_lane", "run_pipecat_lane"),
+    "langchain": ("fi.alk.live.langgraph_lane", "run_langgraph_lane"),
+    "mcp": ("fi.alk.live.mcp_lane", "run_mcp_lane"),
+    "a2a": ("fi.alk.live.a2a_lane", "run_a2a_lane"),
 }
 
-# public name → home module (resolved lazily so `import agent_learning.live`
+# public name → home module (resolved lazily so `import fi.alk.live`
 # stays trivially cheap and provably framework-free)
 _LAZY_EXPORTS = {
     "AGENT_LEARNING_RUN_KIND": "_contract",

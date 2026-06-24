@@ -5,7 +5,7 @@ lazily (one class, one home — no parallel format) plus the studio API
 (create / validate / calibrate / admit / lint / expand / coverage / import /
 pull). The dependency points one way (facade -> ``fi.*``): class layers,
 the behavior-policy compiler, realization metrics, and fidelity math live
-ENGINE-side; this package never imports ``agent_learning.live`` (the
+ENGINE-side; this package never imports ``fi.alk.live`` (the
 live_lane_boundary rule).
 """
 
@@ -33,29 +33,29 @@ _EXPORTS = {
     "persona_fidelity": ("fi.simulate.simulation.fidelity", "persona_fidelity"),
     "attach_fidelity": ("fi.simulate.simulation.fidelity", "attach_fidelity"),
     # in-character fidelity as attack quality (unit 8)
-    "attack_quality": ("agent_learning.studio._fidelity_attack", "attack_quality"),
+    "attack_quality": ("fi.alk.studio._fidelity_attack", "attack_quality"),
     "persona_conditioned_campaign": (
-        "agent_learning.studio._fidelity_attack",
+        "fi.alk.studio._fidelity_attack",
         "persona_conditioned_campaign",
     ),
     # studio API
-    "build_persona": ("agent_learning.studio._calibration", "build_persona"),
-    "validate_persona": ("agent_learning.studio._calibration", "validate_persona"),
-    "calibrate_persona": ("agent_learning.studio._calibration", "calibrate_persona"),
-    "upgrade_legacy_persona": ("agent_learning.studio._upgrade", "upgrade_legacy_persona"),
-    "expand_scenarios": ("agent_learning.studio._coverage", "expand_scenarios"),
-    "synthesize_next_scenario": ("agent_learning.studio._coverage", "synthesize_next_scenario"),
-    "coverage_report": ("agent_learning.studio._coverage", "coverage_report"),
-    "residual_uncovered_estimate": ("agent_learning.studio._coverage", "residual_uncovered_estimate"),
-    "bias_lint": ("agent_learning.studio._bias", "bias_lint"),
-    "import_vendor_persona": ("agent_learning.studio._vendor", "import_vendor_persona"),
-    "render_vendor_text": ("agent_learning.studio._vendor", "render_vendor_text"),
-    "pull_personas": ("agent_learning.studio._download", "pull_personas"),
-    "pull_scenarios": ("agent_learning.studio._download", "pull_scenarios"),
-    "load_persona": ("agent_learning.studio._library", "load_persona"),
-    "save_persona": ("agent_learning.studio._library", "save_persona"),
-    "load_scenario": ("agent_learning.studio._library", "load_scenario"),
-    "save_scenario": ("agent_learning.studio._library", "save_scenario"),
+    "build_persona": ("fi.alk.studio._calibration", "build_persona"),
+    "validate_persona": ("fi.alk.studio._calibration", "validate_persona"),
+    "calibrate_persona": ("fi.alk.studio._calibration", "calibrate_persona"),
+    "upgrade_legacy_persona": ("fi.alk.studio._upgrade", "upgrade_legacy_persona"),
+    "expand_scenarios": ("fi.alk.studio._coverage", "expand_scenarios"),
+    "synthesize_next_scenario": ("fi.alk.studio._coverage", "synthesize_next_scenario"),
+    "coverage_report": ("fi.alk.studio._coverage", "coverage_report"),
+    "residual_uncovered_estimate": ("fi.alk.studio._coverage", "residual_uncovered_estimate"),
+    "bias_lint": ("fi.alk.studio._bias", "bias_lint"),
+    "import_vendor_persona": ("fi.alk.studio._vendor", "import_vendor_persona"),
+    "render_vendor_text": ("fi.alk.studio._vendor", "render_vendor_text"),
+    "pull_personas": ("fi.alk.studio._download", "pull_personas"),
+    "pull_scenarios": ("fi.alk.studio._download", "pull_scenarios"),
+    "load_persona": ("fi.alk.studio._library", "load_persona"),
+    "save_persona": ("fi.alk.studio._library", "save_persona"),
+    "load_scenario": ("fi.alk.studio._library", "load_scenario"),
+    "save_scenario": ("fi.alk.studio._library", "save_scenario"),
 }
 
 

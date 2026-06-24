@@ -110,7 +110,7 @@ def _build_real_graph():
 
 
 def _transcript_events(result: dict[str, Any]) -> list[dict[str, Any]]:
-    from agent_learning.live._transcript import read_transcript
+    from fi.alk.live._transcript import read_transcript
 
     rows = [
         row
@@ -121,7 +121,7 @@ def _transcript_events(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def test_lane_refuses_without_env_flag(monkeypatch):
-    from agent_learning.live import _contract, langgraph_lane
+    from fi.alk.live import _contract, langgraph_lane
 
     monkeypatch.delenv("AGENT_LEARNING_LIVE_LANGCHAIN", raising=False)
     with pytest.raises(_contract.LaneDisabledError):
@@ -129,7 +129,7 @@ def test_lane_refuses_without_env_flag(monkeypatch):
 
 
 def test_rung1_in_process_real_graph_repeats_and_attributes():
-    from agent_learning.live import _contract, langgraph_lane
+    from fi.alk.live import _contract, langgraph_lane
 
     graph = _build_real_graph()  # real langgraph import, real checkpointer
     result = langgraph_lane.run_langgraph_lane(
@@ -166,7 +166,7 @@ def test_factory_subprocess_rung1_real_sqlite_checkpointer(
 ):
     import langgraph  # noqa: F401 — flag set + extra missing must ERROR, not skip
 
-    from agent_learning.live import _runner, langgraph_lane
+    from fi.alk.live import _runner, langgraph_lane
 
     factory_dir = tmp_path / "factory"
     factory_dir.mkdir()
@@ -208,7 +208,7 @@ def test_cross_session_probe_rebuilt_graph_fires_and_contains(
 ):
     import langgraph  # noqa: F401 — flag set + extra missing must ERROR, not skip
 
-    from agent_learning.live import _runner, langgraph_lane
+    from fi.alk.live import _runner, langgraph_lane
 
     factory_dir = tmp_path / "factory"
     factory_dir.mkdir()
@@ -254,7 +254,7 @@ def test_captured_fixture_round_trip_offline_stub(tmp_path):
     """live run -> capture candidate -> simulated review -> replay green
     (guide §5.4 pattern; the stub graph keeps this framework-free)."""
 
-    from agent_learning.live import _capture, _stats, langgraph_lane
+    from fi.alk.live import _capture, _stats, langgraph_lane
 
     result = langgraph_lane.run_langgraph_lane(
         _StubGraph(),

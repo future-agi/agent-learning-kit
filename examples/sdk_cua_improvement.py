@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import cua_loop
+from fi.alk import cua_loop
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURES = EXAMPLE_DIR / "cua_loop_fixture"

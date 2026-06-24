@@ -63,7 +63,7 @@ SDK — optimization, and the simulation twin to observe the control plane
 before optimizing it:
 
 ```python
-from agent_learning import optimize, simulate
+from fi.alk import optimize, simulate
 
 result = optimize.optimize_agent_control_plane(
     name="sdk-agent-control-plane-optimization",

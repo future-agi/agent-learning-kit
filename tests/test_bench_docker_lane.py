@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning import bench
-from agent_learning.bench import _coding
-from agent_learning.bench._codeexec import run_code_tests
-from agent_learning.bench._docker import docker_available
+from fi.alk import bench
+from fi.alk.bench import _coding
+from fi.alk.bench._codeexec import run_code_tests
+from fi.alk.bench._docker import docker_available
 
 pytestmark = pytest.mark.skipif(
     not docker_available(), reason="docker daemon unavailable"

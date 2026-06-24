@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, optimize, redteam, studio
+from fi.alk import configure, optimize, redteam, studio
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY"

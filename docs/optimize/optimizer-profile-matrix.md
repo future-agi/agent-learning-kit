@@ -74,7 +74,7 @@ AGENT_LEARNING_SDK_OPTIMIZER_PROFILE_MATRIX_KEY=local-dev-key \
 SDK, the same operation:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 manifests = optimize.build_optimizer_profile_matrix_manifests()
 payload = optimize.run_optimizer_profile_matrix(

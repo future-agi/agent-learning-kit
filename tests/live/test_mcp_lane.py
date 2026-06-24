@@ -34,7 +34,7 @@ _SCRIPTED_SCENARIO = {
 
 
 def test_lane_refuses_without_env_flag(monkeypatch):
-    from agent_learning.live import _contract, mcp_lane
+    from fi.alk.live import _contract, mcp_lane
 
     monkeypatch.delenv("AGENT_LEARNING_LIVE_MCP", raising=False)
     with pytest.raises(_contract.LaneDisabledError):
@@ -42,7 +42,7 @@ def test_lane_refuses_without_env_flag(monkeypatch):
 
 
 def test_rung1_loopback_server_repeats_and_snapshot(tmp_path):
-    from agent_learning.live import _contract, mcp_lane
+    from fi.alk.live import _contract, mcp_lane
 
     result = mcp_lane.run_mcp_lane(
         _SCRIPTED_SCENARIO, repeats=2, artifacts_dir=tmp_path / "artifacts"
@@ -67,7 +67,7 @@ def test_captured_fixture_round_trip_from_loopback_run(tmp_path):
     """live loopback run -> capture candidate -> simulated review ->
     replay_fixture green (guide §5.4 pattern, needs the mcp extra)."""
 
-    from agent_learning.live import _capture, _stats, mcp_lane
+    from fi.alk.live import _capture, _stats, mcp_lane
 
     result = mcp_lane.run_mcp_lane(
         _SCRIPTED_SCENARIO, repeats=2, artifacts_dir=tmp_path / "artifacts"

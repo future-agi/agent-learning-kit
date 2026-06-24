@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, simulate
+from fi.alk import configure, simulate
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_SIMULATION_KEY"

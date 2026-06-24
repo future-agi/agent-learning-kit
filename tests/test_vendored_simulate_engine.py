@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import simulate
+from fi.alk import simulate
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -189,19 +189,19 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
         "fi.simulate.manifest",
         "fi.simulate.suite",
         "fi.simulate.simulation.engines.local_text",
-        "agent_learning.simulate.environment",
-        "agent_learning.simulate.manifest",
-        "agent_learning.simulate.suite",
-        "agent_learning.simulate.simulation.engines.local_text",
-        "agent_learning.simulate.agent.definition",
+        "fi.alk.simulate.environment",
+        "fi.alk.simulate.manifest",
+        "fi.alk.simulate.suite",
+        "fi.alk.simulate.simulation.engines.local_text",
+        "fi.alk.simulate.agent.definition",
     ):
         assert _module_path(module_name).is_relative_to(FI_ROOT)
 
-    from agent_learning.simulate.agent.definition import AgentDefinition
-    from agent_learning.simulate.environment import WorldContractEnvironment
-    from agent_learning.simulate.manifest import load_manifest_file
-    from agent_learning.simulate.simulation.engines.local_text import LocalTextEngine
-    from agent_learning.simulate.suite import run_eval_suite
+    from fi.alk.simulate.agent.definition import AgentDefinition
+    from fi.alk.simulate.environment import WorldContractEnvironment
+    from fi.alk.simulate.manifest import load_manifest_file
+    from fi.alk.simulate.simulation.engines.local_text import LocalTextEngine
+    from fi.alk.simulate.suite import run_eval_suite
 
     assert AgentDefinition is simulate.AgentDefinition
     assert WorldContractEnvironment is simulate.WorldContractEnvironment
@@ -242,7 +242,7 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
 
 
 def test_browser_cua_probe_scores_local_replay_and_rejects_external_target() -> None:
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     manifest = optimize.build_browser_cua_optimization_manifest(
         name="browser-cua-probe-test",

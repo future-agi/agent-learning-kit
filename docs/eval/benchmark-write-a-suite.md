@@ -70,7 +70,7 @@ The minimum a task must declare — `instruction`, the held-out `checks`, a
 it. A Mapping suite is compiled in place; no file is required:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 suite = {
     "kind": "agent-learning.bench-suite.v1",

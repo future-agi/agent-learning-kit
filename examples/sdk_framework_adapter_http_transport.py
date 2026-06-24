@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-from agent_learning import configure, simulate
+from fi.alk import configure, simulate
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
@@ -215,7 +215,7 @@ def _framework_http_transport_state(
         "kind": "agent-learning.framework-http-transport.v1",
         "framework": framework,
         "transport": "http",
-        "protocol": "agent_learning",
+        "protocol": "fi.alk",
         "endpoint_host": endpoint_host,
         "status_code": 200,
         "success": True,

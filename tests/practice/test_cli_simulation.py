@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 
 
-from agent_learning import cli
-from agent_learning import loss as L
-from agent_learning import simulate as S
+from fi.alk import cli
+from fi.alk import loss as L
+from fi.alk import simulate as S
 
 
 def _write(tmp_path, name, obj):
@@ -93,7 +93,7 @@ def test_simulation_quiet(tmp_path, capsys):
 
 # --- practice family -------------------------------------------------------
 def _practice_manifest(tmp_path):
-    from agent_learning.optimize import build_practice_loop_manifest
+    from fi.alk.optimize import build_practice_loop_manifest
     obj = L.compile_objective({"evals": [{"eval": "agent_report", "weight": 1.0}], "source": "declared",
                               "guards": {"sentinel_rows": ["row_g"], "min_guard_count": 1}})
     sim = {"version": "sha256:v", "inline": {"kind": "agent-learning.simulation.v1", "name": "s",

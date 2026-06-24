@@ -7,7 +7,7 @@ cannot: no network, no host writes, dropped capabilities + no-new-privileges, a
 nosuid tmpfs, capped CPU/memory/PIDs, killed + removed after the run.
 
 Honesty: a Docker run of untrusted candidate code is a genuine **live** event,
-so :func:`agent_learning.bench._coding.run_coding_artifact_in` stamps these rows
+so :func:`fi.alk.bench._coding.run_coding_artifact_in` stamps these rows
 ``evidence_class=live_lane`` (never ``captured_fixture``) — see that module.
 
 This lane is **opt-in** (``sandbox="docker"``) and is NEVER a release-gate

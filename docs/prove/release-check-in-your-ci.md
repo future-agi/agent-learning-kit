@@ -81,7 +81,7 @@ current working directory, so everything above lands under `artifacts/`.
 The same release check from the SDK:
 
 ```python
-from agent_learning import trinity
+from fi.alk import trinity
 
 payload = trinity.release_status(project_root=".")
 assert payload["summary"]["ready"], payload["summary"]["failed_check_count"]

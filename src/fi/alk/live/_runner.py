@@ -57,7 +57,7 @@ def scrubbed_lane_env(required_env: Sequence[str]) -> dict[str, str]:
 
 
 def kit_pythonpath() -> str:
-    """The src/ directory that makes ``agent_learning`` importable in a
+    """The src/ directory that makes ``fi.alk`` importable in a
     worker subprocess (injected at spawn time, ARCH §2b Execution)."""
 
     return str(Path(__file__).resolve().parents[2])

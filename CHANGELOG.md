@@ -25,7 +25,7 @@ First locally-cut v1 release candidate. Package labels: Python
 `agent-learning-kit==0.1.0`, TypeScript `@future-agi/agent-learning-kit==0.2.0`
 (decision records D1/D2; the tag, not the semver, names the product milestone).
 
-- One SDK and CLI (`agent_learning` / `agent-learn`) consolidating the
+- One SDK and CLI (`fi.alk` / `agent-learn`) consolidating the
   `simulate`, `evals`, and `opt` engines — three engines, four workflows
   (test, simulate, red-team, optimize).
 - 66 executable release gates behind `agent-learn release-check`, proved by

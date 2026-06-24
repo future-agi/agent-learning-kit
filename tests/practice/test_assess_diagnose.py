@@ -1,9 +1,9 @@
 """Unit 10 (BBG U10) — ASSESS battery + DIAGNOSE composition."""
 from __future__ import annotations
 
-from agent_learning import loss as L
-from agent_learning.practice import _assess, _diagnose
-from agent_learning.practice._budget import BudgetMeter
+from fi.alk import loss as L
+from fi.alk.practice import _assess, _diagnose
+from fi.alk.practice._budget import BudgetMeter
 
 
 def _objective():

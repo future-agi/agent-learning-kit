@@ -69,7 +69,7 @@ AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY=local-dev-key \
 SDK, the freeze → attach → replay loop:
 
 ```python
-from agent_learning import optimize, simulate
+from fi.alk import optimize, simulate
 
 profiles = simulate.framework_adapter_capability_profiles(
     frameworks=["langgraph", "livekit"],

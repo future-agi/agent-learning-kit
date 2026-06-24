@@ -268,7 +268,7 @@
           "agent-opt/examples/optimize_society_role_graph_strategy.py",
           "agent-opt/internal-docs/optimizer-governance-trace-research.md"
         ],
-        "source": "agent_learning.optimize.build_optimizer_governance_optimization_manifest",
+        "source": "fi.alk.optimize.build_optimizer_governance_optimization_manifest",
         "task_kind": "optimizer_governance"
       },
       "name": "optimizer-governance-optimization",

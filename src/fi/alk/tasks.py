@@ -340,7 +340,7 @@ def _resolve_task_list(
 
 
 # Canonical objective-anchored scoring lives in ``fi`` (the engine) so the
-# optimizer integration can use it WITHOUT importing agent_learning (the
+# optimizer integration can use it WITHOUT importing fi.alk (the
 # vendored_engine_boundary). Re-exported here so B1/B2/B6 call sites are unchanged.
 from fi.opt._objective_scoring import (  # noqa: E402,F401
     METRIC_ALIASES,

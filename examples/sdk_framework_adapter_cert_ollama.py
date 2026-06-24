@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_learning import simulate
+from fi.alk import simulate
 
 
 class LocalOllamaClient:

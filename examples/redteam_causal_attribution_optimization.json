@@ -1247,7 +1247,7 @@
         ]
       },
       "metadata": {
-        "source": "agent_learning.optimize.build_redteam_causal_attribution_optimization_manifest",
+        "source": "fi.alk.optimize.build_redteam_causal_attribution_optimization_manifest",
         "task_kind": "redteam_causal_attribution_graph",
         "coherent_search_paths": [
           "simulation.environments.multi_agent_room.state.causal_attribution.nodes",

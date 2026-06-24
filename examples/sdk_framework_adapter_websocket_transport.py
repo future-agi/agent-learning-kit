@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from agent_learning import configure, simulate
+from fi.alk import configure, simulate
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
@@ -245,7 +245,7 @@ def _framework_websocket_transport_state(
         "kind": "agent-learning.framework-websocket-transport.v1",
         "framework": framework,
         "transport": "websocket",
-        "protocol": "agent_learning",
+        "protocol": "fi.alk",
         "endpoint_host": endpoint_host,
         "status_code": 101,
         "success": True,
@@ -333,7 +333,7 @@ def _framework_trace(framework: str) -> dict[str, Any]:
             "latency_ms": 11.0,
             "attributes": {
                 "network.protocol.name": "websocket",
-                "agent_learning.transport": "websocket",
+                "fi.alk.transport": "websocket",
             },
         },
         {

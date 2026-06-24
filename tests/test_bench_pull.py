@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import bench
-from agent_learning.bench import _pull
+from fi.alk import bench
+from fi.alk.bench import _pull
 
 ROOT = Path(__file__).parent.parent
 PULL_SUITE = ROOT / "examples" / "bench_suites" / "pull_starter.json"

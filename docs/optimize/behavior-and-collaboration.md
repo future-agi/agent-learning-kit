@@ -74,7 +74,7 @@ AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY=local-dev-key \
 SDK, the probe operation:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_multi_agent_room_probe(
     name="sdk-multi-agent-room-probe-optimization",

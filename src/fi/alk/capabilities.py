@@ -261,7 +261,7 @@ def capability_catalog(
 def static_capabilities() -> dict[str, list[str]]:
     """Return capabilities supported by the installed SDK, independent of a run."""
 
-    from agent_learning import simulate, trinity
+    from fi.alk import simulate, trinity
 
     provider_caps = provider_capabilities()
     provider_values = {
@@ -329,7 +329,7 @@ def static_capabilities() -> dict[str, list[str]]:
 
 
 def provider_capabilities() -> dict[str, list[str]]:
-    from agent_learning import simulate
+    from fi.alk import simulate
 
     return {
         _capability_key(provider): sorted(
@@ -603,7 +603,7 @@ def _mapping_keys(value: Any) -> list[Any]:
 
 
 def _consolidation_metadata() -> dict[str, Any]:
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     return trinity.consolidation_metadata()
 

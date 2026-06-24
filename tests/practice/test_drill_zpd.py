@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning.practice import _drill
+from fi.alk.practice import _drill
 
 
 SIM = {"name": "drill", "world": {"kind": "conversation", "spec": {}}, "scenarios": [{"cast": []}],

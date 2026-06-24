@@ -51,7 +51,7 @@ def _clear_lane_flags(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_every_lane_entry_refuses_without_flag_and_imports_no_framework(
     monkeypatch,
 ):
-    from agent_learning.live import (
+    from fi.alk.live import (
         _contract,
         a2a_lane,
         langgraph_lane,
@@ -84,7 +84,7 @@ def test_every_lane_entry_refuses_without_flag_and_imports_no_framework(
 
 
 def test_lane_disabled_error_names_flag_and_opt_in(monkeypatch):
-    from agent_learning.live import _contract
+    from fi.alk.live import _contract
 
     _clear_lane_flags(monkeypatch)
     with pytest.raises(_contract.LaneDisabledError) as excinfo:
@@ -98,7 +98,7 @@ def test_lane_disabled_error_names_flag_and_opt_in(monkeypatch):
 
 
 def test_scrubbed_env_blocks_harness_keys_even_when_declared(monkeypatch):
-    from agent_learning.live._runner import (
+    from fi.alk.live._runner import (
         LANE_BLOCKED_ENV,
         LANE_SAFE_BASE_ENV,
         scrubbed_lane_env,
@@ -121,7 +121,7 @@ def test_scrubbed_env_blocks_harness_keys_even_when_declared(monkeypatch):
 
 
 def test_icc_zero_variance_matrix_is_perfectly_consistent():
-    from agent_learning.live._stats import icc_and_within_variance
+    from fi.alk.live._stats import icc_and_within_variance
 
     icc, within = icc_and_within_variance(np.ones((1, 8)))
     assert icc == 1.0
@@ -133,7 +133,7 @@ def test_icc_zero_variance_matrix_is_perfectly_consistent():
 
 
 def test_divergence_step_locates_the_first_fork():
-    from agent_learning.live._stats import divergence_step
+    from fi.alk.live._stats import divergence_step
 
     assert divergence_step([]) is None
     assert divergence_step([["a", "b"], ["a", "b"]]) is None
@@ -147,7 +147,7 @@ def test_divergence_step_locates_the_first_fork():
 
 
 def test_transcript_cap_retains_head_and_tail_and_marks_incomplete(tmp_path):
-    from agent_learning.live._transcript import TranscriptRecorder
+    from fi.alk.live._transcript import TranscriptRecorder
 
     recorder = TranscriptRecorder(
         tmp_path / "capped.jsonl", required_env=(), max_bytes=700
@@ -174,7 +174,7 @@ def test_transcript_cap_retains_head_and_tail_and_marks_incomplete(tmp_path):
 def test_transcript_redacts_declared_env_values_at_write_time(
     tmp_path, monkeypatch
 ):
-    from agent_learning.live._transcript import TranscriptRecorder
+    from fi.alk.live._transcript import TranscriptRecorder
 
     monkeypatch.setenv("FAKE_LANE_SECRET", "super-secret-credential-value")
     recorder = TranscriptRecorder(
@@ -202,7 +202,7 @@ def _synthetic_lane_result(tmp_path, *, passed: bool = True):
     """A real LaneRunResult built through run_repeated with a synthetic
     run_once that records verifier evidence (extras-free, flag-free)."""
 
-    from agent_learning.live._stats import run_repeated
+    from fi.alk.live._stats import run_repeated
 
     def run_once(index, transcript):
         transcript.record("user", "message", {"turn": 0, "text": "hello"})
@@ -229,7 +229,7 @@ def _synthetic_lane_result(tmp_path, *, passed: bool = True):
 
 
 def test_capture_refuses_candidate_writes_into_the_capture_tree(tmp_path):
-    from agent_learning.live._capture import (
+    from fi.alk.live._capture import (
         CaptureRefusedError,
         capture_to_fixture,
     )
@@ -243,7 +243,7 @@ def test_capture_refuses_candidate_writes_into_the_capture_tree(tmp_path):
 
 
 def test_capture_candidate_keeps_source_class_and_reviewed_false(tmp_path):
-    from agent_learning.live._capture import capture_to_fixture
+    from fi.alk.live._capture import capture_to_fixture
 
     result = _synthetic_lane_result(tmp_path)
     output = tmp_path / "candidates" / "smoke.fixture.json"
@@ -259,7 +259,7 @@ def test_capture_candidate_keeps_source_class_and_reviewed_false(tmp_path):
 
 
 def test_capture_refuses_truncated_transcripts(tmp_path):
-    from agent_learning.live._capture import (
+    from fi.alk.live._capture import (
         CaptureRefusedError,
         capture_to_fixture,
     )
@@ -274,7 +274,7 @@ def test_capture_refuses_truncated_transcripts(tmp_path):
 
 
 def test_capture_round_trip_simulated_review_replays_green(tmp_path):
-    from agent_learning.live._capture import capture_to_fixture, replay_fixture
+    from fi.alk.live._capture import capture_to_fixture, replay_fixture
 
     result = _synthetic_lane_result(tmp_path)
     candidate = capture_to_fixture(
@@ -304,8 +304,8 @@ def test_capture_round_trip_simulated_review_replays_green(tmp_path):
 
 
 def test_version_preflight_mismatch_voids_and_emits_the_finding(tmp_path):
-    from agent_learning.live._runner import version_preflight
-    from agent_learning.live._stats import run_repeated
+    from fi.alk.live._runner import version_preflight
+    from fi.alk.live._stats import run_repeated
 
     preflight = version_preflight(
         ">=9", {"framework": "langgraph", "framework_version": "1.0.0"}
@@ -349,7 +349,7 @@ def test_version_preflight_mismatch_voids_and_emits_the_finding(tmp_path):
 
 
 def test_version_preflight_no_requirement_is_vacuously_ok():
-    from agent_learning.live._runner import version_ok, version_preflight
+    from fi.alk.live._runner import version_ok, version_preflight
 
     assert version_ok(None, None) is True
     assert version_ok("1.2.3", ">=1.2,<2") is True
@@ -447,7 +447,7 @@ def test_credentialed_marker_skips_without_the_credentialed_flag(
 
 
 def test_lane_run_result_round_trips_through_the_run_payload(tmp_path):
-    from agent_learning.live._stats import LaneRunResult, lane_run_payload
+    from fi.alk.live._stats import LaneRunResult, lane_run_payload
 
     result = _synthetic_lane_result(tmp_path)
     payload = lane_run_payload(
@@ -478,7 +478,7 @@ _VOICE_PINNED = "please transfer the balance to my new account right here now"
 
 
 def test_voice_operators_deterministic_under_seed():
-    from agent_learning.live import _perturb
+    from fi.alk.live import _perturb
 
     for fn in (
         _perturb.apply_homophone_swap,
@@ -499,7 +499,7 @@ def test_voice_operators_deterministic_under_seed():
 
 
 def test_voice_operators_table_membership():
-    from agent_learning.live import _perturb
+    from fi.alk.live import _perturb
 
     sentence = "to for right buy cell here new wait aloud cents"  # all homophone keys
     observed_swaps = set()
@@ -524,7 +524,7 @@ def test_voice_operators_table_membership():
 
 
 def test_apply_text_perturbations_voice_dispatch_and_records():
-    from agent_learning.live import _perturb
+    from fi.alk.live import _perturb
 
     turns = [{"user": _VOICE_PINNED}, {"role": "agent", "user": None}]
     perturbed, applied = _perturb.apply_text_perturbations(
@@ -545,7 +545,7 @@ def test_apply_text_perturbations_voice_dispatch_and_records():
 
 
 def test_perturbations_stanza_links_clean_twin():
-    from agent_learning.live import _perturb
+    from fi.alk.live import _perturb
 
     turns = [{"user": _VOICE_PINNED}]
     _, applied = _perturb.apply_text_perturbations(
@@ -566,7 +566,7 @@ def test_perturbations_stanza_links_clean_twin():
 def test_reverb_blend_deterministic_and_text_rung_raises():
     import numpy as np
 
-    from agent_learning.live import _perturb
+    from fi.alk.live import _perturb
 
     x = (0.5 * np.sin(2 * np.pi * 220 * np.arange(8000) / 24000)).astype(np.float32)
     a = _perturb.apply_reverb_blend(x, seed=1142)
@@ -584,7 +584,7 @@ def test_reverb_blend_deterministic_and_text_rung_raises():
 def test_apply_acoustic_perturbations_dispatch_records_and_rung_wall():
     import numpy as np
 
-    from agent_learning.live import _perturb
+    from fi.alk.live import _perturb
 
     x = (0.5 * np.sin(2 * np.pi * 300 * np.arange(8000) / 24000)).astype(np.float32)
     out, applied = _perturb.apply_acoustic_perturbations(
@@ -620,7 +620,7 @@ _RUNG2_TURNS = [
 
 
 def test_rung2_produces_channels_block():
-    from agent_learning.live import livekit_lane
+    from fi.alk.live import livekit_lane
 
     channels, tier, acoustic = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=5
@@ -639,7 +639,7 @@ def test_rung2_produces_channels_block():
 
 
 def test_rung2_codec_none_optout_no_phone_survival():
-    from agent_learning.live import livekit_lane
+    from fi.alk.live import livekit_lane
 
     channels, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback={"codec_profile": "none"}, codec_profile="none", seed=5
@@ -652,7 +652,7 @@ def test_rung2_codec_none_optout_no_phone_survival():
 def test_rung2_evidence_class_never_live_lane():
     # the §2.5 binding correction: every rung-2 artifact is live_stressed /
     # captured_fixture + fidelity_tier deterministic_loopback, NEVER live_lane.
-    from agent_learning.live import livekit_lane, pipecat_lane
+    from fi.alk.live import livekit_lane, pipecat_lane
 
     for mod in (livekit_lane, pipecat_lane):
         channels, tier, _ = mod._rung2_loopback_channels(
@@ -666,7 +666,7 @@ def test_rung2_evidence_class_never_live_lane():
 
 
 def test_rung2_loopback_deterministic_under_seed():
-    from agent_learning.live import livekit_lane
+    from fi.alk.live import livekit_lane
 
     a, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142
@@ -681,7 +681,7 @@ def test_rung2_loopback_deterministic_under_seed():
 
 
 def test_pipecat_rung2_byte_parallel():
-    from agent_learning.live import livekit_lane, pipecat_lane
+    from fi.alk.live import livekit_lane, pipecat_lane
 
     lk, _, _ = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=4
@@ -698,7 +698,7 @@ def test_pipecat_rung2_byte_parallel():
 
 
 def test_rung2_acoustic_operators_apply_over_loopback_and_record():
-    from agent_learning.live import livekit_lane, pipecat_lane
+    from fi.alk.live import livekit_lane, pipecat_lane
 
     for mod in (livekit_lane, pipecat_lane):
         clean, _, clean_app = mod._rung2_loopback_channels(
@@ -735,7 +735,7 @@ def test_rung2_acoustic_operator_determinism_over_loopback():
     # (the acoustic operator over the loopback replays exactly).
     import json
 
-    from agent_learning.live import livekit_lane
+    from fi.alk.live import livekit_lane
 
     a, _, app_a = livekit_lane._rung2_loopback_channels(
         _RUNG2_TURNS, loopback=None, codec_profile="g711_ulaw_8k_ge", seed=1142,
@@ -754,7 +754,7 @@ def test_rung2_acoustic_operator_determinism_over_loopback():
 def test_rung2_acoustic_text_operator_raises_over_pcm():
     # the rung wall runs in both directions: a text-rung operator over the PCM
     # channel is a contract error (mirrors mix_noise over a transcript raising).
-    from agent_learning.live import livekit_lane
+    from fi.alk.live import livekit_lane
 
     with pytest.raises(ValueError):
         livekit_lane._rung2_loopback_channels(
@@ -764,7 +764,7 @@ def test_rung2_acoustic_text_operator_raises_over_pcm():
 
 
 def test_rung3_still_raises_without_keys(monkeypatch):
-    from agent_learning.live import _contract, livekit_lane, pipecat_lane
+    from fi.alk.live import _contract, livekit_lane, pipecat_lane
 
     _clear_lane_flags(monkeypatch)
     monkeypatch.setenv("AGENT_LEARNING_LIVE_LIVEKIT", "1")

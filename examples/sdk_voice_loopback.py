@@ -31,8 +31,8 @@ from typing import Any
 
 import numpy as np
 
-from agent_learning import voice_loop
-from agent_learning.live import _codec, _loopback, _stats
+from fi.alk import voice_loop
+from fi.alk.live import _codec, _loopback, _stats
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURES = EXAMPLE_DIR / "voice_loopback_fixture"
@@ -139,7 +139,7 @@ def _rung2_evidence() -> dict[str, Any]:
     (tier channel_simulated) + the fidelity_tier marker + the §2.5 evidence
     class. The lane dispatch helper is the SAME path the live lane calls."""
 
-    from agent_learning.live import livekit_lane, pipecat_lane
+    from fi.alk.live import livekit_lane, pipecat_lane
 
     lk_channels, lk_tier, _ = livekit_lane._rung2_loopback_channels(
         _TURNS, loopback={"user_wav": _user_wav(), "agent_wav": _agent_wav()},

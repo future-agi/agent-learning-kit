@@ -71,7 +71,7 @@ lands in `capabilities.json`, the profiles bundle in
 The same operations from the SDK:
 
 ```python
-from agent_learning import actions, capabilities, simulate
+from fi.alk import actions, capabilities, simulate
 
 artifact = actions.load_artifact_file("artifacts/run.json")
 catalog = capabilities.capability_catalog(

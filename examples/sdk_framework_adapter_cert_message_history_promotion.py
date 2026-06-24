@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import optimize
+from fi.alk import optimize
 
 
 FAMILY = "message_history"

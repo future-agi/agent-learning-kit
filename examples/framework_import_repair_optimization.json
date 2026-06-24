@@ -412,7 +412,7 @@
             "year": 2026
           }
         ],
-        "source": "agent_learning.optimize.build_framework_import_repair_optimization_manifest",
+        "source": "fi.alk.optimize.build_framework_import_repair_optimization_manifest",
         "task_kind": "framework_import_repair"
       },
       "name": "framework-import-repair-optimization",

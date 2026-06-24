@@ -23,7 +23,7 @@ opt_in_lane: false
 Every `agent-learn` command that produces evidence writes a JSON artifact with
 a top-level `kind` field. The kind universe is closed: the docs gate rejects a
 page that claims to emit a kind outside `V1_DOCS_ALLOWED_ARTIFACT_KINDS`
-(`src/agent_learning/trinity.py`), and `agent-learn release-check` asserts the
+(`src/fi/alk/trinity.py`), and `agent-learn release-check` asserts the
 eleven core kinds in `V1_REQUIRED_SCHEMA_KINDS` are producible. The closed set
 is what makes postconditions one-liners — checking `payload["kind"]` is always
 sufficient to know what you are holding.
@@ -32,7 +32,7 @@ Two values look like kinds but are not artifact kinds:
 `agent-learning.cli.v1` is the CLI payload `schema_version` label, and any
 vendored `agent-simulate.*` value is rewritten to its public
 `agent-learning.*` form by `public_schema_value` /
-`normalize_public_payload` in `src/agent_learning/_schema.py` before an
+`normalize_public_payload` in `src/fi/alk/_schema.py` before an
 artifact is written.
 
 ## 2. Run it

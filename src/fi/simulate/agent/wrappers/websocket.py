@@ -35,7 +35,7 @@ class WebSocketAgentWrapper(AgentWrapper):
         self,
         *,
         endpoint: str,
-        protocol: str = "agent_learning",
+        protocol: str = "fi.alk",
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         api_key_env: Optional[str] = None,
@@ -253,15 +253,15 @@ class WebSocketAgentWrapper(AgentWrapper):
 
 
 def _normalize_protocol(value: str) -> str:
-    protocol = str(value or "agent_learning").lower().replace("-", "_")
+    protocol = str(value or "fi.alk").lower().replace("-", "_")
     aliases = {
-        "agent_learning_websocket": "agent_learning",
-        "websocket": "agent_learning",
-        "ws": "agent_learning",
+        "agent_learning_websocket": "fi.alk",
+        "websocket": "fi.alk",
+        "ws": "fi.alk",
     }
     protocol = aliases.get(protocol, protocol)
-    if protocol != "agent_learning":
-        raise ValueError("protocol must be agent_learning")
+    if protocol != "fi.alk":
+        raise ValueError("protocol must be fi.alk")
     return protocol
 
 

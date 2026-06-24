@@ -373,7 +373,7 @@ def _suite() -> Any:
 
 
 def _agent_learning_suite() -> Any:
-    return optional_module("agent_learning.suite", "trinity")
+    return optional_module("fi.alk.suite", "trinity")
 
 
 def diagnose_text(*args: Any, **kwargs: Any) -> Any:
@@ -2375,7 +2375,7 @@ def build_optimizer_routing_table(
         ),
         "rows": rows,
         "row_count": len(rows),
-        "generated_by": "agent_learning.optimize.build_optimizer_routing_table",
+        "generated_by": "fi.alk.optimize.build_optimizer_routing_table",
     }
 
 
@@ -3149,7 +3149,7 @@ def build_task_optimization_manifest(
         search_space=search_space,
     )
     metadata = {
-        "source": "agent_learning.optimize.build_task_optimization_manifest",
+        "source": "fi.alk.optimize.build_task_optimization_manifest",
         "task_kind": "task",
         **copy.deepcopy(dict(target_metadata or {})),
     }
@@ -3285,7 +3285,7 @@ def build_target_optimization_manifest(
     for key in ("version", "name", "required_env", "optimization"):
         target_base.pop(key, None)
     metadata = {
-        "source": "agent_learning.optimize.build_target_optimization_manifest",
+        "source": "fi.alk.optimize.build_target_optimization_manifest",
         "task_kind": "generic_target",
         **copy.deepcopy(dict(target_metadata or {})),
     }
@@ -3403,7 +3403,7 @@ def build_external_agent_adapter_optimization_manifest(
         base_agent=agent_candidates[0],
         target_metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_external_agent_adapter_optimization_manifest"
             ),
             "cookbook": "external-http-agent-adapter-optimization",
@@ -3514,7 +3514,7 @@ def build_workflow_hook_optimization_manifest(
         base_agent=copy.deepcopy(dict(verified_run["agent"])),
         target_metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_workflow_hook_optimization_manifest"
             ),
             "cookbook": "workflow-hook-optimization",
@@ -3630,7 +3630,7 @@ def build_retrieval_hook_optimization_manifest(
         base_agent=copy.deepcopy(dict(verified_run["agent"])),
         target_metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_retrieval_hook_optimization_manifest"
             ),
             "cookbook": "retrieval-hook-optimization",
@@ -3747,7 +3747,7 @@ def build_evaluation_hook_optimization_manifest(
         base_agent=candidates[0],
         target_metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_evaluation_hook_optimization_manifest"
             ),
             "cookbook": "evaluation-hook-optimization",
@@ -3839,7 +3839,7 @@ def optimize_evaluation_hook_probe(
         base_config=copy.deepcopy(candidates[0]),
         search_space={"evaluation_hook_agent": copy.deepcopy(candidates)},
         metadata={
-            "source": "agent_learning.optimize.optimize_evaluation_hook_probe",
+            "source": "fi.alk.optimize.optimize_evaluation_hook_probe",
             "task_kind": "evaluation_hook_probe",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -3947,7 +3947,7 @@ def build_evaluation_hook_run_manifest_from_probe_optimization(
     manifest_name = str(name or f"{payload.get('name') or 'evaluation-hook-probe'}-run")
     merged_metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_evaluation_hook_run_manifest_from_probe_optimization"
         ),
         "promoted_from_evaluation_hook_probe": True,
@@ -4183,7 +4183,7 @@ def _evaluation_hook_probe_optimization_payload(
             "source_manifest": {
                 "name": name,
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_evaluation_hook_probe",
+                    "source": "fi.alk.optimize.optimize_evaluation_hook_probe",
                     "task_kind": "evaluation_hook_probe",
                     **copy.deepcopy(dict(metadata or {})),
                 },
@@ -4458,7 +4458,7 @@ def build_component_optimization_manifest(
         max_turns=max_turns,
         base_agent=agents[0],
         target_metadata={
-            "source": "agent_learning.optimize.build_component_optimization_manifest",
+            "source": "fi.alk.optimize.build_component_optimization_manifest",
             "cookbook": "component-optimization",
             "task_kind": "component_optimization",
             "observed_failure_report": report_text,
@@ -4607,7 +4607,7 @@ def build_report_repair_optimization_manifest(
         max_turns=3,
         scenario=_default_report_repair_scenario(name),
         target_metadata={
-            "source": "agent_learning.optimize.build_report_repair_optimization_manifest",
+            "source": "fi.alk.optimize.build_report_repair_optimization_manifest",
             "cookbook": "report-repair-optimization",
             "observed_failure_report": report_text,
             "diagnostics": diagnostics,
@@ -4768,7 +4768,7 @@ def build_framework_import_repair_optimization_manifest(
         search_space={},
         target_metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_framework_import_repair_optimization_manifest"
             ),
             "cookbook": "framework-import-repair-optimization",
@@ -4963,7 +4963,7 @@ def build_workspace_import_certification_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_workspace_import_certification_optimization_manifest"
                     ),
                     "cookbook": "workspace-import-certification-optimization",
@@ -5181,7 +5181,7 @@ def build_redteam_readiness_certification_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_redteam_readiness_certification_optimization_manifest"
                     ),
                     "cookbook": "redteam-readiness-certification-optimization",
@@ -5397,7 +5397,7 @@ def build_redteam_corpus_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_redteam_corpus_optimization_manifest"
                     ),
                     "cookbook": "redteam-corpus-optimization",
@@ -5597,7 +5597,7 @@ def build_framework_adapter_matrix_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_framework_adapter_matrix_optimization_manifest"
                     ),
                     "cookbook": "framework-adapter-matrix-optimization",
@@ -5764,7 +5764,7 @@ def build_retrospective_harness_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_retrospective_harness_optimization_manifest"
                     ),
                     "cookbook": "retrospective-harness-optimization",
@@ -5929,7 +5929,7 @@ def build_optimizer_portfolio_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_optimizer_portfolio_optimization_manifest"
                     ),
                     "cookbook": "optimizer-backend-portfolio",
@@ -6102,7 +6102,7 @@ def build_stateful_tool_world_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_stateful_tool_world_optimization_manifest"
                     ),
                     "cookbook": "stateful-tool-world-optimization",
@@ -6261,7 +6261,7 @@ def build_openenv_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_openenv_optimization_manifest"
                     ),
                     "cookbook": "openenv-environment-optimization",
@@ -6426,7 +6426,7 @@ def build_world_model_optimization_manifest(
     target["metadata"] = {
         **copy.deepcopy(dict(target.get("metadata") or {})),
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_world_model_optimization_manifest"
         ),
         "cookbook": "world-model-arena",
@@ -6449,7 +6449,7 @@ def build_world_model_optimization_manifest(
         **metadata,
     }
     manifest["metadata"] = {
-        "source": "agent_learning.optimize.build_world_model_optimization_manifest",
+        "source": "fi.alk.optimize.build_world_model_optimization_manifest",
         "cookbook": "world-model-arena",
         "task_kind": "world_model",
         **copy.deepcopy(dict(manifest.get("metadata") or {})),
@@ -6493,7 +6493,7 @@ def build_world_hooks_optimization_manifest(
 
     metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_world_hooks_optimization_manifest"
         ),
         "cookbook": "native-world-hooks-arena",
@@ -11797,7 +11797,7 @@ def build_orchestration_optimization_manifest(
         search_space=search_space,
         target_base_config=target_base_config,
         target_metadata={
-            "source": "agent_learning.optimize.build_orchestration_optimization_manifest",
+            "source": "fi.alk.optimize.build_orchestration_optimization_manifest",
             "task_kind": "orchestration_stack",
             **copy.deepcopy(dict(target_metadata or {})),
         },
@@ -11911,7 +11911,7 @@ def optimize_orchestration_stack_probe(
         base_config=copy.deepcopy(pair_candidates[0]),
         search_space={"orchestration_stack": copy.deepcopy(pair_candidates)},
         metadata={
-            "source": "agent_learning.optimize.optimize_orchestration_stack_probe",
+            "source": "fi.alk.optimize.optimize_orchestration_stack_probe",
             "task_kind": "orchestration_stack_probe",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -12018,7 +12018,7 @@ def build_orchestration_run_manifest_from_probe_optimization(
     manifest_name = str(name or f"{payload.get('name') or 'orchestration-stack-probe'}-run")
     merged_metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_orchestration_run_manifest_from_probe_optimization"
         ),
         "promoted_from_orchestration_stack_probe": True,
@@ -12306,7 +12306,7 @@ def build_trinity_run_manifest_from_probe_optimization(
         simulation_engine=simulation_engine,
         metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_trinity_run_manifest_from_probe_optimization"
             ),
             "promoted_from_trinity_stack_probe": True,
@@ -12415,7 +12415,7 @@ def _trinity_evaluation_hook_config(
             success_criteria=success_criteria,
             threshold_metric_weight=10.0,
             metadata={
-                "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+                "source": "fi.alk.optimize.optimize_trinity_stack_probe",
                 **copy.deepcopy(dict(metadata or {})),
             },
         )
@@ -12436,7 +12436,7 @@ def _trinity_evaluation_hook_config(
                 if api_key_env
                 else {},
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+                    "source": "fi.alk.optimize.optimize_trinity_stack_probe",
                     **copy.deepcopy(dict(metadata or {})),
                 },
             }
@@ -12630,7 +12630,7 @@ def _trinity_stack_probe_optimization_payload(
                     "harness",
                 ],
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+                    "source": "fi.alk.optimize.optimize_trinity_stack_probe",
                     "task_kind": "trinity_stack_probe",
                     **copy.deepcopy(dict(metadata or {})),
                 },
@@ -12647,7 +12647,7 @@ def _trinity_stack_probe_optimization_payload(
         "evaluation_hook_probe": copy.deepcopy(dict(evaluation_hook_probe)),
         "evaluation_hook_probe_score": copy.deepcopy(dict(evaluation_hook_score)),
         "metadata": {
-            "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+            "source": "fi.alk.optimize.optimize_trinity_stack_probe",
             **copy.deepcopy(dict(metadata or {})),
         },
     }
@@ -13112,7 +13112,7 @@ def _orchestration_probe_optimization_payload(
                 "name": name,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "optimize_orchestration_stack_probe"
                     ),
                     "task_kind": "orchestration_stack_probe",
@@ -13350,7 +13350,7 @@ def build_world_framework_memory_optimization_manifest(
 
     metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_world_framework_memory_optimization_manifest"
         ),
         "cookbook": "world-framework-memory-architecture",
@@ -13513,7 +13513,7 @@ def build_multi_agent_optimization_manifest(
         auto_execute_tools=auto_execute_tools,
         search_space=search_space,
         target_metadata={
-            "source": "agent_learning.optimize.build_multi_agent_optimization_manifest",
+            "source": "fi.alk.optimize.build_multi_agent_optimization_manifest",
             "task_kind": "multi_agent_coordination",
             **copy.deepcopy(dict(target_metadata or {})),
         },
@@ -13585,7 +13585,7 @@ def optimize_multi_agent_room_probe(
         base_config=copy.deepcopy(pair_candidates[0]),
         search_space={"agent_room": copy.deepcopy(pair_candidates)},
         metadata={
-            "source": "agent_learning.optimize.optimize_multi_agent_room_probe",
+            "source": "fi.alk.optimize.optimize_multi_agent_room_probe",
             "task_kind": "multi_agent_room_probe",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -13685,7 +13685,7 @@ def build_multi_agent_run_manifest_from_probe_optimization(
 
     merged_metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_multi_agent_run_manifest_from_probe_optimization"
         ),
         "promoted_from_multi_agent_room_probe": True,
@@ -13944,7 +13944,7 @@ def _multi_agent_probe_optimization_payload(
             "source_manifest": {
                 "name": name,
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_multi_agent_room_probe",
+                    "source": "fi.alk.optimize.optimize_multi_agent_room_probe",
                     "task_kind": "multi_agent_room_probe",
                     **copy.deepcopy(dict(metadata or {})),
                 },
@@ -14210,7 +14210,7 @@ def build_realtime_optimization_manifest(
         search_space=search_space,
         target_base_config={"simulation": {"modality": modality}},
         target_metadata={
-            "source": "agent_learning.optimize.build_realtime_optimization_manifest",
+            "source": "fi.alk.optimize.build_realtime_optimization_manifest",
             "task_kind": "realtime_voice_streaming",
             "framework": framework,
             **copy.deepcopy(dict(target_metadata or {})),
@@ -14299,7 +14299,7 @@ def optimize_realtime_stack_probe(
         base_config=copy.deepcopy(pair_candidates[0]),
         search_space={"realtime_stack": copy.deepcopy(pair_candidates)},
         metadata={
-            "source": "agent_learning.optimize.optimize_realtime_stack_probe",
+            "source": "fi.alk.optimize.optimize_realtime_stack_probe",
             "task_kind": "realtime_stack_probe",
             "framework": framework,
             **copy.deepcopy(dict(metadata or {})),
@@ -14414,7 +14414,7 @@ def build_realtime_run_manifest_from_probe_optimization(
     manifest_name = str(name or f"{payload.get('name') or 'realtime-stack-probe'}-run")
     merged_metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_realtime_run_manifest_from_probe_optimization"
         ),
         "promoted_from_realtime_stack_probe": True,
@@ -14680,7 +14680,7 @@ def _realtime_probe_optimization_payload(
             "source_manifest": {
                 "name": name,
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_realtime_stack_probe",
+                    "source": "fi.alk.optimize.optimize_realtime_stack_probe",
                     "task_kind": "realtime_stack_probe",
                     "framework": framework,
                     **copy.deepcopy(dict(metadata or {})),
@@ -14926,7 +14926,7 @@ def build_memory_optimization_manifest(
         auto_execute_tools=auto_execute_tools,
         search_space=search_space,
         target_metadata={
-            "source": "agent_learning.optimize.build_memory_optimization_manifest",
+            "source": "fi.alk.optimize.build_memory_optimization_manifest",
             "task_kind": "memory_retrieval",
             **copy.deepcopy(dict(target_metadata or {})),
         },
@@ -14988,7 +14988,7 @@ def optimize_memory_layer_probe(
         base_config={"memory": copy.deepcopy(candidate_configs[0])},
         search_space={"memory": copy.deepcopy(candidate_configs)},
         metadata={
-            "source": "agent_learning.optimize.optimize_memory_layer_probe",
+            "source": "fi.alk.optimize.optimize_memory_layer_probe",
             "task_kind": "memory_layer_probe",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -15080,7 +15080,7 @@ def build_memory_run_manifest_from_probe_optimization(
 
     merged_metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_memory_run_manifest_from_probe_optimization"
         ),
         "promoted_from_memory_layer_probe": True,
@@ -15357,7 +15357,7 @@ def _memory_probe_optimization_payload(
             "source_manifest": {
                 "name": name,
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_memory_layer_probe",
+                    "source": "fi.alk.optimize.optimize_memory_layer_probe",
                     "task_kind": "memory_layer_probe",
                     **copy.deepcopy(dict(metadata or {})),
                 },
@@ -15625,7 +15625,7 @@ def build_artifact_optimization_suite(
                 },
                 "search_space": search_space,
                 "metadata": {
-                    "source": "agent_learning.optimize.build_artifact_optimization_suite",
+                    "source": "fi.alk.optimize.build_artifact_optimization_suite",
                     "task_kind": "artifact_evidence",
                     **copy.deepcopy(dict(target_metadata or {})),
                 },
@@ -15692,7 +15692,7 @@ def build_artifact_action_optimization_manifest(
     if not name:
         raise ValueError("name is required")
     artifact_path_value = str(artifact_path)
-    from agent_learning import actions as action_api
+    from fi.alk import actions as action_api
 
     source_artifact = (
         copy.deepcopy(dict(artifact))
@@ -15805,7 +15805,7 @@ def build_artifact_action_optimization_manifest(
         },
         "metadata": {
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_artifact_action_optimization_manifest"
             ),
             "task_kind": "artifact_action_optimization",
@@ -15843,7 +15843,7 @@ def build_artifact_action_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_artifact_action_optimization_manifest"
                     ),
                     "task_kind": "artifact_action_optimization",
@@ -15960,7 +15960,7 @@ def build_eval_suite_optimization_manifest(
         ],
         threshold=threshold,
         metadata={
-            "source": "agent_learning.optimize.build_eval_suite_optimization_manifest",
+            "source": "fi.alk.optimize.build_eval_suite_optimization_manifest",
             "task_kind": "eval_suite_optimization",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -15976,7 +15976,7 @@ def build_eval_suite_optimization_manifest(
             "search_space": search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_eval_suite_optimization_manifest"
                 ),
                 "task_kind": "eval_suite_optimization",
@@ -16100,7 +16100,7 @@ def build_redteam_optimization_manifest(
                 },
                 "search_space": search_space,
                 "metadata": {
-                    "source": "agent_learning.optimize.build_redteam_optimization_manifest",
+                    "source": "fi.alk.optimize.build_redteam_optimization_manifest",
                     "task_kind": "redteam_campaign",
                 },
             },
@@ -16209,7 +16209,7 @@ def build_redteam_autogen_optimization_manifest(
     metadata.update(
         {
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_redteam_autogen_optimization_manifest"
             ),
             "task_kind": "redteam_autogen_campaign",
@@ -16335,7 +16335,7 @@ def build_adaptive_redteam_optimization_manifest(
         )
     )
 
-    from agent_learning import redteam as redteam_facade
+    from fi.alk import redteam as redteam_facade
 
     manifest = redteam_facade.build_redteam_manifest(
         name=name,
@@ -16416,7 +16416,7 @@ def build_adaptive_redteam_optimization_manifest(
             "search_space": diagnosed_search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_adaptive_redteam_optimization_manifest"
                 ),
                 "task_kind": "adaptive_redteam_campaign",
@@ -16579,7 +16579,7 @@ def build_redteam_attack_evolution_optimization_manifest(
         )
     )
 
-    from agent_learning import redteam as redteam_facade
+    from fi.alk import redteam as redteam_facade
 
     manifest = redteam_facade.build_redteam_manifest(
         name=name,
@@ -16625,7 +16625,7 @@ def build_redteam_attack_evolution_optimization_manifest(
             "search_space": search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_redteam_attack_evolution_optimization_manifest"
                 ),
                 "task_kind": "redteam_attack_evolution",
@@ -16739,7 +16739,7 @@ def build_persistent_state_redteam_optimization_manifest(
         if not candidate:
             raise ValueError(f"candidate_environments[{index}] must not be empty")
 
-    from agent_learning import redteam as redteam_facade
+    from fi.alk import redteam as redteam_facade
 
     seed_manifest = redteam_facade.build_persistent_state_redteam_manifest(
         name=name,
@@ -16787,7 +16787,7 @@ def build_persistent_state_redteam_optimization_manifest(
             "search_space": search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_persistent_state_redteam_optimization_manifest"
                 ),
                 "task_kind": "persistent_state_redteam_defense",
@@ -16912,7 +16912,7 @@ def build_long_horizon_redteam_optimization_manifest(
         )
     )
 
-    from agent_learning import redteam as redteam_facade
+    from fi.alk import redteam as redteam_facade
 
     manifest = redteam_facade.build_redteam_manifest(
         name=name,
@@ -16952,7 +16952,7 @@ def build_long_horizon_redteam_optimization_manifest(
             "search_space": search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_long_horizon_redteam_optimization_manifest"
                 ),
                 "task_kind": "long_horizon_redteam_attack_system",
@@ -17060,7 +17060,7 @@ def build_redteam_society_optimization_manifest(
         )
     )
 
-    from agent_learning import redteam as redteam_facade
+    from fi.alk import redteam as redteam_facade
 
     manifest = redteam_facade.build_redteam_manifest(
         name=name,
@@ -17104,7 +17104,7 @@ def build_redteam_society_optimization_manifest(
             "search_space": search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_redteam_society_optimization_manifest"
                 ),
                 "task_kind": "redteam_society_council",
@@ -17211,7 +17211,7 @@ def build_redteam_causal_attribution_optimization_manifest(
         )
     )
 
-    from agent_learning import redteam as redteam_facade
+    from fi.alk import redteam as redteam_facade
 
     manifest = redteam_facade.build_redteam_manifest(
         name=name,
@@ -17256,7 +17256,7 @@ def build_redteam_causal_attribution_optimization_manifest(
             "search_space": search_space,
             "metadata": {
                 "source": (
-                    "agent_learning.optimize."
+                    "fi.alk.optimize."
                     "build_redteam_causal_attribution_optimization_manifest"
                 ),
                 "task_kind": "redteam_causal_attribution_graph",
@@ -17387,7 +17387,7 @@ def build_agent_control_plane_optimization_manifest(
                 },
                 "search_space": search_space,
                 "metadata": {
-                    "source": "agent_learning.optimize.build_agent_control_plane_optimization_manifest",
+                    "source": "fi.alk.optimize.build_agent_control_plane_optimization_manifest",
                     "task_kind": "agent_control_plane",
                     **copy.deepcopy(dict(target_metadata or {})),
                 },
@@ -17523,7 +17523,7 @@ def build_browser_cua_optimization_manifest(
                 },
                 "search_space": search_space,
                 "metadata": {
-                    "source": "agent_learning.optimize.build_browser_cua_optimization_manifest",
+                    "source": "fi.alk.optimize.build_browser_cua_optimization_manifest",
                     "task_kind": "browser_cua",
                     **copy.deepcopy(dict(target_metadata or {})),
                 },
@@ -17630,7 +17630,7 @@ def optimize_browser_cua_probe(
         base_config=copy.deepcopy(pair_candidates[0]),
         search_space={"browser_cua": copy.deepcopy(pair_candidates)},
         metadata={
-            "source": "agent_learning.optimize.optimize_browser_cua_probe",
+            "source": "fi.alk.optimize.optimize_browser_cua_probe",
             "task_kind": "browser_cua_probe",
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -17739,7 +17739,7 @@ def build_browser_cua_run_manifest_from_probe_optimization(
     manifest_name = str(name or f"{payload.get('name') or 'browser-cua-probe'}-run")
     merged_metadata = {
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_browser_cua_run_manifest_from_probe_optimization"
         ),
         "promoted_from_browser_cua_probe": True,
@@ -18039,7 +18039,7 @@ def _browser_cua_probe_optimization_payload(
             "source_manifest": {
                 "name": name,
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_browser_cua_probe",
+                    "source": "fi.alk.optimize.optimize_browser_cua_probe",
                     "task_kind": "browser_cua_probe",
                     **copy.deepcopy(dict(metadata or {})),
                 },
@@ -18350,7 +18350,7 @@ def build_agent_integration_optimization_manifest(
                 },
                 "search_space": search_space,
                 "metadata": {
-                    "source": "agent_learning.optimize.build_agent_integration_optimization_manifest",
+                    "source": "fi.alk.optimize.build_agent_integration_optimization_manifest",
                     "task_kind": "agent_integration",
                     "research_sources": _default_agent_integration_research_sources(),
                     "original_synthesis": (
@@ -18508,7 +18508,7 @@ def build_workspace_observability_optimization_manifest(
                 },
                 "search_space": search_space,
                 "metadata": {
-                    "source": "agent_learning.optimize.build_workspace_observability_optimization_manifest",
+                    "source": "fi.alk.optimize.build_workspace_observability_optimization_manifest",
                     "task_kind": "workspace_observability",
                     **copy.deepcopy(dict(target_metadata or {})),
                 },
@@ -18648,7 +18648,7 @@ def build_framework_certification_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_framework_certification_optimization_manifest"
                     ),
                     "task_kind": "framework_certification",
@@ -18772,7 +18772,7 @@ def build_autonomous_redteam_task_world_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_autonomous_redteam_task_world_optimization_manifest"
                     ),
                     "task_kind": "autonomous_redteam_task_world",
@@ -18897,7 +18897,7 @@ def build_multi_agent_framework_handoff_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_multi_agent_framework_handoff_optimization_manifest"
                     ),
                     "task_kind": "multi_agent_framework_handoff",
@@ -19025,7 +19025,7 @@ def build_optimizer_governance_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_optimizer_governance_optimization_manifest"
                     ),
                     "task_kind": "optimizer_governance",
@@ -19129,7 +19129,7 @@ def build_social_memory_framework_optimization_manifest(
         auto_execute_tools=True,
         target_metadata={
             "source": (
-                "agent_learning.optimize."
+                "fi.alk.optimize."
                 "build_social_memory_framework_optimization_manifest"
             ),
             "task_kind": "social_memory_framework",
@@ -19242,7 +19242,7 @@ def build_multimodal_image_optimization_manifest(
                 "search_space": search_space,
                 "metadata": {
                     "source": (
-                        "agent_learning.optimize."
+                        "fi.alk.optimize."
                         "build_multimodal_image_optimization_manifest"
                     ),
                     "task_kind": "multimodal_image",
@@ -19338,7 +19338,7 @@ def build_framework_optimization_manifest(
         max_turns=1,
         base_agent=base_agent,
         target_metadata={
-            "source": "agent_learning.optimize.build_framework_optimization_manifest",
+            "source": "fi.alk.optimize.build_framework_optimization_manifest",
             "task_kind": "framework_adapter",
             "framework": framework,
         },
@@ -19462,7 +19462,7 @@ def optimize_framework_adapter_probe(
         },
         search_space={"adapter": copy.deepcopy(candidate_configs)},
         metadata={
-            "source": "agent_learning.optimize.optimize_framework_adapter_probe",
+            "source": "fi.alk.optimize.optimize_framework_adapter_probe",
             "task_kind": "framework_adapter_probe",
             "framework": framework,
             "adapter_candidate_source": candidate_source,
@@ -19617,7 +19617,7 @@ def build_framework_run_manifest_from_local_adapter(
         auto_evaluation_config=auto_evaluation_config,
         threshold=threshold,
         metadata={
-            "source": "agent_learning.optimize.build_framework_run_manifest_from_local_adapter",
+            "source": "fi.alk.optimize.build_framework_run_manifest_from_local_adapter",
             **copy.deepcopy(dict(metadata or {})),
         },
         factory=selected_factory,
@@ -19717,7 +19717,7 @@ async def run_framework_adapter_from_local_adapter(
     payload["summary"] = summary
     payload["metadata"] = {
         **_plain_mapping(payload.get("metadata")),
-        "source": "agent_learning.optimize.run_framework_adapter_from_local_adapter",
+        "source": "fi.alk.optimize.run_framework_adapter_from_local_adapter",
         "framework_adapter_direct_run": True,
     }
     if include_manifest:
@@ -19838,7 +19838,7 @@ def build_framework_run_manifest_from_probe_optimization(
         **copy.deepcopy(adapter_metadata),
         **copy.deepcopy(dict(metadata or {})),
         "source": (
-            "agent_learning.optimize."
+            "fi.alk.optimize."
             "build_framework_run_manifest_from_probe_optimization"
         ),
         "promoted_from_framework_adapter_probe": True,
@@ -22303,7 +22303,7 @@ def _framework_probe_optimization_payload(
             "source_manifest": {
                 "name": name,
                 "metadata": {
-                    "source": "agent_learning.optimize.optimize_framework_adapter_probe",
+                    "source": "fi.alk.optimize.optimize_framework_adapter_probe",
                     "task_kind": "framework_adapter_probe",
                     "framework": framework,
                     "target": target,
@@ -26775,7 +26775,7 @@ def _weak_workspace_import_certification_candidate(
                 },
                 {
                     "id": "framework_import_probe",
-                    "command": "python -m agent_learning.simulate probe-framework-imports",
+                    "command": "python -m fi.alk.simulate probe-framework-imports",
                     "status": "failed",
                     "exit_code": 1,
                     "signals": ["framework_import", "import_error"],
@@ -29910,7 +29910,7 @@ def _weak_harness_trajectory_replay_artifact(name: str) -> dict[str, Any]:
             }
         ],
         metadata={
-            "source": "agent_learning.optimize.weak_harness_trajectory_replay",
+            "source": "fi.alk.optimize.weak_harness_trajectory_replay",
             "candidate_profile": "weak_missing_attribution_and_repair",
         },
     )
@@ -29954,7 +29954,7 @@ def _weak_optimizer_backend_portfolio_artifact(name: str) -> dict[str, Any]:
             "selected_backend_required": True,
         },
         metadata={
-            "source": "agent_learning.optimize.weak_optimizer_portfolio",
+            "source": "fi.alk.optimize.weak_optimizer_portfolio",
             "candidate_profile": "weak_single_backend_no_consensus",
             "requires_external_service": False,
             "local_only": True,
@@ -34656,7 +34656,7 @@ def _external_agent_adapter_candidates(
     return [
         candidate(
             agent_type="http",
-            protocol="agent_learning",
+            protocol="fi.alk",
             include_tools=True,
             profile="raw_http_agent_learning_payload",
         ),
@@ -36029,7 +36029,7 @@ def __getattr__(name: str) -> Any:
     module_name = _OPTIMIZE_EXPORTS.get(name)
     if module_name is None:
         raise AttributeError(
-            f"module `agent_learning.optimize` has no attribute `{name}`"
+            f"module `fi.alk.optimize` has no attribute `{name}`"
         )
     return getattr(optional_module(module_name, _OPTIMIZE_EXTRA), name)
 

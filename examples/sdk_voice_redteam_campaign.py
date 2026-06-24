@@ -30,8 +30,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from agent_learning import live, redteam
-from agent_learning.live import _perturb
+from fi.alk import live, redteam
+from fi.alk.live import _perturb
 from fi.simulate.simulation.models import Persona, Scenario
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
@@ -278,8 +278,8 @@ def _pack(output_path: Path | None) -> dict[str, Any]:
     """Synthetic-LaneRunResult capture candidate + reviewed tmp capture +
     credential-free replay, with the attack extras riding the scenario block."""
 
-    from agent_learning.live._capture import capture_to_fixture, replay_fixture
-    from agent_learning.live._stats import run_repeated
+    from fi.alk.live._capture import capture_to_fixture, replay_fixture
+    from fi.alk.live._stats import run_repeated
 
     voice_block = {
         "attack_type": "credential_exfiltration",
@@ -413,7 +413,7 @@ def _rung2_acoustic() -> dict[str, Any]:
     ``phone_survival`` (``channel_simulated`` + the 3 evidence fields), never a
     research pin; ``reverb_blend`` (the BBG-deferred operator) is registered."""
 
-    from agent_learning.live import _perturb, livekit_lane, pipecat_lane
+    from fi.alk.live import _perturb, livekit_lane, pipecat_lane
 
     turns = [
         {"user": "please confirm my appointment and transfer the balance"},
@@ -500,7 +500,7 @@ def _rung2_acoustic() -> dict[str, Any]:
     byte_parallel_lanes = lk_keys == set(pc) and a["rung"] == pc["rung"]
 
     # attack_rung correctness: the canonical "acoustic" token (V1_VOICE_ATTACK_RUNGS).
-    from agent_learning.live import voice_redteam
+    from fi.alk.live import voice_redteam
 
     attack_rung_canonical = (
         voice_redteam.ATTACK_RUNG_ACOUSTIC == "acoustic"
@@ -567,7 +567,7 @@ def run(output_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def _voice_surfaces_observed() -> list[str]:
-    from agent_learning import trinity
+    from fi.alk import trinity
 
     return list(trinity.V1_REDTEAM_VOICE_SURFACES)
 

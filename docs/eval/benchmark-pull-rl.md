@@ -72,7 +72,7 @@ observation keys differ per env (`reach_target` exposes `pos` / `target` /
 `remaining`), so a portable policy branches on what it sees:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 
 def policy(obs: dict) -> str:

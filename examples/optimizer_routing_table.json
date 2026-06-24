@@ -3,7 +3,7 @@
     "local_gate",
     "captured_fixture"
   ],
-  "generated_by": "agent_learning.optimize.build_optimizer_routing_table",
+  "generated_by": "fi.alk.optimize.build_optimizer_routing_table",
   "kind": "agent-learning.optimizer-routing-table.v1",
   "row_count": 17,
   "rows": [

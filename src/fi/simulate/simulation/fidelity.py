@@ -8,7 +8,7 @@ NEVER a standalone artifact kind (ARCH §4).
 
 Persona fidelity carries its OWN three-valued vocabulary (ARCH Decision 2);
 the kit's frozen row verdicts (``live/_contract.py``) are untouched and this
-module never imports ``agent_learning``.
+module never imports ``fi.alk``.
 
 The floor table below is V1-constant-shaped data living with the engine for
 now; the trinity ``V1_PERSONA_FIDELITY_FLOORS`` constants land with the gate

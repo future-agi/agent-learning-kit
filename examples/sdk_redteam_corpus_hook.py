@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-from agent_learning import configure, redteam
+from fi.alk import configure, redteam
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY"

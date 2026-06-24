@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from agent_learning import bench, tasks
+from fi.alk import bench, tasks
 
 ROOT = Path(__file__).parent.parent
 SUITE = ROOT / "examples" / "task_datasets" / "support_starter.json"

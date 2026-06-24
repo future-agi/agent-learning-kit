@@ -337,7 +337,7 @@ def _synthesized_report_artifact(
     source_path: str | Path,
 ) -> Optional[dict[str, Any]]:
     try:
-        cli = importlib.import_module("agent_learning.simulate.cli")
+        cli = importlib.import_module("fi.alk.simulate.cli")
         report = cli._report_result(
             source=artifact,
             source_path=Path(source_path),
@@ -498,7 +498,7 @@ def _dispatch_action_command(command_args: list[str], *, cwd: Path) -> dict[str,
     try:
         os.chdir(cwd)
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            cli = importlib.import_module("agent_learning.cli")
+            cli = importlib.import_module("fi.alk.cli")
             exit_code = int(cli.main(command_args[1:]))
     finally:
         os.chdir(previous_cwd)

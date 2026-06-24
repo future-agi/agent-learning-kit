@@ -26,9 +26,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import telemetry
-from agent_learning._schema import public_payload
-from agent_learning.telemetry import _sync
+from fi.alk import telemetry
+from fi.alk._schema import public_payload
+from fi.alk.telemetry import _sync
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 FIXTURE_DIR = EXAMPLE_DIR / "telemetry_ledger_fixture"

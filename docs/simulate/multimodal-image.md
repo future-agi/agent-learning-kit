@@ -74,7 +74,7 @@ SDK (same operation as the first command):
 ```python
 import asyncio
 import os
-from agent_learning import simulate
+from fi.alk import simulate
 
 os.environ.setdefault("AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_SIMULATION_KEY", "offline-demo-key")
 manifest = simulate.build_multimodal_image_run_manifest(name="multimodal-image-simulation")

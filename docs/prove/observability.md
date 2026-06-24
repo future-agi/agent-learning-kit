@@ -74,7 +74,7 @@ The same operations from the SDK:
 ```python
 import os
 
-from agent_learning import optimize
+from fi.alk import optimize
 
 os.environ.setdefault(
     "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY", "local-offline"

@@ -25,7 +25,7 @@ import os
 
 import pytest
 
-from agent_learning import optimize, trinity
+from fi.alk import optimize, trinity
 
 _MODALITY_VOICE_CELL = "livekit/voice_agent/society"
 _MODALITY_IMAGE_CELL = "llamaindex/image_agent/society"

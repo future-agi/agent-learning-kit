@@ -74,7 +74,7 @@ agent-learn optimize examples/optimization_manifest.json \
 SDK — the default picker and the table builder:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 # Omitted optimizer: the committed routing table picks, with citations.
 manifest = optimize.build_target_optimization_manifest(

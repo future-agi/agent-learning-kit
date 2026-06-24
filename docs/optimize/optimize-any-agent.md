@@ -62,7 +62,7 @@ agent-learn optimize examples/optimization_manifest.json \
 SDK, the same operation over explicit target paths (condensed from the twin):
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_target(
     name="sdk-target-optimization",

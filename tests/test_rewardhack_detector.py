@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning import rewardhack
+from fi.alk import rewardhack
 
 
 def _objective(anchor_terms=("task_success",), canary=None, sentinel=None) -> dict:

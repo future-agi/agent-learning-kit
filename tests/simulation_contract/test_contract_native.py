@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import simulate as S
+from fi.alk import simulate as S
 from fi.simulate.cli import _run_local_text_manifest, load_manifest
 from fi.simulate.manifest import ManifestError
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_learning import loss as L
-from agent_learning.loss import ObjectiveError
+from fi.alk import loss as L
+from fi.alk.loss import ObjectiveError
 
 
 def _declared(evals=None, **over):

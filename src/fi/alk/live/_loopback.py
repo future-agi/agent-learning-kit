@@ -12,7 +12,7 @@ Lane-agnostic substrate shared by both voice lanes at their identical rung-2
 
 Imports are STDLIB + numpy ONLY (the no-extras release env; the
 ``live_lane_boundary`` gate scans this module like any release module —
-no ``agent_learning.live``-prefixed import). ``wave`` decodes PCM-WAV → numpy;
+no ``fi.alk.live``-prefixed import). ``wave`` decodes PCM-WAV → numpy;
 no ``soundfile``/``librosa``/``scipy``. 9A introduces zero new dependency.
 
 The loopback's ONLY evidence-bearing output is two numpy PCM arrays

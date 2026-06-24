@@ -62,7 +62,7 @@ agent-learn eval-task examples/task_evidence.json \
 SDK — the same two operations:
 
 ```python
-from agent_learning import evals
+from fi.alk import evals
 
 suite_result = evals.run_eval_suite_file("examples/eval_suite.json")
 task_result = evals.evaluate_task_evidence_file(

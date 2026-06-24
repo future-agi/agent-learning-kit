@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from agent_learning import trinity
+from fi.alk import trinity
 
 ROOT = Path(__file__).parent.parent
 
@@ -32,7 +32,7 @@ def test_gate_status_clean_on_shipped_example() -> None:
 
 
 def test_byte_pin_matches_shipped_dataset() -> None:
-    from agent_learning import tasks
+    from fi.alk import tasks
 
     ds = tasks.load_task_dataset(ROOT / "examples" / "task_datasets" / "support_starter.json")
     assert ds["version"] == trinity.V1_TASK_BENCHMARK_DATASET_PINNED_VERSION

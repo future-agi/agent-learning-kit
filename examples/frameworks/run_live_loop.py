@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv("/Users/nikhilpareek/Documents/futureAGI/code/core/future-agi/futureagi/.env", override=False)
 
-from agent_learning import improve, tasks  # noqa: E402
+from fi.alk import improve, tasks  # noqa: E402
 
 KIT = "/Users/nikhilpareek/Documents/futureAGI/code/core/agent-learning-kit"
 

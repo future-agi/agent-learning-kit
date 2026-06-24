@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, redteam, simulate
+from fi.alk import configure, redteam, simulate
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY"

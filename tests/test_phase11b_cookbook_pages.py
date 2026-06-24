@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import trinity
+from fi.alk import trinity
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs/frameworks"

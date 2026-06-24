@@ -68,7 +68,7 @@ AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=offline-demo-key \
 SDK (same operations the examples perform):
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_world_hooks(
     name="world-hooks-optimization",

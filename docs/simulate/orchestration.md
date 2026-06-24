@@ -64,7 +64,7 @@ SDK (the operation the twin performs):
 
 ```python
 import asyncio
-from agent_learning import optimize, simulate
+from fi.alk import optimize, simulate
 
 manifest = optimize.build_framework_run_manifest_from_local_adapter(
     target="examples/sdk_framework_adapter_orchestration_trace.py:LocalLangGraphOrchestrationAgent",

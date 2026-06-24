@@ -59,7 +59,7 @@ agent-learn eval-artifact examples/fixtures/task_artifacts/refund_task_run.json 
 SDK — the same operation:
 
 ```python
-from agent_learning import evals
+from fi.alk import evals
 
 config = evals.load_artifact_file("examples/artifact_task_eval_config.json")
 result = evals.evaluate_artifact_file(

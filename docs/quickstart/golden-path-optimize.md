@@ -63,7 +63,7 @@ agent-learn optimize manifests/optimize.json --output artifacts/optimization.jso
 SDK, same operation:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 preview = optimize.optimize_manifest_file("manifests/optimize.json", dry_run=True)
 result = optimize.optimize_manifest_file("manifests/optimize.json")

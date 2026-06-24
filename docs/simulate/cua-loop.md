@@ -63,7 +63,7 @@ python examples/sdk_cua_loop.py artifacts/cua-loop.json
 SDK (the operation the twin performs):
 
 ```python
-from agent_learning import cua_loop
+from fi.alk import cua_loop
 from fi.simulate.environment import BrowserEnvironment
 from fi.simulate.simulation import contract
 

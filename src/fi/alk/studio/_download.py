@@ -69,7 +69,7 @@ def _now() -> str:
 def _config(config: Optional[Any]) -> Any:
     if config is not None:
         return config
-    from agent_learning.config import AgentLearningConfig, current_config, get_api_key
+    from fi.alk.config import AgentLearningConfig, current_config, get_api_key
 
     cfg = AgentLearningConfig.from_env()
     if not cfg.api_key:

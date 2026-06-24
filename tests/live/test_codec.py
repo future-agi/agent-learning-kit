@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from agent_learning.live import _codec
+from fi.alk.live import _codec
 
 
 def _tone(hz: float, n: int = 24000, rate: int = 24000, amp: float = 0.5) -> np.ndarray:
@@ -121,7 +121,7 @@ def test_codec_unsupported_raises_for_opus_when_absent():
 
 
 def test_facade_exports():
-    from agent_learning.live import score_codec_survival, CodecUnsupportedError
+    from fi.alk.live import score_codec_survival, CodecUnsupportedError
 
     assert callable(score_codec_survival)
     assert issubclass(CodecUnsupportedError, RuntimeError)

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import simulate
+from fi.alk import simulate
 
 
 FRAMEWORKS = [

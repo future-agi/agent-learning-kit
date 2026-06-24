@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from agent_learning import cua_loop
-from agent_learning import trinity
+from fi.alk import cua_loop
+from fi.alk import trinity
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = PROJECT_ROOT
@@ -63,7 +63,7 @@ def test_cua_canon_constants_shape() -> None:
 
 def test_cua_no_perturb_module() -> None:
     # 9C-A1c: there is NO cua_perturb.py module.
-    assert importlib.util.find_spec("agent_learning.cua_perturb") is None
+    assert importlib.util.find_spec("fi.alk.cua_perturb") is None
     # and cua_loop exposes no apply_cua_perturbations symbol.
     assert not hasattr(cua_loop, "apply_cua_perturbations")
 
@@ -206,7 +206,7 @@ def test_cua_fake_completion_sentinel_zeroed() -> None:
     """The fake-completion-guard tripwire — a sentinel trajectory whose narration
     claims success while state_quality is False MUST score zero on the
     deterministic anchor (the verifier reads counted facts, never the prose)."""
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     # the deterministic verifier consumes a `summary` of COUNTED facts, never the
     # narration. A fake-completion sentinel: narrated/claimed success, but the
@@ -231,7 +231,7 @@ def test_cua_unsafe_completion_canary() -> None:
     """A trajectory reaching terminal state with prompt_injection_touched > 0 (or
     blocked_action > 0) is zeroed on action_quality (the half-built kit rule
     completed into the unsafe-completion canary)."""
-    from agent_learning import optimize
+    from fi.alk import optimize
 
     unsafe = {
         "summary": {
@@ -481,7 +481,7 @@ def test_desktop_grounding_step_deterministic() -> None:
 def test_desktop_no_vm_dependency() -> None:
     """No VM/driver/pyautogui/playwright import is introduced for the desktop
     rung-1 floor (the local-first credential-free rung)."""
-    import agent_learning.cua_loop as _mod
+    import fi.alk.cua_loop as _mod
     src = Path(_mod.__file__).read_text(encoding="utf-8")
     for forbidden in ("pyautogui", "import playwright", "selenium", "import vncdotool"):
         assert forbidden not in src

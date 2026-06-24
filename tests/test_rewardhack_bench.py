@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_learning import rewardhack, tasks
+from fi.alk import rewardhack, tasks
 
 DATASET = Path(__file__).parent.parent / "examples" / "task_datasets" / "rewardhack_bench.json"
 

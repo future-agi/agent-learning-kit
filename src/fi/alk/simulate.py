@@ -478,7 +478,7 @@ def build_task_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_task_run_manifest",
+            "source": "fi.alk.simulate.build_task_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -887,7 +887,7 @@ def build_external_agent_run_manifest(
         max_turns=max_turns_value,
         auto_execute_tools=True,
         metadata={
-            "source": "agent_learning.simulate.build_external_agent_run_manifest",
+            "source": "fi.alk.simulate.build_external_agent_run_manifest",
             "cookbook": "external-http-agent-adapter",
             "task_kind": "external_agent_adapter",
             "research_sources": _unique_research_sources(
@@ -997,7 +997,7 @@ def build_framework_http_transport_run_manifest(
         auto_execute_tools=True,
         metadata={
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_framework_http_transport_run_manifest"
             ),
             "cookbook": "framework-http-transport",
@@ -1111,7 +1111,7 @@ def build_framework_websocket_transport_run_manifest(
         auto_execute_tools=True,
         metadata={
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_framework_websocket_transport_run_manifest"
             ),
             "cookbook": "framework-websocket-transport",
@@ -1205,7 +1205,7 @@ def build_workflow_hook_run_manifest(
         max_turns=max_turns_value,
         auto_execute_tools=True,
         metadata={
-            "source": "agent_learning.simulate.build_workflow_hook_run_manifest",
+            "source": "fi.alk.simulate.build_workflow_hook_run_manifest",
             "cookbook": "workflow-hook-adapter",
             "task_kind": "workflow_hook",
             "research_sources": _unique_research_sources(
@@ -1296,7 +1296,7 @@ def build_retrieval_hook_run_manifest(
         max_turns=max_turns_value,
         auto_execute_tools=True,
         metadata={
-            "source": "agent_learning.simulate.build_retrieval_hook_run_manifest",
+            "source": "fi.alk.simulate.build_retrieval_hook_run_manifest",
             "cookbook": "retrieval-hook-adapter",
             "task_kind": "retrieval_hook",
             "research_sources": _unique_research_sources(
@@ -1373,7 +1373,7 @@ def build_evaluation_hook_run_manifest(
         max_turns=max_turns_value,
         auto_execute_tools=True,
         metadata={
-            "source": "agent_learning.simulate.build_evaluation_hook_run_manifest",
+            "source": "fi.alk.simulate.build_evaluation_hook_run_manifest",
             "cookbook": "evaluation-hook-adapter",
             "task_kind": "evaluation_hook",
             "research_sources": _unique_research_sources(
@@ -1459,7 +1459,7 @@ def build_realtime_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_realtime_run_manifest",
+            "source": "fi.alk.simulate.build_realtime_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -1528,7 +1528,7 @@ def build_memory_layer_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_memory_layer_run_manifest",
+            "source": "fi.alk.simulate.build_memory_layer_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -1600,7 +1600,7 @@ def build_orchestration_stack_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_orchestration_stack_run_manifest"
             ),
             **copy.deepcopy(dict(metadata)),
@@ -1672,7 +1672,7 @@ def build_world_framework_memory_run_manifest(
         "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
         "metadata": {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_world_framework_memory_run_manifest"
             ),
             "task_kind": "orchestration_stack",
@@ -1752,7 +1752,7 @@ def build_multi_agent_coordination_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_multi_agent_coordination_run_manifest"
             ),
             **copy.deepcopy(dict(metadata)),
@@ -1843,7 +1843,7 @@ def build_browser_cua_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_browser_cua_run_manifest",
+            "source": "fi.alk.simulate.build_browser_cua_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -1955,7 +1955,7 @@ def build_agent_integration_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_agent_integration_run_manifest",
+            "source": "fi.alk.simulate.build_agent_integration_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -2041,7 +2041,7 @@ def build_workspace_observability_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_workspace_observability_run_manifest",
+            "source": "fi.alk.simulate.build_workspace_observability_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -2123,7 +2123,7 @@ def build_agent_control_plane_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_agent_control_plane_run_manifest",
+            "source": "fi.alk.simulate.build_agent_control_plane_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -2202,7 +2202,7 @@ def build_autonomous_redteam_task_world_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_autonomous_redteam_task_world_run_manifest"
             ),
             **copy.deepcopy(dict(metadata)),
@@ -2289,7 +2289,7 @@ def build_stateful_tool_world_run_manifest(
             },
         },
         "metadata": {
-            "source": "agent_learning.simulate.build_stateful_tool_world_run_manifest",
+            "source": "fi.alk.simulate.build_stateful_tool_world_run_manifest",
             "cookbook": "stateful-tool-world",
             "research_sources": _stateful_tool_world_research_sources(),
             "original_synthesis": (
@@ -2336,7 +2336,7 @@ def build_world_model_run_manifest(
         min_turns=min_turns,
         max_turns=max_turns,
         metadata={
-            "source": "agent_learning.simulate.build_world_model_run_manifest",
+            "source": "fi.alk.simulate.build_world_model_run_manifest",
             "cookbook": "world-model-arena",
             "task_kind": "world_model",
             "world_model": {
@@ -2462,7 +2462,7 @@ def build_openenv_run_manifest(
             },
         },
         "metadata": {
-            "source": "agent_learning.simulate.build_openenv_run_manifest",
+            "source": "fi.alk.simulate.build_openenv_run_manifest",
             "cookbook": "openenv-environment-replay",
             "research_sources": _openenv_research_sources(),
             "original_synthesis": (
@@ -2588,7 +2588,7 @@ def build_multimodal_image_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_multimodal_image_run_manifest",
+            "source": "fi.alk.simulate.build_multimodal_image_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -2691,7 +2691,7 @@ def build_framework_import_run_manifest(
             required_export_types=required_export_type_list,
             required_signals=required_signal_list,
             metadata={
-                "source": "agent_learning.simulate.probe_framework_imports",
+                "source": "fi.alk.simulate.probe_framework_imports",
                 **copy.deepcopy(dict(metadata or {})),
             },
         )
@@ -2710,7 +2710,7 @@ def build_framework_import_run_manifest(
                 required_export_types=required_export_type_list,
                 required_signals=required_signal_list,
                 metadata={
-                    "source": "agent_learning.simulate.build_framework_import_run_manifest",
+                    "source": "fi.alk.simulate.build_framework_import_run_manifest",
                     **copy.deepcopy(dict(metadata or {})),
                 },
             )
@@ -2742,7 +2742,7 @@ def build_framework_import_run_manifest(
             threshold=threshold,
         ),
         "metadata": {
-            "source": "agent_learning.simulate.build_framework_import_run_manifest",
+            "source": "fi.alk.simulate.build_framework_import_run_manifest",
             "framework": framework_key,
             "research_sources": _framework_import_probe_research_sources(),
             "original_synthesis": (
@@ -2852,7 +2852,7 @@ def build_workspace_import_certification_run_manifest(
         ),
         "metadata": {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_workspace_import_certification_run_manifest"
             ),
             "cookbook": "workspace-import-certification",
@@ -3007,7 +3007,7 @@ def build_redteam_corpus_run_manifest(
             },
         },
         "metadata": {
-            "source": "agent_learning.simulate.build_redteam_corpus_run_manifest",
+            "source": "fi.alk.simulate.build_redteam_corpus_run_manifest",
             "cookbook": "redteam-corpus-import",
             "research_sources": copy.deepcopy(
                 campaign_payload.get("metadata", {}).get("research_sources", [])
@@ -3172,7 +3172,7 @@ def build_redteam_readiness_certification_run_manifest(
         ),
         "metadata": {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_redteam_readiness_certification_run_manifest"
             ),
             "cookbook": "redteam-readiness-certification",
@@ -3408,7 +3408,7 @@ def build_framework_certification_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_framework_certification_run_manifest"
             ),
             "framework": str(framework),
@@ -3528,14 +3528,14 @@ def build_social_memory_framework_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_social_memory_framework_run_manifest",
+            "source": "fi.alk.simulate.build_social_memory_framework_run_manifest",
             "framework": str(framework),
             "framework_adapter_contract": contract,
             **copy.deepcopy(dict(metadata)),
         }
     else:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_social_memory_framework_run_manifest",
+            "source": "fi.alk.simulate.build_social_memory_framework_run_manifest",
             "framework": str(framework),
             "framework_adapter_contract": contract,
         }
@@ -3622,7 +3622,7 @@ def build_multi_agent_framework_handoff_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_multi_agent_framework_handoff_run_manifest"
             ),
             **copy.deepcopy(dict(metadata)),
@@ -3713,7 +3713,7 @@ def build_optimizer_governance_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": "agent_learning.simulate.build_optimizer_governance_run_manifest",
+            "source": "fi.alk.simulate.build_optimizer_governance_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -3780,7 +3780,7 @@ def build_framework_run_manifest(
         "factory": bool(factory),
         "trace_runtime": bool(trace_runtime),
         "metadata": {
-            "sdk": "agent_learning.simulate.build_framework_run_manifest",
+            "sdk": "fi.alk.simulate.build_framework_run_manifest",
             **copy.deepcopy(dict(metadata or {})),
             "framework_adapter_contract": contract,
         },
@@ -3834,7 +3834,7 @@ def build_framework_run_manifest(
         "simulation": simulation,
         "evaluation": {"enabled": bool(evaluation_enabled)},
         "metadata": {
-            "source": "agent_learning.simulate.build_framework_run_manifest",
+            "source": "fi.alk.simulate.build_framework_run_manifest",
             "framework_adapter_contract": contract,
         },
     }
@@ -3936,7 +3936,7 @@ def build_framework_adapter_matrix_run_manifest(
         },
         "metadata": {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_framework_adapter_matrix_run_manifest"
             ),
             "task_kind": "framework_adapter_matrix",
@@ -4052,7 +4052,7 @@ def build_harness_trajectory_replay_run_manifest(
         },
         "metadata": {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_harness_trajectory_replay_run_manifest"
             ),
             "task_kind": "retrospective_harness",
@@ -4181,7 +4181,7 @@ def build_optimizer_backend_portfolio_run_manifest(
         },
         "metadata": {
             "source": (
-                "agent_learning.simulate."
+                "fi.alk.simulate."
                 "build_optimizer_backend_portfolio_run_manifest"
             ),
             "task_kind": "optimizer_backend_portfolio",
@@ -4248,7 +4248,7 @@ def build_multi_framework_suite_manifest(
         },
         "jobs": jobs,
         "metadata": {
-            "source": "agent_learning.simulate.build_multi_framework_suite_manifest",
+            "source": "fi.alk.simulate.build_multi_framework_suite_manifest",
             **copy.deepcopy(dict(metadata or {})),
         },
     }
@@ -4467,7 +4467,7 @@ def _framework_http_transport_agent(
     return {
         "type": "http",
         "endpoint": str(endpoint),
-        "protocol": "agent_learning",
+        "protocol": "fi.alk",
         "model": "agent-learning-local-framework-http-transport",
         "api_key_env": str(api_key_env),
         "include_tools": True,
@@ -4491,7 +4491,7 @@ def _framework_websocket_transport_agent(
     return {
         "type": "websocket",
         "endpoint": str(endpoint),
-        "protocol": "agent_learning",
+        "protocol": "fi.alk",
         "model": "agent-learning-local-framework-websocket-transport",
         "api_key_env": str(api_key_env),
         "include_tools": True,
@@ -6311,7 +6311,7 @@ def _default_harness_trajectory_replay_artifact(name: str) -> dict[str, Any]:
             ],
         },
         metadata={
-            "source": "agent_learning.simulate.default_harness_trajectory_replay",
+            "source": "fi.alk.simulate.default_harness_trajectory_replay",
             "research_direction": "retrospective_harness_optimization",
         },
     )
@@ -6616,7 +6616,7 @@ def _default_optimizer_backend_portfolio_artifact(
             "rollback_decision",
         ],
         metadata={
-            "source": "agent_learning.simulate.default_optimizer_portfolio",
+            "source": "fi.alk.simulate.default_optimizer_portfolio",
             "requires_external_service": False,
             "local_only": True,
             "external_dependency_count": 0,
@@ -7208,7 +7208,7 @@ def _workspace_import_certification_import_payload(
         ]
     )
     metadata_payload = {
-        "source": "agent_learning.simulate.workspace_import_certification",
+        "source": "fi.alk.simulate.workspace_import_certification",
         "workspace_path": str(workspace_path),
         **copy.deepcopy(dict(metadata or {})),
     }
@@ -7287,7 +7287,7 @@ def _workspace_import_certification_workspace_payload(
         },
         {
             "id": "framework_import_probe",
-            "command": "python -m agent_learning.simulate probe-framework-imports",
+            "command": "python -m fi.alk.simulate probe-framework-imports",
             "status": "passed" if import_passed else "failed",
             "exit_code": 0 if import_passed else 1,
             "signals": ["framework_import", "runtime_import", "python_import"],
@@ -7433,7 +7433,7 @@ def _workspace_import_certification_workspace_payload(
                     "futureagi_platform",
                 ],
                 "metadata": {
-                    "source": "agent_learning.simulate.workspace_import_certification",
+                    "source": "fi.alk.simulate.workspace_import_certification",
                     "framework_import_summary": copy.deepcopy(import_summary),
                     **copy.deepcopy(dict(metadata or {})),
                 },
@@ -7845,7 +7845,7 @@ def _redteam_readiness_framework_import_payload(
                 ),
                 "metadata": {
                     **copy.deepcopy(dict(payload.get("metadata") or {})),
-                    "source": "agent_learning.simulate.redteam_readiness_certification",
+                    "source": "fi.alk.simulate.redteam_readiness_certification",
                     **copy.deepcopy(dict(metadata or {})),
                 },
             }
@@ -7897,7 +7897,7 @@ def _redteam_readiness_campaign_payload(
                 required_channels=channel_values,
                 required_providers=provider_values,
                 metadata={
-                    "source": "agent_learning.simulate.redteam_readiness_certification",
+                    "source": "fi.alk.simulate.redteam_readiness_certification",
                     **copy.deepcopy(dict(metadata or {})),
                 },
             )
@@ -8064,7 +8064,7 @@ def _redteam_readiness_campaign_payload(
         "required_channels": channel_values,
         "required_providers": provider_values,
         "metadata": {
-            "source": "agent_learning.simulate.redteam_readiness_certification",
+            "source": "fi.alk.simulate.redteam_readiness_certification",
             **copy.deepcopy(dict(metadata or {})),
         },
     }
@@ -8231,7 +8231,7 @@ def _redteam_readiness_trust_boundary_payload(
             name=f"{name}-trust-boundary",
             framework=framework,
             metadata={
-                "source": "agent_learning.simulate.redteam_readiness_certification",
+                "source": "fi.alk.simulate.redteam_readiness_certification",
                 **copy.deepcopy(dict(metadata or {})),
             },
         )
@@ -8338,7 +8338,7 @@ def _redteam_readiness_control_plane_payload(
             name=f"{name}-control-plane",
             framework=framework,
             metadata={
-                "source": "agent_learning.simulate.redteam_readiness_certification",
+                "source": "fi.alk.simulate.redteam_readiness_certification",
                 **copy.deepcopy(dict(metadata or {})),
             },
         )
@@ -8408,7 +8408,7 @@ def _redteam_readiness_payload(
         "required_evidence": evidence,
         "required_signals": signals,
         "metadata": {
-            "source": "agent_learning.simulate.redteam_readiness_certification",
+            "source": "fi.alk.simulate.redteam_readiness_certification",
             **copy.deepcopy(dict(metadata or {})),
         },
     }
@@ -9113,7 +9113,7 @@ def _default_openenv_payload(
             "mode": "local_fixture",
             "transport": "mcp",
             "deterministic": True,
-            "source": "agent_learning.simulate.default_openenv",
+            "source": "fi.alk.simulate.default_openenv",
         },
         "failure_injections": [
             {
@@ -10006,7 +10006,7 @@ def normalize_agent_integration_provider_name(value: Any) -> str:
 def __getattr__(name: str) -> Any:
     module_name = _SIMULATE_EXPORTS.get(name)
     if module_name is None:
-        raise AttributeError(f"module `agent_learning.simulate` has no attribute `{name}`")
+        raise AttributeError(f"module `fi.alk.simulate` has no attribute `{name}`")
     return getattr(optional_module(module_name, _SIMULATE_EXTRA), name)
 
 

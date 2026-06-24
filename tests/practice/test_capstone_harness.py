@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 
 
-from agent_learning import cli
-from agent_learning.practice import _capstone
+from fi.alk import cli
+from fi.alk.practice import _capstone
 
 CAPSTONE_DIR = Path(__file__).resolve().parents[1].parent / "examples" / "practice_capstone"
 

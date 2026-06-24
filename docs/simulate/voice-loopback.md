@@ -60,7 +60,7 @@ python examples/sdk_voice_loopback.py artifacts/voice-loopback.json
 SDK (the operation the twin performs):
 
 ```python
-from agent_learning.live import _loopback, _codec, _stats
+from fi.alk.live import _loopback, _codec, _stats
 
 loop = _loopback.run_loopback_roundtrip(turns, user_wav=user_wav, seed=1142)
 u, a, rec = _codec.apply_codec_profile(

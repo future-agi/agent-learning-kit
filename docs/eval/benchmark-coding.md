@@ -63,7 +63,7 @@ To grade **your** agent instead of the gold reference, pass a submission map of
 `task_id -> candidate source`:
 
 ```python
-from agent_learning import bench
+from fi.alk import bench
 
 suite = bench.load_coding_suite("examples/bench_suites/coding_starter.json")
 submission = {"fibonacci": "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n"}

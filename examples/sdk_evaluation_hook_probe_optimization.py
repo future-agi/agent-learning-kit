@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-from agent_learning import optimize, simulate
+from fi.alk import optimize, simulate
 
 
 def build_probe_optimization(endpoint: str) -> dict[str, Any]:

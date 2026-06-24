@@ -30,7 +30,7 @@ The kit has exactly two telemetry channels: the always-on local run ledger
 ([run-ledger](./run-ledger.md)) and keyed sync to *your own* Future AGI
 account. There is no third, anonymous channel — not "off by default",
 structurally absent, and the `telemetry_boundary` release gate scans both
-`src/agent_learning/` and vendored `src/fi/` for any analytics endpoint or
+`src/fi/alk/` and vendored `src/fi/` for any analytics endpoint or
 network emission reachable without keys.
 
 Consent is the key: when `AGENT_LEARNING_API_KEY` / `FUTURE_AGI_API_KEY` /
@@ -63,8 +63,8 @@ AGENT_LEARNING_LEDGER_PATH=examples/telemetry_ledger_fixture \
 The same flow from the SDK:
 
 ```python
-from agent_learning import telemetry
-from agent_learning.telemetry import _sync
+from fi.alk import telemetry
+from fi.alk.telemetry import _sync
 
 row = telemetry.RunLedger().rows()[0]
 print(_sync.sync_destination())          # endpoint + header NAMES only

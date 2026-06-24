@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, optimize
+from fi.alk import configure, optimize
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_STATEFUL_TOOL_WORLD_KEY"

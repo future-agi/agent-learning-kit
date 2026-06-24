@@ -1046,7 +1046,7 @@
         ]
       },
       "metadata": {
-        "source": "agent_learning.optimize.build_report_repair_optimization_manifest",
+        "source": "fi.alk.optimize.build_report_repair_optimization_manifest",
         "task_kind": "task",
         "cookbook": "report-repair-optimization",
         "observed_failure_report": "Failed agent report: framework trace gap, LangGraph checkpoint missing, runtime mismatch, memory lineage missing source attribution, world contract violation, required transition was not completed, and tool call evidence was missing.",

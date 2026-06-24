@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from agent_learning import configure, optimize, simulate, suite
+from fi.alk import configure, optimize, simulate, suite
 
 
 REQUIRED_ENV = "AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY"

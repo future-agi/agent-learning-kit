@@ -152,7 +152,7 @@ def keyed_emit(
 
     try:
         provider, recorder = _build_provider(project_name, headers)
-        tracer = provider.get_tracer("agent_learning.telemetry")
+        tracer = provider.get_tracer("fi.alk.telemetry")
         trace_id_hex = ""
         with tracer.start_as_current_span(span_name) as root:
             trace_id_hex = format(root.get_span_context().trace_id, "032x")

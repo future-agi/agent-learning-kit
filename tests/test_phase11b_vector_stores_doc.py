@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_learning import trinity
+from fi.alk import trinity
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "docs/frameworks/vector-stores.md"

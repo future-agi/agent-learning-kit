@@ -5,17 +5,17 @@ simulation layer didn't know their voice/phone capabilities when normalizing an
 agent-integration manifest.
 """
 
-from agent_learning.simulate import (
+from fi.alk.simulate import (
     AGENT_INTEGRATION_PROVIDER_CAPABILITIES,
     normalize_agent_integration_provider_name,
     normalize_agent_integration_manifest,
 )
-from agent_learning.evals.metrics.agents.report import (
+from fi.alk.evals.metrics.agents.report import (
     _normalize_agent_integration_provider as normalize_report_provider,
     evaluate_agent_report,
 )
-from agent_learning.optimize.components import COMPONENT_SPECS, diagnose_text
-from agent_learning import optimize
+from fi.alk.optimize.components import COMPONENT_SPECS, diagnose_text
+from fi.alk import optimize
 
 
 def test_bland_and_vapi_present_with_voice_capabilities():

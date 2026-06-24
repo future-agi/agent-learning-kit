@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_learning import trinity  # noqa: E402
+from fi.alk import trinity  # noqa: E402
 
 MANIFEST_NAME = "MIRROR_MANIFEST.json"
 MIRROR_README = """# Agent Learning Kit — cookbooks mirror

@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import bench
+from fi.alk import bench
 
 SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_starter.json"
 COMMAND_SUITE_PATH = Path(__file__).parent / "bench_suites" / "coding_command_starter.json"

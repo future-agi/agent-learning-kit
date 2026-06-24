@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import telemetry
-from agent_learning.telemetry import _sync
+from fi.alk import telemetry
+from fi.alk.telemetry import _sync
 
 OUTPUT_KIND = "agent-learning.account-sync-dryrun.v1"
 

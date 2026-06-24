@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_learning import evals
+from fi.alk import evals
 
 
 JUDGE_PASS_THRESHOLD = 0.7

@@ -12,8 +12,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from agent_learning import cli
-from agent_learning.practice import _experiment
+from fi.alk import cli
+from fi.alk.practice import _experiment
 
 CAPSTONE_DIR = Path(__file__).resolve().parents[1].parent / "examples" / "practice_capstone"
 FIXTURES = CAPSTONE_DIR / "fixtures"
@@ -104,8 +104,8 @@ def test_no_consolidation_loses_standing_detection():
 
 def test_ablation_flag_changes_trainer_run():
     """run_practice_loop with a3_no_consolidation admits NO records to the store."""
-    from agent_learning.practice._trainer import run_practice_loop
-    from agent_learning.practice._store import ConsolidationStore
+    from fi.alk.practice._trainer import run_practice_loop
+    from fi.alk.practice._store import ConsolidationStore
     fx = _experiment.load_fixture(FIXTURES, "refund_desk")
     import tempfile
     with tempfile.TemporaryDirectory() as d:

@@ -61,7 +61,7 @@ AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY=local-dev-key \
 SDK, the same operation:
 
 ```python
-from agent_learning import optimize
+from fi.alk import optimize
 
 result = optimize.optimize_optimizer_portfolio(
     name="sdk-optimizer-portfolio-optimization",
