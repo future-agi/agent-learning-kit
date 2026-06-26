@@ -22,14 +22,15 @@ Usage:
         print(f"Blocked by: {result.blocked_by}")
 
 Available Scanners:
-    JailbreakScanner      — prompt manipulation, DAN attacks, role-play exploits
-    CodeInjectionScanner  — SQL, shell, path traversal, SSTI, LDAP, XXE
-    SecretsScanner        — API keys, passwords, private keys, JWTs, DB URLs
-    MaliciousURLScanner   — phishing, IP URLs, suspicious TLDs, shorteners
-    InvisibleCharScanner  — zero-width chars, BIDI overrides, homoglyphs
-    LanguageScanner       — language detection and filtering
+    JailbreakScanner        — prompt manipulation, DAN attacks, role-play exploits
+    CodeInjectionScanner    — SQL, shell, path traversal, SSTI, LDAP, XXE
+    SecretsScanner          — API keys, passwords, private keys, JWTs, DB URLs
+    MaliciousURLScanner     — phishing, IP URLs, suspicious TLDs, shorteners
+    InvisibleCharScanner    — zero-width chars, BIDI overrides, homoglyphs
+    EncodedPayloadScanner   — base64/hex/percent/unicode blobs that decode to injections
+    LanguageScanner         — language detection and filtering
     TopicRestrictionScanner — keyword/embedding-based topic restriction
-    RegexScanner          — custom regex patterns + common PII patterns
+    RegexScanner            — custom regex patterns + common PII patterns
 """
 
 from fi.evals.guardrails.scanners.base import (
@@ -47,6 +48,7 @@ from fi.evals.guardrails.scanners.code_injection import CodeInjectionScanner
 from fi.evals.guardrails.scanners.secrets import SecretsScanner
 from fi.evals.guardrails.scanners.urls import MaliciousURLScanner
 from fi.evals.guardrails.scanners.invisible_chars import InvisibleCharScanner
+from fi.evals.guardrails.scanners.encoded_payload import EncodedPayloadScanner
 from fi.evals.guardrails.scanners.language import LanguageScanner
 from fi.evals.guardrails.scanners.topics import TopicRestrictionScanner
 from fi.evals.guardrails.scanners.regex import RegexScanner, RegexPattern, COMMON_PATTERNS
@@ -67,6 +69,7 @@ def create_default_pipeline(
     secrets: bool = True,
     urls: bool = False,
     invisible_chars: bool = False,
+    encoded_payload: bool = False,
     **kwargs,
 ) -> ScannerPipeline:
     """
@@ -78,6 +81,7 @@ def create_default_pipeline(
         secrets: Enable secrets detection (default: True)
         urls: Enable malicious URL detection (default: False)
         invisible_chars: Enable invisible character detection (default: False)
+        encoded_payload: Enable encoded/obfuscated injection detection (default: False)
 
     Returns:
         Configured ScannerPipeline
@@ -93,6 +97,8 @@ def create_default_pipeline(
         scanners.append(MaliciousURLScanner(**kwargs.get("urls_config", {})))
     if invisible_chars:
         scanners.append(InvisibleCharScanner(**kwargs.get("invisible_chars_config", {})))
+    if encoded_payload:
+        scanners.append(EncodedPayloadScanner(**kwargs.get("encoded_payload_config", {})))
     return ScannerPipeline(scanners)
 
 
@@ -110,6 +116,7 @@ __all__ = [
     "SecretsScanner",
     "MaliciousURLScanner",
     "InvisibleCharScanner",
+    "EncodedPayloadScanner",
     "LanguageScanner",
     "TopicRestrictionScanner",
     "RegexScanner",
