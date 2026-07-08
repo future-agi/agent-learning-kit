@@ -28,6 +28,7 @@ dependencies = [
 nli = ["transformers>=5.2.0,<6", "torch>=2.10.0,<3"]
 embeddings = ["sentence-transformers>=5.2.3,<6"]
 feedback = ["chromadb>=0.4.0"]
+feedback-torch = ["chromadb>=0.4.0", "torchembed>=0.3.0", "torch>=2.0.0"]
 temporal = ["temporalio>=1.7.0"]
 celery = ["celery>=5.3.0", "redis>=5.0.0"]
 ray = ["ray>=2.0.0"]
@@ -36,6 +37,7 @@ all = [
     "torch>=2.10.0,<3",
     "sentence-transformers>=5.2.3,<6",
     "chromadb>=0.4.0",
+    "torchembed>=0.3.0",
     "temporalio>=1.7.0",
     "celery>=5.3.0",
     "redis>=5.0.0",

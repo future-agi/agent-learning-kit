@@ -3,6 +3,11 @@
 Provides abstract FeedbackStore and two implementations:
 - InMemoryFeedbackStore: for testing and small-scale usage
 - ChromaFeedbackStore: for production with semantic vector search
+
+ChromaFeedbackStore optionally integrates torchembed to encode numerical and
+temporal metadata (scores, timestamps) alongside text, improving retrieval
+for cases where score range or recency matters as much as semantic content.
+Install with: pip install ai-evaluation[feedback-torch]
 """
 
 import json
@@ -11,6 +16,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from .types import FeedbackEntry
+from .torchembed_encoder import FeedbackMetadataEncoder, make_enriched_document
+from .torchembed_encoder import is_available as _torchembed_available
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +111,13 @@ class ChromaFeedbackStore(FeedbackStore):
     (all-MiniLM-L6-v2 via sentence-transformers) OR via a LiteLLM embedding
     function for API-based embeddings.
 
+    When ``enrich_with_metadata=True`` and torchembed is installed, numerical
+    and temporal fields from each FeedbackEntry (original_score, correct_score,
+    created_at hour/weekday) are encoded with torchembed and appended to the
+    stored document string.  This gives the retrieval index a weak signal over
+    score proximity and recency — useful when surfacing few-shot examples for
+    calibration.
+
     Args:
         host: ChromaDB server host. None = local persistent mode.
         port: ChromaDB server port. Default 8000.
@@ -112,6 +126,11 @@ class ChromaFeedbackStore(FeedbackStore):
         collection_prefix: Prefix for ChromaDB collection names.
         embedding_model: LiteLLM model string for embeddings.
             None = use ChromaDB's default (sentence-transformers).
+        enrich_with_metadata: Append torchembed-encoded score/time vectors to
+            stored documents for richer retrieval. Requires torchembed to be
+            installed; silently disabled when it is not.
+        metadata_weight: Blending weight hint stored alongside the metadata
+            vector (0–1, default 0.3).
     """
 
     def __init__(
@@ -121,6 +140,8 @@ class ChromaFeedbackStore(FeedbackStore):
         persist_directory: Optional[str] = None,
         collection_prefix: str = "fi_feedback",
         embedding_model: Optional[str] = None,
+        enrich_with_metadata: bool = False,
+        metadata_weight: float = 0.3,
     ):
         try:
             import chromadb
@@ -132,6 +153,22 @@ class ChromaFeedbackStore(FeedbackStore):
 
         self._collection_prefix = collection_prefix
         self._embedding_model = embedding_model
+        self._metadata_weight = metadata_weight
+
+        # torchembed metadata encoder (optional)
+        self._meta_encoder: Optional[FeedbackMetadataEncoder] = None
+        if enrich_with_metadata:
+            if _torchembed_available():
+                try:
+                    self._meta_encoder = FeedbackMetadataEncoder()
+                    logger.info("torchembed metadata enrichment enabled for ChromaFeedbackStore")
+                except Exception as exc:
+                    logger.warning(f"torchembed encoder init failed, enrichment disabled: {exc}")
+            else:
+                logger.warning(
+                    "enrich_with_metadata=True but torchembed is not installed. "
+                    "Install with: pip install ai-evaluation[feedback-torch]"
+                )
 
         # Initialize ChromaDB client
         if host:
@@ -172,9 +209,16 @@ class ChromaFeedbackStore(FeedbackStore):
 
     def add(self, entry: FeedbackEntry) -> str:
         collection = self._get_collection(entry.eval_name)
+        document = entry.to_embedding_text()
+        if self._meta_encoder is not None:
+            try:
+                meta_vec = self._meta_encoder.encode(entry)
+                document = make_enriched_document(document, meta_vec, self._metadata_weight)
+            except Exception as exc:
+                logger.debug(f"Metadata enrichment skipped for entry {entry.id}: {exc}")
         collection.add(
             ids=[entry.id],
-            documents=[entry.to_embedding_text()],
+            documents=[document],
             metadatas=[{
                 "metric_name": entry.eval_name,
                 "original_score": entry.original_score or 0.0,
