@@ -509,13 +509,13 @@ async def run_manifest(
             "dry_run": True,
             "summary": {
                 "required_env": required_manifest_env(runtime_manifest),
-                "scenario_cases": len(cli._scenario_dataset(runtime_manifest)),
+                "scenario_cases": len(cli._scenario_dataset(runtime_manifest, manifest_path.parent)),
                 "environment_count": len(cli._environment_specs(runtime_manifest)),
             },
             "duration_seconds": round(time.time() - started, 4),
         }
 
-    report = await run_local_text_manifest(runtime_manifest, manifest_path)
+    report = await cli._run_manifest(runtime_manifest, manifest_path)
     evaluation = evaluate_manifest_report(runtime_manifest, report)
     result = cli._run_result(
         manifest=runtime_manifest,
@@ -613,7 +613,7 @@ async def redteam_manifest(
             "dry_run": True,
             "summary": {
                 "required_env": required_manifest_env(runtime_manifest),
-                "scenario_cases": len(cli._scenario_dataset(runtime_manifest)),
+                "scenario_cases": len(cli._scenario_dataset(runtime_manifest, manifest_path.parent)),
                 "environment_count": len(cli._environment_specs(runtime_manifest)),
                 "redteam": redteam_summary,
             },

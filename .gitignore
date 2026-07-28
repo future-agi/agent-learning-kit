@@ -14,4 +14,6 @@ coverage/
 .env
 .env.*
 artifacts/
+!src/fi/simulate/artifacts/
+!src/fi/simulate/artifacts/*.py
 examples/artifacts/

@@ -4424,7 +4424,9 @@ def _doctor(args: Sequence[str] = ()) -> int:
         f"missing engine modules: {missing_engine}",
         file=sys.stderr,
     )
-    return 0
+    if status == "passed":
+        return 0
+    return int(payload.get("exit_code") or 1)
 
 
 def _release_check(args: Sequence[str] = ()) -> int:
@@ -5610,9 +5612,22 @@ def _scenario(args: Sequence[str]) -> int:
         return _vendored_import_failed("agent-learn scenario", exc)
     parser = argparse.ArgumentParser(
         prog="agent-learn scenario",
-        description="Scenario studio: synth, expand, coverage, list (account pulls are SDK-only: studio.pull_scenarios).",
+        description="Scenario studio: generate, synth, expand, coverage, and list.",
     )
     sub = parser.add_subparsers(dest="subcommand", required=True)
+
+    generate = sub.add_parser("generate")
+    generate.add_argument("--name", required=True)
+    agent_source = generate.add_mutually_exclusive_group(required=True)
+    agent_source.add_argument("--agent-definition", default=None)
+    agent_source.add_argument("--platform-agent-definition-id", default=None)
+    generate.add_argument("--platform-agent-version-id", default=None)
+    generate.add_argument("--description", default=None)
+    generate.add_argument("--custom-instruction", default=None)
+    generate.add_argument("--rows", type=int, default=10)
+    generate.add_argument("--poll-interval", type=float, default=2.0)
+    generate.add_argument("--timeout", type=float, default=900.0)
+    generate.add_argument("--output", required=True)
 
     synth = sub.add_parser("synth")
     synth.add_argument("--components", nargs="+", required=True)
@@ -5638,6 +5653,72 @@ def _scenario(args: Sequence[str]) -> int:
 
     parsed = parser.parse_args(list(args))
     from fi.simulate.simulation.models import Scenario as _Scenario
+
+    if parsed.subcommand == "generate":
+        try:
+            agent_definition = None
+            if parsed.agent_definition:
+                from fi.simulate.agent.definition import AgentDefinition
+
+                raw_agent = _load_structured_file(
+                    Path(parsed.agent_definition).expanduser().resolve()
+                )
+                if not isinstance(raw_agent, Mapping):
+                    raise ValueError("agent definition root must be an object")
+                agent_definition = AgentDefinition(**dict(raw_agent))
+            request = studio.PlatformScenarioRequest(
+                name=str(parsed.name),
+                agent_definition=agent_definition,
+                platform_agent_definition_id=parsed.platform_agent_definition_id,
+                platform_agent_version_id=parsed.platform_agent_version_id,
+                description=parsed.description,
+                custom_instruction=parsed.custom_instruction,
+                no_of_rows=int(parsed.rows),
+                poll_interval_seconds=float(parsed.poll_interval),
+                timeout_seconds=float(parsed.timeout),
+            )
+            generated = studio.generate_scenario(request)
+            output = Path(parsed.output).expanduser().resolve()
+            _write_structured_file(
+                output,
+                generated.scenario.model_dump(mode="json", exclude_none=True),
+            )
+        except Exception as exc:  # noqa: BLE001 — structured CLI refusal
+            return _emit_studio_payload(
+                {
+                    "status": "refused",
+                    "exit_code": 1,
+                    "findings": [
+                        {
+                            "type": "scenario_generation_failed",
+                            "level": "error",
+                            "reason": str(exc),
+                            "scenario_id": getattr(exc, "scenario_id", None),
+                            "platform_status": getattr(exc, "status", None),
+                            "retryable": bool(getattr(exc, "retryable", False)),
+                        }
+                    ],
+                }
+            )
+        return _emit_studio_payload(
+            {
+                "status": "generated",
+                "exit_code": 0,
+                "scenario": {
+                    "name": generated.scenario.name,
+                    "rows": len(generated.scenario.dataset),
+                    "output": str(output),
+                },
+                "platform": {
+                    "agent_definition_id": generated.platform_agent_definition_id,
+                    "agent_version_id": generated.platform_agent_version_id,
+                    "scenario_id": generated.platform_scenario_id,
+                    "dataset_id": generated.platform_dataset_id,
+                    "status": generated.platform_status,
+                    "polling_duration_seconds": generated.polling_duration_seconds,
+                },
+            }
+        )
 
     if parsed.subcommand == "synth":
         scenarios = []

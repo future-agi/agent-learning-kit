@@ -69,7 +69,9 @@ from fi.simulate import (
     normalize_persistent_state_attack_manifest,
     normalize_optimizer_society_trace,
 )
+from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
 from fi.simulate.evaluation import evaluate_agent_report
+from fi.simulate.results import LocalFilesystemResultSink
 from fi.simulate.manifest import (
     CLI_SCHEMA_VERSION,
     ManifestError,
@@ -828,9 +830,25 @@ async def _run_local_text_manifest(manifest: Mapping[str, Any], manifest_path: P
     if refusal is not None:
         raise ManifestError(f"{refusal['type']}: {refusal['reason']}")
 
-    scenario = _build_scenario(manifest)
+    scenario = await asyncio.to_thread(
+        _build_scenario,
+        manifest,
+        manifest_path.parent,
+    )
     agent_callback = _build_agent_callback(dict(manifest.get("agent") or {}), manifest_path.parent)
     environments = _build_environments(_environment_specs(manifest), manifest_path.parent)
+    result_sink = None
+    result_root = simulation.get("result_root")
+    if result_root is not None:
+        if not isinstance(result_root, str) or not result_root.strip():
+            raise ManifestError("simulation.result_root must be a non-empty path")
+        result_root_path = Path(result_root)
+        if not result_root_path.is_absolute():
+            result_root_path = manifest_path.parent / result_root_path
+        result_sink = LocalFilesystemResultSink(result_root_path)
+    run_id = simulation.get("run_id")
+    if run_id is not None and (not isinstance(run_id, str) or not run_id.strip()):
+        raise ManifestError("simulation.run_id must be a non-empty string")
     report = await TestRunner().run_test(
         scenario=scenario,
         agent_callback=agent_callback,
@@ -840,12 +858,215 @@ async def _run_local_text_manifest(manifest: Mapping[str, Any], manifest_path: P
         modality=str(simulation.get("modality") or "text"),
         attacks=simulation.get("attacks"),
         auto_execute_tools=bool(simulation.get("auto_execute_tools", True)),
+        simulation_run_id=run_id,
+        result_sink=result_sink,
     )
     _record_mock_profile(report, manifest)
     return report
 
 
-def _build_scenario(manifest: Mapping[str, Any]) -> Scenario:
+async def _run_livekit_manifest(manifest: Mapping[str, Any], manifest_path: Path) -> Any:
+    simulation = dict(manifest.get("simulation") or {})
+    raw_agent = manifest.get("agent_definition")
+    if not isinstance(raw_agent, Mapping) or not raw_agent:
+        raise ManifestError("livekit manifest requires an agent_definition block")
+    raw_simulator = manifest.get("simulator")
+    if raw_simulator is not None and not isinstance(raw_simulator, Mapping):
+        raise ManifestError("simulator must be an object")
+    try:
+        agent_definition = AgentDefinition(**dict(raw_agent))
+        simulator = (
+            SimulatorAgentDefinition(**dict(raw_simulator))
+            if raw_simulator
+            else None
+        )
+    except ValidationError as exc:
+        raise ManifestError(f"invalid livekit manifest: {exc}") from exc
+
+    recording_root = Path(str(simulation.get("recording_root") or "recordings"))
+    if not recording_root.is_absolute():
+        recording_root = manifest_path.parent / recording_root
+    return await TestRunner().run_test(
+        agent_definition=agent_definition,
+        scenario=await asyncio.to_thread(
+            _build_scenario,
+            manifest,
+            manifest_path.parent,
+        ),
+        simulator=simulator,
+        simulation_run_id=simulation.get("run_id"),
+        record_audio=bool(simulation.get("record_audio", False)),
+        recording_root=recording_root,
+        recorder_sample_rate=int(simulation.get("recorder_sample_rate", 8000)),
+        recorder_join_delay=float(simulation.get("recorder_join_delay", 0.2)),
+        min_turn_messages=int(simulation.get("min_turn_messages", 8)),
+        max_seconds=float(simulation.get("max_seconds", 45.0)),
+        connect_timeout=float(simulation.get("connect_timeout", 15.0)),
+        readiness_timeout=float(simulation.get("readiness_timeout", 30.0)),
+        cleanup_timeout=float(simulation.get("cleanup_timeout", 30.0)),
+        conversation_direction=str(
+            simulation.get("conversation_direction") or "simulator_first"
+        ),
+    )
+
+
+async def _run_cloud_manifest(manifest: Mapping[str, Any], manifest_path: Path) -> Any:
+    simulation = dict(manifest.get("simulation") or {})
+    run_id = simulation.get("run_id")
+    run_test_name = simulation.get("run_test_name")
+    if not run_id and not run_test_name:
+        raise ManifestError("cloud manifest requires simulation.run_id or run_test_name")
+    raw_agent = manifest.get("agent")
+    agent_callback = (
+        _build_agent_callback(dict(raw_agent), manifest_path.parent)
+        if isinstance(raw_agent, Mapping) and raw_agent
+        else None
+    )
+    return await TestRunner().run_test(
+        run_id=str(run_id) if run_id else None,
+        run_test_name=str(run_test_name) if run_test_name else None,
+        agent_callback=agent_callback,
+        timeout=float(simulation.get("timeout", 120.0)),
+    )
+
+
+async def _run_manifest(manifest: Mapping[str, Any], manifest_path: Path) -> Any:
+    simulation = dict(manifest.get("simulation") or {})
+    engine = str(simulation.get("engine") or "local_text").lower().replace("-", "_")
+    runners = {
+        "local": _run_local_text_manifest,
+        "local_text": _run_local_text_manifest,
+        "livekit": _run_livekit_manifest,
+        "cloud": _run_cloud_manifest,
+    }
+    runner = runners.get(engine)
+    if runner is None:
+        supported = ", ".join(sorted(runners))
+        raise ManifestError(
+            f"unsupported simulation.engine for CLI slice: {engine}. "
+            f"Supported: {supported}"
+        )
+    return await runner(manifest, manifest_path)
+
+
+def _build_platform_scenario(
+    manifest: Mapping[str, Any],
+    raw_scenario: Mapping[str, Any],
+    platform: Mapping[str, Any],
+    base_dir: Path,
+) -> Scenario:
+    if any(key in raw_scenario for key in ("source", "dataset")):
+        raise ManifestError(
+            "scenario.platform cannot be combined with scenario.source or scenario.dataset"
+        )
+    if str(platform.get("mode") or "generate") != "generate":
+        raise ManifestError("scenario.platform.mode must be generate")
+    if str(platform.get("kind") or "graph") != "graph":
+        raise ManifestError("scenario.platform.kind must be graph")
+
+    cache_path = None
+    raw_cache_path = platform.get("cache_path")
+    if raw_cache_path is not None:
+        if not isinstance(raw_cache_path, str) or not raw_cache_path.strip():
+            raise ManifestError("scenario.platform.cache_path must be a non-empty path")
+        cache_path = Path(raw_cache_path).expanduser()
+        if not cache_path.is_absolute():
+            cache_path = base_dir / cache_path
+        if cache_path.is_file() and not bool(platform.get("refresh", False)):
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ManifestError(f"invalid generated scenario cache: {cache_path}") from exc
+            if not isinstance(cached, Mapping):
+                raise ManifestError("generated scenario cache root must be an object")
+            scenario_data = cached.get("scenario", cached)
+            if not isinstance(scenario_data, Mapping):
+                raise ManifestError("generated scenario cache has no scenario object")
+            return _build_scenario({"scenario": scenario_data}, base_dir)
+
+    platform_agent_id = platform.get("platform_agent_definition_id")
+    platform_version_id = platform.get("platform_agent_version_id")
+    agent_definition = None
+    if not platform_agent_id:
+        raw_agent = manifest.get("agent_definition")
+        if not isinstance(raw_agent, Mapping) or not raw_agent:
+            raise ManifestError(
+                "scenario.platform requires top-level agent_definition or platform_agent_definition_id"
+            )
+        try:
+            agent_definition = AgentDefinition(**dict(raw_agent))
+        except ValidationError as exc:
+            raise ManifestError(f"invalid platform target agent_definition: {exc}") from exc
+
+    try:
+        from fi.alk import studio
+
+        generated = studio.generate_scenario(
+            studio.PlatformScenarioRequest(
+                name=str(
+                    platform.get("name")
+                    or raw_scenario.get("name")
+                    or manifest.get("name")
+                    or "Generated Scenario"
+                ),
+                agent_definition=agent_definition,
+                platform_agent_definition_id=(
+                    str(platform_agent_id) if platform_agent_id else None
+                ),
+                platform_agent_version_id=(
+                    str(platform_version_id) if platform_version_id else None
+                ),
+                description=(
+                    str(platform["description"])
+                    if platform.get("description") is not None
+                    else None
+                ),
+                custom_instruction=(
+                    str(platform["custom_instruction"])
+                    if platform.get("custom_instruction") is not None
+                    else None
+                ),
+                no_of_rows=int(platform.get("no_of_rows", 10)),
+                poll_interval_seconds=float(
+                    platform.get("poll_interval_seconds", 2.0)
+                ),
+                timeout_seconds=float(platform.get("timeout_seconds", 900.0)),
+            )
+        )
+    except Exception as exc:
+        raise ManifestError(f"platform scenario generation failed: {exc}") from exc
+
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "scenario": generated.scenario.model_dump(
+                        mode="json",
+                        exclude_none=True,
+                    ),
+                    "platform": {
+                        "agent_definition_id": generated.platform_agent_definition_id,
+                        "agent_version_id": generated.platform_agent_version_id,
+                        "scenario_id": generated.platform_scenario_id,
+                        "dataset_id": generated.platform_dataset_id,
+                        "status": generated.platform_status,
+                        "checksum_sha256": generated.checksum_sha256,
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    return generated.scenario
+
+
+def _build_scenario(
+    manifest: Mapping[str, Any],
+    base_dir: Path | None = None,
+) -> Scenario:
     # G4 re-hydration (ARCH §1.9, BBG U1): construct ``Persona(**row)`` so every
     # Phase-7 typed layer (identity/temperament/behavior_policy/knowledge/attack/
     # provenance/version) survives, and carry the typed Scenario block
@@ -854,6 +1075,36 @@ def _build_scenario(manifest: Mapping[str, Any]) -> Scenario:
     raw = dict(manifest.get("scenario") or {})
     if not raw:
         raise ManifestError("manifest requires a scenario")
+    platform = raw.pop("platform", None)
+    if platform is not None:
+        if not isinstance(platform, Mapping):
+            raise ManifestError("scenario.platform must be an object")
+        return _build_platform_scenario(
+            manifest,
+            raw,
+            platform,
+            base_dir or Path.cwd(),
+        )
+    source = raw.pop("source", None)
+    if source is not None:
+        if "dataset" in raw:
+            raise ManifestError("scenario.source cannot be combined with scenario.dataset")
+        if not isinstance(source, str) or not source.strip():
+            raise ManifestError("scenario.source must be a non-empty JSON path")
+        source_path = Path(source).expanduser()
+        if not source_path.is_absolute():
+            source_path = (base_dir or Path.cwd()) / source_path
+        if not source_path.is_file():
+            raise ManifestError(f"scenario source not found: {source_path}")
+        if source_path.suffix.lower() != ".json":
+            raise ManifestError("scenario.source must reference a JSON file")
+        try:
+            source_data = json.loads(source_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ManifestError(f"invalid scenario source: {source_path}") from exc
+        if not isinstance(source_data, Mapping):
+            raise ManifestError("scenario source root must be an object")
+        raw = {**dict(source_data), **raw}
     dataset = raw.get("dataset")
     if not isinstance(dataset, list) or not dataset:
         raise ManifestError("scenario.dataset must contain at least one persona")
@@ -2002,7 +2253,19 @@ def _run_result(
 ) -> Dict[str, Any]:
     report_payload = _to_plain(report)
     evaluation_payload = _to_plain(evaluation) if evaluation is not None else None
-    passed = bool(evaluation_payload.get("passed")) if isinstance(evaluation_payload, Mapping) else True
+    case_statuses = [
+        str((getattr(result, "metadata", {}) or {}).get("status") or "")
+        for result in getattr(report, "results", []) or []
+    ]
+    cases_passed = all(
+        not status or status in {"completed", "passed"}
+        for status in case_statuses
+    )
+    passed = cases_passed and (
+        bool(evaluation_payload.get("passed"))
+        if isinstance(evaluation_payload, Mapping)
+        else True
+    )
     summary = {
         "case_count": len(getattr(report, "results", []) or []),
         "evaluation_score": evaluation_payload.get("score") if isinstance(evaluation_payload, Mapping) else None,
@@ -18495,8 +18758,16 @@ def _environment_specs(manifest: Mapping[str, Any]) -> List[Mapping[str, Any]]:
     return list(environments)
 
 
-def _scenario_dataset(manifest: Mapping[str, Any]) -> List[Any]:
-    return list(dict(manifest.get("scenario") or {}).get("dataset") or [])
+def _scenario_dataset(
+    manifest: Mapping[str, Any],
+    base_dir: Path | None = None,
+) -> List[Any]:
+    raw = dict(manifest.get("scenario") or {})
+    if not raw:
+        return []
+    if "source" in raw:
+        return list(_build_scenario(manifest, base_dir).dataset)
+    return list(raw.get("dataset") or [])
 
 
 def _coerce_list(value: Any) -> List[Any]:

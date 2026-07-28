@@ -61,7 +61,11 @@ dependencies = [
 simulate = []
 evaluation = []
 optimize = []
-livekit = ["livekit-agents[openai,silero]>=1.2"]
+livekit = [
+  "aiohttp>=3.10",
+  "livekit-agents[deepgram,openai,silero]>=1.2",
+  "livekit-plugins-elevenlabs>=1.2",
+]
 langchain = [
   "langchain-core>=1.4.6,<2",            # verified latest stable on PyPI 2026-06-11
   "langgraph>=1.2.4,<2",                 # verified latest stable on PyPI 2026-06-11
@@ -84,11 +88,15 @@ nli = ["transformers>=5.2.0,<6", "torch>=2.10.0,<3"]
 embeddings = ["sentence-transformers>=5.2.3,<6"]
 feedback = ["chromadb>=0.4.0"]
 trinity = [
-  "livekit-agents[openai,silero]>=1.2",
+  "aiohttp>=3.10",
+  "livekit-agents[deepgram,openai,silero]>=1.2",
+  "livekit-plugins-elevenlabs>=1.2",
 ]
 all = [
+  "aiohttp>=3.10",
   "chromadb>=0.4.0",
-  "livekit-agents[openai,silero]>=1.2",
+  "livekit-agents[deepgram,openai,silero]>=1.2",
+  "livekit-plugins-elevenlabs>=1.2",
   "sentence-transformers>=5.2.3,<6",
   "torch>=2.10.0,<3",
   "transformers>=5.2.0,<6",
