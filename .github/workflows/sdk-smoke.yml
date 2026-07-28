@@ -1,0 +1,31 @@
+name: SDK smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  clean-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: python -m pip install .
+      - name: Run doctor
+        run: agent-learn doctor --quiet
+      - name: Run local text simulation
+        env:
+          AGENT_LEARNING_RUN_EXAMPLE_KEY: smoke
+        run: >-
+          agent-learn simulation run examples/run_manifest.json
+          --output smoke-report.json --quiet
+      - name: Verify simulation report
+        run: >-
+          python -c "import json, pathlib;
+          report=json.loads(pathlib.Path('smoke-report.json').read_text());
+          assert report['status'] == 'ran' and report['report']['results']"

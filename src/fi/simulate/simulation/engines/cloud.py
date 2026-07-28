@@ -5,6 +5,7 @@ import logging
 import contextlib
 from typing import Optional, Callable
 
+from fi.simulate._logging import redacted_exc_info
 from fi.simulate.agent.generic import wrap_agent
 from fi.simulate.agent.wrapper import AgentWrapper, AgentInput, AgentResponse
 from fi.simulate.simulation.models import TestReport
@@ -129,8 +130,12 @@ class CloudEngine(BaseEngine):
                 
             print("✅ Cloud Simulation Completed.")
             
-        except Exception as e:
-            logger.exception(f"Cloud simulation failed: {e}")
+        except Exception as exc:
+            logger.error(
+                "Cloud simulation failed",
+                exc_info=redacted_exc_info(exc),
+                extra={"exception_type": type(exc).__name__},
+            )
             raise
         finally:
             if self.api:

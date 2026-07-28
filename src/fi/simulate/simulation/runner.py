@@ -51,6 +51,7 @@ class TestRunner:
         # --- Shared Arguments ---
         num_scenarios: int = 1,
         topic: Optional[str] = None,
+        simulation_run_id: Optional[str] = None,
         record_audio: bool = False,
         recorder_sample_rate: int = 8000,
         recorder_join_delay: float = 0.2,
@@ -74,6 +75,7 @@ class TestRunner:
             agent_callback: User's agent function to wrap for cloud mode
             num_scenarios: Number of scenarios to generate (local mode only)
             topic: Topic for scenario generation (local mode only)
+            simulation_run_id: Optional stable run ID for local LiveKit mode
             record_audio: Whether to record audio
             recorder_sample_rate: Audio sample rate
             recorder_join_delay: Delay before recorder joins
@@ -103,6 +105,7 @@ class TestRunner:
                 agent_callback=agent_callback,
                 num_scenarios=num_scenarios,
                 topic=topic,
+                run_id=simulation_run_id,
                 **kwargs,
             )
             
@@ -126,6 +129,7 @@ class TestRunner:
                 recorder_join_delay=recorder_join_delay,
                 min_turn_messages=min_turn_messages,
                 max_seconds=max_seconds,
+                run_id=simulation_run_id,
                 **kwargs
             )
         else:
