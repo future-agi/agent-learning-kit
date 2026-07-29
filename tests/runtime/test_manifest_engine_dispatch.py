@@ -308,7 +308,17 @@ def test_livekit_manifest_rejects_unknown_transport_kind(tmp_path: Path) -> None
         asyncio.run(cli._run_manifest(manifest, tmp_path / "m.json"))
 
 
-def test_livekit_manifest_rejects_sip_inbound_missing_dispatch_rule(tmp_path: Path) -> None:
+def test_livekit_manifest_accepts_sip_inbound_without_dispatch_rule(
+    monkeypatch, tmp_path: Path
+) -> None:
+    captured = {}
+
+    class FakeRunner:
+        async def run_test(self, **kwargs):
+            captured.update(kwargs)
+            return "report"
+
+    monkeypatch.setattr(cli, "TestRunner", FakeRunner)
     manifest = {
         "scenario": _scenario(),
         "agent_definition": {
@@ -318,6 +328,24 @@ def test_livekit_manifest_rejects_sip_inbound_missing_dispatch_rule(tmp_path: Pa
             "room_mode": "managed",
             "system_prompt": "Help.",
             "transport": {"kind": "sip_inbound"},
+        },
+        "simulation": {"engine": "livekit"},
+    }
+    asyncio.run(cli._run_manifest(manifest, tmp_path / "m.json"))
+    assert captured["agent_definition"].transport.kind == "sip_inbound"
+    assert captured["agent_definition"].transport.dispatch_rule_name is None
+
+
+def test_livekit_manifest_rejects_sip_inbound_empty_dispatch_rule(tmp_path: Path) -> None:
+    manifest = {
+        "scenario": _scenario(),
+        "agent_definition": {
+            "name": "phone-agent",
+            "url": "ws://127.0.0.1:7880",
+            "room_name": "sdk-{test_case_id}",
+            "room_mode": "managed",
+            "system_prompt": "Help.",
+            "transport": {"kind": "sip_inbound", "dispatch_rule_name": "   "},
         },
         "simulation": {"engine": "livekit"},
     }

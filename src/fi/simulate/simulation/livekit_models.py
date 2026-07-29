@@ -137,19 +137,107 @@ def _deepgram_tts(
     )
 
 
+def _google_credentials_kwargs() -> dict[str, object]:
+    """Pick Vertex AI vs Gemini API from env — Vertex when possible.
+
+    Vertex is preferred: it has higher throughput and uses ADC so the
+    key never lives in the SDK process. Falls back to the direct Gemini
+    API when only ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) is set.
+    """
+
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get(
+        "VERTEX_PROJECT"
+    )
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get(
+        "VERTEX_LOCATION",
+        "us-central1",
+    )
+    credentials = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if project and credentials:
+        return {"vertexai": True, "project": project, "location": location}
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if api_key:
+        return {"vertexai": False, "api_key": api_key}
+    raise ValueError(
+        "google_credentials_missing: set GOOGLE_APPLICATION_CREDENTIALS + "
+        "GOOGLE_CLOUD_PROJECT for Vertex or GEMINI_API_KEY for Gemini API"
+    )
+
+
+def _google_speech_credentials_kwargs() -> dict[str, object]:
+    credentials = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if credentials:
+        return {"credentials_file": credentials}
+    raise ValueError(
+        "google_cloud_speech_credentials_missing: set "
+        "GOOGLE_APPLICATION_CREDENTIALS for Google STT/TTS"
+    )
+
+
+def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
+    google = _import_plugin("google")
+    kwargs = _google_credentials_kwargs()
+    model = _provider_model(
+        config.model,
+        default="gpt-4o",
+        replacement="gemini-2.5-flash-lite",
+    )
+    return google.LLM(model=model, temperature=config.temperature, **kwargs)
+
+
+def _google_stt(
+    config: STTConfig,
+    _http_session: aiohttp.ClientSession | None,
+) -> livekit_stt.STT:
+    google = _import_plugin("google")
+    kwargs = _google_speech_credentials_kwargs()
+    # Google Cloud Speech doesn't accept the ``model`` name shape the
+    # other STTs use — pass ``languages`` and defaults instead.
+    return google.STT(
+        languages=[config.language or "en-US"],
+        **kwargs,
+    )
+
+
+def _google_tts(
+    config: TTSConfig,
+    _http_session: aiohttp.ClientSession | None,
+) -> livekit_tts.TTS:
+    google = _import_plugin("google")
+    kwargs = _google_speech_credentials_kwargs()
+    voice = (
+        config.voice
+        if config.voice not in {"alloy", ""}
+        else "en-US-Chirp3-HD-Kore"
+    )
+    language = "-".join(voice.split("-")[:2]) if "-" in voice else "en-US"
+    return google.TTS(
+        voice_name=voice,
+        language=language,
+        **kwargs,
+    )
+
+
 _LLM_FACTORIES: dict[str, LLMFactory] = {
     "openai": _openai_llm,
     "openai_compatible": _openai_llm,
+    "google": _google_llm,
+    "vertex": _google_llm,
+    "gemini": _google_llm,
 }
 _STT_FACTORIES: dict[str, STTFactory] = {
     "openai": _openai_stt,
     "elevenlabs": _elevenlabs_stt,
     "deepgram": _deepgram_stt,
+    "google": _google_stt,
+    "vertex": _google_stt,
 }
 _TTS_FACTORIES: dict[str, TTSFactory] = {
     "openai": _openai_tts,
     "elevenlabs": _elevenlabs_tts,
     "deepgram": _deepgram_tts,
+    "google": _google_tts,
+    "vertex": _google_tts,
 }
 _HTTP_PROVIDERS = {"deepgram", "elevenlabs"}
 
