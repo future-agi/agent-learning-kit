@@ -22,15 +22,28 @@ except ImportError as exc:
         "LiveKit mode requires the 'livekit' optional dependency"
     ) from exc
 
+from datetime import datetime, timezone
+
 from fi.simulate._logging import redacted_exc_info
 from fi.simulate.agent.definition import (
     AgentDefinition,
     LLMConfig,
+    ProviderEvidenceConfig,
     SimulatorAgentDefinition,
     STTConfig,
     TelephonyTransport,
     TTSConfig,
 )
+from fi.simulate.artifacts.manifest import ArtifactManifestEntry
+from fi.simulate.evidence.base import EvidenceSourceSummary
+from fi.simulate.evidence.providers import (
+    EvidenceContext,
+    ProviderConfigError,
+    ProviderFetchResult,
+    RetellEvidenceSource,
+    VapiEvidenceSource,
+)
+from fi.simulate.endpoints.vapi import VapiCallOriginator
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
 from fi.simulate.recording.room_recorder import RoomRecorder, mix_recordings
 from fi.simulate.runtime import (
@@ -54,6 +67,7 @@ class _TargetParticipant:
     identity: str
     sid: str
     audio_track_sid: str
+    attributes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -66,6 +80,8 @@ class _CaseOutcome:
     audio_output_path: str | None = None
     audio_combined_path: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+    evidence: list[EvidenceSourceSummary] = field(default_factory=list)
+    provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
 
 
 class _TestRunnerAgent(Agent):
@@ -83,7 +99,13 @@ class _TestRunnerAgent(Agent):
     def started_session(self) -> AgentSession | None:
         return self._session
 
-    async def start_session(self, room: rtc.Room) -> AgentSession:
+    async def start_session(
+        self,
+        room: rtc.Room,
+        *,
+        participant_kinds: list | None = None,
+        participant_identity: str | None = None,
+    ) -> AgentSession:
         configured_min = getattr(self, "min_endpointing_delay", None)
         configured_max = getattr(self, "max_endpointing_delay", None)
         min_endpointing_delay = (
@@ -92,37 +114,42 @@ class _TestRunnerAgent(Agent):
         max_endpointing_delay = (
             configured_max if isinstance(configured_max, (int, float)) else 2.2
         )
+        session_vad = getattr(self, "vad", None)
         session = AgentSession(
             stt=self.stt,
             llm=self.llm,
             tts=self.tts,
-            vad=None,
+            vad=session_vad,
             allow_interruptions=True,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
-            turn_detection=getattr(self, "turn_detection", "stt"),
+            turn_detection="vad" if session_vad is not None else getattr(self, "turn_detection", "stt"),
             preemptive_generation=False,
             discard_audio_if_uninterruptible=True,
             min_interruption_duration=0.3,
         )
         self._session = session
+        default_kinds = [
+            rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            getattr(
+                rtc.ParticipantKind,
+                "PARTICIPANT_KIND_AGENT",
+                rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            ),
+            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        ]
+        input_kwargs: dict = {
+            "delete_room_on_close": False,
+            "participant_kinds": participant_kinds or default_kinds,
+            "pre_connect_audio": False,
+            "pre_connect_audio_timeout": 3.0,
+        }
+        if participant_identity:
+            input_kwargs["participant_identity"] = participant_identity
         await session.start(
             self,
             room=room,
-            room_input_options=RoomInputOptions(
-                delete_room_on_close=False,
-                participant_kinds=[
-                    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-                    getattr(
-                        rtc.ParticipantKind,
-                        "PARTICIPANT_KIND_AGENT",
-                        rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-                    ),
-                    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-                ],
-                pre_connect_audio=True,
-                pre_connect_audio_timeout=3.0,
-            ),
+            room_input_options=RoomInputOptions(**input_kwargs),
             room_output_options=RoomOutputOptions(transcription_enabled=False),
         )
         session.update_options(
@@ -205,6 +232,16 @@ class LiveKitEngine(BaseEngine):
                 "external_room_template_required: concurrent-safe multi-case runs "
                 "need {run_id}, {test_case_id}, or {index} in room_name"
             )
+        transport = agent_definition.transport or TelephonyTransport()
+        if (
+            transport.kind == "sip_inbound"
+            and len(scenario.dataset) > 1
+            and not _has_room_template(agent_definition.room_name)
+        ):
+            raise ValueError(
+                "sip_inbound_room_template_required: multi-case inbound runs "
+                "need {run_id} or {test_case_id} in room_name"
+            )
         current_run_id = run_id or new_run_id()
         report = TestReport()
         for index, persona in enumerate(scenario.dataset):
@@ -253,6 +290,16 @@ class LiveKitEngine(BaseEngine):
                     mode="json",
                     exclude_none=True,
                 )
+            if outcome.evidence:
+                metadata["evidence"] = [
+                    item.model_dump(mode="json", exclude_none=True)
+                    for item in outcome.evidence
+                ]
+            if outcome.provider_artifacts:
+                metadata["provider_artifacts"] = [
+                    entry.model_dump(mode="json", exclude_none=True)
+                    for entry in outcome.provider_artifacts
+                ]
             report.results.append(
                 TestCaseResult(
                     persona=persona,
@@ -304,30 +351,69 @@ class LiveKitEngine(BaseEngine):
         session: AgentSession | None = None
         api_client: api.LiveKitAPI | None = None
         target: _TargetParticipant | None = None
-        managed_room_created = False
+        managed_room_owned = agent_definition.room_mode == "managed"
         room_connected = False
         cleanup_errors: list[str] = []
         outcome: _CaseOutcome | None = None
+        sip_dispatch_rule_id: str | None = None
+        sip_dispatch_rule_created = False
+        vapi_originator: VapiCallOriginator | None = None
+        vapi_call_id: str | None = None
+        case_started_at = datetime.now(timezone.utc)
         transport = agent_definition.transport or TelephonyTransport()
+        effective_target_identity = agent_definition.target_participant_identity
         effective_readiness_timeout = (
             transport.readiness_timeout_seconds
             if transport.kind == "sip_inbound"
             and transport.readiness_timeout_seconds is not None
             else readiness_timeout
         )
+        sip_answer_timeout = transport.answer_timeout_seconds or max(
+            connect_timeout, 60.0
+        )
         try:
-            if agent_definition.room_mode == "managed":
+            if managed_room_owned:
                 api_client = api.LiveKitAPI(
                     _api_url(str(agent_definition.url)),
                     api_key,
                     api_secret,
                 )
-                await asyncio.wait_for(
-                    api_client.room.create_room(api.CreateRoomRequest(name=room_name)),
-                    timeout=connect_timeout,
-                )
-                managed_room_created = True
-                if transport.kind == "webrtc":
+                if transport.kind != "sip_outbound":
+                    try:
+                        await asyncio.wait_for(
+                            api_client.room.create_room(
+                                api.CreateRoomRequest(name=room_name)
+                            ),
+                            timeout=connect_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        outcome = _failure_outcome(
+                            TestCaseStatus.TIMED_OUT,
+                            FailureStage.PREPARING,
+                            "livekit_room_create_timeout",
+                            "LiveKit room creation exceeded its deadline",
+                            retryable=True,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "LiveKit room creation failed",
+                            exc_info=redacted_exc_info(exc),
+                            extra={
+                                "run_id": run_id,
+                                "test_case_id": test_case_id,
+                                "room_name": room_name,
+                            },
+                        )
+                        outcome = _failure_outcome(
+                            TestCaseStatus.FAILED,
+                            FailureStage.PREPARING,
+                            "livekit_room_create_failed",
+                            "Failed to create the LiveKit room",
+                            details=_safe_provider_error_details(
+                                exc, operation="room_create"
+                            ),
+                        )
+                if outcome is None and transport.kind == "webrtc":
                     await asyncio.wait_for(
                         api_client.agent_dispatch.create_dispatch(
                             api.CreateAgentDispatchRequest(
@@ -346,34 +432,29 @@ class LiveKitEngine(BaseEngine):
                         ),
                         timeout=connect_timeout,
                     )
-                elif transport.kind == "sip_outbound":
-                    identity_template = (
-                        transport.participant_identity
-                        or "sip-caller-{test_case_id}"
-                    )
-                    participant_identity = identity_template.format(
-                        test_case_id=test_case_id, run_id=run_id
-                    )
+                elif outcome is None and transport.kind == "sip_inbound":
                     try:
-                        await asyncio.wait_for(
-                            api_client.sip.create_sip_participant(
-                                api.CreateSIPParticipantRequest(
-                                    sip_trunk_id=transport.sip_trunk_id,
-                                    sip_number=transport.sip_number,
-                                    sip_call_to=transport.sip_call_to,
+                        sip_dispatch_rule_id, sip_dispatch_rule_created = (
+                            await asyncio.wait_for(
+                                _ensure_sip_inbound_dispatch(
+                                    api_client,
+                                    transport=transport,
                                     room_name=room_name,
-                                    participant_identity=participant_identity,
-                                    wait_until_answered=True,
-                                    play_ringtone=True,
-                                )
-                            ),
-                            timeout=connect_timeout,
+                                ),
+                                timeout=connect_timeout,
+                            )
                         )
                     except asyncio.TimeoutError:
-                        raise
+                        outcome = _failure_outcome(
+                            TestCaseStatus.TIMED_OUT,
+                            FailureStage.PREPARING,
+                            "sip_inbound_dispatch_timeout",
+                            "SIP inbound dispatch provisioning exceeded its deadline",
+                            retryable=True,
+                        )
                     except Exception as exc:
                         logger.warning(
-                            "SIP dial failed",
+                            "SIP inbound dispatch provisioning failed",
                             exc_info=redacted_exc_info(exc),
                             extra={
                                 "run_id": run_id,
@@ -384,11 +465,14 @@ class LiveKitEngine(BaseEngine):
                         outcome = _failure_outcome(
                             TestCaseStatus.FAILED,
                             FailureStage.PREPARING,
-                            "sip_dial_failed",
-                            "Failed to dial the SIP participant",
-                            details={"exception_type": type(exc).__name__},
+                            "sip_inbound_dispatch_failed",
+                            "Failed to provision SIP inbound dispatch",
+                            details=_safe_provider_error_details(
+                                exc, operation="sip_dispatch"
+                            ),
                         )
-                        return outcome
+            if outcome is not None:
+                return outcome
             token = (
                 AccessToken(api_key, api_secret)
                 .with_identity(simulator_identity)
@@ -425,14 +509,139 @@ class LiveKitEngine(BaseEngine):
                 ),
                 agent_name=agent_definition.name,
             )
+            sip_participant_identity: str | None = None
+            if transport.kind == "sip_outbound":
+                identity_template = (
+                    transport.participant_identity or "sip-caller-{test_case_id}"
+                )
+                sip_participant_identity = identity_template.format(
+                    test_case_id=test_case_id, run_id=run_id
+                )
+                if effective_target_identity is None:
+                    effective_target_identity = sip_participant_identity
+            session_participant_kinds = None
+            session_participant_identity: str | None = None
+            if transport.kind in ("sip_outbound", "sip_inbound"):
+                session_participant_kinds = [
+                    rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                ]
+                session_participant_identity = (
+                    effective_target_identity or sip_participant_identity
+                )
             session = await asyncio.wait_for(
-                customer_agent.start_session(room),
+                customer_agent.start_session(
+                    room,
+                    participant_kinds=session_participant_kinds,
+                    participant_identity=session_participant_identity,
+                ),
                 timeout=connect_timeout,
             )
+            if (
+                transport.kind == "sip_outbound"
+                and api_client is not None
+            ):
+                try:
+                    logger.info(
+                        "sip_outbound_dialing",
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                        },
+                    )
+                    await asyncio.wait_for(
+                        api_client.sip.create_sip_participant(
+                            api.CreateSIPParticipantRequest(
+                                sip_trunk_id=transport.sip_trunk_id,
+                                sip_number=transport.sip_number,
+                                sip_call_to=transport.sip_call_to,
+                                room_name=room_name,
+                                participant_identity=sip_participant_identity,
+                                wait_until_answered=True,
+                                play_ringtone=True,
+                            )
+                        ),
+                        timeout=sip_answer_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "sip_answer_timeout",
+                        "Outbound SIP call was not answered before the deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "SIP dial failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "sip_dial_failed",
+                        "Failed to dial the SIP participant",
+                        details=_safe_provider_error_details(
+                            exc, operation="sip_dial"
+                        ),
+                    )
+                    return outcome
+            if transport.kind == "sip_inbound":
+                logger.info(
+                    "sip_inbound_ready",
+                    extra={
+                        "run_id": run_id,
+                        "test_case_id": test_case_id,
+                        "room_name": room_name,
+                        "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                        "sip_dispatch_rule_created": sip_dispatch_rule_created,
+                    },
+                )
+            if transport.inbound_call_originator == "vapi":
+                try:
+                    vapi_originator = VapiCallOriginator.from_env()
+                    vapi_call = await asyncio.wait_for(
+                        vapi_originator.start(), timeout=connect_timeout
+                    )
+                    vapi_call_id = vapi_call.call_id
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "vapi_call_start_timeout",
+                        "Vapi call creation exceeded its deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "Vapi call creation failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "vapi_call_start_failed",
+                        "Failed to start the Vapi call",
+                        details=_safe_provider_error_details(
+                            exc, operation="vapi_call_start"
+                        ),
+                    )
+                    return outcome
             target = await _wait_for_target_audio(
                 room,
                 excluded_identities={simulator_identity, recorder_identity},
-                target_identity=agent_definition.target_participant_identity,
+                target_identity=effective_target_identity,
                 timeout=effective_readiness_timeout,
             )
             if conversation_direction == "simulator_first":
@@ -461,6 +670,7 @@ class LiveKitEngine(BaseEngine):
             elif (
                 stop_reason == "target_disconnected"
                 and len(messages) < min_turn_messages
+                and not _has_role_alternation(messages)
             ):
                 outcome = _failure_outcome(
                     TestCaseStatus.FAILED,
@@ -588,7 +798,44 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
-            if api_client is not None and managed_room_created:
+            if vapi_originator is not None:
+                try:
+                    if vapi_call_id is not None:
+                        await asyncio.wait_for(
+                            vapi_originator.stop(vapi_call_id),
+                            timeout=cleanup_timeout,
+                        )
+                    await vapi_originator.close()
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "vapi_call_stop",
+                        run_id,
+                        test_case_id,
+                    )
+            if (
+                api_client is not None
+                and sip_dispatch_rule_id
+                and sip_dispatch_rule_created
+            ):
+                try:
+                    await asyncio.wait_for(
+                        _delete_sip_dispatch_rule(
+                            api_client, sip_dispatch_rule_id
+                        ),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:
+                    if not _is_not_found(exc):
+                        _record_cleanup_error(
+                            cleanup_errors,
+                            exc,
+                            "sip_dispatch_delete",
+                            run_id,
+                            test_case_id,
+                        )
+            if api_client is not None and managed_room_owned:
                 try:
                     await asyncio.wait_for(
                         api_client.room.delete_room(
@@ -636,6 +883,20 @@ class LiveKitEngine(BaseEngine):
                 cleanup_errors.extend(
                     f"recording:{type(error).__name__}" for error in recorder.errors
                 )
+        if agent_definition.provider_evidence is not None:
+            provider_summary, provider_artifacts = await _collect_provider_evidence(
+                config=agent_definition.provider_evidence,
+                transport=transport,
+                run_id=run_id,
+                test_case_id=test_case_id,
+                case_directory=case_directory,
+                started_at=case_started_at,
+                target=target,
+                provider_call_id_hint=vapi_call_id,
+            )
+            if provider_summary is not None:
+                outcome.evidence.append(provider_summary)
+            outcome.provider_artifacts.extend(provider_artifacts)
         outcome.metadata.update(
             {
                 "simulator_participant_identity": simulator_identity,
@@ -646,8 +907,14 @@ class LiveKitEngine(BaseEngine):
                 "target_audio_track_sid": (
                     target.audio_track_sid if target is not None else None
                 ),
+                "target_participant_attributes": (
+                    dict(target.attributes) if target is not None else {}
+                ),
                 "cleanup_status": "failed" if cleanup_errors else "completed",
                 "cleanup_errors": cleanup_errors,
+                "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                "sip_dispatch_rule_created": sip_dispatch_rule_created,
+                "vapi_call_id": vapi_call_id,
             }
         )
         return outcome
@@ -773,6 +1040,7 @@ def _find_target_audio(
         for publication in participant.track_publications.values():
             if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
                 continue
+            attrs = dict(getattr(participant, "attributes", {}) or {})
             candidates.append(
                 (
                     priority,
@@ -780,6 +1048,9 @@ def _find_target_audio(
                         identity=identity,
                         sid=str(participant.sid),
                         audio_track_sid=str(publication.sid),
+                        attributes={
+                            str(key): str(value) for key, value in attrs.items()
+                        },
                     ),
                 )
             )
@@ -867,6 +1138,11 @@ def _session_messages(session: AgentSession) -> list[dict[str, str]]:
                 continue
         messages.append(current)
     return messages
+
+
+def _has_role_alternation(messages: list[dict[str, str]]) -> bool:
+    roles = {msg.get("role") for msg in messages if msg.get("content")}
+    return "user" in roles and "assistant" in roles
 
 
 def _failure_outcome(
@@ -1020,3 +1296,215 @@ def _record_cleanup_error(
             "exception_type": type(exc).__name__,
         },
     )
+
+
+_LIVEKIT_INBOUND_TRUNK_ENV = "LIVEKIT_INBOUND_TRUNK_ID"
+
+
+def _safe_provider_error_details(exc: Exception, *, operation: str) -> dict[str, object]:
+    """Extract sanitized error attributes for report failures.
+
+    Never returns the exception message; only structural fields that are
+    known to be safe from LiveKit/Twirp exception classes.
+    """
+
+    code = getattr(exc, "code", None)
+    if code is not None:
+        code_value = getattr(code, "value", None)
+        if code_value is None and not isinstance(code, (str, int)):
+            code_value = str(code)
+        else:
+            code_value = code_value if code_value is not None else code
+    else:
+        code_value = None
+    status = getattr(exc, "status", None)
+    details: dict[str, object] = {
+        "operation": operation,
+        "exception_type": type(exc).__name__,
+    }
+    if code_value is not None:
+        details["provider_code"] = code_value
+    if status is not None:
+        try:
+            details["http_status"] = int(status)
+        except (TypeError, ValueError):
+            details["http_status"] = str(status)
+    return details
+
+
+async def _ensure_sip_inbound_dispatch(
+    api_client: api.LiveKitAPI,
+    *,
+    transport: TelephonyTransport,
+    room_name: str,
+) -> tuple[str, bool]:
+    """Return ``(sip_dispatch_rule_id, created_by_sdk)``.
+
+    When ``transport.dispatch_rule_name`` is supplied the SDK verifies
+    the rule exists and reuses it. Otherwise the SDK provisions a
+    per-run direct rule bound to ``LIVEKIT_INBOUND_TRUNK_ID`` that routes
+    incoming calls into ``room_name`` — the same room the local
+    simulator has already joined — and returns its id so the caller can
+    tear it down.
+    """
+
+    from livekit.protocol.sip import (
+        CreateSIPDispatchRuleRequest,
+        ListSIPDispatchRuleRequest,
+        SIPDispatchRule,
+        SIPDispatchRuleDirect,
+    )
+
+    existing = await api_client.sip.list_sip_dispatch_rule(
+        ListSIPDispatchRuleRequest()
+    )
+    if transport.dispatch_rule_name:
+        for rule in existing.items:
+            if rule.name != transport.dispatch_rule_name:
+                continue
+            direct = getattr(rule.rule, "dispatch_rule_direct", None) if rule.rule else None
+            direct_room = getattr(direct, "room_name", "") if direct is not None else ""
+            if not direct_room:
+                raise RuntimeError(
+                    "sip_inbound_rule_mismatch: "
+                    f"{transport.dispatch_rule_name} is not a direct rule"
+                )
+            if direct_room != room_name:
+                raise RuntimeError(
+                    "sip_inbound_rule_mismatch: "
+                    f"{transport.dispatch_rule_name} targets a different room"
+                )
+            return rule.sip_dispatch_rule_id, False
+        raise RuntimeError(
+            f"sip_inbound_rule_missing: {transport.dispatch_rule_name}"
+        )
+    trunk_id = os.environ.get(_LIVEKIT_INBOUND_TRUNK_ENV)
+    if not trunk_id:
+        raise RuntimeError(
+            f"sip_inbound_trunk_missing: set {_LIVEKIT_INBOUND_TRUNK_ENV}"
+        )
+    for rule in existing.items:
+        if trunk_id and trunk_id in rule.trunk_ids:
+            raise RuntimeError(
+                "sip_inbound_route_conflict: existing dispatch rule "
+                f"{rule.sip_dispatch_rule_id} already covers this trunk"
+            )
+    rule_name = f"sim-inbound-{room_name[-24:]}"
+    resp = await api_client.sip.create_sip_dispatch_rule(
+        CreateSIPDispatchRuleRequest(
+            rule=SIPDispatchRule(
+                dispatch_rule_direct=SIPDispatchRuleDirect(
+                    room_name=room_name,
+                ),
+            ),
+            trunk_ids=[trunk_id],
+            hide_phone_number=False,
+            name=rule_name,
+        )
+    )
+    return resp.sip_dispatch_rule_id, True
+
+
+async def _delete_sip_dispatch_rule(
+    api_client: api.LiveKitAPI, rule_id: str
+) -> None:
+    from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
+
+    await api_client.sip.delete_sip_dispatch_rule(
+        DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
+    )
+
+
+async def _collect_provider_evidence(
+    *,
+    config: ProviderEvidenceConfig,
+    transport: TelephonyTransport,
+    run_id: str,
+    test_case_id: str,
+    case_directory: Path,
+    started_at: datetime,
+    target: _TargetParticipant | None,
+    provider_call_id_hint: str | None = None,
+) -> tuple[EvidenceSourceSummary | None, list[ArtifactManifestEntry]]:
+    call_id_hint = provider_call_id_hint
+    caller_phone: str | None = None
+    if target is not None:
+        if call_id_hint is None and config.participant_attribute:
+            call_id_hint = target.attributes.get(config.participant_attribute)
+        caller_phone = (
+            target.attributes.get("sip.from")
+            or target.attributes.get("sip.fromUser")
+            or target.attributes.get("sip.callerNumber")
+        )
+    context = EvidenceContext(
+        run_id=run_id,
+        test_case_id=test_case_id,
+        case_directory=case_directory,
+        started_at=started_at,
+        call_id_hint=call_id_hint,
+        caller_phone=caller_phone,
+        callee_phone=transport.sip_number,
+    )
+    try:
+        if config.provider == "vapi":
+            adapter = VapiEvidenceSource(config)
+        elif config.provider == "retell":
+            adapter = RetellEvidenceSource(config)
+        else:
+            raise ProviderConfigError(
+                f"unsupported_provider_evidence: {config.provider}"
+            )
+    except ProviderConfigError as exc:
+        summary = EvidenceSourceSummary(
+            source_id=f"{config.provider}:unconfigured",
+            adapter=config.provider,
+            evidence_class=_EVIDENCE_PROVIDER_REPORTED,
+            available=False,
+            redactions=["auth", "phone_e164"],
+            metadata={"provider": config.provider, "reason": str(exc)},
+        )
+        return summary, []
+    try:
+        await adapter.connect(context)
+        result: ProviderFetchResult = await adapter.fetch_final()
+    except Exception as exc:  # noqa: BLE001 — provider failures are first-class evidence
+        logger.warning(
+            "Provider evidence adapter failed",
+            exc_info=redacted_exc_info(exc),
+            extra={
+                "provider": config.provider,
+                "run_id": run_id,
+                "test_case_id": test_case_id,
+            },
+        )
+        summary = EvidenceSourceSummary(
+            source_id=f"{config.provider}:error",
+            adapter=config.provider,
+            evidence_class=_EVIDENCE_PROVIDER_REPORTED,
+            available=False,
+            redactions=["auth", "phone_e164"],
+            metadata={
+                "provider": config.provider,
+                "reason": "adapter_exception",
+                "exception_type": type(exc).__name__,
+            },
+        )
+        return summary, []
+    finally:
+        try:
+            await adapter.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Provider evidence adapter close failed",
+                extra={
+                    "provider": config.provider,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+    return result.summary, result.artifacts
+
+
+# Import lazily to avoid a module-import cycle with ProviderConfigError above.
+from fi.simulate.evidence.base import EvidenceClass as _EvidenceClass  # noqa: E402
+
+_EVIDENCE_PROVIDER_REPORTED = _EvidenceClass.PROVIDER_REPORTED

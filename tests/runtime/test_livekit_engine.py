@@ -352,7 +352,7 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
             calls.append(("inactive",))
 
     class FakeCustomerAgent:
-        async def start_session(self, _room):
+        async def start_session(self, _room, **_kwargs):
             return FakeSession()
 
         def open_conversation(self):
@@ -542,7 +542,7 @@ class _FakeSipSession:
 
 
 class _FakeCustomerAgent:
-    async def start_session(self, _room):
+    async def start_session(self, _room, **_kwargs):
         return _FakeSipSession()
 
     def open_conversation(self):
@@ -681,7 +681,7 @@ def test_sip_outbound_api_failure_yields_typed_sip_dial_failed(monkeypatch) -> N
         async def aclose(self):
             pass
 
-    monkeypatch.setattr(livekit.rtc, "Room", lambda: SimpleNamespace())
+    monkeypatch.setattr(livekit.rtc, "Room", lambda: _FakeRoomAudio("sip-target"))
     monkeypatch.setattr(livekit.api, "LiveKitAPI", lambda *_a: _Api())
     monkeypatch.setattr(livekit, "AccessToken", _fake_access_token())
     engine = LiveKitEngine()
@@ -723,15 +723,40 @@ def test_sip_inbound_timeout_yields_typed_no_participant(monkeypatch) -> None:
     class _Room:
         async def create_room(self, request):
             calls.append(("create_room", request.name))
+            calls_room_name.append(request.name)
 
         async def delete_room(self, request):
             calls.append(("delete_room", request.room))
+
+    calls_room_name: list[str] = []
+
+    class _SipStub:
+        async def list_sip_dispatch_rule(self, _request):
+            expected_room = calls_room_name[-1] if calls_room_name else ""
+            item = SimpleNamespace(
+                name="inbound-rule",
+                sip_dispatch_rule_id="SD_reused",
+                trunk_ids=["ST_test_inbound"],
+                rule=SimpleNamespace(
+                    dispatch_rule_direct=SimpleNamespace(room_name=expected_room)
+                ),
+            )
+            return SimpleNamespace(items=[item])
+
+        async def create_sip_dispatch_rule(self, _request):
+            raise AssertionError("dispatch_rule_name reuse must not create a new rule")
+
+        async def delete_sip_dispatch_rule(self, _request):
+            raise AssertionError("reused dispatch rule must not be deleted")
+
+        async def create_sip_participant(self, _request):
+            return None
 
     class _Api:
         def __init__(self):
             self.room = _Room()
             self.agent_dispatch = SimpleNamespace(create_dispatch=lambda _r: None)
-            self.sip = SimpleNamespace(create_sip_participant=lambda _r: None)
+            self.sip = _SipStub()
 
         async def aclose(self):
             pass
@@ -760,7 +785,7 @@ def test_sip_inbound_timeout_yields_typed_no_participant(monkeypatch) -> None:
         session = _FakeSipSession()
 
         class _Agent:
-            async def start_session(self, _room):
+            async def start_session(self, _room, **_kwargs):
                 return session
 
             def open_conversation(self):
@@ -789,6 +814,8 @@ def test_sip_inbound_timeout_yields_typed_no_participant(monkeypatch) -> None:
     result = report.results[0]
     assert result.metadata["status"] == CaseStatus.AGENT_UNAVAILABLE.value
     assert result.metadata["failure"]["code"] == "sip_inbound_no_participant"
+    assert result.metadata["sip_dispatch_rule_id"] == "SD_reused"
+    assert result.metadata["sip_dispatch_rule_created"] is False
 
 
 def test_cleanup_logging_redacts_exception_details(caplog) -> None:
