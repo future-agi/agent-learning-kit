@@ -111,8 +111,14 @@ def test_default_customer_agent_supports_elevenlabs(monkeypatch) -> None:
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
     monkeypatch.delenv("ELEVEN_API_KEY", raising=False)
 
-    fake_openai = SimpleNamespace(LLM=lambda **kw: ("llm", kw), STT=lambda **kw: ("stt", kw), TTS=lambda **kw: ("tts", kw))
-    fake_elevenlabs = SimpleNamespace(STT=lambda **kw: ("stt", kw), TTS=lambda **kw: ("tts", kw))
+    fake_openai = SimpleNamespace(
+        LLM=lambda **kw: ("llm", kw),
+        STT=lambda **kw: ("stt", kw),
+        TTS=lambda **kw: ("tts", kw),
+    )
+    fake_elevenlabs = SimpleNamespace(
+        STT=lambda **kw: ("stt", kw), TTS=lambda **kw: ("tts", kw)
+    )
 
     def _fake_import(name):
         return {"openai": fake_openai, "elevenlabs": fake_elevenlabs}[name]
@@ -258,6 +264,23 @@ def test_livekit_api_url_normalizes_websocket_schemes() -> None:
     assert livekit._api_url("ws://localhost:7880") == "http://localhost:7880"
 
 
+def test_provider_evidence_uses_explicit_target_api_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("TARGET_VAPI_KEY", "vapi-secret")
+    vapi_target = livekit.VapiTargetConfig(
+        assistant_id="assistant_123",
+        api_base_url="https://vapi.example",
+        api_key_env="TARGET_VAPI_KEY",
+    )
+    retell_target = livekit.RetellTargetConfig(
+        agent_id="agent_123",
+        api_url="https://retell.example/v2/create-web-call",
+    )
+
+    assert livekit._target_api_key(vapi_target) == "vapi-secret"
+    assert livekit._target_evidence_base_url(vapi_target) == "https://vapi.example"
+    assert livekit._target_evidence_base_url(retell_target) == "https://retell.example"
+
+
 def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
     calls = []
     audio_kind = livekit.rtc.TrackKind.KIND_AUDIO
@@ -300,7 +323,9 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
 
     class FakeDispatchService:
         async def create_dispatch(self, request):
-            calls.append(("dispatch", request.agent_name, request.room, request.metadata))
+            calls.append(
+                ("dispatch", request.agent_name, request.room, request.metadata)
+            )
 
     class FakeApiClient:
         def __init__(self):
@@ -482,7 +507,9 @@ def test_conversation_completes_after_minimum_messages() -> None:
 def test_unsupported_provider_lists_supported_options() -> None:
     from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
 
-    with pytest.raises(ValueError, match="Unsupported LiveKit STT provider: 'nope'") as exc_info:
+    with pytest.raises(
+        ValueError, match="Unsupported LiveKit STT provider: 'nope'"
+    ) as exc_info:
         asyncio.run(
             livekit_models.build_livekit_models(
                 llm_config=LLMConfig(),
@@ -501,9 +528,7 @@ class _FakeRoomAudio:
                 identity=target_identity,
                 sid="participant-target",
                 track_publications={
-                    "track-target": SimpleNamespace(
-                        sid="track-target", kind=audio_kind
-                    )
+                    "track-target": SimpleNamespace(sid="track-target", kind=audio_kind)
                 },
             )
         }
@@ -843,14 +868,32 @@ def test_cleanup_logging_redacts_exception_details(caplog) -> None:
 
 
 @pytest.mark.parametrize(
-    ("transport_kind", "connector_name", "identity_prefix"),
+    ("transport_kind", "connector_name", "identity_prefix", "target"),
     [
-        ("vapi_websocket", "VapiWebSocketConnector", "fagi-vapi-bridge-"),
-        ("retell_webcall", "RetellWebCallConnector", "fagi-retell-bridge-"),
+        (
+            "vapi_websocket",
+            "VapiWebSocketConnector",
+            "fagi-vapi-bridge-",
+            {
+                "provider": "vapi",
+                "assistant_id": "assistant_123",
+                "api_key_env": "TARGET_PROVIDER_KEY",
+            },
+        ),
+        (
+            "retell_webcall",
+            "RetellWebCallConnector",
+            "fagi-retell-bridge-",
+            {
+                "provider": "retell",
+                "agent_id": "agent_123",
+                "api_key_env": "TARGET_PROVIDER_KEY",
+            },
+        ),
     ],
 )
 def test_web_bridge_joins_as_target_without_sip(
-    monkeypatch, transport_kind, connector_name, identity_prefix
+    monkeypatch, transport_kind, connector_name, identity_prefix, target
 ) -> None:
     calls: list[tuple] = []
     engine = _install_engine_fakes(monkeypatch, calls)
@@ -886,10 +929,15 @@ def test_web_bridge_joins_as_target_without_sip(
         )
 
     connector_type = getattr(livekit, connector_name)
+    received_targets = []
     monkeypatch.setattr(
         connector_type,
-        "from_env",
-        classmethod(lambda _cls: SimpleNamespace()),
+        "from_target",
+        classmethod(
+            lambda _cls, provider_target: (
+                received_targets.append(provider_target) or SimpleNamespace()
+            )
+        ),
     )
     monkeypatch.setattr(livekit, "LiveKitAudioBridge", _Bridge)
     monkeypatch.setattr(livekit, "_wait_for_target_audio", _wait_for_target)
@@ -900,6 +948,7 @@ def test_web_bridge_joins_as_target_without_sip(
                 room_mode="managed",
                 room_name="sdk-web-{test_case_id}",
                 transport={"kind": transport_kind},
+                target=target,
             ),
             scenario=_scenario(),
             run_id="run_web_bridge",
@@ -909,8 +958,10 @@ def test_web_bridge_joins_as_target_without_sip(
 
     result = report.results[0]
     assert result.metadata["status"] == CaseStatus.COMPLETED.value
+    assert result.metadata["target_provider"] == target["provider"]
     assert result.metadata["provider_call_id"] == "call_web_123"
     assert result.metadata["target_participant_identity"].startswith(identity_prefix)
+    assert received_targets[0].provider == target["provider"]
     assert ("bridge_connect",) in calls
     assert ("bridge_close",) in calls
     assert not [call for call in calls if call[0] in {"dispatch", "sip_dial"}]

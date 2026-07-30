@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 import aiohttp
 from livekit import rtc
 
+from fi.simulate.agent.definition import RetellTargetConfig
 from fi.simulate.simulation.bridge.audio import PCMResampler
 from fi.simulate.simulation.bridge.connector import ConnectorConfig, ProviderConnector
 
@@ -28,6 +29,20 @@ class RetellWebCallConnector(ProviderConnector):
         self._resamplers: dict[int, PCMResampler] = {}
 
     @classmethod
+    def from_target(cls, target: RetellTargetConfig) -> "RetellWebCallConnector":
+        api_key = os.environ.get(target.api_key_env, "").strip()
+        if not api_key:
+            raise ValueError("retell_webcall_config_missing: " + target.api_key_env)
+        return cls(
+            ConnectorConfig(
+                api_key=api_key,
+                assistant_id=target.agent_id,
+                api_url=str(target.api_url),
+                livekit_url=str(target.livekit_url),
+            )
+        )
+
+    @classmethod
     def from_env(cls) -> "RetellWebCallConnector":
         api_key = os.environ.get("RETELL_API_KEY", "").strip()
         agent_id = os.environ.get("RETELL_AGENT_ID", "").strip()
@@ -40,13 +55,10 @@ class RetellWebCallConnector(ProviderConnector):
             if not value
         ]
         if missing:
-            raise ValueError(
-                "retell_webcall_config_missing: " + ", ".join(missing)
-            )
-        return cls(
-            ConnectorConfig(
-                api_key=api_key,
-                assistant_id=agent_id,
+            raise ValueError("retell_webcall_config_missing: " + ", ".join(missing))
+        return cls.from_target(
+            RetellTargetConfig(
+                agent_id=agent_id,
                 api_url=os.environ.get(
                     "RETELL_API_URL",
                     "https://api.retellai.com/v2/create-web-call",
@@ -70,7 +82,9 @@ class RetellWebCallConnector(ProviderConnector):
                         f"retell_webcall_create_failed:{response.status}"
                     )
                 payload = await response.json()
-        access_token = payload.get("access_token") if isinstance(payload, dict) else None
+        access_token = (
+            payload.get("access_token") if isinstance(payload, dict) else None
+        )
         call_id = payload.get("call_id") if isinstance(payload, dict) else None
         if not isinstance(access_token, str) or not access_token.strip():
             raise ValueError("retell_webcall_response_missing_access_token")
@@ -110,9 +124,7 @@ class RetellWebCallConnector(ProviderConnector):
             self._connected = True
             if self._track_future is None:
                 raise RuntimeError("retell_webcall_track_future_missing")
-            await asyncio.wait_for(
-                asyncio.shield(self._track_future), timeout=30.0
-            )
+            await asyncio.wait_for(asyncio.shield(self._track_future), timeout=30.0)
             logger.info("retell_webcall_connected", extra={"call_id": call_id})
         except asyncio.TimeoutError as exc:
             await self.disconnect()

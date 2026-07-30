@@ -19,6 +19,9 @@ _SIMULATE_EXTRA = "simulate"
 
 _FI_SIMULATE_EXPORT_NAMES = (
     "AgentDefinition",
+    "LiveKitSimulatorRuntime",
+    "VapiTargetConfig",
+    "RetellTargetConfig",
     "SimulatorAgentDefinition",
     "LLMConfig",
     "TTSConfig",

@@ -7,7 +7,11 @@ from typing import Any, Callable, Mapping
 
 from pydantic import ValidationError
 
-from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
+from fi.simulate.agent.definition import (
+    AgentDefinition,
+    LiveKitSimulatorRuntime,
+    SimulatorAgentDefinition,
+)
 from fi.simulate.manifest import ManifestError, validate_manifest_env
 from fi.simulate.simulation.models import Scenario
 from fi.simulate.voice import build_voice_run_manifest, run_voice_simulation
@@ -24,6 +28,10 @@ def add_voice_arguments(parser: argparse.ArgumentParser) -> None:
     scenarios.add_argument("--topic", help="Generate scenarios from this topic.")
     parser.add_argument(
         "--simulator", help="Optional SimulatorAgentDefinition JSON/YAML file."
+    )
+    parser.add_argument(
+        "--livekit-runtime",
+        help="FutureAGI LiveKitSimulatorRuntime JSON/YAML file.",
     )
     parser.add_argument("--num-scenarios", type=int, default=1)
     parser.add_argument("--run-id", default=None)
@@ -80,6 +88,13 @@ async def run_voice_command(
             if args.simulator
             else None
         )
+        livekit_runtime = (
+            LiveKitSimulatorRuntime(
+                **load_object(Path(args.livekit_runtime).expanduser().resolve())
+            )
+            if args.livekit_runtime
+            else None
+        )
     except ValidationError as exc:
         raise ManifestError(f"invalid typed voice input: {exc}") from exc
     if args.write_manifest and scenario is None:
@@ -90,6 +105,7 @@ async def run_voice_command(
             agent_definition=agent_definition,
             scenario=scenario,
             simulator=simulator,
+            livekit_runtime=livekit_runtime,
             name=args.name,
             simulation_run_id=args.run_id,
             record_audio=args.record_audio,
@@ -130,6 +146,7 @@ async def run_voice_command(
         agent_definition=agent_definition,
         scenario=scenario,
         simulator=simulator,
+        livekit_runtime=livekit_runtime,
         topic=args.topic,
         num_scenarios=args.num_scenarios,
         simulation_run_id=args.run_id,

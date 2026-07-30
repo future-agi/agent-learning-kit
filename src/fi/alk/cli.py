@@ -6169,7 +6169,7 @@ def _runs_sync(telemetry: Any, ledger: Any, parsed: Any) -> int:
     if not _sync.sync_enabled():
         print("no Future AGI keys present — nothing was sent anywhere.")
         print(
-            "  set AGENT_LEARNING_API_KEY / FUTURE_AGI_API_KEY / FI_API_KEY "
+            "  set FI_API_KEY / FUTURE_AGI_API_KEY / AGENT_LEARNING_API_KEY "
             "to sync runs to your own account."
         )
         return 0
@@ -6251,8 +6251,8 @@ def _runs_sync_dry_run(
             "would also send nothing."
         )
         print(
-            "\nno destination: AGENT_LEARNING_API_KEY / FUTURE_AGI_API_KEY / "
-            "FI_API_KEY all unset."
+            "\nno destination: FI_API_KEY / FUTURE_AGI_API_KEY / "
+            "AGENT_LEARNING_API_KEY all unset."
         )
         print(
             f"your runs live only in  {ledger.dir}  — fully yours, fully "

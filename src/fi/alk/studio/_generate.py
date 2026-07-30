@@ -163,10 +163,6 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
     transport_kind = transport.kind if transport else "webrtc"
     inbound = transport_kind != "sip_inbound"
     description = agent_definition.system_prompt
-    if agent_definition.description:
-        description = (
-            f"{agent_definition.description}\n\nSystem instructions:\n{description}"
-        )
     scan = scan_content({"description": description})
     if scan["status"] == "flagged":
         raise ScenarioGenerationError(
@@ -189,9 +185,7 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
         "inbound": inbound,
         "language": agent_definition.stt.language,
         "languages": (
-            [agent_definition.stt.language]
-            if agent_definition.stt.language
-            else None
+            [agent_definition.stt.language] if agent_definition.stt.language else None
         ),
         "model": agent_definition.llm.model,
         "model_details": {
@@ -199,7 +193,29 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
             "temperature": agent_definition.llm.temperature,
         },
     }
-    if transport_kind in {"sip_outbound", "sip_inbound"}:
+    target = agent_definition.target
+    if target is not None:
+        target_id = (
+            target.assistant_id if target.provider == "vapi" else target.agent_id
+        )
+        target_url = (
+            target.api_base_url if target.provider == "vapi" else target.api_url
+        )
+        payload.update(
+            {
+                "provider": target.provider,
+                "assistant_id": target_id,
+                "scenario_generation_only": True,
+            }
+        )
+        safe_configuration.update(
+            {
+                "provider": target.provider,
+                "assistant_id": target_id,
+                "provider_api_url": str(target_url),
+            }
+        )
+    elif transport_kind in {"sip_outbound", "sip_inbound"}:
         if transport is None or not transport.sip_call_to:
             raise ScenarioGenerationError(
                 "SIP platform agent creation requires a target contact number"
@@ -212,6 +228,10 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
         )
         safe_configuration["contact_number"] = transport.sip_call_to
     else:
+        if agent_definition.url is None:
+            raise ScenarioGenerationError(
+                "LiveKit target creation requires an AgentDefinition url"
+            )
         livekit_url = _safe_livekit_url(agent_definition.url)
         livekit_agent_name = agent_definition.agent_name or agent_definition.name
         payload.update(
@@ -238,7 +258,9 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
     ).hexdigest()
     base_name = "-".join(agent_definition.name.strip().split()) or "agent"
     payload["agent_name"] = f"{base_name[:220]}-alk-{configuration_hash[:12]}"
-    return {key: value for key, value in payload.items() if value is not None}, configuration_hash
+    return {
+        key: value for key, value in payload.items() if value is not None
+    }, configuration_hash
 
 
 def _active_version_id(detail: Mapping[str, Any]) -> str | None:
@@ -353,7 +375,11 @@ def _completed_scenario(
         )
     try:
         rows = fetch_dataset_rows(base, headers, dataset_id)
-    except (urllib.error.HTTPError, urllib.error.URLError, ScenarioDownloadError) as exc:
+    except (
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        ScenarioDownloadError,
+    ) as exc:
         raise ScenarioGenerationError(
             "completed platform Scenario dataset could not be retrieved",
             scenario_id=scenario_id,

@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from fi.alk.studio import GeneratedScenario
 
-from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
+from fi.simulate.agent.definition import (
+    AgentDefinition,
+    LiveKitSimulatorRuntime,
+    SimulatorAgentDefinition,
+)
 from fi.simulate.simulation.models import Scenario, TestReport
 from fi.simulate.simulation.runner import TestRunner
 
@@ -18,6 +22,7 @@ _RUN_VERSION = "agent-learning.run.v1"
 async def run_voice_simulation(
     *,
     agent_definition: AgentDefinition,
+    livekit_runtime: LiveKitSimulatorRuntime | None = None,
     scenario: Scenario | None = None,
     simulator: SimulatorAgentDefinition | None = None,
     topic: str | None = None,
@@ -42,6 +47,7 @@ async def run_voice_simulation(
         raise ValueError("provide scenario or topic for scenario generation")
     return await TestRunner().run_test(
         agent_definition=agent_definition,
+        livekit_runtime=livekit_runtime,
         scenario=scenario,
         simulator=simulator,
         topic=topic,
@@ -92,6 +98,7 @@ def build_voice_run_manifest(
     agent_definition: AgentDefinition,
     scenario: Scenario,
     simulator: SimulatorAgentDefinition | None = None,
+    livekit_runtime: LiveKitSimulatorRuntime | None = None,
     name: str | None = None,
     required_env: Sequence[str] = (),
     simulation_run_id: str | None = None,
@@ -118,6 +125,11 @@ def build_voice_run_manifest(
         if simulator is not None
         else None
     )
+    typed_runtime = (
+        LiveKitSimulatorRuntime.model_validate(livekit_runtime)
+        if livekit_runtime is not None
+        else None
+    )
     simulation: dict[str, Any] = {
         "engine": "livekit",
         "modality": "voice",
@@ -132,12 +144,20 @@ def build_voice_run_manifest(
         "cleanup_timeout": cleanup_timeout,
         "conversation_direction": conversation_direction,
     }
+    if typed_runtime is not None:
+        simulation["livekit_runtime"] = typed_runtime.model_dump(
+            mode="json", exclude_none=True
+        )
     if simulation_run_id:
         simulation["run_id"] = simulation_run_id
     manifest: dict[str, Any] = {
         "version": _RUN_VERSION,
         "name": name or f"{agent.name}-voice-simulation",
-        "required_env": _voice_required_env(agent, required_env),
+        "required_env": _voice_required_env(
+            agent,
+            typed_runtime,
+            required_env,
+        ),
         "agent_definition": agent.model_dump(mode="json", exclude_none=True),
         "scenario": typed_scenario.model_dump(mode="json", exclude_none=True),
         "simulation": simulation,
@@ -158,22 +178,38 @@ def build_voice_run_manifest(
 
 def _voice_required_env(
     agent_definition: AgentDefinition,
+    livekit_runtime: LiveKitSimulatorRuntime | None,
     required_env: Sequence[str],
 ) -> list[str]:
-    names = ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", *required_env]
+    names = [
+        livekit_runtime.api_key_env if livekit_runtime else "LIVEKIT_API_KEY",
+        livekit_runtime.api_secret_env if livekit_runtime else "LIVEKIT_API_SECRET",
+        *required_env,
+    ]
     transport = agent_definition.transport
+    target = agent_definition.target
+    if target is not None:
+        names.append(target.api_key_env)
     if transport is not None:
-        if transport.kind == "vapi_websocket":
+        if transport.kind == "vapi_websocket" and target is None:
             names.extend(("VAPI_API_KEY", "VAPI_ASSISTANT_ID"))
-        elif transport.kind == "retell_webcall":
+        elif transport.kind == "retell_webcall" and target is None:
             names.extend(("RETELL_API_KEY", "RETELL_AGENT_ID"))
         elif transport.kind == "sip_inbound":
             names.append("LIVEKIT_INBOUND_TRUNK_ID")
             if transport.inbound_call_originator == "vapi":
                 names.extend(
                     (
-                        "VAPI_API_KEY",
-                        "VAPI_ASSISTANT_ID",
+                        (
+                            target.api_key_env
+                            if target is not None and target.provider == "vapi"
+                            else "VAPI_API_KEY"
+                        ),
+                        (
+                            ""
+                            if target is not None and target.provider == "vapi"
+                            else "VAPI_ASSISTANT_ID"
+                        ),
                         "VAPI_PHONE_NUMBER_ID",
                         "LIVEKIT_INBOUND_DID",
                     )

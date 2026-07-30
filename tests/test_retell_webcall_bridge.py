@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from fi.simulate.agent.definition import RetellTargetConfig
 from fi.simulate.simulation.bridge import retell
 from fi.simulate.simulation.bridge.connector import ConnectorConfig
 from fi.simulate.simulation.bridge.retell import RetellWebCallConnector
@@ -105,6 +106,26 @@ def test_retell_webcall_connector_creates_and_joins_call(monkeypatch) -> None:
     assert session.request["json"] == {"agent_id": "agent_123"}
     assert room.connection == ("wss://retell.example.com", "livekit-token")
     assert room.disconnected is True
+
+
+def test_retell_webcall_connector_uses_explicit_target(monkeypatch) -> None:
+    monkeypatch.setenv("HEALTHCARE_RETELL_KEY", "test-key")
+
+    connector = RetellWebCallConnector.from_target(
+        RetellTargetConfig(
+            agent_id="agent_healthcare",
+            api_url="https://retell.healthcare.example/v2/create-web-call",
+            livekit_url="wss://retell-healthcare.example.com",
+            api_key_env="HEALTHCARE_RETELL_KEY",
+        )
+    )
+
+    assert connector._config.assistant_id == "agent_healthcare"
+    assert connector._config.api_key == "test-key"
+    assert (
+        connector._config.api_url
+        == "https://retell.healthcare.example/v2/create-web-call"
+    )
 
 
 def test_retell_webcall_connector_requires_credentials(monkeypatch) -> None:

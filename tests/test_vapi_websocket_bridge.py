@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from fi.simulate.agent.definition import VapiTargetConfig
 from fi.simulate.simulation.bridge import vapi
 from fi.simulate.simulation.bridge.connector import ConnectorConfig
 from fi.simulate.simulation.bridge.vapi import VapiWebSocketConnector
@@ -109,6 +110,22 @@ def test_vapi_websocket_connector_creates_and_streams_call(monkeypatch) -> None:
     assert len(session.websocket.sent[0]) < 960
     assert received == [(b"audio", 16000)]
     assert session.closed is True
+
+
+def test_vapi_websocket_connector_uses_explicit_target(monkeypatch) -> None:
+    monkeypatch.setenv("HEALTHCARE_VAPI_KEY", "test-key")
+
+    connector = VapiWebSocketConnector.from_target(
+        VapiTargetConfig(
+            assistant_id="assistant_healthcare",
+            api_base_url="https://vapi.healthcare.example",
+            api_key_env="HEALTHCARE_VAPI_KEY",
+        )
+    )
+
+    assert connector._config.assistant_id == "assistant_healthcare"
+    assert connector._config.api_key == "test-key"
+    assert connector._config.api_url == "https://vapi.healthcare.example/call"
 
 
 def test_vapi_websocket_connector_requires_credentials(monkeypatch) -> None:

@@ -69,7 +69,11 @@ from fi.simulate import (
     normalize_persistent_state_attack_manifest,
     normalize_optimizer_society_trace,
 )
-from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
+from fi.simulate.agent.definition import (
+    AgentDefinition,
+    LiveKitSimulatorRuntime,
+    SimulatorAgentDefinition,
+)
 from fi.simulate.evaluation import evaluate_agent_report
 from fi.simulate.voice_cli import add_voice_arguments, run_voice_command
 from fi.simulate.results import LocalFilesystemResultSink
@@ -924,12 +928,18 @@ async def _run_livekit_manifest(
     if not isinstance(raw_agent, Mapping) or not raw_agent:
         raise ManifestError("livekit manifest requires an agent_definition block")
     raw_simulator = manifest.get("simulator")
+    raw_runtime = simulation.get("livekit_runtime")
     if raw_simulator is not None and not isinstance(raw_simulator, Mapping):
         raise ManifestError("simulator must be an object")
+    if raw_runtime is not None and not isinstance(raw_runtime, Mapping):
+        raise ManifestError("simulation.livekit_runtime must be an object")
     try:
         agent_definition = AgentDefinition(**dict(raw_agent))
         simulator = (
             SimulatorAgentDefinition(**dict(raw_simulator)) if raw_simulator else None
+        )
+        livekit_runtime = (
+            LiveKitSimulatorRuntime(**dict(raw_runtime)) if raw_runtime else None
         )
     except ValidationError as exc:
         raise ManifestError(f"invalid livekit manifest: {exc}") from exc
@@ -939,6 +949,7 @@ async def _run_livekit_manifest(
         recording_root = manifest_path.parent / recording_root
     return await TestRunner().run_test(
         agent_definition=agent_definition,
+        livekit_runtime=livekit_runtime,
         scenario=await asyncio.to_thread(
             _build_scenario,
             manifest,

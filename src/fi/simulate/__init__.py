@@ -1,6 +1,9 @@
 from .agent import (
     AgentDefinition,
+    LiveKitSimulatorRuntime,
+    RetellTargetConfig,
     SimulatorAgentDefinition,
+    VapiTargetConfig,
     LLMConfig,
     TTSConfig,
     STTConfig,
@@ -269,6 +272,9 @@ from .instrumentation.livekit import FutureAGIObserver
 
 __all__ = [
     "AgentDefinition",
+    "LiveKitSimulatorRuntime",
+    "VapiTargetConfig",
+    "RetellTargetConfig",
     "SimulatorAgentDefinition",
     "LLMConfig",
     "TTSConfig",

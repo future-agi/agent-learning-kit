@@ -58,6 +58,7 @@ class RetellEvidenceSource:
         config: ProviderEvidenceConfig,
         *,
         api_key: str | None = None,
+        api_base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if config.provider != "retell":
@@ -71,7 +72,7 @@ class RetellEvidenceSource:
                 "RETELL_API_KEY is required for the Retell adapter"
             )
         self._client = client or httpx.AsyncClient(
-            base_url=_RETELL_API_BASE,
+            base_url=api_base_url or _RETELL_API_BASE,
             headers={"Authorization": f"Bearer {self._api_key}"},
             timeout=httpx.Timeout(30.0, connect=10.0),
         )
@@ -102,10 +103,14 @@ class RetellEvidenceSource:
     async def _locate_and_fetch_call(self) -> dict[str, Any] | None:
         assert self._context is not None
         context = self._context
-        if self._config.call_id_source in {
-            "participant_attribute",
-            "originator_response",
-        } and context.call_id_hint:
+        if (
+            self._config.call_id_source
+            in {
+                "participant_attribute",
+                "originator_response",
+            }
+            and context.call_id_hint
+        ):
             return await self._get_call(context.call_id_hint)
         window = self._config.polling_window_seconds
         if not window:
@@ -118,7 +123,9 @@ class RetellEvidenceSource:
         }
         if context.caller_phone:
             filters["from_number"] = [context.caller_phone]
-        deadline = asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
+        deadline = (
+            asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
+        )
         while True:
             response = await self._client.post(
                 "/v2/list-calls",
@@ -135,9 +142,9 @@ class RetellEvidenceSource:
             if terminal:
                 # Fetch the full call payload for the newest terminal match.
                 terminal.sort(
-                    key=lambda item: item.get("end_timestamp")
-                    or item.get("start_timestamp")
-                    or 0,
+                    key=lambda item: (
+                        item.get("end_timestamp") or item.get("start_timestamp") or 0
+                    ),
                     reverse=True,
                 )
                 call_id = terminal[0].get("call_id")
@@ -228,7 +235,8 @@ class RetellEvidenceSource:
             adapter=_ADAPTER,
             evidence_class=EvidenceClass.PROVIDER_REPORTED,
             capabilities=self.capabilities,
-            available=str(payload.get("call_status") or "").lower() in _TERMINAL_STATUSES,
+            available=str(payload.get("call_status") or "").lower()
+            in _TERMINAL_STATUSES,
             redactions=["auth", "phone_e164"],
             metadata={k: v for k, v in metadata.items() if v is not None},
         )

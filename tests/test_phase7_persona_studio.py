@@ -925,7 +925,7 @@ def test_cli_persona_pull_unkeyed_and_vendor_import(tmp_path, capsys, monkeypatc
     assert code == 1 and refused["status"] == "refused"  # structured, no traceback
     finding = refused["findings"][0]
     assert finding["type"] == "account_keys_missing"
-    assert "AGENT_LEARNING_API_KEY" in finding["reason"]  # config.py message verbatim
+    assert "FI_API_KEY" in finding["reason"]  # config.py message verbatim
 
     Path("vapi.txt").write_text(VAPI_TEXT, encoding="utf-8")
     code, imported = _run_cli(capsys, [

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 
-from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
+from fi.simulate.agent.definition import (
+    AgentDefinition,
+    LiveKitSimulatorRuntime,
+    SimulatorAgentDefinition,
+)
 from fi.simulate.simulation.models import Persona, Scenario
 from fi.simulate import voice
 
@@ -25,6 +30,15 @@ def _agent(**updates) -> AgentDefinition:
     }
     values.update(updates)
     return AgentDefinition(**values)
+
+
+def _runtime() -> LiveKitSimulatorRuntime:
+    return LiveKitSimulatorRuntime(
+        url="wss://futureagi-livekit.example.com",
+        room_name="sdk-{test_case_id}",
+        api_key_env="FAGI_LIVEKIT_KEY",
+        api_secret_env="FAGI_LIVEKIT_SECRET",
+    )
 
 
 def _scenario() -> Scenario:
@@ -114,6 +128,7 @@ def test_run_voice_simulation_delegates_typed_inputs(
             agent_definition=_agent(),
             scenario=_scenario(),
             simulator=SimulatorAgentDefinition(),
+            livekit_runtime=_runtime(),
             simulation_run_id="run_direct",
             recording_root=tmp_path,
             record_audio=True,
@@ -124,9 +139,120 @@ def test_run_voice_simulation_delegates_typed_inputs(
     assert result == "report"
     assert isinstance(captured["agent_definition"], AgentDefinition)
     assert isinstance(captured["scenario"], Scenario)
+    assert captured["livekit_runtime"] == _runtime()
     assert captured["simulation_run_id"] == "run_direct"
     assert captured["recording_root"] == tmp_path
     assert captured["max_seconds"] == 90
+
+
+def test_direct_transport_rejects_mismatched_explicit_target() -> None:
+    with pytest.raises(ValueError, match="vapi_websocket_requires_vapi_target"):
+        _agent(
+            target={
+                "provider": "retell",
+                "agent_id": "agent_healthcare",
+            },
+        )
+
+
+def test_explicit_target_requires_matching_direct_transport() -> None:
+    with pytest.raises(ValueError, match="vapi_target_requires_vapi_websocket"):
+        _agent(
+            transport={"kind": "webrtc"},
+            target={
+                "provider": "vapi",
+                "assistant_id": "assistant_healthcare",
+            },
+        )
+
+
+def test_explicit_vapi_target_manifest_keeps_runtime_and_secrets_separate() -> None:
+    agent = _agent(
+        target={
+            "provider": "vapi",
+            "assistant_id": "assistant_healthcare",
+            "api_base_url": "https://vapi.example",
+            "api_key_env": "ACME_VAPI_API_KEY",
+        },
+    )
+
+    manifest = voice.build_voice_run_manifest(
+        agent_definition=agent,
+        scenario=_scenario(),
+        livekit_runtime=_runtime(),
+    )
+
+    assert manifest["agent_definition"]["target"] == {
+        "provider": "vapi",
+        "assistant_id": "assistant_healthcare",
+        "api_base_url": "https://vapi.example/",
+        "api_key_env": "ACME_VAPI_API_KEY",
+    }
+    assert manifest["simulation"]["livekit_runtime"] == {
+        "url": "wss://futureagi-livekit.example.com/",
+        "room_name": "sdk-{test_case_id}",
+        "room_mode": "managed",
+        "api_key_env": "FAGI_LIVEKIT_KEY",
+        "api_secret_env": "FAGI_LIVEKIT_SECRET",
+    }
+    assert manifest["required_env"] == [
+        "FAGI_LIVEKIT_KEY",
+        "FAGI_LIVEKIT_SECRET",
+        "ACME_VAPI_API_KEY",
+    ]
+    assert '"api_key":' not in json.dumps(manifest)
+
+
+@pytest.mark.parametrize(
+    ("transport", "target", "provider", "target_id"),
+    [
+        (
+            "vapi_websocket",
+            {
+                "provider": "vapi",
+                "assistant_id": "assistant_healthcare",
+                "api_key_env": "ACME_VAPI_API_KEY",
+            },
+            "vapi",
+            "assistant_healthcare",
+        ),
+        (
+            "retell_webcall",
+            {
+                "provider": "retell",
+                "agent_id": "agent_healthcare",
+                "api_key_env": "ACME_RETELL_API_KEY",
+            },
+            "retell",
+            "agent_healthcare",
+        ),
+    ],
+)
+def test_platform_payload_uses_target_provider_without_credentials(
+    transport, target, provider, target_id
+) -> None:
+    from fi.alk.studio._generate import _agent_payload
+
+    payload, configuration_hash = _agent_payload(
+        _agent(
+            description="Human-readable target summary that is not part of the prompt.",
+            transport={"kind": transport},
+            provider_evidence={
+                "provider": provider,
+                "call_id_source": "originator_response",
+            },
+            target=target,
+        )
+    )
+
+    assert payload["description"] == "Help the caller."
+    assert "Human-readable target summary" not in payload["description"]
+    assert payload["provider"] == provider
+    assert payload["assistant_id"] == target_id
+    assert payload["scenario_generation_only"] is True
+    assert "livekit_url" not in payload
+    assert "api_key" not in payload
+    assert configuration_hash
 
 
 def test_run_voice_simulation_rejects_ambiguous_scenario_generation() -> None:

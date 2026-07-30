@@ -57,6 +57,7 @@ class VapiEvidenceSource:
         config: ProviderEvidenceConfig,
         *,
         api_key: str | None = None,
+        api_base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if config.provider != "vapi":
@@ -68,7 +69,7 @@ class VapiEvidenceSource:
         if not self._api_key:
             raise ProviderConfigError("VAPI_API_KEY is required for the Vapi adapter")
         self._client = client or httpx.AsyncClient(
-            base_url=_VAPI_API_BASE,
+            base_url=api_base_url or _VAPI_API_BASE,
             headers={"Authorization": f"Bearer {self._api_key}"},
             timeout=httpx.Timeout(30.0, connect=10.0),
         )
@@ -102,7 +103,9 @@ class VapiEvidenceSource:
             await self._client.aclose()
 
     async def _poll_call(self, call_id: str) -> dict[str, Any]:
-        deadline = asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
+        deadline = (
+            asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
+        )
         while True:
             response = await self._client.get(f"/call/{call_id}")
             response.raise_for_status()
@@ -159,7 +162,9 @@ class VapiEvidenceSource:
     async def _get_bytes(self, url: str) -> bytes:
         # Recording URLs are pre-signed by Vapi and do NOT accept our
         # Authorization header — fetch through a bare client instead.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0)
+        ) as client:
             response = await client.get(url)
             response.raise_for_status()
             return response.content
@@ -172,7 +177,11 @@ class VapiEvidenceSource:
     ) -> EvidenceSourceSummary:
         assert self._context is not None
         artifact = payload.get("artifact") or {}
-        performance = artifact.get("performanceMetrics") or payload.get("performanceMetrics") or {}
+        performance = (
+            artifact.get("performanceMetrics")
+            or payload.get("performanceMetrics")
+            or {}
+        )
         transcript_messages = payload.get("messages") or artifact.get("messages") or []
         tool_calls = _extract_tool_calls(transcript_messages)
         cost_summary = _cost_summary(payload)
@@ -223,7 +232,9 @@ def _extract_vapi_recording_urls(payload: dict[str, Any]) -> dict[str, str | Non
     mono = recording.get("mono") if isinstance(recording, dict) else {}
     urls: dict[str, str | None] = {
         "combined": (mono or {}).get("combinedUrl") if isinstance(mono, dict) else None,
-        "assistant": (mono or {}).get("assistantUrl") if isinstance(mono, dict) else None,
+        "assistant": (mono or {}).get("assistantUrl")
+        if isinstance(mono, dict)
+        else None,
         "customer": (mono or {}).get("customerUrl") if isinstance(mono, dict) else None,
         "stereo": recording.get("stereoUrl") if isinstance(recording, dict) else None,
     }
@@ -256,5 +267,3 @@ def _cost_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
     if total is None and not breakdown:
         return None
     return {"total": total, "breakdown": coerce_json(breakdown)}
-
-

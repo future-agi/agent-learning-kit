@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import AsyncIterable
 
@@ -27,12 +28,16 @@ from datetime import datetime, timezone
 from fi.simulate._logging import redacted_exc_info
 from fi.simulate.agent.definition import (
     AgentDefinition,
+    LiveKitSimulatorRuntime,
     LLMConfig,
     ProviderEvidenceConfig,
+    RetellTargetConfig,
     SimulatorAgentDefinition,
     STTConfig,
     TelephonyTransport,
     TTSConfig,
+    VapiTargetConfig,
+    VoiceProviderTarget,
 )
 from fi.simulate.artifacts.manifest import ArtifactManifestEntry
 from fi.simulate.evidence.base import EvidenceSourceSummary
@@ -128,7 +133,9 @@ class _TestRunnerAgent(Agent):
             allow_interruptions=True,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
-            turn_detection="vad" if session_vad is not None else getattr(self, "turn_detection", "stt"),
+            turn_detection="vad"
+            if session_vad is not None
+            else getattr(self, "turn_detection", "stt"),
             preemptive_generation=False,
             discard_audio_if_uninterruptible=True,
             min_interruption_duration=0.3,
@@ -189,6 +196,7 @@ class LiveKitEngine(BaseEngine):
     async def run(
         self,
         agent_definition: AgentDefinition | None = None,
+        livekit_runtime: LiveKitSimulatorRuntime | None = None,
         scenario: Scenario | None = None,
         simulator: SimulatorAgentDefinition | None = None,
         num_scenarios: int = 1,
@@ -208,8 +216,11 @@ class LiveKitEngine(BaseEngine):
     ) -> TestReport:
         if agent_definition is None:
             raise ValueError("LiveKitEngine requires 'agent_definition'.")
+        runtime = _resolve_livekit_runtime(agent_definition, livekit_runtime)
         if conversation_direction not in {"simulator_first", "agent_first"}:
-            raise ValueError("conversation_direction must be simulator_first or agent_first")
+            raise ValueError(
+                "conversation_direction must be simulator_first or agent_first"
+            )
         if scenario is None:
             generator = ScenarioGenerator(agent_definition)
             if topic is None:
@@ -229,19 +240,21 @@ class LiveKitEngine(BaseEngine):
             )
             scenario = Scenario(name="Generated Scenario", dataset=personas)
         if (
-            agent_definition.room_mode == "external"
+            runtime.room_mode == "external"
             and len(scenario.dataset) > 1
-            and not _has_room_template(agent_definition.room_name)
+            and not _has_room_template(runtime.room_name)
         ):
             raise ValueError(
                 "external_room_template_required: concurrent-safe multi-case runs "
                 "need {run_id}, {test_case_id}, or {index} in room_name"
             )
         transport = agent_definition.transport or TelephonyTransport()
+        if transport.kind != "webrtc" and runtime.room_mode != "managed":
+            raise ValueError("managed_transport_requires_managed_room")
         if (
             transport.kind == "sip_inbound"
             and len(scenario.dataset) > 1
-            and not _has_room_template(agent_definition.room_name)
+            and not _has_room_template(runtime.room_name)
         ):
             raise ValueError(
                 "sip_inbound_room_template_required: multi-case inbound runs "
@@ -257,7 +270,7 @@ class LiveKitEngine(BaseEngine):
                 index,
             )
             room_name = _resolve_room_name(
-                agent_definition,
+                runtime,
                 run_id=current_run_id,
                 test_case_id=test_case_id,
                 index=index,
@@ -265,6 +278,7 @@ class LiveKitEngine(BaseEngine):
             case_directory = Path(recording_root) / current_run_id / test_case_id
             outcome = await self._run_single_test_case(
                 agent_definition,
+                runtime,
                 persona,
                 simulator,
                 run_id=current_run_id,
@@ -287,7 +301,7 @@ class LiveKitEngine(BaseEngine):
                 "test_case_id": test_case_id,
                 "status": outcome.status.value,
                 "room_name": room_name,
-                "room_mode": agent_definition.room_mode,
+                "room_mode": runtime.room_mode,
                 **outcome.metadata,
             }
             if outcome.failure is not None:
@@ -321,6 +335,7 @@ class LiveKitEngine(BaseEngine):
     async def _run_single_test_case(
         self,
         agent_definition: AgentDefinition,
+        runtime: LiveKitSimulatorRuntime,
         persona: Persona,
         simulator: SimulatorAgentDefinition | None,
         *,
@@ -338,14 +353,14 @@ class LiveKitEngine(BaseEngine):
         cleanup_timeout: float,
         conversation_direction: str,
     ) -> _CaseOutcome:
-        api_key = os.environ.get("LIVEKIT_API_KEY")
-        api_secret = os.environ.get("LIVEKIT_API_SECRET")
+        api_key = os.environ.get(runtime.api_key_env)
+        api_secret = os.environ.get(runtime.api_secret_env)
         if not api_key or not api_secret:
             return _failure_outcome(
                 TestCaseStatus.FAILED,
                 FailureStage.PREPARING,
                 "livekit_credentials_missing",
-                "LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required",
+                f"{runtime.api_key_env} and {runtime.api_secret_env} are required",
             )
         simulator_identity = f"fagi-simulator-{test_case_id[-12:]}"
         recorder_identity = f"fagi-recorder-{test_case_id[-12:]}"
@@ -356,7 +371,7 @@ class LiveKitEngine(BaseEngine):
         session: AgentSession | None = None
         api_client: api.LiveKitAPI | None = None
         target: _TargetParticipant | None = None
-        managed_room_owned = agent_definition.room_mode == "managed"
+        managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
         cleanup_errors: list[str] = []
         outcome: _CaseOutcome | None = None
@@ -368,6 +383,7 @@ class LiveKitEngine(BaseEngine):
         bridge_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
         transport = agent_definition.transport or TelephonyTransport()
+        provider_target = agent_definition.target
         effective_target_identity = agent_definition.target_participant_identity
         effective_readiness_timeout = (
             transport.readiness_timeout_seconds
@@ -381,7 +397,7 @@ class LiveKitEngine(BaseEngine):
         try:
             if managed_room_owned:
                 api_client = api.LiveKitAPI(
-                    _api_url(str(agent_definition.url)),
+                    _api_url(str(runtime.url)),
                     api_key,
                     api_secret,
                 )
@@ -441,15 +457,16 @@ class LiveKitEngine(BaseEngine):
                     )
                 elif outcome is None and transport.kind == "sip_inbound":
                     try:
-                        sip_dispatch_rule_id, sip_dispatch_rule_created = (
-                            await asyncio.wait_for(
-                                _ensure_sip_inbound_dispatch(
-                                    api_client,
-                                    transport=transport,
-                                    room_name=room_name,
-                                ),
-                                timeout=connect_timeout,
-                            )
+                        (
+                            sip_dispatch_rule_id,
+                            sip_dispatch_rule_created,
+                        ) = await asyncio.wait_for(
+                            _ensure_sip_inbound_dispatch(
+                                api_client,
+                                transport=transport,
+                                room_name=room_name,
+                            ),
+                            timeout=connect_timeout,
                         )
                     except asyncio.TimeoutError:
                         outcome = _failure_outcome(
@@ -487,13 +504,13 @@ class LiveKitEngine(BaseEngine):
                 .to_jwt()
             )
             await asyncio.wait_for(
-                room.connect(str(agent_definition.url), token),
+                room.connect(str(runtime.url), token),
                 timeout=connect_timeout,
             )
             room_connected = True
             if record_audio:
                 recorder = RoomRecorder(
-                    url=str(agent_definition.url),
+                    url=str(runtime.url),
                     api_key=api_key,
                     api_secret=api_secret,
                     room_name=room_name,
@@ -529,9 +546,7 @@ class LiveKitEngine(BaseEngine):
                     effective_target_identity = sip_participant_identity
             elif transport.kind in {"vapi_websocket", "retell_webcall"}:
                 provider_name = transport.kind.split("_", maxsplit=1)[0]
-                bridge_identity = (
-                    f"fagi-{provider_name}-bridge-{test_case_id[-12:]}"
-                )
+                bridge_identity = f"fagi-{provider_name}-bridge-{test_case_id[-12:]}"
                 effective_target_identity = bridge_identity
             session_participant_kinds = None
             session_participant_identity: str | None = None
@@ -541,9 +556,7 @@ class LiveKitEngine(BaseEngine):
                 "vapi_websocket",
                 "retell_webcall",
             ):
-                session_participant_kinds = [
-                    rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-                ]
+                session_participant_kinds = [rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
                 session_participant_identity = (
                     effective_target_identity or sip_participant_identity
                 )
@@ -557,13 +570,22 @@ class LiveKitEngine(BaseEngine):
             )
             if transport.kind in {"vapi_websocket", "retell_webcall"}:
                 try:
-                    connector = (
-                        VapiWebSocketConnector.from_env()
-                        if transport.kind == "vapi_websocket"
-                        else RetellWebCallConnector.from_env()
-                    )
+                    if transport.kind == "vapi_websocket" and isinstance(
+                        provider_target, VapiTargetConfig
+                    ):
+                        connector = VapiWebSocketConnector.from_target(provider_target)
+                    elif transport.kind == "retell_webcall" and isinstance(
+                        provider_target, RetellTargetConfig
+                    ):
+                        connector = RetellWebCallConnector.from_target(provider_target)
+                    else:
+                        connector = (
+                            VapiWebSocketConnector.from_env()
+                            if transport.kind == "vapi_websocket"
+                            else RetellWebCallConnector.from_env()
+                        )
                     audio_bridge = LiveKitAudioBridge(
-                        url=str(agent_definition.url),
+                        url=str(runtime.url),
                         api_key=api_key,
                         api_secret=api_secret,
                         room_name=room_name,
@@ -604,10 +626,7 @@ class LiveKitEngine(BaseEngine):
                         ),
                     )
                     return outcome
-            if (
-                transport.kind == "sip_outbound"
-                and api_client is not None
-            ):
+            if transport.kind == "sip_outbound" and api_client is not None:
                 try:
                     logger.info(
                         "sip_outbound_dialing",
@@ -655,9 +674,7 @@ class LiveKitEngine(BaseEngine):
                         FailureStage.PREPARING,
                         "sip_dial_failed",
                         "Failed to dial the SIP participant",
-                        details=_safe_provider_error_details(
-                            exc, operation="sip_dial"
-                        ),
+                        details=_safe_provider_error_details(exc, operation="sip_dial"),
                     )
                     return outcome
             if transport.kind == "sip_inbound":
@@ -762,10 +779,7 @@ class LiveKitEngine(BaseEngine):
                 if session is not None and target is None
                 else FailureStage.PREPARING
             )
-            if (
-                stage == FailureStage.READINESS
-                and transport.kind == "sip_inbound"
-            ):
+            if stage == FailureStage.READINESS and transport.kind == "sip_inbound":
                 code = "sip_inbound_no_participant"
                 message = "No inbound SIP participant joined before deadline"
             elif stage == FailureStage.READINESS:
@@ -861,9 +875,7 @@ class LiveKitEngine(BaseEngine):
                         audio_bridge.aclose(), timeout=cleanup_timeout
                     )
                     if bridge_task is not None:
-                        await asyncio.wait_for(
-                            bridge_task, timeout=cleanup_timeout
-                        )
+                        await asyncio.wait_for(bridge_task, timeout=cleanup_timeout)
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -906,9 +918,7 @@ class LiveKitEngine(BaseEngine):
             ):
                 try:
                     await asyncio.wait_for(
-                        _delete_sip_dispatch_rule(
-                            api_client, sip_dispatch_rule_id
-                        ),
+                        _delete_sip_dispatch_rule(api_client, sip_dispatch_rule_id),
                         timeout=cleanup_timeout,
                     )
                 except Exception as exc:
@@ -978,6 +988,8 @@ class LiveKitEngine(BaseEngine):
                 started_at=case_started_at,
                 target=target,
                 provider_call_id_hint=provider_call_id,
+                provider_api_key=_target_api_key(provider_target),
+                provider_api_base_url=_target_evidence_base_url(provider_target),
             )
             if provider_summary is not None:
                 outcome.evidence.append(provider_summary)
@@ -999,6 +1011,9 @@ class LiveKitEngine(BaseEngine):
                 "cleanup_errors": cleanup_errors,
                 "sip_dispatch_rule_id": sip_dispatch_rule_id,
                 "sip_dispatch_rule_created": sip_dispatch_rule_created,
+                "target_provider": (
+                    provider_target.provider if provider_target is not None else None
+                ),
                 "provider_call_id": provider_call_id,
                 "vapi_call_id": (
                     provider_call_id
@@ -1007,9 +1022,7 @@ class LiveKitEngine(BaseEngine):
                     else None
                 ),
                 "retell_call_id": (
-                    provider_call_id
-                    if transport.kind == "retell_webcall"
-                    else None
+                    provider_call_id if transport.kind == "retell_webcall" else None
                 ),
             }
         )
@@ -1027,6 +1040,12 @@ class LiveKitEngine(BaseEngine):
             persona,
             call_type=call_type,
             agent_name=agent_name,
+            additional_instructions=(
+                simulator.instructions if simulator is not None else None
+            ),
+            default_language=(
+                simulator.stt.language if simulator is not None else None
+            ),
         )
         if simulator is None:
             voice_provider = os.environ.get(
@@ -1054,7 +1073,7 @@ class LiveKitEngine(BaseEngine):
             llm_config = simulator.llm
             stt_config = simulator.stt
             tts_config = simulator.tts
-            instructions = simulator.instructions or customer_prompt
+            instructions = customer_prompt
             allow_interruptions = simulator.allow_interruptions
             min_endpointing_delay = simulator.min_endpointing_delay
             max_endpointing_delay = simulator.max_endpointing_delay
@@ -1327,27 +1346,59 @@ def _collapse_recordings(
     return mix_recordings(paths, destination, sample_rate=sample_rate)
 
 
-def _resolve_room_name(
+def _target_api_key(target: VoiceProviderTarget | None) -> str | None:
+    if target is None:
+        return None
+    return os.environ.get(target.api_key_env) or None
+
+
+def _target_evidence_base_url(target: VoiceProviderTarget | None) -> str | None:
+    if isinstance(target, VapiTargetConfig):
+        return str(target.api_base_url).rstrip("/")
+    if isinstance(target, RetellTargetConfig):
+        parsed = urlsplit(str(target.api_url))
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return None
+
+
+def _resolve_livekit_runtime(
     agent_definition: AgentDefinition,
+    runtime: LiveKitSimulatorRuntime | None,
+) -> LiveKitSimulatorRuntime:
+    if runtime is not None:
+        return runtime
+    if agent_definition.url is None or not agent_definition.room_name:
+        raise ValueError(
+            "livekit_runtime_required: provide LiveKitSimulatorRuntime or legacy "
+            "AgentDefinition url and room_name"
+        )
+    return LiveKitSimulatorRuntime(
+        url=agent_definition.url,
+        room_name=agent_definition.room_name,
+        room_mode=agent_definition.room_mode,
+    )
+
+
+def _resolve_room_name(
+    runtime: LiveKitSimulatorRuntime,
     *,
     run_id: str,
     test_case_id: str,
     index: int,
 ) -> str:
-    if agent_definition.room_mode == "external":
-        return agent_definition.room_name.format(
+    if runtime.room_mode == "external":
+        return runtime.room_name.format(
             run_id=run_id,
             test_case_id=test_case_id,
             index=index,
         )
-    prefix = _SAFE_ROOM.sub("-", agent_definition.room_name).strip("-._")
+    prefix = _SAFE_ROOM.sub("-", runtime.room_name).strip("-._")
     return f"{prefix[:48]}-{test_case_id[-12:]}"
 
 
 def _has_room_template(room_name: str) -> bool:
     return any(
-        marker in room_name
-        for marker in ("{run_id}", "{test_case_id}", "{index}")
+        marker in room_name for marker in ("{run_id}", "{test_case_id}", "{index}")
     )
 
 
@@ -1397,7 +1448,9 @@ def _record_cleanup_error(
 _LIVEKIT_INBOUND_TRUNK_ENV = "LIVEKIT_INBOUND_TRUNK_ID"
 
 
-def _safe_provider_error_details(exc: Exception, *, operation: str) -> dict[str, object]:
+def _safe_provider_error_details(
+    exc: Exception, *, operation: str
+) -> dict[str, object]:
     """Extract sanitized error attributes for report failures.
 
     Never returns the exception message; only structural fields that are
@@ -1451,14 +1504,14 @@ async def _ensure_sip_inbound_dispatch(
         SIPDispatchRuleDirect,
     )
 
-    existing = await api_client.sip.list_sip_dispatch_rule(
-        ListSIPDispatchRuleRequest()
-    )
+    existing = await api_client.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
     if transport.dispatch_rule_name:
         for rule in existing.items:
             if rule.name != transport.dispatch_rule_name:
                 continue
-            direct = getattr(rule.rule, "dispatch_rule_direct", None) if rule.rule else None
+            direct = (
+                getattr(rule.rule, "dispatch_rule_direct", None) if rule.rule else None
+            )
             direct_room = getattr(direct, "room_name", "") if direct is not None else ""
             if not direct_room:
                 raise RuntimeError(
@@ -1471,9 +1524,7 @@ async def _ensure_sip_inbound_dispatch(
                     f"{transport.dispatch_rule_name} targets a different room"
                 )
             return rule.sip_dispatch_rule_id, False
-        raise RuntimeError(
-            f"sip_inbound_rule_missing: {transport.dispatch_rule_name}"
-        )
+        raise RuntimeError(f"sip_inbound_rule_missing: {transport.dispatch_rule_name}")
     trunk_id = os.environ.get(_LIVEKIT_INBOUND_TRUNK_ENV)
     if not trunk_id:
         raise RuntimeError(
@@ -1501,9 +1552,7 @@ async def _ensure_sip_inbound_dispatch(
     return resp.sip_dispatch_rule_id, True
 
 
-async def _delete_sip_dispatch_rule(
-    api_client: api.LiveKitAPI, rule_id: str
-) -> None:
+async def _delete_sip_dispatch_rule(api_client: api.LiveKitAPI, rule_id: str) -> None:
     from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
 
     await api_client.sip.delete_sip_dispatch_rule(
@@ -1521,6 +1570,8 @@ async def _collect_provider_evidence(
     started_at: datetime,
     target: _TargetParticipant | None,
     provider_call_id_hint: str | None = None,
+    provider_api_key: str | None = None,
+    provider_api_base_url: str | None = None,
 ) -> tuple[EvidenceSourceSummary | None, list[ArtifactManifestEntry]]:
     call_id_hint = provider_call_id_hint
     caller_phone: str | None = None
@@ -1543,9 +1594,17 @@ async def _collect_provider_evidence(
     )
     try:
         if config.provider == "vapi":
-            adapter = VapiEvidenceSource(config)
+            adapter = VapiEvidenceSource(
+                config,
+                api_key=provider_api_key,
+                api_base_url=provider_api_base_url,
+            )
         elif config.provider == "retell":
-            adapter = RetellEvidenceSource(config)
+            adapter = RetellEvidenceSource(
+                config,
+                api_key=provider_api_key,
+                api_base_url=provider_api_base_url,
+            )
         else:
             raise ProviderConfigError(
                 f"unsupported_provider_evidence: {config.provider}"

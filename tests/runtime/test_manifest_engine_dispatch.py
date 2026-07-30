@@ -28,7 +28,9 @@ def _scenario() -> dict:
     }
 
 
-def test_livekit_manifest_builds_typed_runtime_inputs(monkeypatch, tmp_path: Path) -> None:
+def test_livekit_manifest_builds_typed_runtime_inputs(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured = {}
 
     class FakeRunner:
@@ -81,7 +83,50 @@ def test_livekit_manifest_builds_typed_runtime_inputs(monkeypatch, tmp_path: Pat
     assert captured["max_seconds"] == 90.0
 
 
-def test_cloud_manifest_uses_existing_test_runner_mode(monkeypatch, tmp_path: Path) -> None:
+def test_livekit_manifest_hydrates_explicit_target_and_runtime(
+    monkeypatch, tmp_path: Path
+) -> None:
+    captured = {}
+
+    class FakeRunner:
+        async def run_test(self, **kwargs):
+            captured.update(kwargs)
+            return "report"
+
+    monkeypatch.setattr(cli, "TestRunner", FakeRunner)
+    manifest = {
+        "scenario": _scenario(),
+        "agent_definition": {
+            "name": "healthcare-agent",
+            "system_prompt": "Schedule appointments.",
+            "target": {
+                "provider": "vapi",
+                "assistant_id": "assistant_healthcare",
+                "api_key_env": "HEALTHCARE_VAPI_KEY",
+            },
+            "transport": {"kind": "vapi_websocket"},
+        },
+        "simulation": {
+            "engine": "livekit",
+            "livekit_runtime": {
+                "url": "wss://futureagi-livekit.example.com",
+                "room_name": "healthcare-{test_case_id}",
+                "api_key_env": "FAGI_LIVEKIT_KEY",
+                "api_secret_env": "FAGI_LIVEKIT_SECRET",
+            },
+        },
+    }
+
+    report = asyncio.run(cli._run_manifest(manifest, tmp_path / "manifest.json"))
+
+    assert report == "report"
+    assert captured["agent_definition"].target.assistant_id == "assistant_healthcare"
+    assert captured["livekit_runtime"].room_name == "healthcare-{test_case_id}"
+
+
+def test_cloud_manifest_uses_existing_test_runner_mode(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured = {}
 
     class FakeRunner:
@@ -122,7 +167,9 @@ def test_local_text_manifest_keeps_existing_runner(monkeypatch, tmp_path: Path) 
 
 
 def test_manifest_dispatch_rejects_unknown_engine(tmp_path: Path) -> None:
-    with pytest.raises(ManifestError, match="Supported: cloud, livekit, local, local_text"):
+    with pytest.raises(
+        ManifestError, match="Supported: cloud, livekit, local, local_text"
+    ):
         asyncio.run(
             cli._run_manifest(
                 {"simulation": {"engine": "unknown"}},
@@ -145,7 +192,9 @@ def test_local_text_manifest_writes_canonical_artifacts(tmp_path: Path) -> None:
         },
     }
 
-    report = asyncio.run(cli._run_local_text_manifest(manifest, tmp_path / "manifest.json"))
+    report = asyncio.run(
+        cli._run_local_text_manifest(manifest, tmp_path / "manifest.json")
+    )
 
     assert report.results[0].transcript
     run_directory = tmp_path / "canonical" / "run_canonical_text"
@@ -194,7 +243,9 @@ def test_scenario_source_rejects_inline_dataset(tmp_path: Path) -> None:
         )
 
 
-def test_run_manifest_file_serializes_livekit_report(monkeypatch, tmp_path: Path) -> None:
+def test_run_manifest_file_serializes_livekit_report(
+    monkeypatch, tmp_path: Path
+) -> None:
     persona = Persona(
         persona={"name": "Morgan"},
         situation="My delivery is late.",
@@ -244,7 +295,9 @@ def test_run_manifest_file_serializes_livekit_report(monkeypatch, tmp_path: Path
     assert result["report"]["results"][0]["metadata"]["status"] == "completed"
 
 
-def test_livekit_manifest_accepts_sip_outbound_transport(monkeypatch, tmp_path: Path) -> None:
+def test_livekit_manifest_accepts_sip_outbound_transport(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured = {}
 
     class FakeRunner:
@@ -336,7 +389,9 @@ def test_livekit_manifest_accepts_sip_inbound_without_dispatch_rule(
     assert captured["agent_definition"].transport.dispatch_rule_name is None
 
 
-def test_livekit_manifest_rejects_sip_inbound_empty_dispatch_rule(tmp_path: Path) -> None:
+def test_livekit_manifest_rejects_sip_inbound_empty_dispatch_rule(
+    tmp_path: Path,
+) -> None:
     manifest = {
         "scenario": _scenario(),
         "agent_definition": {
@@ -353,7 +408,9 @@ def test_livekit_manifest_rejects_sip_inbound_empty_dispatch_rule(tmp_path: Path
         asyncio.run(cli._run_manifest(manifest, tmp_path / "m.json"))
 
 
-def test_livekit_manifest_without_transport_defaults_to_webrtc(monkeypatch, tmp_path: Path) -> None:
+def test_livekit_manifest_without_transport_defaults_to_webrtc(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured = {}
 
     class FakeRunner:

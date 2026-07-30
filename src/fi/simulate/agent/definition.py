@@ -1,6 +1,7 @@
 import re
-from typing import Literal, Optional
-from pydantic import BaseModel, Field, AnyUrl, model_validator
+from typing import Annotated, Literal, Optional
+
+from pydantic import AnyHttpUrl, AnyUrl, BaseModel, Field, model_validator
 
 
 _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
@@ -130,12 +131,21 @@ class TelephonyTransport(BaseModel):
             if not self.sip_trunk_id or not self.sip_trunk_id.strip():
                 raise ValueError("sip_outbound requires sip_trunk_id")
             if not self.sip_call_to or not _E164.match(self.sip_call_to):
-                raise ValueError("sip_outbound requires E.164 sip_call_to (e.g. +14155551234)")
+                raise ValueError(
+                    "sip_outbound requires E.164 sip_call_to (e.g. +14155551234)"
+                )
             if not self.sip_number or not _E164.match(self.sip_number):
-                raise ValueError("sip_outbound requires E.164 sip_number (e.g. +14155551234)")
+                raise ValueError(
+                    "sip_outbound requires E.164 sip_number (e.g. +14155551234)"
+                )
         elif self.kind == "sip_inbound":
-            if self.dispatch_rule_name is not None and not self.dispatch_rule_name.strip():
-                raise ValueError("sip_inbound dispatch_rule_name must be non-empty when set")
+            if (
+                self.dispatch_rule_name is not None
+                and not self.dispatch_rule_name.strip()
+            ):
+                raise ValueError(
+                    "sip_inbound dispatch_rule_name must be non-empty when set"
+                )
         elif self.kind in {"webrtc", "vapi_websocket", "retell_webcall"}:
             if any(
                 [
@@ -149,20 +159,96 @@ class TelephonyTransport(BaseModel):
                 raise ValueError(f"{self.kind} transport cannot set SIP fields")
         return self
 
+
+class VapiTargetConfig(BaseModel):
+    """Non-secret configuration for a Vapi assistant under test."""
+
+    provider: Literal["vapi"] = "vapi"
+    assistant_id: str = Field(..., min_length=1)
+    api_base_url: AnyHttpUrl = Field(
+        "https://api.vapi.ai",
+        validate_default=True,
+    )
+    api_key_env: str = Field(
+        "VAPI_API_KEY",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+
+
+class RetellTargetConfig(BaseModel):
+    """Non-secret configuration for a Retell agent under test."""
+
+    provider: Literal["retell"] = "retell"
+    agent_id: str = Field(..., min_length=1)
+    api_url: AnyHttpUrl = Field(
+        "https://api.retellai.com/v2/create-web-call",
+        validate_default=True,
+    )
+    livekit_url: AnyUrl = Field(
+        "wss://retell-ai-4ihahnq7.livekit.cloud",
+        validate_default=True,
+    )
+    api_key_env: str = Field(
+        "RETELL_API_KEY",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+
+    @model_validator(mode="after")
+    def _check_livekit_url(self) -> "RetellTargetConfig":
+        if self.livekit_url.scheme not in {"ws", "wss"}:
+            raise ValueError("retell_livekit_url_invalid: URL must use ws:// or wss://")
+        return self
+
+
+VoiceProviderTarget = Annotated[
+    VapiTargetConfig | RetellTargetConfig,
+    Field(discriminator="provider"),
+]
+
+
+class LiveKitSimulatorRuntime(BaseModel):
+    """FutureAGI-owned LiveKit runtime for the simulator and bridge."""
+
+    url: AnyUrl = Field(..., description="FutureAGI LiveKit WebSocket URL.")
+    room_name: str = Field(..., min_length=1)
+    room_mode: Literal["external", "managed"] = "managed"
+    api_key_env: str = Field(
+        "LIVEKIT_API_KEY",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+    api_secret_env: str = Field(
+        "LIVEKIT_API_SECRET",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+
+    @model_validator(mode="after")
+    def _check_url(self) -> "LiveKitSimulatorRuntime":
+        if self.url.scheme not in {"ws", "wss"}:
+            raise ValueError("livekit_url_invalid: URL must use ws:// or wss://")
+        return self
+
+
 class LLMConfig(BaseModel):
     """Configuration for the simulator language model."""
+
     provider: str = Field("openai", description="The LiveKit LLM provider.")
     model: str = Field("gpt-4o", description="The language model to use.")
-    temperature: float = Field(0.7, ge=0.0, le=2.0, description="Controls randomness in the LLM's output.")
+    temperature: float = Field(
+        0.7, ge=0.0, le=2.0, description="Controls randomness in the LLM's output."
+    )
+
 
 class TTSConfig(BaseModel):
     """Configuration for simulator text-to-speech."""
+
     provider: str = Field("openai", description="The LiveKit TTS provider.")
     model: str = Field("gpt-4o-mini-tts", description="The TTS model to use.")
     voice: str = Field("alloy", description="The voice or voice ID to use.")
 
+
 class STTConfig(BaseModel):
     """Configuration for simulator speech-to-text."""
+
     provider: str = Field("openai", description="The LiveKit STT provider.")
     model: str = Field(
         "gpt-4o-mini-transcribe",
@@ -170,27 +256,44 @@ class STTConfig(BaseModel):
     )
     language: Optional[str] = Field("en", description="The transcription language.")
 
+
 class VADConfig(BaseModel):
     """Configuration for Voice Activity Detection (VAD)."""
-    provider: str = Field("silero", description="The VAD provider to use. 'silero' is recommended.")
-    min_silence_duration: float = Field(0.1, description="Minimum duration of silence to consider as the end of a speech segment.")
-    speech_pad_ms: int = Field(200, description="Additional padding in milliseconds to add to the end of a speech segment.")
+
+    provider: str = Field(
+        "silero", description="The VAD provider to use. 'silero' is recommended."
+    )
+    min_silence_duration: float = Field(
+        0.1,
+        description="Minimum duration of silence to consider as the end of a speech segment.",
+    )
+    speech_pad_ms: int = Field(
+        200,
+        description="Additional padding in milliseconds to add to the end of a speech segment.",
+    )
+
 
 class AgentDefinition(BaseModel):
     """
     The core configuration for a voice AI agent.
     """
-    name: str = Field(..., description="A unique name for the agent.")
-    description: Optional[str] = Field(None, description="A brief description of the agent's purpose.")
-    url: AnyUrl = Field(..., description="The WebRTC URL (e.g., LiveKit server URL) the agent will connect to.")
-    room_name: str = Field(..., description="The room name or managed-room prefix.")
+
+    name: str = Field(..., description="A unique name for the target agent.")
+    description: Optional[str] = Field(
+        None,
+        description="A safe description of the target agent's purpose and capabilities.",
+    )
+    system_prompt: str = Field(
+        ...,
+        description="Current system prompt or instructions of the target agent.",
+    )
+    target: VoiceProviderTarget | None = Field(
+        None,
+        description="Non-secret provider configuration for a direct target agent.",
+    )
     agent_name: Optional[str] = Field(
         None,
-        description="Exact registered LiveKit agent name used for managed dispatch.",
-    )
-    room_mode: Literal["external", "managed"] = Field(
-        "external",
-        description="Whether the SDK joins an existing room or owns room lifecycle.",
+        description="Exact registered LiveKit target agent name used for managed dispatch.",
     )
     target_participant_identity: Optional[str] = Field(
         None,
@@ -198,7 +301,7 @@ class AgentDefinition(BaseModel):
     )
     transport: Optional[TelephonyTransport] = Field(
         None,
-        description="Optional telephony transport; omitted = WebRTC (unchanged).",
+        description="Transport used to reach the target agent.",
     )
     provider_evidence: Optional[ProviderEvidenceConfig] = Field(
         None,
@@ -207,19 +310,65 @@ class AgentDefinition(BaseModel):
             "(Vapi/Retell). None = SDK-observed evidence only."
         ),
     )
+    url: AnyUrl | None = Field(
+        None,
+        description=(
+            "Legacy FutureAGI LiveKit URL. Use LiveKitSimulatorRuntime for new "
+            "voice simulations."
+        ),
+    )
+    room_name: str | None = Field(
+        None,
+        description=(
+            "Legacy FutureAGI LiveKit room template. Use LiveKitSimulatorRuntime "
+            "for new voice simulations."
+        ),
+    )
+    room_mode: Literal["external", "managed"] = Field(
+        "external",
+        description=(
+            "Legacy FutureAGI LiveKit room lifecycle setting. Use "
+            "LiveKitSimulatorRuntime for new voice simulations."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_transport(self) -> "AgentDefinition":
-        scheme = getattr(self.url, "scheme", None)
-        if scheme not in {"ws", "wss"}:
+        if self.url is not None and self.url.scheme not in {"ws", "wss"}:
             raise ValueError("livekit_url_invalid: URL must use ws:// or wss://")
         transport = self.transport
         if (
-            transport is not None
+            self.url is not None
+            and transport is not None
             and transport.kind != "webrtc"
             and self.room_mode != "managed"
         ):
             raise ValueError("managed_transport_requires_managed_room")
+        expected_target_provider = (
+            {
+                "vapi_websocket": "vapi",
+                "retell_webcall": "retell",
+            }.get(transport.kind)
+            if transport is not None
+            else None
+        )
+        if (
+            expected_target_provider is not None
+            and self.target is not None
+            and self.target.provider != expected_target_provider
+        ):
+            raise ValueError(
+                f"{transport.kind}_requires_{expected_target_provider}_target"
+            )
+        if self.target is not None:
+            expected_transport = {
+                "vapi": "vapi_websocket",
+                "retell": "retell_webcall",
+            }[self.target.provider]
+            if transport is None or transport.kind != expected_transport:
+                raise ValueError(
+                    f"{self.target.provider}_target_requires_{expected_transport}"
+                )
         evidence = self.provider_evidence
         if transport is not None and transport.inbound_call_originator == "vapi":
             if transport.kind != "sip_inbound":
@@ -244,29 +393,35 @@ class AgentDefinition(BaseModel):
                         f"{transport.kind}_requires_{web_provider}_evidence"
                     )
                 if evidence.call_id_source != "originator_response":
-                    raise ValueError(
-                        f"{transport.kind}_requires_originator_response"
-                    )
+                    raise ValueError(f"{transport.kind}_requires_originator_response")
         return self
 
-    system_prompt: str = Field(..., description="The main system prompt or instructions that define the agent's behavior.")
-    
     llm: LLMConfig = Field(default_factory=LLMConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     vad: VADConfig = Field(default_factory=VADConfig)
-    initial_message: str = Field("Hello! How can I help you today?", description="The first message the agent speaks to start the conversation.")
+    initial_message: str = Field(
+        "Hello! How can I help you today?",
+        description="The first message the agent speaks to start the conversation.",
+    )
 
     class Config:
         """Pydantic configuration."""
+
         json_schema_extra = {
             "example": {
-                "name": "openai-support-agent",
-                "url": "wss://your-livekit-server.com",
-                "room_name": "agent-room-123",
-                "system_prompt": "You are a friendly and helpful support agent."
+                "name": "vapi-support-agent",
+                "description": "Customer-support voice assistant.",
+                "system_prompt": "Copy the current target-agent prompt here.",
+                "target": {
+                    "provider": "vapi",
+                    "assistant_id": "assistant-id",
+                    "api_key_env": "VAPI_API_KEY",
+                },
+                "transport": {"kind": "vapi_websocket"},
             }
         }
+
 
 class SimulatorAgentDefinition(BaseModel):
     """
@@ -276,13 +431,20 @@ class SimulatorAgentDefinition(BaseModel):
     run with lightweight/cheaper models and different voice/transcription settings.
     """
 
-    name: Optional[str] = Field(None, description="Optional label for the simulator agent")
+    name: Optional[str] = Field(
+        None, description="Optional label for the simulator agent"
+    )
     instructions: Optional[str] = Field(
         None,
-        description="Optional base instructions for the simulator agent. If omitted, the TestRunner persona prompt is used.",
+        description=(
+            "Optional policy appended to the scenario-derived simulator prompt. "
+            "It never replaces persona, situation, or outcome instructions."
+        ),
     )
 
-    llm: LLMConfig = Field(default_factory=lambda: LLMConfig(model="gpt-4o-mini", temperature=0.6))
+    llm: LLMConfig = Field(
+        default_factory=lambda: LLMConfig(model="gpt-4o-mini", temperature=0.6)
+    )
     tts: TTSConfig = Field(default_factory=TTSConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     vad: VADConfig = Field(default_factory=VADConfig)

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import aiohttp
 
+from fi.simulate.agent.definition import VapiTargetConfig
 from fi.simulate.simulation.bridge.audio import PCMResampler
 from fi.simulate.simulation.bridge.connector import ConnectorConfig, ProviderConnector
 
@@ -23,6 +24,19 @@ class VapiWebSocketConnector(ProviderConnector):
         self._resamplers: dict[int, PCMResampler] = {}
 
     @classmethod
+    def from_target(cls, target: VapiTargetConfig) -> "VapiWebSocketConnector":
+        api_key = os.environ.get(target.api_key_env, "").strip()
+        if not api_key:
+            raise ValueError("vapi_websocket_config_missing: " + target.api_key_env)
+        return cls(
+            ConnectorConfig(
+                api_key=api_key,
+                assistant_id=target.assistant_id,
+                api_url=f"{str(target.api_base_url).rstrip('/')}/call",
+            )
+        )
+
+    @classmethod
     def from_env(cls) -> "VapiWebSocketConnector":
         api_key = os.environ.get("VAPI_API_KEY", "").strip()
         assistant_id = os.environ.get("VAPI_ASSISTANT_ID", "").strip()
@@ -36,12 +50,10 @@ class VapiWebSocketConnector(ProviderConnector):
         ]
         if missing:
             raise ValueError("vapi_websocket_config_missing: " + ", ".join(missing))
-        base_url = os.environ.get("VAPI_API_BASE_URL", "https://api.vapi.ai")
-        return cls(
-            ConnectorConfig(
-                api_key=api_key,
+        return cls.from_target(
+            VapiTargetConfig(
                 assistant_id=assistant_id,
-                api_url=f"{base_url.rstrip('/')}/call",
+                api_base_url=os.environ.get("VAPI_API_BASE_URL", "https://api.vapi.ai"),
             )
         )
 
