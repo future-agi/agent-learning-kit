@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
+from fi.simulate.simulation.models import Persona, Scenario
+from fi.simulate import voice
+
+
+def _agent(**updates) -> AgentDefinition:
+    values = {
+        "name": "vapi-agent",
+        "url": "wss://livekit.example.com",
+        "room_name": "sdk-{test_case_id}",
+        "room_mode": "managed",
+        "system_prompt": "Help the caller.",
+        "transport": {"kind": "vapi_websocket"},
+        "provider_evidence": {
+            "provider": "vapi",
+            "call_id_source": "originator_response",
+        },
+    }
+    values.update(updates)
+    return AgentDefinition(**values)
+
+
+def _scenario() -> Scenario:
+    return Scenario(
+        name="delivery",
+        dataset=[
+            Persona(
+                persona={"name": "Priya"},
+                situation="My device is late.",
+                outcome="The delivery is resolved.",
+            )
+        ],
+    )
+
+
+def test_platform_voice_scenario_creates_agent_and_scenario(monkeypatch) -> None:
+    captured = {}
+
+    def generate(request, *, config):
+        captured["request"] = request
+        captured["config"] = config
+        return "generated"
+
+    from fi.alk import studio
+
+    monkeypatch.setattr(studio, "generate_scenario", generate)
+
+    result = asyncio.run(
+        voice.generate_platform_voice_scenario(
+            agent_definition=_agent(),
+            name="platform-delivery",
+            description="Generate delivery scenarios.",
+            custom_instruction="Exercise delay handling.",
+            no_of_rows=10,
+            config="platform-config",
+        )
+    )
+
+    assert result == "generated"
+    assert captured["request"].agent_definition == _agent()
+    assert captured["request"].name == "platform-delivery"
+    assert captured["config"] == "platform-config"
+
+
+def test_build_voice_run_manifest_serializes_typed_inputs_without_secrets() -> None:
+    manifest = voice.build_voice_run_manifest(
+        agent_definition=_agent(),
+        scenario=_scenario(),
+        simulator=SimulatorAgentDefinition(),
+        name="direct-vapi",
+        required_env=["DEEPGRAM_API_KEY"],
+        simulation_run_id="run_voice",
+        record_audio=True,
+        max_seconds=120,
+    )
+
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["name"] == "direct-vapi"
+    assert manifest["agent_definition"]["transport"]["kind"] == "vapi_websocket"
+    assert manifest["scenario"]["name"] == "delivery"
+    assert manifest["simulation"]["run_id"] == "run_voice"
+    assert manifest["simulation"]["max_seconds"] == 120
+    assert manifest["required_env"] == [
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "DEEPGRAM_API_KEY",
+        "VAPI_API_KEY",
+        "VAPI_ASSISTANT_ID",
+    ]
+    assert "VAPI_API_KEY" not in str(manifest["agent_definition"])
+
+
+def test_run_voice_simulation_delegates_typed_inputs(
+    monkeypatch, tmp_path: Path
+) -> None:
+    captured = {}
+
+    class FakeRunner:
+        async def run_test(self, **kwargs):
+            captured.update(kwargs)
+            return "report"
+
+    monkeypatch.setattr(voice, "TestRunner", FakeRunner)
+
+    result = asyncio.run(
+        voice.run_voice_simulation(
+            agent_definition=_agent(),
+            scenario=_scenario(),
+            simulator=SimulatorAgentDefinition(),
+            simulation_run_id="run_direct",
+            recording_root=tmp_path,
+            record_audio=True,
+            max_seconds=90,
+        )
+    )
+
+    assert result == "report"
+    assert isinstance(captured["agent_definition"], AgentDefinition)
+    assert isinstance(captured["scenario"], Scenario)
+    assert captured["simulation_run_id"] == "run_direct"
+    assert captured["recording_root"] == tmp_path
+    assert captured["max_seconds"] == 90
+
+
+def test_run_voice_simulation_rejects_ambiguous_scenario_generation() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        asyncio.run(
+            voice.run_voice_simulation(
+                agent_definition=_agent(),
+                scenario=_scenario(),
+                topic="delivery support",
+            )
+        )
+
+
+def test_run_voice_simulation_requires_scenario_or_topic() -> None:
+    with pytest.raises(ValueError, match="provide scenario or topic"):
+        asyncio.run(voice.run_voice_simulation(agent_definition=_agent()))

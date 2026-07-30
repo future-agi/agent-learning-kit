@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -40,6 +41,18 @@ def load_manifest_file(path: str | Path) -> Dict[str, Any]:
 
 
 load_manifest = load_manifest_file
+
+
+def write_manifest_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
+    """Write a portable simulation manifest as formatted JSON."""
+
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(dict(manifest), indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return destination
 
 
 def public_result(result: Mapping[str, Any]) -> Dict[str, Any]:
@@ -137,7 +150,9 @@ def prepare_redteam_manifest(manifest: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _has_redteam_block(manifest: Mapping[str, Any]) -> bool:
-    return manifest.get("redteam") not in (None, "", [], {}) or manifest.get("red_team") not in (None, "", [], {})
+    return manifest.get("redteam") not in (None, "", [], {}) or manifest.get(
+        "red_team"
+    ) not in (None, "", [], {})
 
 
 def _prepare_redteam_if_present(
@@ -491,9 +506,9 @@ async def run_manifest(
     if opts.name:
         runtime_manifest["name"] = opts.name
     if opts.threshold is not None:
-        runtime_manifest.setdefault("evaluation", {}).setdefault(
-            "agent_report", {}
-        )["threshold"] = opts.threshold
+        runtime_manifest.setdefault("evaluation", {}).setdefault("agent_report", {})[
+            "threshold"
+        ] = opts.threshold
     if opts.no_eval:
         runtime_manifest.setdefault("evaluation", {})["enabled"] = False
 
@@ -509,7 +524,9 @@ async def run_manifest(
             "dry_run": True,
             "summary": {
                 "required_env": required_manifest_env(runtime_manifest),
-                "scenario_cases": len(cli._scenario_dataset(runtime_manifest, manifest_path.parent)),
+                "scenario_cases": len(
+                    cli._scenario_dataset(runtime_manifest, manifest_path.parent)
+                ),
                 "environment_count": len(cli._environment_specs(runtime_manifest)),
             },
             "duration_seconds": round(time.time() - started, 4),
@@ -596,9 +613,9 @@ async def redteam_manifest(
     if opts.name:
         runtime_manifest["name"] = opts.name
     if opts.threshold is not None:
-        runtime_manifest.setdefault("evaluation", {}).setdefault(
-            "agent_report", {}
-        )["threshold"] = opts.threshold
+        runtime_manifest.setdefault("evaluation", {}).setdefault("agent_report", {})[
+            "threshold"
+        ] = opts.threshold
 
     started = time.time()
     redteam_summary = cli._prepare_redteam_manifest(runtime_manifest)
@@ -613,7 +630,9 @@ async def redteam_manifest(
             "dry_run": True,
             "summary": {
                 "required_env": required_manifest_env(runtime_manifest),
-                "scenario_cases": len(cli._scenario_dataset(runtime_manifest, manifest_path.parent)),
+                "scenario_cases": len(
+                    cli._scenario_dataset(runtime_manifest, manifest_path.parent)
+                ),
                 "environment_count": len(cli._environment_specs(runtime_manifest)),
                 "redteam": redteam_summary,
             },
@@ -708,9 +727,9 @@ def optimize_manifest(
     if opts.threshold is not None:
         runtime_manifest.setdefault("optimization", {})["threshold"] = opts.threshold
     if opts.max_candidates is not None:
-        runtime_manifest.setdefault("optimization", {}).setdefault(
-            "optimizer", {}
-        )["max_candidates"] = opts.max_candidates
+        runtime_manifest.setdefault("optimization", {}).setdefault("optimizer", {})[
+            "max_candidates"
+        ] = opts.max_candidates
 
     started = time.time()
     validate_manifest_env(runtime_manifest)
@@ -723,9 +742,7 @@ def optimize_manifest(
             "search_path_count": len(
                 cli._target_config(optimization).get("search_space", {})
             ),
-            "max_candidates": cli._optimizer_config(optimization).get(
-                "max_candidates"
-            ),
+            "max_candidates": cli._optimizer_config(optimization).get("max_candidates"),
         }
         if redteam_summary is not None:
             summary["redteam"] = redteam_summary
@@ -831,7 +848,9 @@ def build_manifest_optimization_problem(
             )
             score = float(evidence_evaluation.score)
         else:
-            score = float(getattr(evaluation, "score", 1.0 if evaluation is None else 0.0))
+            score = float(
+                getattr(evaluation, "score", 1.0 if evaluation is None else 0.0)
+            )
             # bug #2: when the manifest DECLARES an anchor objective, score the
             # candidate on it (real dynamic range) instead of the all-metrics-mean
             # evaluation score. Scoped: no declared-anchor objective -> unchanged.
@@ -840,13 +859,22 @@ def build_manifest_optimization_problem(
             eval_plain = cli._to_plain(evaluation) if evaluation is not None else {}
             objective = (
                 candidate_manifest.get("objective")
-                or ((candidate_manifest.get("simulation") or {}).get("inline") or {}).get("objective")
+                or (
+                    (candidate_manifest.get("simulation") or {}).get("inline") or {}
+                ).get("objective")
                 or (candidate_manifest.get("evaluation") or {}).get("objective")
             )
-            anchored = _score_from_value({
-                "objective": objective,
-                "summary": (eval_plain.get("summary") if isinstance(eval_plain, Mapping) else {}) or {},
-            })
+            anchored = _score_from_value(
+                {
+                    "objective": objective,
+                    "summary": (
+                        eval_plain.get("summary")
+                        if isinstance(eval_plain, Mapping)
+                        else {}
+                    )
+                    or {},
+                }
+            )
             if anchored is not None:
                 score = float(anchored)
         metadata = {
@@ -861,7 +889,9 @@ def build_manifest_optimization_problem(
             )
         return {
             "score": score,
-            "reason": getattr(evidence_evaluation, "reason", "") if evidence_evaluation is not None else "",
+            "reason": getattr(evidence_evaluation, "reason", "")
+            if evidence_evaluation is not None
+            else "",
             "metadata": metadata,
         }
 
@@ -890,13 +920,19 @@ def _simulation_evidence_scoring_config(
         return None
     if not isinstance(raw, Mapping):
         return None
-    method = str(
-        raw.get("method")
-        or raw.get("type")
-        or raw.get("name")
-        or raw.get("strategy")
-        or "simulation_evidence"
-    ).strip().lower().replace("-", "_").replace(" ", "_")
+    method = (
+        str(
+            raw.get("method")
+            or raw.get("type")
+            or raw.get("name")
+            or raw.get("strategy")
+            or "simulation_evidence"
+        )
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
     if not bool(raw.get("enabled", True)):
         return None
     if method not in {
@@ -944,7 +980,9 @@ def _optimization_options(
     return ManifestOptimizationOptions(
         name=opts.name if name is None else name,
         threshold=opts.threshold if threshold is None else threshold,
-        max_candidates=opts.max_candidates if max_candidates is None else max_candidates,
+        max_candidates=opts.max_candidates
+        if max_candidates is None
+        else max_candidates,
         dry_run=opts.dry_run if dry_run is None else dry_run,
     )
 

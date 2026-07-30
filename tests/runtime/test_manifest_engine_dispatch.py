@@ -401,3 +401,64 @@ def test_cli_result_fails_when_engine_case_fails() -> None:
 
     assert result["status"] == "failed"
     assert result["exit_code"] == 1
+
+
+@pytest.mark.parametrize(
+    ("transport_kind", "provider"),
+    [("vapi_websocket", "vapi"), ("retell_webcall", "retell")],
+)
+def test_livekit_manifest_accepts_provider_web_transport(
+    monkeypatch, tmp_path: Path, transport_kind, provider
+) -> None:
+    captured = {}
+
+    class FakeRunner:
+        async def run_test(self, **kwargs):
+            captured.update(kwargs)
+            return "report"
+
+    monkeypatch.setattr(cli, "TestRunner", FakeRunner)
+    manifest = {
+        "scenario": _scenario(),
+        "agent_definition": {
+            "name": "web-agent",
+            "url": "wss://livekit.example.com",
+            "room_name": "sdk-web-{test_case_id}",
+            "room_mode": "managed",
+            "system_prompt": "Evaluate the provider assistant.",
+            "transport": {"kind": transport_kind},
+            "provider_evidence": {
+                "provider": provider,
+                "call_id_source": "originator_response",
+            },
+        },
+        "simulation": {"engine": "livekit"},
+    }
+
+    asyncio.run(cli._run_manifest(manifest, tmp_path / "web.json"))
+
+    definition = captured["agent_definition"]
+    assert definition.transport.kind == transport_kind
+    assert definition.provider_evidence.provider == provider
+    assert definition.provider_evidence.call_id_source == "originator_response"
+
+
+def test_provider_web_transport_rejects_sip_fields(tmp_path: Path) -> None:
+    manifest = {
+        "scenario": _scenario(),
+        "agent_definition": {
+            "name": "vapi-agent",
+            "url": "wss://livekit.example.com",
+            "room_name": "sdk-vapi",
+            "room_mode": "managed",
+            "system_prompt": "Evaluate the Vapi assistant.",
+            "transport": {
+                "kind": "vapi_websocket",
+                "sip_call_to": "+14155551234",
+            },
+        },
+        "simulation": {"engine": "livekit"},
+    }
+
+    with pytest.raises(ManifestError, match="cannot set SIP fields"):
+        asyncio.run(cli._run_manifest(manifest, tmp_path / "vapi.json"))

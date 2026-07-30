@@ -186,6 +186,11 @@ from .simulation import (
     SyntheticToolTaskConfig,
 )
 from .evaluation import evaluate_agent_report, evaluate_report
+from .voice import (
+    build_voice_run_manifest,
+    generate_platform_voice_scenario,
+    run_voice_simulation,
+)
 from .manifest import (
     MANIFEST_SCHEMA_VERSION,
     ManifestError,
@@ -203,6 +208,7 @@ from .manifest import (
     evaluate_manifest_report,
     load_manifest,
     load_manifest_file,
+    write_manifest_file,
     missing_manifest_env,
     optimize_manifest,
     optimize_manifest_file,
@@ -463,6 +469,7 @@ __all__ = [
     "evaluate_manifest_report",
     "load_manifest",
     "load_manifest_file",
+    "write_manifest_file",
     "load_eval_suite_file",
     "missing_manifest_env",
     "optimize_manifest",
@@ -483,6 +490,9 @@ __all__ = [
     "run_eval_suite",
     "run_eval_suite_file",
     "run_local_text_manifest",
+    "run_voice_simulation",
+    "generate_platform_voice_scenario",
+    "build_voice_run_manifest",
     "run_manifest",
     "run_manifest_file",
     "run_redteam_manifest",

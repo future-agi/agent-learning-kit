@@ -44,6 +44,11 @@ from fi.simulate.evidence.providers import (
     VapiEvidenceSource,
 )
 from fi.simulate.endpoints.vapi import VapiCallOriginator
+from fi.simulate.simulation.bridge import (
+    LiveKitAudioBridge,
+    RetellWebCallConnector,
+    VapiWebSocketConnector,
+)
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
 from fi.simulate.recording.room_recorder import RoomRecorder, mix_recordings
 from fi.simulate.runtime import (
@@ -358,7 +363,9 @@ class LiveKitEngine(BaseEngine):
         sip_dispatch_rule_id: str | None = None
         sip_dispatch_rule_created = False
         vapi_originator: VapiCallOriginator | None = None
-        vapi_call_id: str | None = None
+        provider_call_id: str | None = None
+        audio_bridge: LiveKitAudioBridge | None = None
+        bridge_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
         transport = agent_definition.transport or TelephonyTransport()
         effective_target_identity = agent_definition.target_participant_identity
@@ -510,6 +517,7 @@ class LiveKitEngine(BaseEngine):
                 agent_name=agent_definition.name,
             )
             sip_participant_identity: str | None = None
+            bridge_identity: str | None = None
             if transport.kind == "sip_outbound":
                 identity_template = (
                     transport.participant_identity or "sip-caller-{test_case_id}"
@@ -519,9 +527,20 @@ class LiveKitEngine(BaseEngine):
                 )
                 if effective_target_identity is None:
                     effective_target_identity = sip_participant_identity
+            elif transport.kind in {"vapi_websocket", "retell_webcall"}:
+                provider_name = transport.kind.split("_", maxsplit=1)[0]
+                bridge_identity = (
+                    f"fagi-{provider_name}-bridge-{test_case_id[-12:]}"
+                )
+                effective_target_identity = bridge_identity
             session_participant_kinds = None
             session_participant_identity: str | None = None
-            if transport.kind in ("sip_outbound", "sip_inbound"):
+            if transport.kind in (
+                "sip_outbound",
+                "sip_inbound",
+                "vapi_websocket",
+                "retell_webcall",
+            ):
                 session_participant_kinds = [
                     rtc.ParticipantKind.PARTICIPANT_KIND_SIP
                 ]
@@ -536,6 +555,55 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+            if transport.kind in {"vapi_websocket", "retell_webcall"}:
+                try:
+                    connector = (
+                        VapiWebSocketConnector.from_env()
+                        if transport.kind == "vapi_websocket"
+                        else RetellWebCallConnector.from_env()
+                    )
+                    audio_bridge = LiveKitAudioBridge(
+                        url=str(agent_definition.url),
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        room_name=room_name,
+                        identity=bridge_identity or "fagi-provider-bridge",
+                        connector=connector,
+                    )
+                    await asyncio.wait_for(
+                        audio_bridge.connect(), timeout=connect_timeout
+                    )
+                    provider_call_id = audio_bridge.call_id
+                    bridge_task = asyncio.create_task(audio_bridge.run())
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "web_bridge_start_timeout",
+                        "Provider web call creation exceeded its deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "Provider web bridge creation failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "transport": transport.kind,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "web_bridge_start_failed",
+                        "Failed to start the provider web bridge",
+                        details=_safe_provider_error_details(
+                            exc, operation="web_bridge_start"
+                        ),
+                    )
+                    return outcome
             if (
                 transport.kind == "sip_outbound"
                 and api_client is not None
@@ -609,7 +677,7 @@ class LiveKitEngine(BaseEngine):
                     vapi_call = await asyncio.wait_for(
                         vapi_originator.start(), timeout=connect_timeout
                     )
-                    vapi_call_id = vapi_call.call_id
+                    provider_call_id = vapi_call.call_id
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
                         TestCaseStatus.TIMED_OUT,
@@ -787,6 +855,23 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
+            if audio_bridge is not None:
+                try:
+                    await asyncio.wait_for(
+                        audio_bridge.aclose(), timeout=cleanup_timeout
+                    )
+                    if bridge_task is not None:
+                        await asyncio.wait_for(
+                            bridge_task, timeout=cleanup_timeout
+                        )
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "bridge_close",
+                        run_id,
+                        test_case_id,
+                    )
             if room_connected:
                 try:
                     await asyncio.wait_for(room.disconnect(), timeout=cleanup_timeout)
@@ -800,9 +885,9 @@ class LiveKitEngine(BaseEngine):
                     )
             if vapi_originator is not None:
                 try:
-                    if vapi_call_id is not None:
+                    if provider_call_id is not None:
                         await asyncio.wait_for(
-                            vapi_originator.stop(vapi_call_id),
+                            vapi_originator.stop(provider_call_id),
                             timeout=cleanup_timeout,
                         )
                     await vapi_originator.close()
@@ -892,7 +977,7 @@ class LiveKitEngine(BaseEngine):
                 case_directory=case_directory,
                 started_at=case_started_at,
                 target=target,
-                provider_call_id_hint=vapi_call_id,
+                provider_call_id_hint=provider_call_id,
             )
             if provider_summary is not None:
                 outcome.evidence.append(provider_summary)
@@ -914,7 +999,18 @@ class LiveKitEngine(BaseEngine):
                 "cleanup_errors": cleanup_errors,
                 "sip_dispatch_rule_id": sip_dispatch_rule_id,
                 "sip_dispatch_rule_created": sip_dispatch_rule_created,
-                "vapi_call_id": vapi_call_id,
+                "provider_call_id": provider_call_id,
+                "vapi_call_id": (
+                    provider_call_id
+                    if transport.kind == "vapi_websocket"
+                    or transport.inbound_call_originator == "vapi"
+                    else None
+                ),
+                "retell_call_id": (
+                    provider_call_id
+                    if transport.kind == "retell_webcall"
+                    else None
+                ),
             }
         )
         return outcome

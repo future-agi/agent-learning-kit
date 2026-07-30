@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -241,6 +240,9 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "run_eval_suite",
     "run_eval_suite_file",
     "run_local_text_manifest",
+    "run_voice_simulation",
+    "generate_platform_voice_scenario",
+    "build_voice_run_manifest",
     "run_manifest",
     "run_manifest_file",
     "run_redteam_manifest",
@@ -341,9 +343,8 @@ _SIMULATE_SUBMODULE_ALIASES = {
 _SIMULATE_PACKAGE_ALIASES = {
     alias
     for alias in _SIMULATE_SUBMODULE_ALIASES
-    if "." not in alias or any(
-        child.startswith(f"{alias}.") for child in _SIMULATE_SUBMODULE_ALIASES
-    )
+    if "." not in alias
+    or any(child.startswith(f"{alias}.") for child in _SIMULATE_SUBMODULE_ALIASES)
 }
 
 install_lazy_module_aliases(
@@ -362,7 +363,11 @@ AGENT_LEARNING_SIMULATION_KIND = "agent-learning.simulation.v1"
 # The closed envelope strip list for round-trip/determinism byte-equality
 # (ARCH §3; AD-Q — frozen constant, mirrored into the gate).
 STABLE_RESULT_ENVELOPE_FIELDS = (
-    "created_at", "started_at", "completed_at", "duration_s", "timing",
+    "created_at",
+    "started_at",
+    "completed_at",
+    "duration_s",
+    "timing",
 )
 
 
@@ -551,17 +556,26 @@ def _lift_tool_bindings(environments: Sequence[Mapping[str, Any]]) -> list[dict]
         if etype in {"mock_tools", "tool_mock"}:
             for tool in env.get("tools") or env.get("mock_tools") or []:
                 name = tool.get("name") if isinstance(tool, Mapping) else str(tool)
-                bindings.append({"name": str(name), "mock": {"level": "static_fixture"}})
-        elif etype in {"openenv", "open_env", "environment_replay", "observability_replay"}:
-            bindings.append({
-                "name": f"{etype}_replay",
-                "mock": {
-                    "level": "recorded_replay",
-                    "source": f"replay://{env.get('name') or etype}",
-                    "provenance": {"capture": "sha256:lifted"},
-                    "recorded_replay": {"miss_policy": "fail"},
-                },
-            })
+                bindings.append(
+                    {"name": str(name), "mock": {"level": "static_fixture"}}
+                )
+        elif etype in {
+            "openenv",
+            "open_env",
+            "environment_replay",
+            "observability_replay",
+        }:
+            bindings.append(
+                {
+                    "name": f"{etype}_replay",
+                    "mock": {
+                        "level": "recorded_replay",
+                        "source": f"replay://{env.get('name') or etype}",
+                        "provenance": {"capture": "sha256:lifted"},
+                        "recorded_replay": {"miss_policy": "fail"},
+                    },
+                }
+            )
     return bindings
 
 
@@ -597,14 +611,18 @@ def build_simulation_manifest(
             "version": AGENT_LEARNING_RUN_KIND,
             "name": str(name),
             "scenario": dict(scenario),
-            "simulation": {"environments": list((scenario or {}).get("environments") or [])},
+            "simulation": {
+                "environments": list((scenario or {}).get("environments") or [])
+            },
         }
         return derive_simulation_manifest(run_manifest)
 
     def _normalize(values):
         out = []
         for v in values or []:
-            out.append(v.model_dump(exclude_none=True) if hasattr(v, "model_dump") else dict(v))
+            out.append(
+                v.model_dump(exclude_none=True) if hasattr(v, "model_dump") else dict(v)
+            )
         return out
 
     world_block = dict(world or {})
@@ -672,7 +690,9 @@ def derive_simulation_manifest(run_manifest: Mapping[str, Any]) -> dict[str, Any
     persona_hashes: list[str] = []
     for index, row in enumerate(scenario.get("dataset") or [], start=1):
         rowd = dict(row)
-        rowd.setdefault("persona", dict(rowd.get("persona") or {"name": f"persona-{index}"}))
+        rowd.setdefault(
+            "persona", dict(rowd.get("persona") or {"name": f"persona-{index}"})
+        )
         rowd.setdefault("situation", str(rowd.get("situation") or ""))
         rowd.setdefault("outcome", str(rowd.get("outcome") or ""))
         persona_obj = persona_module.Persona(**rowd)
@@ -683,8 +703,18 @@ def derive_simulation_manifest(run_manifest: Mapping[str, Any]) -> dict[str, Any
     # 2. ONE ScenarioBinding: per-persona role:"user" cast, casting:"each".
     scenario_typed = {
         key: scenario[key]
-        for key in ("name", "description", "kind", "coverage", "constraints",
-                    "escalation", "attack_type", "attack_surface", "version", "parent_version")
+        for key in (
+            "name",
+            "description",
+            "kind",
+            "coverage",
+            "constraints",
+            "escalation",
+            "attack_type",
+            "attack_surface",
+            "version",
+            "parent_version",
+        )
         if key in scenario
     }
     scenario_typed.setdefault("name", name)
@@ -730,19 +760,34 @@ def derive_simulation_manifest(run_manifest: Mapping[str, Any]) -> dict[str, Any
     # 6. objective ← lifted from evaluation.agent_report (+ optimizer
     #    metric_weights for optimization manifests) with source:"derived".
     objective = None
-    agent_report = evaluation.get("agent_report") if isinstance(evaluation, Mapping) else None
+    agent_report = (
+        evaluation.get("agent_report") if isinstance(evaluation, Mapping) else None
+    )
     if agent_report or optimization:
         terms = [{"eval": "agent_report", "weight": 1.0}]
         if optimization:
-            optimizer = (optimization.get("optimizer") or {}) if isinstance(optimization, Mapping) else {}
-            weights = optimizer.get("metric_weights") if isinstance(optimizer, Mapping) else None
+            optimizer = (
+                (optimization.get("optimizer") or {})
+                if isinstance(optimization, Mapping)
+                else {}
+            )
+            weights = (
+                optimizer.get("metric_weights")
+                if isinstance(optimizer, Mapping)
+                else None
+            )
             if isinstance(weights, Mapping):
-                terms = [{"eval": str(k), "weight": float(v)} for k, v in sorted(weights.items())]
+                terms = [
+                    {"eval": str(k), "weight": float(v)}
+                    for k, v in sorted(weights.items())
+                ]
         objective = {
             "evals": terms,
-            "aggregation": {"mode": "obligation_cells",
-                            "conjunction": "all_cells_must_close",
-                            "projection": "weighted_mean"},
+            "aggregation": {
+                "mode": "obligation_cells",
+                "conjunction": "all_cells_must_close",
+                "projection": "weighted_mean",
+            },
             "source": "derived",
         }
 
@@ -805,7 +850,9 @@ def derive_simulation_run_manifest(
     # The legacy dataset is the simulation's owned personas (re-attached for the
     # existing engine path, which enumerates scenario.dataset).
     scenario_block["dataset"] = copy.deepcopy(list(sim.get("personas") or []))
-    scenario_block.setdefault("name", scenario_name or sim.get("name") or "simulation-run")
+    scenario_block.setdefault(
+        "name", scenario_name or sim.get("name") or "simulation-run"
+    )
     if sim.get("goal") is not None and "goal" not in scenario_block:
         scenario_block["goal"] = sim["goal"]
     if sim.get("verification") is not None and "verification" not in scenario_block:
@@ -1032,10 +1079,7 @@ def build_framework_http_transport_run_manifest(
         max_turns=max_turns_value,
         auto_execute_tools=True,
         metadata={
-            "source": (
-                "fi.alk.simulate."
-                "build_framework_http_transport_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_framework_http_transport_run_manifest"),
             "cookbook": "framework-http-transport",
             "task_kind": "framework_http_transport",
             "framework": framework_key,
@@ -1127,9 +1171,7 @@ def build_framework_websocket_transport_run_manifest(
                 framework_key,
             )
         ),
-        environments=[
-            _framework_websocket_transport_status_environment(framework_key)
-        ],
+        environments=[_framework_websocket_transport_status_environment(framework_key)],
         required_env=_unique_strings([*required_env, *env_required]),
         available_tools=["framework_websocket_status"],
         required_tools=["framework_websocket_status"],
@@ -1147,8 +1189,7 @@ def build_framework_websocket_transport_run_manifest(
         auto_execute_tools=True,
         metadata={
             "source": (
-                "fi.alk.simulate."
-                "build_framework_websocket_transport_run_manifest"
+                "fi.alk.simulate.build_framework_websocket_transport_run_manifest"
             ),
             "cookbook": "framework-websocket-transport",
             "task_kind": "framework_websocket_transport",
@@ -1202,9 +1243,7 @@ def build_workflow_hook_run_manifest(
     env_required = [api_key_env] if api_key_env else []
     return build_task_run_manifest(
         name=name,
-        agent=copy.deepcopy(
-            dict(agent or _workflow_hook_agent(tool_name=tool_name))
-        ),
+        agent=copy.deepcopy(dict(agent or _workflow_hook_agent(tool_name=tool_name))),
         task_description=(
             "Execute an authenticated HTTP workflow hook, preserve auth "
             "redaction, collect hook trace evidence, and verify completion."
@@ -1291,9 +1330,7 @@ def build_retrieval_hook_run_manifest(
     env_required = [api_key_env] if api_key_env else []
     return build_task_run_manifest(
         name=name,
-        agent=copy.deepcopy(
-            dict(agent or _retrieval_hook_agent(tool_name=tool_name))
-        ),
+        agent=copy.deepcopy(dict(agent or _retrieval_hook_agent(tool_name=tool_name))),
         task_description=(
             "Call an authenticated HTTP retriever, collect ranked source "
             "documents, cite current evidence, and preserve redacted "
@@ -1315,8 +1352,18 @@ def build_retrieval_hook_run_manifest(
             )
         ],
         required_env=_unique_strings([*required_env, *env_required]),
-        available_tools=[tool_name, "read_document", "cite_sources", "retrieval_memory_status"],
-        required_tools=[tool_name, "read_document", "cite_sources", "retrieval_memory_status"],
+        available_tools=[
+            tool_name,
+            "read_document",
+            "cite_sources",
+            "retrieval_memory_status",
+        ],
+        required_tools=[
+            tool_name,
+            "read_document",
+            "cite_sources",
+            "retrieval_memory_status",
+        ],
         success_criteria=[
             "current refund policy document retrieved",
             "doc_refund_2026 cited",
@@ -1600,21 +1647,19 @@ def build_orchestration_stack_run_manifest(
 
     from . import optimize as _agent_optimize
 
-    optimization_manifest = (
-        _agent_optimize.build_orchestration_optimization_manifest(
-            name=name,
-            stack_candidates=[copy.deepcopy(dict(stack))],
-            evaluation_config=copy.deepcopy(dict(evaluation_config)),
-            agent_candidates=[copy.deepcopy(dict(agent))] if agent else None,
-            scenario=scenario,
-            required_env=required_env,
-            threshold=threshold,
-            simulation_engine=simulation_engine,
-            min_turns=min_turns,
-            max_turns=max_turns,
-            auto_execute_tools=auto_execute_tools,
-            target_metadata=metadata,
-        )
+    optimization_manifest = _agent_optimize.build_orchestration_optimization_manifest(
+        name=name,
+        stack_candidates=[copy.deepcopy(dict(stack))],
+        evaluation_config=copy.deepcopy(dict(evaluation_config)),
+        agent_candidates=[copy.deepcopy(dict(agent))] if agent else None,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+        target_metadata=metadata,
     )
     manifest: dict[str, Any] = {
         "version": AGENT_LEARNING_RUN_KIND,
@@ -1635,10 +1680,7 @@ def build_orchestration_stack_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": (
-                "fi.alk.simulate."
-                "build_orchestration_stack_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_orchestration_stack_run_manifest"),
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -1707,10 +1749,7 @@ def build_world_framework_memory_run_manifest(
         },
         "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
         "metadata": {
-            "source": (
-                "fi.alk.simulate."
-                "build_world_framework_memory_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_world_framework_memory_run_manifest"),
             "task_kind": "orchestration_stack",
             "task_variant": "world_framework_memory",
             "cookbook": "world-framework-memory-architecture",
@@ -1787,10 +1826,7 @@ def build_multi_agent_coordination_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": (
-                "fi.alk.simulate."
-                "build_multi_agent_coordination_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_multi_agent_coordination_run_manifest"),
             **copy.deepcopy(dict(metadata)),
         }
     return manifest
@@ -2238,8 +2274,7 @@ def build_autonomous_redteam_task_world_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "fi.alk.simulate."
-                "build_autonomous_redteam_task_world_run_manifest"
+                "fi.alk.simulate.build_autonomous_redteam_task_world_run_manifest"
             ),
             **copy.deepcopy(dict(metadata)),
         }
@@ -2668,7 +2703,9 @@ def probe_framework_imports(
 def build_framework_import_run_manifest(
     *,
     name: str,
-    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    targets: Optional[
+        Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]
+    ] = None,
     import_manifest: Optional[Mapping[str, Any]] = None,
     framework: str = "custom",
     adapter: Optional[Mapping[str, Any]] = None,
@@ -2703,7 +2740,9 @@ def build_framework_import_run_manifest(
 
     framework_key = _framework_key(framework)
     required_framework_list = _unique_strings(required_frameworks or [framework_key])
-    required_export_type_list = _unique_strings(required_export_types or ["probe_suite"])
+    required_export_type_list = _unique_strings(
+        required_export_types or ["probe_suite"]
+    )
     required_signal_list = _unique_strings(
         required_signals
         or [
@@ -2796,7 +2835,9 @@ def build_workspace_import_certification_run_manifest(
     *,
     name: str,
     workspace_path: str | Path,
-    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    targets: Optional[
+        Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]
+    ] = None,
     import_manifest: Optional[Mapping[str, Any]] = None,
     framework: str = "custom",
     repository_url: Optional[str] = None,
@@ -2838,7 +2879,9 @@ def build_workspace_import_certification_run_manifest(
 
     workspace_dir = Path(workspace_path).expanduser().resolve()
     if not workspace_dir.exists() or not workspace_dir.is_dir():
-        raise ValueError(f"workspace_path must be an existing directory: {workspace_dir}")
+        raise ValueError(
+            f"workspace_path must be an existing directory: {workspace_dir}"
+        )
 
     framework_key = _framework_key(framework)
     environments = build_workspace_import_certification_environments(
@@ -2888,8 +2931,7 @@ def build_workspace_import_certification_run_manifest(
         ),
         "metadata": {
             "source": (
-                "fi.alk.simulate."
-                "build_workspace_import_certification_run_manifest"
+                "fi.alk.simulate.build_workspace_import_certification_run_manifest"
             ),
             "cookbook": "workspace-import-certification",
             "framework": framework_key,
@@ -2913,7 +2955,9 @@ def build_workspace_import_certification_environments(
     *,
     name: str,
     workspace_path: str | Path,
-    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    targets: Optional[
+        Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]
+    ] = None,
     import_manifest: Optional[Mapping[str, Any]] = None,
     framework: str = "custom",
     repository_url: Optional[str] = None,
@@ -2932,7 +2976,9 @@ def build_workspace_import_certification_environments(
 
     workspace_dir = Path(workspace_path).expanduser().resolve()
     if not workspace_dir.exists() or not workspace_dir.is_dir():
-        raise ValueError(f"workspace_path must be an existing directory: {workspace_dir}")
+        raise ValueError(
+            f"workspace_path must be an existing directory: {workspace_dir}"
+        )
     if targets is None and import_manifest is None:
         raise ValueError("targets or import_manifest is required")
 
@@ -3097,7 +3143,9 @@ def build_redteam_readiness_certification_run_manifest(
     *,
     name: str,
     workspace_path: str | Path,
-    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    targets: Optional[
+        Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]
+    ] = None,
     import_manifest: Optional[Mapping[str, Any]] = None,
     framework: str = "agent_learning_kit",
     repository_url: Optional[str] = None,
@@ -3149,7 +3197,9 @@ def build_redteam_readiness_certification_run_manifest(
 
     workspace_dir = Path(workspace_path).expanduser().resolve()
     if not workspace_dir.exists() or not workspace_dir.is_dir():
-        raise ValueError(f"workspace_path must be an existing directory: {workspace_dir}")
+        raise ValueError(
+            f"workspace_path must be an existing directory: {workspace_dir}"
+        )
 
     framework_key = _framework_key(framework)
     environments = build_redteam_readiness_certification_environments(
@@ -3208,8 +3258,7 @@ def build_redteam_readiness_certification_run_manifest(
         ),
         "metadata": {
             "source": (
-                "fi.alk.simulate."
-                "build_redteam_readiness_certification_run_manifest"
+                "fi.alk.simulate.build_redteam_readiness_certification_run_manifest"
             ),
             "cookbook": "redteam-readiness-certification",
             "framework": framework_key,
@@ -3232,7 +3281,9 @@ def build_redteam_readiness_certification_environments(
     *,
     name: str,
     workspace_path: str | Path,
-    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    targets: Optional[
+        Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]
+    ] = None,
     import_manifest: Optional[Mapping[str, Any]] = None,
     framework: str = "agent_learning_kit",
     repository_url: Optional[str] = None,
@@ -3262,7 +3313,9 @@ def build_redteam_readiness_certification_environments(
 
     workspace_dir = Path(workspace_path).expanduser().resolve()
     if not workspace_dir.exists() or not workspace_dir.is_dir():
-        raise ValueError(f"workspace_path must be an existing directory: {workspace_dir}")
+        raise ValueError(
+            f"workspace_path must be an existing directory: {workspace_dir}"
+        )
     if targets is None and import_manifest is None:
         raise ValueError("targets or import_manifest is required")
 
@@ -3274,25 +3327,28 @@ def build_redteam_readiness_certification_environments(
         dict(observability or _default_redteam_readiness_observability(name))
     )
     artifact_payloads = [
-        copy.deepcopy(dict(item)) for item in (artifacts or _default_redteam_readiness_artifacts(name))
+        copy.deepcopy(dict(item))
+        for item in (artifacts or _default_redteam_readiness_artifacts(name))
     ]
-    base_workspace, import_environment = build_workspace_import_certification_environments(
-        name=name,
-        workspace_path=workspace_dir,
-        targets=targets,
-        import_manifest=import_manifest,
-        framework=framework_key,
-        repository_url=repository_url,
-        commit_sha=commit_sha,
-        adapter=adapter,
-        target=target_payload,
-        observability=observability_payload,
-        artifacts=artifact_payloads,
-        required_sources=required_sources,
-        required_frameworks=required_frameworks or [framework_key],
-        required_export_types=required_export_types,
-        required_signals=required_signals,
-        metadata=metadata,
+    base_workspace, import_environment = (
+        build_workspace_import_certification_environments(
+            name=name,
+            workspace_path=workspace_dir,
+            targets=targets,
+            import_manifest=import_manifest,
+            framework=framework_key,
+            repository_url=repository_url,
+            commit_sha=commit_sha,
+            adapter=adapter,
+            target=target_payload,
+            observability=observability_payload,
+            artifacts=artifact_payloads,
+            required_sources=required_sources,
+            required_frameworks=required_frameworks or [framework_key],
+            required_export_types=required_export_types,
+            required_signals=required_signals,
+            metadata=metadata,
+        )
     )
     import_environment = {
         "type": "framework_import",
@@ -3443,10 +3499,7 @@ def build_framework_certification_run_manifest(
     }
     if metadata:
         manifest["metadata"] = {
-            "source": (
-                "fi.alk.simulate."
-                "build_framework_certification_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_framework_certification_run_manifest"),
             "framework": str(framework),
             "target_framework": str(target_framework),
             **copy.deepcopy(dict(metadata)),
@@ -3508,7 +3561,9 @@ def build_social_memory_framework_run_manifest(
         .get("search_space", {})
     )
     default_agents = list(search_space.get("agent") or [optimization_manifest["agent"]])
-    selected_agent = copy.deepcopy(dict(agent)) if agent else copy.deepcopy(default_agents[-1])
+    selected_agent = (
+        copy.deepcopy(dict(agent)) if agent else copy.deepcopy(default_agents[-1])
+    )
     contract = framework_adapter_contract(
         framework,
         target=str(target),
@@ -3658,8 +3713,7 @@ def build_multi_agent_framework_handoff_run_manifest(
     if metadata:
         manifest["metadata"] = {
             "source": (
-                "fi.alk.simulate."
-                "build_multi_agent_framework_handoff_run_manifest"
+                "fi.alk.simulate.build_multi_agent_framework_handoff_run_manifest"
             ),
             **copy.deepcopy(dict(metadata)),
         }
@@ -3864,7 +3918,9 @@ def build_framework_run_manifest(
         "scenario": copy.deepcopy(
             dict(scenario)
             if scenario is not None
-            else _default_framework_scenario(str(name), framework_key, resolved_modality)
+            else _default_framework_scenario(
+                str(name), framework_key, resolved_modality
+            )
         ),
         "agent": agent,
         "simulation": simulation,
@@ -3928,7 +3984,9 @@ def build_framework_adapter_matrix_run_manifest(
             agent
             or {
                 "type": "scripted",
-                "responses": [{"content": "Native framework adapter matrix certified."}],
+                "responses": [
+                    {"content": "Native framework adapter matrix certified."}
+                ],
             }
         )
     )
@@ -3971,10 +4029,7 @@ def build_framework_adapter_matrix_run_manifest(
             }
         },
         "metadata": {
-            "source": (
-                "fi.alk.simulate."
-                "build_framework_adapter_matrix_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_framework_adapter_matrix_run_manifest"),
             "task_kind": "framework_adapter_matrix",
             "frameworks": framework_keys,
             "framework_adapter_contract_matrix": matrix_payload,
@@ -4076,9 +4131,7 @@ def build_harness_trajectory_replay_run_manifest(
             "max_turns": max_turns_value,
             "min_turns": int(min_turns),
             "auto_execute_tools": True,
-            "environments": [
-                _harness_trajectory_replay_environment(replay_payload)
-            ],
+            "environments": [_harness_trajectory_replay_environment(replay_payload)],
         },
         "evaluation": {
             "agent_report": {
@@ -4087,10 +4140,7 @@ def build_harness_trajectory_replay_run_manifest(
             }
         },
         "metadata": {
-            "source": (
-                "fi.alk.simulate."
-                "build_harness_trajectory_replay_run_manifest"
-            ),
+            "source": ("fi.alk.simulate.build_harness_trajectory_replay_run_manifest"),
             "task_kind": "retrospective_harness",
             "harness_trajectory_replay": replay_payload,
             **copy.deepcopy(dict(metadata or {})),
@@ -4179,9 +4229,7 @@ def build_optimizer_backend_portfolio_run_manifest(
     config = copy.deepcopy(
         dict(
             evaluation_config
-            or _optimizer_backend_portfolio_evaluation_config(
-                portfolio_payload
-            )
+            or _optimizer_backend_portfolio_evaluation_config(portfolio_payload)
         )
     )
     return {
@@ -4217,8 +4265,7 @@ def build_optimizer_backend_portfolio_run_manifest(
         },
         "metadata": {
             "source": (
-                "fi.alk.simulate."
-                "build_optimizer_backend_portfolio_run_manifest"
+                "fi.alk.simulate.build_optimizer_backend_portfolio_run_manifest"
             ),
             "task_kind": "optimizer_backend_portfolio",
             "optimizer_backend_portfolio": portfolio_payload,
@@ -4227,9 +4274,7 @@ def build_optimizer_backend_portfolio_run_manifest(
     }
 
 
-build_optimizer_portfolio_run_manifest = (
-    build_optimizer_backend_portfolio_run_manifest
-)
+build_optimizer_portfolio_run_manifest = build_optimizer_backend_portfolio_run_manifest
 
 
 def build_multi_framework_suite_manifest(
@@ -5501,7 +5546,7 @@ def _default_realtime_voice(framework: str) -> dict[str, Any]:
                 "stt": [120, 132, 148],
                 "llm": [210, 224, 241],
                 "tts": [250, 260, 280],
-            }
+            },
         },
         "routes": {
             "support": {"queue": "refund_support", "priority": "high"},
@@ -5555,13 +5600,7 @@ def _default_realtime_streaming_trace(framework: str) -> dict[str, Any]:
 def write_manifest_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
     """Write a simulation manifest as formatted JSON and return the path."""
 
-    manifest_path = Path(path).expanduser().resolve()
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(dict(manifest), indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
-    return manifest_path
+    return _manifest().write_manifest_file(manifest, path)
 
 
 async def run_local_text_manifest(
@@ -5689,7 +5728,9 @@ def render_markdown(
     return _manifest().render_markdown(result, source_path=source_path)
 
 
-def create_baseline_file(path: str | Path, *, name: Optional[str] = None) -> dict[str, Any]:
+def create_baseline_file(
+    path: str | Path, *, name: Optional[str] = None
+) -> dict[str, Any]:
     return public_payload(_manifest().create_baseline_file(path, name=name))
 
 
@@ -5751,7 +5792,9 @@ def compare_results(
     return public_payload(payload)
 
 
-def render_report_file(path: str | Path, *, name: Optional[str] = None) -> dict[str, Any]:
+def render_report_file(
+    path: str | Path, *, name: Optional[str] = None
+) -> dict[str, Any]:
     return public_payload(_manifest().render_report_file(path, name=name))
 
 
@@ -6181,7 +6224,9 @@ def _framework_adapter_matrix_evaluation_config(
         )
     )
     gate.setdefault("kind", "agent-learning.framework-adapter-contract.v1")
-    gate.setdefault("required_frameworks", _unique_strings(matrix_payload.get("frameworks")))
+    gate.setdefault(
+        "required_frameworks", _unique_strings(matrix_payload.get("frameworks"))
+    )
     gate.setdefault("require_trace_runtime", True)
     gate.setdefault("require_local_executable_fixture", True)
     gate.setdefault("require_no_external_service", True)
@@ -6189,7 +6234,9 @@ def _framework_adapter_matrix_evaluation_config(
     gate.setdefault("forbidden_target_schemes", ["http", "https"])
     gate.setdefault("required_schema_sections", ["input", "output"])
     gate.setdefault("required_lifecycle_hooks", ["setup", "teardown"])
-    gate.setdefault("required_capabilities", ["messages", "tool_calls", "runtime_trace"])
+    gate.setdefault(
+        "required_capabilities", ["messages", "tool_calls", "runtime_trace"]
+    )
     gate.setdefault(
         "required_evidence_requirements",
         [
@@ -6550,17 +6597,13 @@ def _default_optimizer_backend_portfolio_artifact(
                 "component": "tool_frontier",
                 "failure_mode": "overbroad_tool_menu",
                 "confidence": 0.91,
-                "recommended_search_path": (
-                    "optimizer.backend_portfolio.backends"
-                ),
+                "recommended_search_path": ("optimizer.backend_portfolio.backends"),
             },
             {
                 "component": "multi_agent",
                 "failure_mode": "unstable_search_policy",
                 "confidence": 0.88,
-                "recommended_search_path": (
-                    "optimizer.backend_selector.policy"
-                ),
+                "recommended_search_path": ("optimizer.backend_selector.policy"),
             },
         ],
         search_paths=[
@@ -6952,7 +6995,10 @@ def _browser_cua_environment(item: Mapping[str, Any]) -> dict[str, Any]:
         return {"type": "browser_cua", "data": copied["browser_cua"]}
     if copied.get("browser") is not None:
         return {"type": "browser", "data": copied["browser"]}
-    if copied.get("mutation_pack") is not None or copied.get("prompt_injections") is not None:
+    if (
+        copied.get("mutation_pack") is not None
+        or copied.get("prompt_injections") is not None
+    ):
         return {"type": "browser_cua", "data": copied}
     return {"type": "browser", "data": copied}
 
@@ -7015,7 +7061,10 @@ def _autonomous_redteam_task_world_environment(
     for environment_type in autonomous_types:
         if copied.get(environment_type) is not None:
             return {"type": environment_type, "data": copied[environment_type]}
-    if copied.get("world_contract") is not None or copied.get("attack_pack") is not None:
+    if (
+        copied.get("world_contract") is not None
+        or copied.get("attack_pack") is not None
+    ):
         return {"type": "world_attack_replay", "data": copied}
     if copied.get("packages") is not None:
         return {"type": "domain_package", "data": copied}
@@ -7074,7 +7123,9 @@ def _framework_certification_environment(item: Mapping[str, Any]) -> dict[str, A
     return {"type": "framework_lifecycle", "data": copied}
 
 
-def _default_framework_import_probe_scenario(name: str, framework: str) -> dict[str, Any]:
+def _default_framework_import_probe_scenario(
+    name: str, framework: str
+) -> dict[str, Any]:
     return {
         "name": str(name),
         "dataset": [
@@ -7227,7 +7278,9 @@ def _workspace_import_certification_import_payload(
     metadata: Optional[Mapping[str, Any]],
 ) -> dict[str, Any]:
     required_framework_list = _unique_strings(required_frameworks or [framework])
-    required_export_type_list = _unique_strings(required_export_types or ["probe_suite"])
+    required_export_type_list = _unique_strings(
+        required_export_types or ["probe_suite"]
+    )
     required_signal_list = _unique_strings(
         required_signals
         or [
@@ -7304,9 +7357,13 @@ def _workspace_import_certification_workspace_payload(
 ) -> dict[str, Any]:
     import_summary = dict(import_payload.get("summary") or {})
     failed_imports = int(import_summary.get("failed_source_count") or 0)
-    import_passed = failed_imports == 0 and int(import_summary.get("source_count") or 0) > 0
+    import_passed = (
+        failed_imports == 0 and int(import_summary.get("source_count") or 0) > 0
+    )
     repository = {
-        "provider": "github" if repository_url and "github.com" in repository_url else "local",
+        "provider": "github"
+        if repository_url and "github.com" in repository_url
+        else "local",
         "url": str(repository_url or workspace_path),
         "path": str(workspace_path),
         "commit_sha": str(commit_sha or "local-worktree"),
@@ -7478,7 +7535,9 @@ def _workspace_import_certification_workspace_payload(
     )
 
 
-def _workspace_import_certification_scenario(name: str, framework: str) -> dict[str, Any]:
+def _workspace_import_certification_scenario(
+    name: str, framework: str
+) -> dict[str, Any]:
     return {
         "name": str(name),
         "dataset": [
@@ -7633,10 +7692,16 @@ def _workspace_import_certification_evaluation(
             "require_no_secret_leakage": True,
             "require_observability": True,
             "require_futureagi_platform": True,
-            "min_command_count": max(4, int(workspace_summary.get("command_count") or 0)),
-            "min_passed_commands": max(4, int(workspace_summary.get("command_count") or 0)),
+            "min_command_count": max(
+                4, int(workspace_summary.get("command_count") or 0)
+            ),
+            "min_passed_commands": max(
+                4, int(workspace_summary.get("command_count") or 0)
+            ),
             "min_log_count": max(2, int(workspace_summary.get("log_count") or 0)),
-            "min_artifact_count": max(3, int(workspace_summary.get("artifact_count") or 0)),
+            "min_artifact_count": max(
+                3, int(workspace_summary.get("artifact_count") or 0)
+            ),
             "min_simulation_count": 1,
             "min_eval_count": 1,
             "min_optimization_count": 1,
@@ -7668,7 +7733,9 @@ def _workspace_import_certification_evaluation(
         "framework_import_quality": {
             "min_source_count": int(import_summary.get("source_count") or 1),
             "min_passed_sources": int(import_summary.get("source_count") or 1),
-            "min_artifact_count": max(1, int(import_summary.get("artifact_count") or 0)),
+            "min_artifact_count": max(
+                1, int(import_summary.get("artifact_count") or 0)
+            ),
             "min_observability_hooks": max(
                 1,
                 int(import_summary.get("observability_hook_count") or 0),
@@ -7679,7 +7746,9 @@ def _workspace_import_certification_evaluation(
             "require_observability": True,
             "require_artifacts": True,
             "required_sources": source_ids,
-            "required_frameworks": list(import_payload.get("required_frameworks") or []),
+            "required_frameworks": list(
+                import_payload.get("required_frameworks") or []
+            ),
             "required_export_types": list(
                 import_payload.get("required_export_types") or []
             ),
@@ -8104,7 +8173,9 @@ def _redteam_readiness_campaign_payload(
             **copy.deepcopy(dict(metadata or {})),
         },
     }
-    return copy.deepcopy(_simulate().normalize_red_team_campaign_manifest(campaign_payload))
+    return copy.deepcopy(
+        _simulate().normalize_red_team_campaign_manifest(campaign_payload)
+    )
 
 
 def _redteam_readiness_workspace_payload(
@@ -8308,7 +8379,13 @@ def _redteam_readiness_control_plane_payload(
                         "status": "approved",
                         "reversible": True,
                         "requires_approval": True,
-                        "controls": ["risk_scoring", "action_policy", "approval", "budget", "audit"],
+                        "controls": [
+                            "risk_scoring",
+                            "action_policy",
+                            "approval",
+                            "budget",
+                            "audit",
+                        ],
                     },
                     {
                         "id": "wire_transfer_rollback",
@@ -8468,7 +8545,9 @@ def _redteam_readiness_child_digest(payload: Mapping[str, Any]) -> dict[str, Any
     }
 
 
-def _redteam_readiness_certification_scenario(name: str, framework: str) -> dict[str, Any]:
+def _redteam_readiness_certification_scenario(
+    name: str, framework: str
+) -> dict[str, Any]:
     return {
         "name": str(name),
         "dataset": [
@@ -8498,39 +8577,91 @@ def _default_redteam_readiness_certification_agent() -> dict[str, Any]:
             {
                 "content": "Checking workspace execution and import evidence.",
                 "tool_calls": [
-                    {"id": "workspace_status", "name": "workspace_run_status", "arguments": {}},
-                    {"id": "workspace_gaps", "name": "list_workspace_run_gaps", "arguments": {}},
-                    {"id": "framework_import_status", "name": "framework_import_status", "arguments": {}},
-                    {"id": "framework_import_gaps", "name": "list_framework_import_gaps", "arguments": {}},
+                    {
+                        "id": "workspace_status",
+                        "name": "workspace_run_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "workspace_gaps",
+                        "name": "list_workspace_run_gaps",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_status",
+                        "name": "framework_import_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_gaps",
+                        "name": "list_framework_import_gaps",
+                        "arguments": {},
+                    },
                 ],
             },
             {
                 "content": "Checking adversarial campaign evidence.",
                 "tool_calls": [
-                    {"id": "campaign_status", "name": "red_team_campaign_status", "arguments": {}},
-                    {"id": "campaign_gaps", "name": "list_red_team_campaign_gaps", "arguments": {}},
+                    {
+                        "id": "campaign_status",
+                        "name": "red_team_campaign_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "campaign_gaps",
+                        "name": "list_red_team_campaign_gaps",
+                        "arguments": {},
+                    },
                 ],
             },
             {
                 "content": "Checking trust-boundary evidence.",
                 "tool_calls": [
-                    {"id": "trust_status", "name": "agent_trust_boundary_status", "arguments": {}},
-                    {"id": "trust_gaps", "name": "list_agent_trust_gaps", "arguments": {}},
+                    {
+                        "id": "trust_status",
+                        "name": "agent_trust_boundary_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "trust_gaps",
+                        "name": "list_agent_trust_gaps",
+                        "arguments": {},
+                    },
                 ],
             },
             {
                 "content": "Checking runtime control-plane evidence.",
                 "tool_calls": [
-                    {"id": "control_status", "name": "agent_control_plane_status", "arguments": {}},
-                    {"id": "control_gaps", "name": "list_agent_control_gaps", "arguments": {}},
+                    {
+                        "id": "control_status",
+                        "name": "agent_control_plane_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "control_gaps",
+                        "name": "list_agent_control_gaps",
+                        "arguments": {},
+                    },
                 ],
             },
             {
                 "content": "Checking the composed red-team readiness gate.",
                 "tool_calls": [
-                    {"id": "readiness_status", "name": "red_team_readiness_status", "arguments": {}},
-                    {"id": "readiness_evidence", "name": "list_red_team_readiness_evidence", "arguments": {}},
-                    {"id": "readiness_gaps", "name": "list_red_team_readiness_gaps", "arguments": {}},
+                    {
+                        "id": "readiness_status",
+                        "name": "red_team_readiness_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "readiness_evidence",
+                        "name": "list_red_team_readiness_evidence",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "readiness_gaps",
+                        "name": "list_red_team_readiness_gaps",
+                        "arguments": {},
+                    },
                 ],
             },
         ],
@@ -8686,7 +8817,10 @@ def _multi_agent_framework_handoff_environment(
         return {"type": "framework_trace", "data": copied["framework_trace"]}
     if copied.get("multi_agent_room") is not None:
         return {"type": "multi_agent_room", "data": copied["multi_agent_room"]}
-    if copied.get("participants") is not None or copied.get("handoff_contracts") is not None:
+    if (
+        copied.get("participants") is not None
+        or copied.get("handoff_contracts") is not None
+    ):
         return {"type": "multi_agent_room", "data": copied}
     return {"type": "framework_trace", "data": copied}
 
@@ -8745,7 +8879,9 @@ def _known_frameworks() -> set[str]:
 
 
 def _framework_key(framework: str) -> str:
-    return str(framework or "custom").strip().lower().replace("-", "_").replace(" ", "_")
+    return (
+        str(framework or "custom").strip().lower().replace("-", "_").replace(" ", "_")
+    )
 
 
 def _unique_strings(values: Sequence[Any]) -> list[str]:
@@ -8979,8 +9115,15 @@ def _redteam_corpus_evaluation_config(
 
 def _openenv_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     copied = copy.deepcopy(dict(item))
-    environment_type = str(copied.get("type") or copied.get("kind") or "").lower().replace("-", "_")
-    if environment_type in {"openenv", "open_env", "gymnasium_env", "environment_replay"}:
+    environment_type = (
+        str(copied.get("type") or copied.get("kind") or "").lower().replace("-", "_")
+    )
+    if environment_type in {
+        "openenv",
+        "open_env",
+        "gymnasium_env",
+        "environment_replay",
+    }:
         if copied.get("data") is not None:
             return {"type": "openenv", "data": copy.deepcopy(dict(copied["data"]))}
         copied.pop("type", None)
@@ -8989,7 +9132,9 @@ def _openenv_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     if copied.get("openenv") is not None or copied.get("open_env") is not None:
         return {
             "type": "openenv",
-            "data": copy.deepcopy(dict(copied.get("openenv") or copied.get("open_env") or {})),
+            "data": copy.deepcopy(
+                dict(copied.get("openenv") or copied.get("open_env") or {})
+            ),
         }
     return {"type": "openenv", "data": copied}
 
@@ -9002,7 +9147,11 @@ def _openenv_payload_from_environments(
     for environment in environments:
         if not isinstance(environment, Mapping):
             continue
-        env_type = str(environment.get("type") or environment.get("kind") or "").lower().replace("-", "_")
+        env_type = (
+            str(environment.get("type") or environment.get("kind") or "")
+            .lower()
+            .replace("-", "_")
+        )
         if env_type in {"openenv", "open_env", "gymnasium_env", "environment_replay"}:
             data = environment.get("data")
             return copy.deepcopy(dict(data if isinstance(data, Mapping) else {}))
@@ -9229,9 +9378,7 @@ def _default_openenv_payload(
 
 def _openenv_evaluation_config(openenv_payload: Mapping[str, Any]) -> dict[str, Any]:
     normalized = _simulate().normalize_openenv_manifest(openenv_payload)
-    steps = [
-        item for item in normalized.get("steps", []) if isinstance(item, Mapping)
-    ]
+    steps = [item for item in normalized.get("steps", []) if isinstance(item, Mapping)]
     return {
         "task_description": (
             "Evaluate a local-first OpenEnv replay with reset, step, state, "
@@ -9277,9 +9424,7 @@ def _openenv_evaluation_config(openenv_payload: Mapping[str, Any]) -> dict[str, 
             "min_reset_count": 1,
             "min_step_count": len(steps),
             "min_action_route_count": len(steps),
-            "min_reward_total": sum(
-                float(item.get("reward") or 0.0) for item in steps
-            ),
+            "min_reward_total": sum(float(item.get("reward") or 0.0) for item in steps),
             "require_done": any(bool(item.get("done")) for item in steps),
             "require_terminated": any(bool(item.get("terminated")) for item in steps),
             "require_metadata_capture": True,
@@ -9346,9 +9491,10 @@ def _stateful_tool_world_environment(item: Mapping[str, Any]) -> dict[str, Any]:
         }
     if copied.get("world_contract") is not None:
         return {"type": "world_contract", "data": copied["world_contract"]}
-    if copied.get("required_state_deltas") is not None or copied.get(
-        "utility_under_attack"
-    ) is not None:
+    if (
+        copied.get("required_state_deltas") is not None
+        or copied.get("utility_under_attack") is not None
+    ):
         return {"type": "stateful_tool_world", "data": copied}
     return {"type": "world_contract", "data": copied}
 
@@ -10039,6 +10185,24 @@ def normalize_agent_integration_provider_name(value: Any) -> str:
     return str(environment._normalize_agent_integration_provider_name(value))
 
 
+async def run_voice_simulation(**kwargs: Any) -> Any:
+    """Run a typed LiveKit voice simulation without a manifest file."""
+
+    return await _simulate().run_voice_simulation(**kwargs)
+
+
+async def generate_platform_voice_scenario(**kwargs: Any) -> Any:
+    """Create a platform Agent Definition and generate its typed Scenario."""
+
+    return await _simulate().generate_platform_voice_scenario(**kwargs)
+
+
+def build_voice_run_manifest(**kwargs: Any) -> dict[str, Any]:
+    """Build the portable manifest for a typed LiveKit voice simulation."""
+
+    return _simulate().build_voice_run_manifest(**kwargs)
+
+
 def __getattr__(name: str) -> Any:
     module_name = _SIMULATE_EXPORTS.get(name)
     if module_name is None:
@@ -10136,6 +10300,9 @@ __all__ = [
     "run_eval_suite",
     "run_eval_suite_file",
     "run_local_text_manifest",
+    "run_voice_simulation",
+    "generate_platform_voice_scenario",
+    "build_voice_run_manifest",
     "run_manifest",
     "run_manifest_file",
     "shrink_attack_evolution",

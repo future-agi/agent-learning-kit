@@ -840,3 +840,77 @@ def test_cleanup_logging_redacts_exception_details(caplog) -> None:
     assert errors == ["disconnect:RuntimeError"]
     assert secret not in caplog.text
     assert "RuntimeError: details redacted" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("transport_kind", "connector_name", "identity_prefix"),
+    [
+        ("vapi_websocket", "VapiWebSocketConnector", "fagi-vapi-bridge-"),
+        ("retell_webcall", "RetellWebCallConnector", "fagi-retell-bridge-"),
+    ],
+)
+def test_web_bridge_joins_as_target_without_sip(
+    monkeypatch, transport_kind, connector_name, identity_prefix
+) -> None:
+    calls: list[tuple] = []
+    engine = _install_engine_fakes(monkeypatch, calls)
+
+    class _Bridge:
+        def __init__(self, **kwargs):
+            calls.append(("bridge_init", kwargs["room_name"], kwargs["identity"]))
+            self.call_id = "call_web_123"
+            self._closed = asyncio.Event()
+
+        async def connect(self):
+            calls.append(("bridge_connect",))
+
+        async def run(self):
+            await self._closed.wait()
+
+        async def aclose(self):
+            calls.append(("bridge_close",))
+            self._closed.set()
+
+    async def _wait_for_target(
+        _room,
+        *,
+        excluded_identities,
+        target_identity,
+        timeout,
+    ):
+        calls.append(("target_wait", target_identity))
+        return livekit._TargetParticipant(
+            identity=target_identity,
+            sid="bridge-participant",
+            audio_track_sid="bridge-track",
+        )
+
+    connector_type = getattr(livekit, connector_name)
+    monkeypatch.setattr(
+        connector_type,
+        "from_env",
+        classmethod(lambda _cls: SimpleNamespace()),
+    )
+    monkeypatch.setattr(livekit, "LiveKitAudioBridge", _Bridge)
+    monkeypatch.setattr(livekit, "_wait_for_target_audio", _wait_for_target)
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=_agent(
+                room_mode="managed",
+                room_name="sdk-web-{test_case_id}",
+                transport={"kind": transport_kind},
+            ),
+            scenario=_scenario(),
+            run_id="run_web_bridge",
+            min_turn_messages=2,
+        )
+    )
+
+    result = report.results[0]
+    assert result.metadata["status"] == CaseStatus.COMPLETED.value
+    assert result.metadata["provider_call_id"] == "call_web_123"
+    assert result.metadata["target_participant_identity"].startswith(identity_prefix)
+    assert ("bridge_connect",) in calls
+    assert ("bridge_close",) in calls
+    assert not [call for call in calls if call[0] in {"dispatch", "sip_dial"}]

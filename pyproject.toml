@@ -63,6 +63,7 @@ evaluation = []
 optimize = []
 livekit = [
   "aiohttp>=3.10",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
   "livekit-agents[deepgram,openai,silero,google]>=1.2",
   "livekit-plugins-elevenlabs>=1.2",
 ]
@@ -89,11 +90,13 @@ embeddings = ["sentence-transformers>=5.2.3,<6"]
 feedback = ["chromadb>=0.4.0"]
 trinity = [
   "aiohttp>=3.10",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
   "livekit-agents[deepgram,openai,silero,google]>=1.2",
   "livekit-plugins-elevenlabs>=1.2",
 ]
 all = [
   "aiohttp>=3.10",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
   "chromadb>=0.4.0",
   "livekit-agents[deepgram,openai,silero,google]>=1.2",
   "livekit-plugins-elevenlabs>=1.2",

@@ -78,7 +78,9 @@ class TelephonyTransport(BaseModel):
     a per-run rule and tears it down on cleanup.
     """
 
-    kind: Literal["webrtc", "sip_outbound", "sip_inbound"] = Field(
+    kind: Literal[
+        "webrtc", "sip_outbound", "sip_inbound", "vapi_websocket", "retell_webcall"
+    ] = Field(
         "webrtc",
         description="Transport used to reach the target participant.",
     )
@@ -134,7 +136,7 @@ class TelephonyTransport(BaseModel):
         elif self.kind == "sip_inbound":
             if self.dispatch_rule_name is not None and not self.dispatch_rule_name.strip():
                 raise ValueError("sip_inbound dispatch_rule_name must be non-empty when set")
-        elif self.kind == "webrtc":
+        elif self.kind in {"webrtc", "vapi_websocket", "retell_webcall"}:
             if any(
                 [
                     self.sip_trunk_id,
@@ -144,7 +146,7 @@ class TelephonyTransport(BaseModel):
                     self.inbound_call_originator,
                 ]
             ):
-                raise ValueError("webrtc transport cannot set SIP fields")
+                raise ValueError(f"{self.kind} transport cannot set SIP fields")
         return self
 
 class LLMConfig(BaseModel):
@@ -217,7 +219,7 @@ class AgentDefinition(BaseModel):
             and transport.kind != "webrtc"
             and self.room_mode != "managed"
         ):
-            raise ValueError("sip_transport_requires_managed_room")
+            raise ValueError("managed_transport_requires_managed_room")
         evidence = self.provider_evidence
         if transport is not None and transport.inbound_call_originator == "vapi":
             if transport.kind != "sip_inbound":
@@ -232,6 +234,19 @@ class AgentDefinition(BaseModel):
                     "retell_pstn_outbound_unsupported: Retell has no outbound "
                     "phone API; use sip_inbound or a different provider"
                 )
+            web_provider = {
+                "vapi_websocket": "vapi",
+                "retell_webcall": "retell",
+            }.get(transport.kind)
+            if web_provider is not None:
+                if evidence.provider != web_provider:
+                    raise ValueError(
+                        f"{transport.kind}_requires_{web_provider}_evidence"
+                    )
+                if evidence.call_id_source != "originator_response":
+                    raise ValueError(
+                        f"{transport.kind}_requires_originator_response"
+                    )
         return self
 
     system_prompt: str = Field(..., description="The main system prompt or instructions that define the agent's behavior.")

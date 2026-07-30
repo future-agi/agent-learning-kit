@@ -102,7 +102,10 @@ class RetellEvidenceSource:
     async def _locate_and_fetch_call(self) -> dict[str, Any] | None:
         assert self._context is not None
         context = self._context
-        if self._config.call_id_source == "participant_attribute" and context.call_id_hint:
+        if self._config.call_id_source in {
+            "participant_attribute",
+            "originator_response",
+        } and context.call_id_hint:
             return await self._get_call(context.call_id_hint)
         window = self._config.polling_window_seconds
         if not window:
