@@ -249,7 +249,6 @@ def test_platform_payload_uses_target_provider_without_credentials(
     assert "Human-readable target summary" not in payload["description"]
     assert payload["provider"] == provider
     assert payload["assistant_id"] == target_id
-    assert payload["scenario_generation_only"] is True
     assert "livekit_url" not in payload
     assert "api_key" not in payload
     assert configuration_hash

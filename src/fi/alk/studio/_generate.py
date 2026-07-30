@@ -205,7 +205,6 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
             {
                 "provider": target.provider,
                 "assistant_id": target_id,
-                "scenario_generation_only": True,
             }
         )
         safe_configuration.update(
