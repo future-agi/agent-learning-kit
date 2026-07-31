@@ -26,6 +26,8 @@ from ._scan import DownloadRejected, scan_content
 
 _AGENT_LIST_PATH = "/simulate/agent-definitions/"
 _AGENT_CREATE_PATH = "/simulate/agent-definitions/create/"
+_AGENT_VERSION_CREATE_PATH = "/simulate/agent-definitions/{agent_id}/versions/create/"
+_SCENARIO_LIST_PATH = "/simulate/scenarios/"
 _SCENARIO_CREATE_PATH = "/simulate/scenarios/create/"
 _SCENARIO_DETAIL_PATH = "/simulate/scenarios/{scenario_id}/"
 _TERMINAL_FAILURE_STATUSES = {"failed", "error", "cancelled"}
@@ -178,6 +180,7 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
         "model_provider": agent_definition.llm.provider,
         "language": agent_definition.stt.language,
     }
+    identity_configuration: dict[str, Any] = {"transport": transport_kind}
     payload: dict[str, Any] = {
         "agent_type": "voice",
         "commit_message": "Created by Agent Learning Kit for scenario generation",
@@ -214,6 +217,9 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
                 "provider_api_url": str(target_url),
             }
         )
+        identity_configuration.update(
+            {"provider": target.provider, "assistant_id": target_id}
+        )
     elif transport_kind in {"sip_outbound", "sip_inbound"}:
         if transport is None or not transport.sip_call_to:
             raise ScenarioGenerationError(
@@ -226,6 +232,9 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
             }
         )
         safe_configuration["contact_number"] = transport.sip_call_to
+        identity_configuration.update(
+            {"provider": "others", "contact_number": transport.sip_call_to}
+        )
     else:
         if agent_definition.url is None:
             raise ScenarioGenerationError(
@@ -246,6 +255,13 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
                 "livekit_agent_name": livekit_agent_name,
             }
         )
+        identity_configuration.update(
+            {
+                "provider": "livekit",
+                "livekit_url": livekit_url,
+                "livekit_agent_name": livekit_agent_name,
+            }
+        )
 
     configuration_hash = hashlib.sha256(
         json.dumps(
@@ -255,26 +271,70 @@ def _agent_payload(agent_definition: AgentDefinition) -> tuple[dict[str, Any], s
             default=str,
         ).encode("utf-8")
     ).hexdigest()
+    identity_hash = hashlib.sha256(
+        json.dumps(
+            identity_configuration,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
     base_name = "-".join(agent_definition.name.strip().split()) or "agent"
-    payload["agent_name"] = f"{base_name[:220]}-alk-{configuration_hash[:12]}"
+    payload["agent_name"] = f"{base_name[:220]}-alk-{identity_hash[:12]}"
+    payload["commit_message"] = _configuration_commit(configuration_hash)
     return {
         key: value for key, value in payload.items() if value is not None
     }, configuration_hash
 
 
-def _active_version_id(detail: Mapping[str, Any]) -> str | None:
+def _configuration_commit(configuration_hash: str) -> str:
+    return f"Agent Learning Kit configuration {configuration_hash}"
+
+
+def _active_version(detail: Mapping[str, Any]) -> Mapping[str, Any] | None:
     active = detail.get("active_version")
     if isinstance(active, Mapping) and active.get("id"):
+        return active
+    versions = detail.get("versions")
+    if isinstance(versions, list):
+        return next(
+            (
+                version
+                for version in versions
+                if isinstance(version, Mapping) and version.get("id")
+            ),
+            None,
+        )
+    return None
+
+
+def _active_version_id(detail: Mapping[str, Any]) -> str | None:
+    active = _active_version(detail)
+    if active is not None:
         return str(active["id"])
     latest = detail.get("latest_version_id")
-    if latest:
-        return str(latest)
-    versions = detail.get("versions")
-    if isinstance(versions, list) and versions:
-        first = versions[0]
-        if isinstance(first, Mapping) and first.get("id"):
-            return str(first["id"])
-    return None
+    return str(latest) if latest else None
+
+
+def _logical_agent_match(
+    item: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> bool:
+    if str(_field(item, "agent_name") or "") == str(payload["agent_name"]):
+        return True
+    provider = str(payload.get("provider") or "")
+    assistant_id = payload.get("assistant_id")
+    if assistant_id:
+        return bool(
+            str(_field(item, "provider") or "") == provider
+            and str(_field(item, "assistant_id") or "") == str(assistant_id)
+        )
+    contact_number = payload.get("contact_number")
+    return bool(
+        contact_number
+        and str(_field(item, "provider") or "") == provider
+        and str(_field(item, "contact_number") or "") == str(contact_number)
+    )
 
 
 def ensure_platform_agent(
@@ -286,34 +346,66 @@ def ensure_platform_agent(
     headers = _headers(cfg)
     base = str(cfg.api_url).rstrip("/")
     payload, configuration_hash = _agent_payload(agent_definition)
-    stable_name = str(payload["agent_name"])
+    search = payload.get("assistant_id") or agent_definition.name
     query = urllib.parse.urlencode(
-        {"search": stable_name, "agent_type": "voice", "limit": 100}
+        {"search": search, "agent_type": "voice", "limit": 100}
     )
     listing = _request_json(f"{base}{_AGENT_LIST_PATH}?{query}", headers)
-    exact = next(
+    existing = next(
         (
             item
             for item in _rows(listing)
-            if str(_field(item, "agent_name") or "") == stable_name
+            if isinstance(item, Mapping) and _logical_agent_match(item, payload)
         ),
         None,
     )
-    if exact is not None:
-        agent_id = str(_field(exact, "id") or "")
-        version_id = str(_field(exact, "latest_version_id") or "")
-        if not version_id:
-            detail = _request_json(f"{base}{_AGENT_LIST_PATH}{agent_id}/", headers)
-            version_id = _active_version_id(detail) or ""
-        if not agent_id or not version_id:
+    if existing is not None:
+        agent_id = str(_field(existing, "id") or "")
+        if not agent_id:
+            raise ScenarioGenerationError(
+                "reused platform Agent Definition has no agent id"
+            )
+        detail = _request_json(f"{base}{_AGENT_LIST_PATH}{agent_id}/", headers)
+        active = _active_version(detail) if isinstance(detail, Mapping) else None
+        if active is None:
             raise ScenarioGenerationError(
                 "reused platform Agent Definition has no active version"
+            )
+        version_id = str(active["id"])
+        if str(active.get("commit_message") or "") == _configuration_commit(
+            configuration_hash
+        ):
+            return PlatformAgentReference(
+                agent_definition_id=agent_id,
+                agent_version_id=version_id,
+                configuration_hash=configuration_hash,
+                reused=True,
+            )
+        created_version = _request_json(
+            f"{base}{_AGENT_VERSION_CREATE_PATH.format(agent_id=agent_id)}",
+            headers,
+            method="POST",
+            payload=payload,
+        )
+        version = (
+            created_version.get("version")
+            if isinstance(created_version, Mapping)
+            else None
+        )
+        version_id = (
+            str(_field(version, "id") or "")
+            if isinstance(version, Mapping)
+            else ""
+        )
+        if not version_id:
+            raise ScenarioGenerationError(
+                "platform Agent Version response did not include a version id"
             )
         return PlatformAgentReference(
             agent_definition_id=agent_id,
             agent_version_id=version_id,
             configuration_hash=configuration_hash,
-            reused=True,
+            reused=False,
         )
 
     created = _request_json(
@@ -500,6 +592,33 @@ def generate_scenario(
 
     headers = _headers(cfg)
     base = str(cfg.api_url).rstrip("/")
+    query = urllib.parse.urlencode(
+        {
+            "search": request.name.strip(),
+            "agent_definition_id": agent_definition_id,
+            "limit": 100,
+        }
+    )
+    listing = _request_json(f"{base}{_SCENARIO_LIST_PATH}?{query}", headers)
+    existing = next(
+        (
+            item
+            for item in _rows(listing)
+            if str(_field(item, "name") or "") == request.name.strip()
+        ),
+        None,
+    )
+    if existing is not None:
+        scenario_id = str(_field(existing, "id") or "")
+        if scenario_id:
+            return fetch_scenario(
+                scenario_id,
+                platform_agent_definition_id=agent_definition_id,
+                platform_agent_version_id=agent_version_id,
+                poll_interval_seconds=request.poll_interval_seconds,
+                timeout_seconds=request.timeout_seconds,
+                config=cfg,
+            )
     created = _request_json(
         f"{base}{_SCENARIO_CREATE_PATH}",
         headers,

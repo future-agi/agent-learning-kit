@@ -6,9 +6,15 @@ from dataclasses import dataclass
 from types import ModuleType
 
 import aiohttp
-from livekit.agents import llm as livekit_llm
-from livekit.agents import stt as livekit_stt
-from livekit.agents import tts as livekit_tts
+
+try:
+    from livekit.agents import llm as livekit_llm
+    from livekit.agents import stt as livekit_stt
+    from livekit.agents import tts as livekit_tts
+except ImportError as exc:
+    raise ImportError(
+        "LiveKit model construction requires the 'livekit' optional dependency"
+    ) from exc
 
 from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
 
@@ -242,16 +248,20 @@ _TTS_FACTORIES: dict[str, TTSFactory] = {
 _HTTP_PROVIDERS = {"deepgram", "elevenlabs"}
 
 
+def build_livekit_llm(config: LLMConfig) -> livekit_llm.LLM:
+    provider = config.provider.lower()
+    factory = _factory(_LLM_FACTORIES, provider, "LLM")
+    return factory(config)
+
+
 async def build_livekit_models(
     *,
     llm_config: LLMConfig,
     stt_config: STTConfig,
     tts_config: TTSConfig,
 ) -> LiveKitModels:
-    llm_provider = llm_config.provider.lower()
     stt_provider = stt_config.provider.lower()
     tts_provider = tts_config.provider.lower()
-    llm_factory = _factory(_LLM_FACTORIES, llm_provider, "LLM")
     stt_factory = _factory(_STT_FACTORIES, stt_provider, "STT")
     tts_factory = _factory(_TTS_FACTORIES, tts_provider, "TTS")
     http_session = (
@@ -262,7 +272,7 @@ async def build_livekit_models(
     try:
         return LiveKitModels(
             stt=stt_factory(stt_config, http_session),
-            llm=llm_factory(llm_config),
+            llm=build_livekit_llm(llm_config),
             tts=tts_factory(tts_config, http_session),
             http_session=http_session,
         )

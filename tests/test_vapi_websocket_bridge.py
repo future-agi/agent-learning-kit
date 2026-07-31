@@ -82,6 +82,7 @@ def test_vapi_websocket_connector_creates_and_streams_call(monkeypatch) -> None:
             api_key="test-key",
             assistant_id="assistant_123",
             api_url="https://api.vapi.ai/call",
+            first_message_mode="assistant-waits-for-user",
         )
     )
 
@@ -105,6 +106,9 @@ def test_vapi_websocket_connector_creates_and_streams_call(monkeypatch) -> None:
                 "sampleRate": 16000,
             },
         },
+        "assistantOverrides": {
+            "firstMessageMode": "assistant-waits-for-user",
+        },
     }
     assert session.request["websocket_url"] == "wss://vapi.example/call"
     assert len(session.websocket.sent[0]) < 960
@@ -120,12 +124,14 @@ def test_vapi_websocket_connector_uses_explicit_target(monkeypatch) -> None:
             assistant_id="assistant_healthcare",
             api_base_url="https://vapi.healthcare.example",
             api_key_env="HEALTHCARE_VAPI_KEY",
-        )
+        ),
+        first_message_mode="assistant-waits-for-user",
     )
 
     assert connector._config.assistant_id == "assistant_healthcare"
     assert connector._config.api_key == "test-key"
     assert connector._config.api_url == "https://vapi.healthcare.example/call"
+    assert connector._config.first_message_mode == "assistant-waits-for-user"
 
 
 def test_vapi_websocket_connector_requires_credentials(monkeypatch) -> None:

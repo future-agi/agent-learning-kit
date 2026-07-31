@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from ._facade import optional_module
+from ._paths import project_root as discover_project_root
 from ._module_alias import install_lazy_module_aliases
 from ._schema import (
     public_payload,
@@ -2175,7 +2176,7 @@ def _load_committed_routing_table(
     candidate = (
         Path(path)
         if path is not None
-        else Path(__file__).resolve().parents[2] / OPTIMIZER_ROUTING_TABLE_FILE
+        else discover_project_root(__file__) / OPTIMIZER_ROUTING_TABLE_FILE
     )
     if not candidate.is_file():
         return None
@@ -2395,7 +2396,7 @@ def routing_table_matches_committed(
     candidate = (
         Path(path)
         if path is not None
-        else Path(__file__).resolve().parents[2] / OPTIMIZER_ROUTING_TABLE_FILE
+        else discover_project_root(__file__) / OPTIMIZER_ROUTING_TABLE_FILE
     )
     if not candidate.is_file():
         return False

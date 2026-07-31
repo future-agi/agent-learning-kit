@@ -43,3 +43,4 @@ class ConnectorConfig:
     assistant_id: str
     api_url: str
     livekit_url: str = ""
+    first_message_mode: str | None = None

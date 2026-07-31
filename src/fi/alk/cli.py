@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from ._paths import project_root as discover_project_root
 from ._schema import normalize_public_payload
 
 
@@ -4537,7 +4538,7 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     root = (
         Path(parsed.project_root).expanduser().resolve()
         if parsed.project_root
-        else Path(__file__).resolve().parents[2]
+        else discover_project_root(__file__)
     )
     selected = list(parsed.only or trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS)
     command_results: dict[str, dict[str, Any]] = {}

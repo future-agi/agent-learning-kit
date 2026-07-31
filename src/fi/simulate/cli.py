@@ -969,6 +969,9 @@ async def _run_livekit_manifest(
         conversation_direction=str(
             simulation.get("conversation_direction") or "simulator_first"
         ),
+        agent_first_silence_timeout_seconds=float(
+            simulation.get("agent_first_silence_timeout_seconds", 30.0)
+        ),
     )
 
 

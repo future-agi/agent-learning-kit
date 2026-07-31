@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
 from typing import AsyncIterable
+from uuid import uuid4
 
 try:
     from livekit import api, rtc
@@ -16,8 +17,15 @@ try:
     from livekit.agents.voice import ModelSettings
     from livekit.agents.voice.io import TimedString
     from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
-    from livekit.plugins import silero
     from livekit.api import AccessToken, VideoGrants
+    from livekit.plugins import silero
+    from livekit.protocol.sip import (
+        CreateSIPDispatchRuleRequest,
+        DeleteSIPDispatchRuleRequest,
+        ListSIPDispatchRuleRequest,
+        SIPDispatchRule,
+        SIPDispatchRuleDirect,
+    )
 except ImportError as exc:
     raise ImportError(
         "LiveKit mode requires the 'livekit' optional dependency"
@@ -99,15 +107,28 @@ class _TestRunnerAgent(Agent):
         super().__init__(**kwargs)
         self._persona = persona
         self._session: AgentSession | None = None
+        self._end_requested = asyncio.Event()
 
-    @function_tool()
-    async def end_call(self) -> None:
-        await asyncio.sleep(0.2)
-        self.session.shutdown()
+    @function_tool(
+        name="endCall",
+        description=(
+            "End the conversation after you have said one natural closing sentence. "
+            "Use this immediately when the caller says goodbye or the objective is done."
+        ),
+    )
+    async def end_call(self) -> str:
+        self._end_requested.set()
+        if self._session is not None:
+            await self._session.aclose()
+        return "Conversation ended."
 
     @property
     def started_session(self) -> AgentSession | None:
         return self._session
+
+    @property
+    def end_requested(self) -> asyncio.Event:
+        return self._end_requested
 
     async def start_session(
         self,
@@ -210,6 +231,7 @@ class LiveKitEngine(BaseEngine):
         readiness_timeout: float = 30.0,
         cleanup_timeout: float = 30.0,
         conversation_direction: str = "simulator_first",
+        agent_first_silence_timeout_seconds: float = 30.0,
         recording_root: str | Path = "recordings",
         run_id: str | None = None,
         **kwargs,
@@ -221,8 +243,17 @@ class LiveKitEngine(BaseEngine):
             raise ValueError(
                 "conversation_direction must be simulator_first or agent_first"
             )
+        if agent_first_silence_timeout_seconds <= 0:
+            raise ValueError("agent_first_silence_timeout_seconds must be positive")
         if scenario is None:
-            generator = ScenarioGenerator(agent_definition)
+            generator = ScenarioGenerator(
+                agent_definition,
+                llm_config=(
+                    simulator.llm
+                    if simulator is not None
+                    else _default_simulator_llm_config()
+                ),
+            )
             if topic is None:
                 simulator_context = (
                     simulator.instructions
@@ -261,6 +292,7 @@ class LiveKitEngine(BaseEngine):
                 "need {run_id} or {test_case_id} in room_name"
             )
         current_run_id = run_id or new_run_id()
+        invocation_id = uuid4().hex[:12]
         report = TestReport()
         for index, persona in enumerate(scenario.dataset):
             persona_ref = persona.version or persona.content_hash()
@@ -274,6 +306,7 @@ class LiveKitEngine(BaseEngine):
                 run_id=current_run_id,
                 test_case_id=test_case_id,
                 index=index,
+                invocation_id=invocation_id,
             )
             case_directory = Path(recording_root) / current_run_id / test_case_id
             outcome = await self._run_single_test_case(
@@ -283,6 +316,7 @@ class LiveKitEngine(BaseEngine):
                 simulator,
                 run_id=current_run_id,
                 test_case_id=test_case_id,
+                invocation_id=invocation_id,
                 room_name=room_name,
                 case_directory=case_directory,
                 record_audio=record_audio,
@@ -294,11 +328,13 @@ class LiveKitEngine(BaseEngine):
                 readiness_timeout=readiness_timeout,
                 cleanup_timeout=cleanup_timeout,
                 conversation_direction=conversation_direction,
+                agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
             )
             metadata = {
                 "engine": "livekit",
                 "run_id": current_run_id,
                 "test_case_id": test_case_id,
+                "invocation_id": invocation_id,
                 "status": outcome.status.value,
                 "room_name": room_name,
                 "room_mode": runtime.room_mode,
@@ -341,6 +377,7 @@ class LiveKitEngine(BaseEngine):
         *,
         run_id: str,
         test_case_id: str,
+        invocation_id: str,
         room_name: str,
         case_directory: Path,
         record_audio: bool,
@@ -352,6 +389,7 @@ class LiveKitEngine(BaseEngine):
         readiness_timeout: float,
         cleanup_timeout: float,
         conversation_direction: str,
+        agent_first_silence_timeout_seconds: float,
     ) -> _CaseOutcome:
         api_key = os.environ.get(runtime.api_key_env)
         api_secret = os.environ.get(runtime.api_secret_env)
@@ -379,6 +417,7 @@ class LiveKitEngine(BaseEngine):
         sip_dispatch_rule_created = False
         vapi_originator: VapiCallOriginator | None = None
         provider_call_id: str | None = None
+        provider_termination_source: str | None = None
         audio_bridge: LiveKitAudioBridge | None = None
         bridge_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
@@ -447,6 +486,7 @@ class LiveKitEngine(BaseEngine):
                                     {
                                         "simulation_run_id": run_id,
                                         "test_case_id": test_case_id,
+                                        "simulator_participant_identity": simulator_identity,
                                         "target_instructions": agent_definition.system_prompt,
                                     },
                                     sort_keys=True,
@@ -537,10 +577,13 @@ class LiveKitEngine(BaseEngine):
             bridge_identity: str | None = None
             if transport.kind == "sip_outbound":
                 identity_template = (
-                    transport.participant_identity or "sip-caller-{test_case_id}"
+                    transport.participant_identity
+                    or "sip-caller-{invocation_id}-{test_case_id}"
                 )
                 sip_participant_identity = identity_template.format(
-                    test_case_id=test_case_id, run_id=run_id
+                    test_case_id=test_case_id,
+                    run_id=run_id,
+                    invocation_id=invocation_id,
                 )
                 if effective_target_identity is None:
                     effective_target_identity = sip_participant_identity
@@ -573,7 +616,14 @@ class LiveKitEngine(BaseEngine):
                     if transport.kind == "vapi_websocket" and isinstance(
                         provider_target, VapiTargetConfig
                     ):
-                        connector = VapiWebSocketConnector.from_target(provider_target)
+                        connector = VapiWebSocketConnector.from_target(
+                            provider_target,
+                            first_message_mode=(
+                                "assistant-waits-for-user"
+                                if conversation_direction == "simulator_first"
+                                else "assistant-speaks-first"
+                            ),
+                        )
                     elif transport.kind == "retell_webcall" and isinstance(
                         provider_target, RetellTargetConfig
                     ):
@@ -734,11 +784,14 @@ class LiveKitEngine(BaseEngine):
             stop_reason = await _wait_for_conversation_end(
                 room,
                 session,
+                customer_agent=customer_agent,
                 target_identity=target.identity,
                 min_turn_messages=min_turn_messages,
                 timeout=max_seconds,
+                conversation_direction=conversation_direction,
+                agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
             )
-            messages = _session_messages(session)
+            messages = _canonical_report_messages(session)
             transcript = "\n".join(
                 f"{message['role']}: {message['content']}" for message in messages
             )
@@ -902,6 +955,7 @@ class LiveKitEngine(BaseEngine):
                             vapi_originator.stop(provider_call_id),
                             timeout=cleanup_timeout,
                         )
+                        provider_termination_source = "sdk_originator_cleanup"
                     await vapi_originator.close()
                 except Exception as exc:
                     _record_cleanup_error(
@@ -990,9 +1044,14 @@ class LiveKitEngine(BaseEngine):
                 provider_call_id_hint=provider_call_id,
                 provider_api_key=_target_api_key(provider_target),
                 provider_api_base_url=_target_evidence_base_url(provider_target),
+                termination_source=provider_termination_source,
             )
             if provider_summary is not None:
                 outcome.evidence.append(provider_summary)
+                if provider_call_id is None:
+                    resolved_call_id = provider_summary.metadata.get("call_id")
+                    if resolved_call_id:
+                        provider_call_id = str(resolved_call_id)
             outcome.provider_artifacts.extend(provider_artifacts)
         outcome.metadata.update(
             {
@@ -1051,10 +1110,7 @@ class LiveKitEngine(BaseEngine):
             voice_provider = os.environ.get(
                 "SIMULATOR_VOICE_PROVIDER", "openai"
             ).lower()
-            llm_config = LLMConfig(
-                model=os.environ.get("SIMULATOR_LLM_MODEL", "gpt-4o-mini"),
-                temperature=0.6,
-            )
+            llm_config = _default_simulator_llm_config()
             stt_config = STTConfig(
                 provider=voice_provider,
                 model=os.environ.get("SIMULATOR_STT_MODEL", "gpt-4o-mini-transcribe"),
@@ -1178,9 +1234,12 @@ async def _wait_for_conversation_end(
     room: rtc.Room,
     session: AgentSession,
     *,
+    customer_agent: _TestRunnerAgent,
     target_identity: str,
     min_turn_messages: int,
     timeout: float,
+    conversation_direction: str,
+    agent_first_silence_timeout_seconds: float,
 ) -> str:
     closed = asyncio.Event()
     target_disconnected = asyncio.Event()
@@ -1194,14 +1253,24 @@ async def _wait_for_conversation_end(
 
     session.on("close", on_close)
     room.on("participant_disconnected", on_participant_disconnected)
-    close_task = asyncio.create_task(closed.wait())
-    disconnect_task = asyncio.create_task(target_disconnected.wait())
-    minimum_task = asyncio.create_task(
-        _wait_for_minimum_messages(session, min_turn_messages)
-    )
+    tasks = {
+        "closed": asyncio.create_task(closed.wait()),
+        "target_disconnected": asyncio.create_task(target_disconnected.wait()),
+        "minimum_messages_reached": asyncio.create_task(
+            _wait_for_minimum_messages(session, min_turn_messages)
+        ),
+        "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
+    }
+    if conversation_direction == "agent_first":
+        tasks["conversation_silence_timeout"] = asyncio.create_task(
+            _wait_for_agent_first_silence(
+                session,
+                timeout_seconds=agent_first_silence_timeout_seconds,
+            )
+        )
     try:
         done, pending = await asyncio.wait(
-            {close_task, disconnect_task, minimum_task},
+            set(tasks.values()),
             timeout=timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
@@ -1212,11 +1281,18 @@ async def _wait_for_conversation_end(
         if not done:
             session.shutdown(drain=False)
             return "timeout"
-        if disconnect_task in done:
-            session.shutdown(drain=False)
-            return "target_disconnected"
-        if minimum_task in done:
-            return "minimum_messages_reached"
+        for reason in (
+            "simulator_end_call",
+            "target_disconnected",
+            "conversation_silence_timeout",
+            "minimum_messages_reached",
+            "closed",
+        ):
+            task = tasks.get(reason)
+            if task is not None and task in done:
+                if reason in {"target_disconnected", "conversation_silence_timeout"}:
+                    session.shutdown(drain=False)
+                return "session_closed" if reason == "closed" else reason
         return "session_closed"
     finally:
         _remove_room_listener(
@@ -1224,6 +1300,30 @@ async def _wait_for_conversation_end(
             "participant_disconnected",
             on_participant_disconnected,
         )
+
+
+async def _wait_for_agent_first_silence(
+    session: AgentSession,
+    *,
+    timeout_seconds: float,
+) -> None:
+    last_signature: tuple[tuple[str, str], ...] = ()
+    last_change = asyncio.get_running_loop().time()
+    while True:
+        messages = _session_messages(session)
+        signature = tuple(
+            (message["role"], message["content"]) for message in messages
+        )
+        if signature != last_signature:
+            last_signature = signature
+            last_change = asyncio.get_running_loop().time()
+        roles = {message["role"] for message in messages if message["content"]}
+        if (
+            {"user", "assistant"}.issubset(roles)
+            and asyncio.get_running_loop().time() - last_change >= timeout_seconds
+        ):
+            return
+        await asyncio.sleep(0.1)
 
 
 async def _wait_for_minimum_messages(
@@ -1253,6 +1353,17 @@ def _session_messages(session: AgentSession) -> list[dict[str, str]]:
                 continue
         messages.append(current)
     return messages
+
+
+def _canonical_report_messages(session: AgentSession) -> list[dict[str, str]]:
+    role_map = {"assistant": "user", "user": "assistant"}
+    return [
+        {
+            "role": role_map.get(message["role"], message["role"]),
+            "content": message["content"],
+        }
+        for message in _session_messages(session)
+    ]
 
 
 def _has_role_alternation(messages: list[dict[str, str]]) -> bool:
@@ -1361,6 +1472,14 @@ def _target_evidence_base_url(target: VoiceProviderTarget | None) -> str | None:
     return None
 
 
+def _default_simulator_llm_config() -> LLMConfig:
+    return LLMConfig(
+        provider=os.environ.get("SIMULATOR_LLM_PROVIDER", "openai"),
+        model=os.environ.get("SIMULATOR_LLM_MODEL", "gpt-4o-mini"),
+        temperature=0.6,
+    )
+
+
 def _resolve_livekit_runtime(
     agent_definition: AgentDefinition,
     runtime: LiveKitSimulatorRuntime | None,
@@ -1385,15 +1504,24 @@ def _resolve_room_name(
     run_id: str,
     test_case_id: str,
     index: int,
+    invocation_id: str,
 ) -> str:
+    rendered = runtime.room_name.format(
+        run_id=run_id,
+        test_case_id=test_case_id,
+        index=index,
+        invocation_id=invocation_id,
+    )
     if runtime.room_mode == "external":
-        return runtime.room_name.format(
-            run_id=run_id,
-            test_case_id=test_case_id,
-            index=index,
-        )
-    prefix = _SAFE_ROOM.sub("-", runtime.room_name).strip("-._")
-    return f"{prefix[:48]}-{test_case_id[-12:]}"
+        return rendered
+    prefix = _SAFE_ROOM.sub("-", rendered).strip("-._") or "simulation"
+    suffix_parts = []
+    if invocation_id not in prefix:
+        suffix_parts.append(invocation_id)
+    if test_case_id not in prefix:
+        suffix_parts.append(test_case_id[-12:])
+    suffix = "-" + "-".join(suffix_parts) if suffix_parts else ""
+    return f"{prefix[: 255 - len(suffix)]}{suffix}"
 
 
 def _has_room_template(room_name: str) -> bool:
@@ -1497,13 +1625,6 @@ async def _ensure_sip_inbound_dispatch(
     tear it down.
     """
 
-    from livekit.protocol.sip import (
-        CreateSIPDispatchRuleRequest,
-        ListSIPDispatchRuleRequest,
-        SIPDispatchRule,
-        SIPDispatchRuleDirect,
-    )
-
     existing = await api_client.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
     if transport.dispatch_rule_name:
         for rule in existing.items:
@@ -1553,8 +1674,6 @@ async def _ensure_sip_inbound_dispatch(
 
 
 async def _delete_sip_dispatch_rule(api_client: api.LiveKitAPI, rule_id: str) -> None:
-    from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
-
     await api_client.sip.delete_sip_dispatch_rule(
         DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
     )
@@ -1572,16 +1691,23 @@ async def _collect_provider_evidence(
     provider_call_id_hint: str | None = None,
     provider_api_key: str | None = None,
     provider_api_base_url: str | None = None,
+    termination_source: str | None = None,
 ) -> tuple[EvidenceSourceSummary | None, list[ArtifactManifestEntry]]:
     call_id_hint = provider_call_id_hint
-    caller_phone: str | None = None
+    caller_phone = transport.sip_number if transport.kind == "sip_outbound" else None
+    callee_phone = transport.sip_call_to if transport.kind == "sip_outbound" else None
     if target is not None:
         if call_id_hint is None and config.participant_attribute:
             call_id_hint = target.attributes.get(config.participant_attribute)
-        caller_phone = (
+        caller_phone = caller_phone or (
             target.attributes.get("sip.from")
             or target.attributes.get("sip.fromUser")
             or target.attributes.get("sip.callerNumber")
+        )
+        callee_phone = callee_phone or (
+            target.attributes.get("sip.to")
+            or target.attributes.get("sip.toUser")
+            or target.attributes.get("sip.calledNumber")
         )
     context = EvidenceContext(
         run_id=run_id,
@@ -1590,7 +1716,8 @@ async def _collect_provider_evidence(
         started_at=started_at,
         call_id_hint=call_id_hint,
         caller_phone=caller_phone,
-        callee_phone=transport.sip_number,
+        callee_phone=callee_phone,
+        termination_source=termination_source,
     )
     try:
         if config.provider == "vapi":

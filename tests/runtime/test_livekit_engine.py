@@ -62,12 +62,14 @@ def test_managed_room_names_are_unique_per_run_and_case() -> None:
         run_id="run_a",
         test_case_id="case_aaaaaaaaaaaa",
         index=0,
+        invocation_id="invocation-a",
     )
     second = livekit._resolve_room_name(
         agent,
         run_id="run_a",
         test_case_id="case_bbbbbbbbbbbb",
         index=1,
+        invocation_id="invocation-a",
     )
 
     assert first != second
@@ -200,6 +202,30 @@ def test_two_ten_case_suites_do_not_share_room_names(monkeypatch) -> None:
     assert len(first_rooms) == 10
     assert len(second_rooms) == 10
     assert first_rooms.isdisjoint(second_rooms)
+
+
+def test_report_messages_use_target_perspective_roles() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    text_content="Simulator opens the call.",
+                ),
+                SimpleNamespace(
+                    type="message",
+                    role="user",
+                    text_content="Target agent responds.",
+                ),
+            ]
+        )
+    )
+
+    assert livekit._canonical_report_messages(session) == [
+        {"role": "user", "content": "Simulator opens the call."},
+        {"role": "assistant", "content": "Target agent responds."},
+    ]
 
 
 def test_target_audio_selection_uses_explicit_identity() -> None:
@@ -377,6 +403,9 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
             calls.append(("inactive",))
 
     class FakeCustomerAgent:
+        def __init__(self):
+            self.end_requested = asyncio.Event()
+
         async def start_session(self, _room, **_kwargs):
             return FakeSession()
 
@@ -416,7 +445,11 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
     assert result.metadata["target_participant_identity"] == "target-agent"
     dispatch = next(call for call in calls if call[0] == "dispatch")
     assert dispatch[1:3] == ("registered-agent", room_name)
-    assert '"target_instructions": "Help the caller."' in dispatch[3]
+    dispatch_metadata = json.loads(dispatch[3])
+    assert dispatch_metadata["target_instructions"] == "Help the caller."
+    assert dispatch_metadata["simulator_participant_identity"] == (
+        "fagi-simulator-" + result.metadata["test_case_id"][-12:]
+    )
     assert ("delete_room", room_name) in calls
     assert ("open",) in calls
 
@@ -494,9 +527,12 @@ def test_conversation_completes_after_minimum_messages() -> None:
         livekit._wait_for_conversation_end(
             FakeRoom(),
             FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
             target_identity="target-agent",
             min_turn_messages=2,
             timeout=1,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
         )
     )
 
@@ -567,6 +603,9 @@ class _FakeSipSession:
 
 
 class _FakeCustomerAgent:
+    def __init__(self) -> None:
+        self.end_requested = asyncio.Event()
+
     async def start_session(self, _room, **_kwargs):
         return _FakeSipSession()
 
@@ -868,7 +907,14 @@ def test_cleanup_logging_redacts_exception_details(caplog) -> None:
 
 
 @pytest.mark.parametrize(
-    ("transport_kind", "connector_name", "identity_prefix", "target"),
+    (
+        "transport_kind",
+        "connector_name",
+        "identity_prefix",
+        "target",
+        "conversation_direction",
+        "first_message_mode",
+    ),
     [
         (
             "vapi_websocket",
@@ -879,6 +925,20 @@ def test_cleanup_logging_redacts_exception_details(caplog) -> None:
                 "assistant_id": "assistant_123",
                 "api_key_env": "TARGET_PROVIDER_KEY",
             },
+            "simulator_first",
+            "assistant-waits-for-user",
+        ),
+        (
+            "vapi_websocket",
+            "VapiWebSocketConnector",
+            "fagi-vapi-bridge-",
+            {
+                "provider": "vapi",
+                "assistant_id": "assistant_123",
+                "api_key_env": "TARGET_PROVIDER_KEY",
+            },
+            "agent_first",
+            "assistant-speaks-first",
         ),
         (
             "retell_webcall",
@@ -889,11 +949,19 @@ def test_cleanup_logging_redacts_exception_details(caplog) -> None:
                 "agent_id": "agent_123",
                 "api_key_env": "TARGET_PROVIDER_KEY",
             },
+            "simulator_first",
+            None,
         ),
     ],
 )
 def test_web_bridge_joins_as_target_without_sip(
-    monkeypatch, transport_kind, connector_name, identity_prefix, target
+    monkeypatch,
+    transport_kind,
+    connector_name,
+    identity_prefix,
+    target,
+    conversation_direction,
+    first_message_mode,
 ) -> None:
     calls: list[tuple] = []
     engine = _install_engine_fakes(monkeypatch, calls)
@@ -930,14 +998,17 @@ def test_web_bridge_joins_as_target_without_sip(
 
     connector_type = getattr(livekit, connector_name)
     received_targets = []
+    connector_kwargs = []
+
+    def _from_target(_cls, provider_target, **kwargs):
+        received_targets.append(provider_target)
+        connector_kwargs.append(kwargs)
+        return SimpleNamespace()
+
     monkeypatch.setattr(
         connector_type,
         "from_target",
-        classmethod(
-            lambda _cls, provider_target: (
-                received_targets.append(provider_target) or SimpleNamespace()
-            )
-        ),
+        classmethod(_from_target),
     )
     monkeypatch.setattr(livekit, "LiveKitAudioBridge", _Bridge)
     monkeypatch.setattr(livekit, "_wait_for_target_audio", _wait_for_target)
@@ -953,6 +1024,7 @@ def test_web_bridge_joins_as_target_without_sip(
             scenario=_scenario(),
             run_id="run_web_bridge",
             min_turn_messages=2,
+            conversation_direction=conversation_direction,
         )
     )
 
@@ -962,6 +1034,11 @@ def test_web_bridge_joins_as_target_without_sip(
     assert result.metadata["provider_call_id"] == "call_web_123"
     assert result.metadata["target_participant_identity"].startswith(identity_prefix)
     assert received_targets[0].provider == target["provider"]
+    assert connector_kwargs == (
+        [{"first_message_mode": first_message_mode}]
+        if first_message_mode is not None
+        else [{}]
+    )
     assert ("bridge_connect",) in calls
     assert ("bridge_close",) in calls
     assert not [call for call in calls if call[0] in {"dispatch", "sip_dial"}]

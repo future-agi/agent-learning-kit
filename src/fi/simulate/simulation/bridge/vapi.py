@@ -24,7 +24,12 @@ class VapiWebSocketConnector(ProviderConnector):
         self._resamplers: dict[int, PCMResampler] = {}
 
     @classmethod
-    def from_target(cls, target: VapiTargetConfig) -> "VapiWebSocketConnector":
+    def from_target(
+        cls,
+        target: VapiTargetConfig,
+        *,
+        first_message_mode: str | None = None,
+    ) -> "VapiWebSocketConnector":
         api_key = os.environ.get(target.api_key_env, "").strip()
         if not api_key:
             raise ValueError("vapi_websocket_config_missing: " + target.api_key_env)
@@ -33,6 +38,7 @@ class VapiWebSocketConnector(ProviderConnector):
                 api_key=api_key,
                 assistant_id=target.assistant_id,
                 api_url=f"{str(target.api_base_url).rstrip('/')}/call",
+                first_message_mode=first_message_mode,
             )
         )
 
@@ -60,20 +66,25 @@ class VapiWebSocketConnector(ProviderConnector):
     async def connect(self) -> None:
         self._session = aiohttp.ClientSession()
         try:
+            payload = {
+                "assistantId": self._config.assistant_id,
+                "transport": {
+                    "provider": "vapi.websocket",
+                    "audioFormat": {
+                        "format": "pcm_s16le",
+                        "container": "raw",
+                        "sampleRate": VAPI_SAMPLE_RATE,
+                    },
+                },
+            }
+            if self._config.first_message_mode:
+                payload["assistantOverrides"] = {
+                    "firstMessageMode": self._config.first_message_mode,
+                }
             async with self._session.post(
                 self._config.api_url,
                 headers={"Authorization": f"Bearer {self._config.api_key}"},
-                json={
-                    "assistantId": self._config.assistant_id,
-                    "transport": {
-                        "provider": "vapi.websocket",
-                        "audioFormat": {
-                            "format": "pcm_s16le",
-                            "container": "raw",
-                            "sampleRate": VAPI_SAMPLE_RATE,
-                        },
-                    },
-                },
+                json=payload,
             ) as response:
                 if response.status != 201:
                     raise RuntimeError(

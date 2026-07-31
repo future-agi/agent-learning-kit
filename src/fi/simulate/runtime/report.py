@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
@@ -111,12 +112,19 @@ class SimulationReport(BaseModel):
             case_status = TestCaseStatus(
                 result.metadata.get("status", TestCaseStatus.COMPLETED.value)
             )
+            raw_failure = result.metadata.get("failure")
+            failure = (
+                SimulationFailure.model_validate(raw_failure)
+                if isinstance(raw_failure, Mapping)
+                else None
+            )
             cases.append(
                 SimulationTestCaseResult(
                     test_case_id=test_case_id,
                     status=case_status,
                     persona=result.persona,
                     result=result,
+                    failure=failure,
                     evidence=[item.model_copy(deep=True) for item in evidence or []],
                 )
             )

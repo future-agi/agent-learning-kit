@@ -51,6 +51,11 @@ def add_voice_arguments(parser: argparse.ArgumentParser) -> None:
         default="simulator_first",
     )
     parser.add_argument(
+        "--agent-first-silence-timeout-seconds",
+        type=float,
+        default=30.0,
+    )
+    parser.add_argument(
         "--write-manifest",
         help="Write a portable manifest; requires --scenario.",
     )
@@ -118,6 +123,9 @@ async def run_voice_command(
             readiness_timeout=args.readiness_timeout,
             cleanup_timeout=args.cleanup_timeout,
             conversation_direction=args.conversation_direction,
+            agent_first_silence_timeout_seconds=(
+                args.agent_first_silence_timeout_seconds
+            ),
             evaluation_enabled=not args.no_eval,
             threshold=args.threshold if args.threshold is not None else 0.7,
         )
@@ -160,6 +168,9 @@ async def run_voice_command(
         readiness_timeout=args.readiness_timeout,
         cleanup_timeout=args.cleanup_timeout,
         conversation_direction=args.conversation_direction,
+        agent_first_silence_timeout_seconds=(
+            args.agent_first_silence_timeout_seconds
+        ),
     )
     evaluation = None if args.no_eval else evaluate_report(manifest, report)
     result = result_builder(

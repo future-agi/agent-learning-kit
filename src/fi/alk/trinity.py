@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
+from ._paths import project_root as discover_project_root
 from .config import current_config
 
 
@@ -549,6 +550,7 @@ V1_LIVE_FAILURE_LAYERS = [
 V1_LIVE_LANE_GUARDED_IMPORT_FILES = [
     "src/fi/simulate/simulation/engines/livekit.py",
     "src/fi/simulate/simulation/generator.py",
+    "src/fi/simulate/simulation/livekit_models.py",
     "src/fi/simulate/recording/room_recorder.py",
     "src/fi/simulate/agent/wrappers/langchain.py",
 ]
@@ -9758,7 +9760,7 @@ def assert_release_ready(project_root: str | Path | None = None) -> dict[str, An
 def _release_project_root(project_root: str | Path | None) -> Path:
     if project_root is not None:
         return Path(project_root).expanduser().resolve()
-    return Path(__file__).resolve().parents[2]
+    return discover_project_root(__file__)
 
 
 def _append_release_check(

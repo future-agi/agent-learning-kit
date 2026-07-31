@@ -3,7 +3,7 @@
 Retell has no PSTN-outbound API. This adapter only supports inbound legs
 (Retell agent dialed our number) and web-call bridge legs (already
 established elsewhere in the run). It matches the Retell call by
-``from_number`` + start-time window through ``POST /list-calls``, then
+``from_number`` + start-time window through ``POST /v3/list-calls``, then
 fetches the full call with ``GET /get-call/{call_id}``. Credentials are
 read from env.
 """
@@ -119,16 +119,24 @@ class RetellEvidenceSource:
         upper = int((started + timedelta(seconds=window)).timestamp() * 1000)
         lower = int((started - timedelta(seconds=window)).timestamp() * 1000)
         filters: dict[str, Any] = {
-            "start_timestamp": {"lower_threshold": lower, "upper_threshold": upper},
+            "start_timestamp": {
+                "type": "range",
+                "op": "bt",
+                "value": [lower, upper],
+            },
         }
         if context.caller_phone:
-            filters["from_number"] = [context.caller_phone]
+            filters["from_number"] = {
+                "type": "string",
+                "op": "eq",
+                "value": context.caller_phone,
+            }
         deadline = (
             asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
         )
         while True:
             response = await self._client.post(
-                "/v2/list-calls",
+                "/v3/list-calls",
                 json={"limit": 5, "filter_criteria": filters},
             )
             response.raise_for_status()

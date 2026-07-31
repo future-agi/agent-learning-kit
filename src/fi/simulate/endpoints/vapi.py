@@ -32,6 +32,10 @@ from .base import (
 )
 
 
+class VapiOriginatorConfigError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class VapiCall:
     call_id: str
@@ -85,6 +89,11 @@ class VapiCallOriginator:
         )
 
     async def start(self) -> VapiCall:
+        phone_response = await self._client.get(
+            f"/phone-number/{self._phone_number_id}",
+            headers=self._headers,
+        )
+        phone_response.raise_for_status()
         response = await self._client.post(
             "/call",
             headers=self._headers,
@@ -182,4 +191,9 @@ class VapiAgentEndpoint:
         return ReconciliationResult(reconciled=True)
 
 
-__all__ = ["VapiAgentEndpoint", "VapiCall", "VapiCallOriginator"]
+__all__ = [
+    "VapiAgentEndpoint",
+    "VapiCall",
+    "VapiCallOriginator",
+    "VapiOriginatorConfigError",
+]

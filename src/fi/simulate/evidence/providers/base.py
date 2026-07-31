@@ -25,6 +25,7 @@ class EvidenceContext:
     call_id_hint: str | None = None
     caller_phone: str | None = None
     callee_phone: str | None = None
+    termination_source: str | None = None
 
 
 @dataclass

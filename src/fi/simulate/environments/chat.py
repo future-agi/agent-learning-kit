@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
+from fi.simulate._logging import redacted_exc_info
 from fi.simulate.agent.generic import wrap_agent
 from fi.simulate.agent.wrapper import AgentInput, AgentResponse, AgentWrapper, SimulationArtifact, SimulationEvent
 from fi.simulate.environment import (
@@ -13,8 +15,12 @@ from fi.simulate.environment import (
 )
 from fi.simulate.simulation.fidelity import attach_fidelity
 from fi.simulate.simulation import goal_machine
+from fi.simulate.runtime.failures import FailureStage, SimulationFailure
+from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
 from fi.simulate.simulation.synthetic import SyntheticDataGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class ChatEnvironment:
@@ -82,8 +88,8 @@ class ChatEnvironment:
 
         results = []
         for index, persona in enumerate(scenario.dataset):
-            results.append(
-                await self._run_persona(
+            try:
+                result = await self._run_persona(
                     wrapper,
                     scenario,
                     persona,
@@ -98,7 +104,36 @@ class ChatEnvironment:
                     auto_execute_tools=auto_execute_tools,
                     stop_when=stop_when,
                 )
-            )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Chat persona execution failed",
+                    exc_info=redacted_exc_info(exc),
+                    extra={
+                        "scenario": scenario.name,
+                        "persona_index": index,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                failure = SimulationFailure(
+                    stage=FailureStage.RUNNING,
+                    code="chat_persona_failed",
+                    message="Chat persona execution failed",
+                    retryable=False,
+                    details={"exception_type": type(exc).__name__},
+                )
+                result = TestCaseResult(
+                    persona=persona,
+                    transcript="",
+                    metadata={
+                        "engine": "local_text",
+                        "modality": modality,
+                        "scenario_name": scenario.name,
+                        "thread_id": f"{scenario.name}-{index}",
+                        "status": TestCaseStatus.FAILED.value,
+                        "failure": failure.model_dump(mode="json", exclude_none=True),
+                    },
+                )
+            results.append(result)
 
         return TestReport(results=results)
 

@@ -100,8 +100,8 @@ class TelephonyTransport(BaseModel):
     participant_identity: Optional[str] = Field(
         None,
         description=(
-            "Template for the SIP participant identity. May contain "
-            "{test_case_id} / {run_id}. Defaults to sip-caller-{test_case_id}."
+            "Template for the SIP participant identity. May contain {test_case_id}, "
+            "{run_id}, or {invocation_id}. The default includes invocation and case IDs."
         ),
     )
     dispatch_rule_name: Optional[str] = Field(

@@ -38,6 +38,7 @@ async def run_voice_simulation(
     readiness_timeout: float = 30.0,
     cleanup_timeout: float = 30.0,
     conversation_direction: str = "simulator_first",
+    agent_first_silence_timeout_seconds: float = 30.0,
 ) -> TestReport:
     """Run a LiveKit voice simulation directly from typed SDK objects."""
 
@@ -63,6 +64,7 @@ async def run_voice_simulation(
         readiness_timeout=readiness_timeout,
         cleanup_timeout=cleanup_timeout,
         conversation_direction=conversation_direction,
+        agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
     )
 
 
@@ -112,6 +114,7 @@ def build_voice_run_manifest(
     readiness_timeout: float = 30.0,
     cleanup_timeout: float = 30.0,
     conversation_direction: str = "simulator_first",
+    agent_first_silence_timeout_seconds: float = 30.0,
     evaluation_enabled: bool = True,
     evaluation_config: Mapping[str, Any] | None = None,
     threshold: float = 0.7,
@@ -143,6 +146,7 @@ def build_voice_run_manifest(
         "readiness_timeout": readiness_timeout,
         "cleanup_timeout": cleanup_timeout,
         "conversation_direction": conversation_direction,
+        "agent_first_silence_timeout_seconds": agent_first_silence_timeout_seconds,
     }
     if typed_runtime is not None:
         simulation["livekit_runtime"] = typed_runtime.model_dump(
@@ -196,7 +200,8 @@ def _voice_required_env(
         elif transport.kind == "retell_webcall" and target is None:
             names.extend(("RETELL_API_KEY", "RETELL_AGENT_ID"))
         elif transport.kind == "sip_inbound":
-            names.append("LIVEKIT_INBOUND_TRUNK_ID")
+            if not transport.dispatch_rule_name:
+                names.append("LIVEKIT_INBOUND_TRUNK_ID")
             if transport.inbound_call_originator == "vapi":
                 names.extend(
                     (

@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import uuid
+from datetime import timedelta, timezone
 from typing import Any
 
 import httpx
@@ -85,9 +86,11 @@ class VapiEvidenceSource:
             raise RuntimeError("vapi_adapter_not_connected")
         context = self._context
         call_id = context.call_id_hint
-        if not call_id:
-            return self._unavailable("vapi_call_id_missing")
         try:
+            if not call_id and self._config.call_id_source == "polling_window":
+                call_id = await self._locate_call_id()
+            if not call_id:
+                return self._unavailable("vapi_call_id_missing")
             call_payload = await self._poll_call(call_id)
         except httpx.HTTPError as exc:
             return self._unavailable(
@@ -101,6 +104,47 @@ class VapiEvidenceSource:
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    async def _locate_call_id(self) -> str | None:
+        assert self._context is not None
+        window = self._config.polling_window_seconds
+        if not window:
+            return None
+        started = self._context.started_at.astimezone(timezone.utc)
+        params = {
+            "limit": 100,
+            "createdAtGt": (started - timedelta(seconds=window)).isoformat(),
+            "createdAtLt": (started + timedelta(seconds=window)).isoformat(),
+        }
+        deadline = (
+            asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
+        )
+        while True:
+            response = await self._client.get("/call", params=params)
+            response.raise_for_status()
+            candidates = _select_vapi_calls(response.json())
+            matches = [
+                call
+                for call in candidates
+                if _matches_call_numbers(
+                    call,
+                    caller=self._context.caller_phone,
+                    callee=self._context.callee_phone,
+                )
+            ]
+            if matches:
+                matches.sort(
+                    key=lambda call: str(
+                        call.get("startedAt") or call.get("createdAt") or ""
+                    ),
+                    reverse=True,
+                )
+                call_id = matches[0].get("id")
+                if call_id:
+                    return str(call_id)
+            if asyncio.get_running_loop().time() >= deadline:
+                return None
+            await asyncio.sleep(self._config.poll_interval_seconds)
 
     async def _poll_call(self, call_id: str) -> dict[str, Any]:
         deadline = (
@@ -203,6 +247,10 @@ class VapiEvidenceSource:
         }
         if self._context.caller_phone:
             metadata["caller_phone"] = redact_phone(self._context.caller_phone)
+        if self._context.termination_source:
+            metadata["termination_source"] = self._context.termination_source
+            if payload.get("endedReason") == "call-deleted":
+                metadata["ended_reason_interpretation"] = "sdk_originator_teardown"
         return EvidenceSourceSummary(
             source_id=self._source_id,
             adapter=_ADAPTER,
@@ -224,6 +272,43 @@ class VapiEvidenceSource:
             metadata={"provider": "vapi", "reason": code, **coerce_json(details)},
         )
         return ProviderFetchResult(summary=summary, artifacts=[])
+
+
+def _select_vapi_calls(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("calls", "results", "items", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _matches_call_numbers(
+    payload: dict[str, Any],
+    *,
+    caller: str | None,
+    callee: str | None,
+) -> bool:
+    if caller:
+        customer = payload.get("customer") or {}
+        if _normalized_phone(customer.get("number")) != _normalized_phone(caller):
+            return False
+    if callee:
+        phone_number = payload.get("phoneNumber") or {}
+        target_number = (
+            phone_number.get("number")
+            or payload.get("phoneNumberNumber")
+            or payload.get("toNumber")
+        )
+        if target_number and _normalized_phone(target_number) != _normalized_phone(callee):
+            return False
+    return True
+
+
+def _normalized_phone(value: Any) -> str:
+    return "".join(character for character in str(value or "") if character.isdigit())
 
 
 def _extract_vapi_recording_urls(payload: dict[str, Any]) -> dict[str, str | None]:

@@ -44,7 +44,7 @@ def test_voice_prompt_preserves_complete_platform_persona_rules() -> None:
     assert "Your specialist appointment was cancelled without notice." in prompt
     assert "Get a new appointment time and confirm the clinic location." in prompt
     assert "Never Break Character" in prompt
-    assert "end_call tool" in prompt
+    assert "endCall tool" in prompt
     assert "Let the situation guide your behavior, not your narration" in prompt
 
 

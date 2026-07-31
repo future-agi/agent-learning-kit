@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .._paths import project_root
 from ..config import API_KEY_ENV_NAMES, SECRET_KEY_ENV_NAMES
 from ._transcript import TranscriptRecorder, redact_env_values
 
@@ -60,7 +61,7 @@ def kit_pythonpath() -> str:
     """The src/ directory that makes ``fi.alk`` importable in a
     worker subprocess (injected at spawn time, ARCH §2b Execution)."""
 
-    return str(Path(__file__).resolve().parents[2])
+    return str(project_root(__file__) / "src")
 
 
 @dataclasses.dataclass
