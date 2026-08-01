@@ -1042,3 +1042,80 @@ def test_web_bridge_joins_as_target_without_sip(
     assert ("bridge_connect",) in calls
     assert ("bridge_close",) in calls
     assert not [call for call in calls if call[0] in {"dispatch", "sip_dial"}]
+
+
+def _dispatch_rule(rule_id: str, name: str, trunk_id: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        sip_dispatch_rule_id=rule_id, name=name, trunk_ids=[trunk_id], rule=None
+    )
+
+
+class _StubSipService:
+    """Minimal SIP surface for exercising dispatch-rule provisioning."""
+
+    def __init__(self, existing):
+        self.existing = list(existing)
+        self.deleted: list[str] = []
+        self.created: list[str] = []
+
+    async def list_sip_dispatch_rule(self, _request):
+        return SimpleNamespace(items=list(self.existing))
+
+    async def delete_sip_dispatch_rule(self, request):
+        self.deleted.append(request.sip_dispatch_rule_id)
+        self.existing = [
+            r
+            for r in self.existing
+            if r.sip_dispatch_rule_id != request.sip_dispatch_rule_id
+        ]
+
+    async def create_sip_dispatch_rule(self, request):
+        self.created.append(request.name)
+        return SimpleNamespace(sip_dispatch_rule_id="SDR_new")
+
+
+def _dispatch_client(existing):
+    sip = _StubSipService(existing)
+    return SimpleNamespace(sip=sip), sip
+
+
+def test_sip_inbound_dispatch_reclaims_own_orphaned_rule(monkeypatch):
+    """A rule this SDK left behind must not block later runs.
+
+    Without this, one crashed run poisons the project until a human
+    deletes the leftover rule by hand.
+    """
+    monkeypatch.setenv("LIVEKIT_INBOUND_TRUNK_ID", "ST_trunk")
+    orphan = _dispatch_rule("SDR_orphan", "sim-inbound-abandoned-room", "ST_trunk")
+    client, sip = _dispatch_client([orphan])
+
+    rule_id, created = asyncio.run(
+        livekit._ensure_sip_inbound_dispatch(
+            client,
+            transport=livekit.TelephonyTransport(kind="sip_inbound"),
+            room_name="fresh-room",
+        )
+    )
+
+    assert sip.deleted == ["SDR_orphan"]
+    assert rule_id == "SDR_new"
+    assert created is True
+
+
+def test_sip_inbound_dispatch_refuses_foreign_rule(monkeypatch):
+    """Routing we did not create is never silently deleted."""
+    monkeypatch.setenv("LIVEKIT_INBOUND_TRUNK_ID", "ST_trunk")
+    foreign = _dispatch_rule("SDR_theirs", "production-inbound", "ST_trunk")
+    client, sip = _dispatch_client([foreign])
+
+    with pytest.raises(RuntimeError, match="sip_inbound_route_conflict"):
+        asyncio.run(
+            livekit._ensure_sip_inbound_dispatch(
+                client,
+                transport=livekit.TelephonyTransport(kind="sip_inbound"),
+                room_name="fresh-room",
+            )
+        )
+
+    assert sip.deleted == []
+    assert sip.created == []

@@ -51,7 +51,12 @@ CASES = {
             "PSTN_CALLER_NUMBER",
             "LIVEKIT_TARGET_PHONE_NUMBER",
         ),
-        "A working LiveKit outbound trunk and a phone number answered by the target LiveKit agent.",
+        "A working LiveKit outbound trunk, and a phone number that already routes "
+        "to the target agent. Unlike 1.2.1, this case provisions no routing: it "
+        "dials LIVEKIT_TARGET_PHONE_NUMBER and expects an agent to answer, so a "
+        "standing inbound trunk + dispatch rule for that number must already "
+        "exist (a real deployment has this; a bare test project does not). "
+        "PSTN_CALLER_NUMBER must differ from the target number.",
     ),
     "1.1.2": VoiceCase(
         "1.1.2",
