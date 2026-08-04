@@ -1,18 +1,49 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 
 from fi.alk import simulate
 
-_COMMON_ENV = (
-    "ACCEPTANCE_LIVEKIT_URL",
-    "LIVEKIT_API_KEY",
-    "LIVEKIT_API_SECRET",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_CLOUD_PROJECT",
-    "DEEPGRAM_API_KEY",
-)
+_COMMON_ENV = ("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+_GOOGLE_PROVIDERS = {"gemini", "google", "vertex"}
+_MODEL_DEFAULTS = {
+    "llm": {
+        "gemini": "gemini-2.5-flash-lite",
+        "google": "gemini-2.5-flash-lite",
+        "openai": "gpt-4o",
+        "openai_compatible": "gpt-4o",
+        "vertex": "gemini-2.5-flash-lite",
+    },
+    "stt": {
+        "cartesia": "ink-2",
+        "deepgram": "nova-3",
+        "elevenlabs": "scribe_v2_realtime",
+        "google": "latest_long",
+        "openai": "gpt-4o-mini-transcribe",
+        "openai_compatible": "gpt-4o-mini-transcribe",
+        "vertex": "latest_long",
+    },
+    "tts": {
+        "cartesia": "sonic-3",
+        "deepgram": "aura-2-andromeda-en",
+        "elevenlabs": "eleven_turbo_v2_5",
+        "google": "standard",
+        "openai": "gpt-4o-mini-tts",
+        "openai_compatible": "gpt-4o-mini-tts",
+        "vertex": "standard",
+    },
+}
+_TTS_VOICE_DEFAULTS = {
+    "cartesia": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+    "deepgram": "andromeda",
+    "elevenlabs": "hpp4J3VqNfWAUOO0d1Us",
+    "google": "en-US-Chirp3-HD-Kore",
+    "openai": "alloy",
+    "openai_compatible": "alloy",
+    "vertex": "en-US-Chirp3-HD-Kore",
+}
 
 
 @dataclass(frozen=True)
@@ -26,7 +57,16 @@ class VoiceCase:
 
     @property
     def required_env(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys((*_COMMON_ENV, *self.extra_env)))
+        return tuple(
+            dict.fromkeys(
+                (
+                    _livekit_url_env_name(),
+                    *_COMMON_ENV,
+                    *_simulator_required_env(),
+                    *self.extra_env,
+                )
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -159,10 +199,12 @@ def missing_env(case: VoiceCase) -> list[str]:
 
 def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
     case = CASES[case_id]
+    room_override = os.environ.get("ACCEPTANCE_ROOM_NAME_OVERRIDE", "").strip()
     runtime = simulate.LiveKitSimulatorRuntime(
-        url=_env("ACCEPTANCE_LIVEKIT_URL"),
-        room_name=f"acceptance-{case_id.replace('.', '-')}-{run_id}",
+        url=_livekit_url(),
+        room_name=room_override or f"acceptance-{case_id.replace('.', '-')}-{run_id}",
         room_mode="managed",
+        room_name_verbatim=bool(room_override),
     )
     scenario = simulate.Scenario(
         name=f"acceptance-{case_id}",
@@ -177,18 +219,27 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
             )
         ],
     )
+    llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google")
+    stt_provider = os.environ.get("SIMULATOR_STT_PROVIDER", "deepgram")
+    tts_provider = os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram")
     simulator = simulate.SimulatorAgentDefinition(
         llm={
-            "provider": os.environ.get("SIMULATOR_LLM_PROVIDER", "google"),
-            "model": os.environ.get(
-                "SIMULATOR_LLM_MODEL", "gemini-2.5-flash-lite"
+            "provider": llm_provider,
+            "model": _model("llm", llm_provider),
+        },
+        stt={
+            "provider": stt_provider,
+            "model": _model("stt", stt_provider),
+            "language": os.environ.get(
+                "SIMULATOR_STT_LANGUAGE",
+                "en-US" if stt_provider.lower() in _GOOGLE_PROVIDERS else "en",
             ),
         },
-        stt={"provider": "deepgram", "model": "nova-3", "language": "en"},
         tts={
-            "provider": "deepgram",
-            "model": "aura-2-andromeda-en",
-            "voice": "andromeda",
+            "provider": tts_provider,
+            "model": _model("tts", tts_provider),
+            "voice": os.environ.get("SIMULATOR_TTS_VOICE")
+            or _TTS_VOICE_DEFAULTS.get(tts_provider.lower(), "alloy"),
         },
     )
     agent = _build_agent(case_id)
@@ -198,8 +249,49 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
         scenario=scenario,
         simulator=simulator,
         conversation_direction=case.conversation_direction,
-        max_seconds=150.0 if "telephony" in case.description.lower() else 120.0,
+        max_seconds=(
+            210.0
+            if {stt_provider.lower(), tts_provider.lower()} & _GOOGLE_PROVIDERS
+            else 150.0
+            if "telephony" in case.description.lower()
+            else 120.0
+        ),
     )
+
+
+def _simulator_required_env() -> tuple[str, ...]:
+    llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google").lower()
+    voice_providers = {
+        os.environ.get("SIMULATOR_STT_PROVIDER", "deepgram").lower(),
+        os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram").lower(),
+    }
+    providers = {llm_provider, *voice_providers}
+    required: list[str] = []
+    if llm_provider in _GOOGLE_PROVIDERS:
+        if os.environ.get("GEMINI_API_KEY"):
+            required.append("GEMINI_API_KEY")
+        elif os.environ.get("GOOGLE_API_KEY"):
+            required.append("GOOGLE_API_KEY")
+        else:
+            required.extend(("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"))
+    if (
+        voice_providers & {"google", "vertex"}
+        and "GOOGLE_APPLICATION_CREDENTIALS" not in required
+    ):
+        required.append("GOOGLE_APPLICATION_CREDENTIALS")
+    if "deepgram" in providers:
+        required.append("DEEPGRAM_API_KEY")
+    if "cartesia" in providers:
+        required.append("CARTESIA_API_KEY")
+    if "openai" in providers or "openai_compatible" in providers:
+        required.append("OPENAI_API_KEY")
+    if "elevenlabs" in providers:
+        required.append(
+            "ELEVEN_API_KEY"
+            if os.environ.get("ELEVEN_API_KEY")
+            else "ELEVENLABS_API_KEY"
+        )
+    return tuple(required)
 
 
 def _build_agent(case_id: str) -> simulate.AgentDefinition:
@@ -217,13 +309,17 @@ def _build_agent(case_id: str) -> simulate.AgentDefinition:
             target_number_env="LIVEKIT_TARGET_PHONE_NUMBER",
         )
     if case_id == "1.2.1":
+        transport: dict = {
+            "kind": "sip_inbound",
+            "readiness_timeout_seconds": 120,
+        }
+        rule_name = os.environ.get("LIVEKIT_INBOUND_DISPATCH_RULE_NAME", "").strip()
+        if rule_name:
+            transport["dispatch_rule_name"] = rule_name
         return simulate.AgentDefinition(
             name="livekit-originating-target",
             system_prompt=_env("LIVEKIT_TARGET_SYSTEM_PROMPT"),
-            transport={
-                "kind": "sip_inbound",
-                "readiness_timeout_seconds": 120,
-            },
+            transport=transport,
         )
     if case_id in {"2.1.2", "2.2.2"}:
         return simulate.AgentDefinition(
@@ -321,3 +417,31 @@ def _env(name: str) -> str:
     if not value:
         raise ValueError(f"missing environment variable: {name}")
     return value
+
+
+def _model(kind: str, provider: str) -> str:
+    env_name = f"SIMULATOR_{kind.upper()}_MODEL"
+    return os.environ.get(env_name) or _MODEL_DEFAULTS[kind].get(
+        provider.lower(),
+        _MODEL_DEFAULTS[kind]["openai"],
+    )
+
+
+def _livekit_url_env_name() -> str:
+    return (
+        "LIVEKIT_URL"
+        if not os.environ.get("ACCEPTANCE_LIVEKIT_URL", "").strip()
+        and os.environ.get("LIVEKIT_URL", "").strip()
+        else "ACCEPTANCE_LIVEKIT_URL"
+    )
+
+
+def _livekit_url() -> str:
+    name = _livekit_url_env_name()
+    if name == "LIVEKIT_URL":
+        warnings.warn(
+            "ACCEPTANCE_LIVEKIT_URL is unset; using LIVEKIT_URL",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return _env(name)

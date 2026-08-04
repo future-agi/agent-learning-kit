@@ -212,6 +212,14 @@ class LiveKitSimulatorRuntime(BaseModel):
     url: AnyUrl = Field(..., description="FutureAGI LiveKit WebSocket URL.")
     room_name: str = Field(..., min_length=1)
     room_mode: Literal["external", "managed"] = "managed"
+    room_name_verbatim: bool = Field(
+        False,
+        description=(
+            "When True, use room_name exactly as provided (no invocation/case "
+            "suffix). Required when routing to a pre-existing dispatch rule that "
+            "binds to a fixed room. Only valid for single-persona runs."
+        ),
+    )
     api_key_env: str = Field(
         "LIVEKIT_API_KEY",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",

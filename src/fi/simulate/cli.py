@@ -947,6 +947,11 @@ async def _run_livekit_manifest(
     recording_root = Path(str(simulation.get("recording_root") or "recordings"))
     if not recording_root.is_absolute():
         recording_root = manifest_path.parent / recording_root
+    recording_case_directory = simulation.get("recording_case_directory")
+    if recording_case_directory is not None:
+        recording_case_directory = Path(str(recording_case_directory))
+        if not recording_case_directory.is_absolute():
+            recording_case_directory = manifest_path.parent / recording_case_directory
     return await TestRunner().run_test(
         agent_definition=agent_definition,
         livekit_runtime=livekit_runtime,
@@ -959,6 +964,7 @@ async def _run_livekit_manifest(
         simulation_run_id=simulation.get("run_id"),
         record_audio=bool(simulation.get("record_audio", False)),
         recording_root=recording_root,
+        recording_case_directory=recording_case_directory,
         recorder_sample_rate=int(simulation.get("recorder_sample_rate", 8000)),
         recorder_join_delay=float(simulation.get("recorder_join_delay", 0.2)),
         min_turn_messages=int(simulation.get("min_turn_messages", 8)),

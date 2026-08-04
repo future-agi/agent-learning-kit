@@ -39,6 +39,7 @@ TTSFactory = Callable[[TTSConfig, aiohttp.ClientSession | None], livekit_tts.TTS
 def _import_plugin(name: str) -> ModuleType:
     try:
         import importlib
+
         return importlib.import_module(f"livekit.plugins.{name}")
     except ImportError:
         raise ImportError(
@@ -102,6 +103,23 @@ def _deepgram_stt(
     )
 
 
+def _cartesia_stt(
+    config: STTConfig,
+    http_session: aiohttp.ClientSession | None,
+) -> livekit_stt.STT:
+    cartesia = _import_plugin("cartesia")
+    return cartesia.STT(
+        api_key=_required_env("CARTESIA_API_KEY"),
+        http_session=http_session,
+        model=_provider_model(
+            config.model,
+            default="gpt-4o-mini-transcribe",
+            replacement="ink-2",
+        ),
+        language=config.language or "en",
+    )
+
+
 def _openai_tts(
     config: TTSConfig,
     _http_session: aiohttp.ClientSession | None,
@@ -143,6 +161,28 @@ def _deepgram_tts(
     )
 
 
+def _cartesia_tts(
+    config: TTSConfig,
+    http_session: aiohttp.ClientSession | None,
+) -> livekit_tts.TTS:
+    cartesia = _import_plugin("cartesia")
+    voice = (
+        config.voice
+        if config.voice not in {"alloy", ""}
+        else "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+    )
+    return cartesia.TTS(
+        api_key=_required_env("CARTESIA_API_KEY"),
+        http_session=http_session,
+        model=_provider_model(
+            config.model,
+            default="gpt-4o-mini-tts",
+            replacement="sonic-3",
+        ),
+        voice=voice,
+    )
+
+
 def _google_credentials_kwargs() -> dict[str, object]:
     """Pick Vertex AI vs Gemini API from env — Vertex when possible.
 
@@ -151,9 +191,7 @@ def _google_credentials_kwargs() -> dict[str, object]:
     API when only ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) is set.
     """
 
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get(
-        "VERTEX_PROJECT"
-    )
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get(
         "VERTEX_LOCATION",
         "us-central1",
@@ -188,6 +226,13 @@ def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
         default="gpt-4o",
         replacement="gemini-2.5-flash-lite",
     )
+    if (
+        kwargs.get("vertexai") is True
+        and model.startswith("gemini-3")
+        and not os.environ.get("GOOGLE_CLOUD_LOCATION")
+        and not os.environ.get("VERTEX_LOCATION")
+    ):
+        kwargs["location"] = "global"
     return google.LLM(model=model, temperature=config.temperature, **kwargs)
 
 
@@ -197,10 +242,17 @@ def _google_stt(
 ) -> livekit_stt.STT:
     google = _import_plugin("google")
     kwargs = _google_speech_credentials_kwargs()
-    # Google Cloud Speech doesn't accept the ``model`` name shape the
-    # other STTs use — pass ``languages`` and defaults instead.
+    languages = [
+        language.strip()
+        for language in (config.language or "en-US").split(",")
+        if language.strip()
+    ]
+    # Non-streaming mode lets AgentSession's VAD-backed StreamAdapter defer
+    # the Google request until speech exists. This avoids Google's 400
+    # "Long duration elapsed without audio" during agent-first quiet gaps.
     return google.STT(
-        languages=[config.language or "en-US"],
+        languages=languages or ["en-US"],
+        use_streaming=False,
         **kwargs,
     )
 
@@ -209,17 +261,18 @@ def _google_tts(
     config: TTSConfig,
     _http_session: aiohttp.ClientSession | None,
 ) -> livekit_tts.TTS:
+    from google.cloud import texttospeech
+
     google = _import_plugin("google")
     kwargs = _google_speech_credentials_kwargs()
     voice = (
-        config.voice
-        if config.voice not in {"alloy", ""}
-        else "en-US-Chirp3-HD-Kore"
+        config.voice if config.voice not in {"alloy", ""} else "en-US-Chirp3-HD-Kore"
     )
     language = "-".join(voice.split("-")[:2]) if "-" in voice else "en-US"
     return google.TTS(
         voice_name=voice,
         language=language,
+        audio_encoding=texttospeech.AudioEncoding.LINEAR16,
         **kwargs,
     )
 
@@ -235,6 +288,7 @@ _STT_FACTORIES: dict[str, STTFactory] = {
     "openai": _openai_stt,
     "elevenlabs": _elevenlabs_stt,
     "deepgram": _deepgram_stt,
+    "cartesia": _cartesia_stt,
     "google": _google_stt,
     "vertex": _google_stt,
 }
@@ -242,10 +296,11 @@ _TTS_FACTORIES: dict[str, TTSFactory] = {
     "openai": _openai_tts,
     "elevenlabs": _elevenlabs_tts,
     "deepgram": _deepgram_tts,
+    "cartesia": _cartesia_tts,
     "google": _google_tts,
     "vertex": _google_tts,
 }
-_HTTP_PROVIDERS = {"deepgram", "elevenlabs"}
+_HTTP_PROVIDERS = {"cartesia", "deepgram", "elevenlabs"}
 
 
 def build_livekit_llm(config: LLMConfig) -> livekit_llm.LLM:

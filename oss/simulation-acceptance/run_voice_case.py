@@ -10,6 +10,7 @@ from pathlib import Path
 from voice_cases import CASES, build_inputs, missing_env
 
 from fi.alk import simulate
+from fi.simulate.evaluation import evaluate_agent_report
 from fi.simulate.runtime import new_run_id
 
 
@@ -51,6 +52,7 @@ def main() -> int:
         simulation_run_id=run_id,
         record_audio=True,
         recording_root=output_dir / "recordings",
+        recording_case_directory=output_dir / "recordings",
         min_turn_messages=6,
         max_seconds=inputs.max_seconds,
         connect_timeout=60,
@@ -90,6 +92,7 @@ def main() -> int:
                 simulation_run_id=run_id,
                 record_audio=True,
                 recording_root=output_dir / "recordings",
+                recording_case_directory=output_dir / "recordings",
                 min_turn_messages=6,
                 max_seconds=inputs.max_seconds,
                 connect_timeout=60,
@@ -99,6 +102,7 @@ def main() -> int:
                 agent_first_silence_timeout_seconds=30,
             )
         )
+        evaluation = evaluate_agent_report(report, attach=True)
     finally:
         _finish_livekit_outbound_trigger(trigger)
     report_path = output_dir / "report.json"
@@ -113,13 +117,22 @@ def main() -> int:
                 "known_status": case.status,
                 "status": status,
                 "failure": result.metadata.get("failure"),
+                "evaluation_passed": evaluation.passed,
+                "evaluation_score": evaluation.score,
                 "manifest": str(manifest_path),
                 "report": str(report_path),
             },
             indent=2,
         )
     )
-    return 0 if status == "completed" else 1
+    return _result_exit_code(
+        status=status,
+        evaluation_passed=evaluation.passed,
+    )
+
+
+def _result_exit_code(*, status: str, evaluation_passed: bool) -> int:
+    return 0 if status == "completed" and evaluation_passed else 1
 
 
 def _start_livekit_outbound_trigger(case_id: str) -> subprocess.Popen | None:

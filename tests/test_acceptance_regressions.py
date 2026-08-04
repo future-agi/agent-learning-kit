@@ -10,10 +10,17 @@ import pytest
 
 from fi.alk._paths import project_root
 from fi.alk.studio import _generate
-from fi.simulate.agent.definition import AgentDefinition, LLMConfig, ProviderEvidenceConfig
+from fi.simulate.agent.definition import (
+    AgentDefinition,
+    LLMConfig,
+    ProviderEvidenceConfig,
+)
 from fi.simulate.endpoints.vapi import VapiCallOriginator
 from fi.simulate.evidence.providers.base import EvidenceContext
-from fi.simulate.evidence.providers.vapi import VapiEvidenceSource
+from fi.simulate.evidence.providers.vapi import (
+    VapiEvidenceSource,
+    _extract_vapi_recording_urls,
+)
 from fi.simulate.simulation import generator
 from fi.simulate.simulation.engines import livekit
 
@@ -223,6 +230,135 @@ def test_vapi_teardown_evidence_keeps_raw_reason_and_marks_sdk_source(
     assert summary.metadata["ended_reason_interpretation"] == "sdk_originator_teardown"
 
 
+def test_vapi_recording_download_uses_authenticated_artifact_endpoint() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "api.vapi.ai":
+            assert request.url.path == "/call/call-123/stereo-recording"
+            assert request.headers["Authorization"] == "Bearer test-key"
+            return httpx.Response(
+                302,
+                headers={"Location": "https://storage.example/signed-recording"},
+            )
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, content=b"recording-bytes")
+
+    async def run() -> bytes:
+        client = httpx.AsyncClient(
+            base_url="https://api.vapi.ai",
+            headers={"Authorization": "Bearer test-key"},
+            transport=httpx.MockTransport(handler),
+        )
+        source = VapiEvidenceSource(
+            ProviderEvidenceConfig(
+                provider="vapi",
+                call_id_source="originator_response",
+            ),
+            api_key="test-key",
+            client=client,
+        )
+        try:
+            return await source._get_recording("call-123", "stereo")
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(run()) == b"recording-bytes"
+    assert len(requests) == 2
+
+
+def test_vapi_recording_discovery_supports_current_and_legacy_payloads() -> None:
+    current = _extract_vapi_recording_urls(
+        {
+            "artifact": {
+                "recording": {
+                    "mono": {"combinedUrl": "private-mono"},
+                    "stereoUrl": "private-stereo",
+                }
+            }
+        }
+    )
+    legacy = _extract_vapi_recording_urls(
+        {
+            "artifact": {
+                "recordingUrl": "legacy-mono",
+                "stereoRecordingUrl": "legacy-stereo",
+            }
+        }
+    )
+
+    assert current["combined"] == "private-mono"
+    assert current["stereo"] == "private-stereo"
+    assert legacy["combined"] == "legacy-mono"
+    assert legacy["stereo"] == "legacy-stereo"
+
+
+def test_vapi_evidence_keeps_tool_call_identities(tmp_path: Path) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200))
+    )
+    source = VapiEvidenceSource(
+        ProviderEvidenceConfig(provider="vapi", call_id_source="originator_response"),
+        api_key="test-key",
+        client=client,
+    )
+
+    async def run() -> dict:
+        await source.connect(
+            EvidenceContext(
+                run_id="run-vapi",
+                test_case_id="case-vapi",
+                case_directory=tmp_path,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        summary = source._summarize(
+            {
+                "status": "ended",
+                "messages": [
+                    {
+                        "toolCalls": [
+                            {
+                                "id": "call-end",
+                                "function": {
+                                    "name": "endCall",
+                                    "arguments": {"reason": "resolved"},
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "toolCallResultList": [
+                            {
+                                "toolCallId": "call-end",
+                                "name": "endCall",
+                                "result": "ok",
+                            }
+                        ],
+                    },
+                ],
+            },
+            "call-123",
+            [],
+        )
+        await client.aclose()
+        return summary.metadata
+
+    metadata = asyncio.run(run())
+
+    assert metadata["tool_calls"] == [
+        {
+            "id": "call-end",
+            "name": "endCall",
+            "arguments": {"reason": "resolved"},
+        }
+    ]
+    assert metadata["tool_results"] == [
+        {"tool_call_id": "call-end", "name": "endCall", "result": "ok"}
+    ]
+
+
 def test_vapi_originator_supports_provider_managed_phone_number() -> None:
     requests: list[httpx.Request] = []
 
@@ -296,7 +432,10 @@ def test_platform_agent_updates_version_instead_of_creating_new_definition(
 
     assert reference.agent_definition_id == "agent-123"
     assert reference.agent_version_id == "version-2"
-    assert ("POST", "https://platform.example/simulate/agent-definitions/agent-123/versions/create/") in calls
+    assert (
+        "POST",
+        "https://platform.example/simulate/agent-definitions/agent-123/versions/create/",
+    ) in calls
     assert not any(url.endswith("/agent-definitions/create/") for _, url in calls)
 
 

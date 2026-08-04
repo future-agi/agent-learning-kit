@@ -30,6 +30,7 @@ async def run_voice_simulation(
     simulation_run_id: str | None = None,
     record_audio: bool = False,
     recording_root: str | Path = "recordings",
+    recording_case_directory: str | Path | None = None,
     recorder_sample_rate: int = 8000,
     recorder_join_delay: float = 0.2,
     min_turn_messages: int = 8,
@@ -56,6 +57,7 @@ async def run_voice_simulation(
         simulation_run_id=simulation_run_id,
         record_audio=record_audio,
         recording_root=recording_root,
+        recording_case_directory=recording_case_directory,
         recorder_sample_rate=recorder_sample_rate,
         recorder_join_delay=recorder_join_delay,
         min_turn_messages=min_turn_messages,
@@ -106,6 +108,7 @@ def build_voice_run_manifest(
     simulation_run_id: str | None = None,
     record_audio: bool = False,
     recording_root: str | Path = "recordings",
+    recording_case_directory: str | Path | None = None,
     recorder_sample_rate: int = 8000,
     recorder_join_delay: float = 0.2,
     min_turn_messages: int = 8,
@@ -148,6 +151,8 @@ def build_voice_run_manifest(
         "conversation_direction": conversation_direction,
         "agent_first_silence_timeout_seconds": agent_first_silence_timeout_seconds,
     }
+    if recording_case_directory is not None:
+        simulation["recording_case_directory"] = str(recording_case_directory)
     if typed_runtime is not None:
         simulation["livekit_runtime"] = typed_runtime.model_dump(
             mode="json", exclude_none=True
@@ -162,7 +167,11 @@ def build_voice_run_manifest(
             typed_runtime,
             required_env,
         ),
-        "agent_definition": agent.model_dump(mode="json", exclude_none=True),
+        "agent_definition": agent.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_unset=True,
+        ),
         "scenario": typed_scenario.model_dump(mode="json", exclude_none=True),
         "simulation": simulation,
         "evaluation": {

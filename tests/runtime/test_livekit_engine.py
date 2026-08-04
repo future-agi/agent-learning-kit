@@ -86,6 +86,27 @@ def test_external_multi_case_run_requires_room_template() -> None:
         )
 
 
+def test_verbatim_room_name_rejects_multi_persona_run() -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="room_name_verbatim requires a single-persona scenario",
+    ):
+        asyncio.run(
+            LiveKitEngine().run(
+                agent_definition=_agent(),
+                livekit_runtime=runtime,
+                scenario=_scenario(2),
+            )
+        )
+
+
 def test_missing_credentials_is_typed_failure_not_transcript(monkeypatch) -> None:
     monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
     monkeypatch.delenv("LIVEKIT_API_SECRET", raising=False)
@@ -102,6 +123,43 @@ def test_missing_credentials_is_typed_failure_not_transcript(monkeypatch) -> Non
     assert result.transcript == ""
     assert result.metadata["status"] == CaseStatus.FAILED.value
     assert result.metadata["failure"]["code"] == "livekit_credentials_missing"
+
+
+def test_recording_case_directory_is_used_without_repeating_run_and_case(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured = {}
+    engine = LiveKitEngine()
+
+    async def _fake_run_case(*_args, **kwargs):
+        captured["case_directory"] = kwargs["case_directory"]
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+    case_directory = tmp_path / "recordings"
+
+    asyncio.run(
+        engine.run(
+            agent_definition=_agent(),
+            scenario=_scenario(),
+            run_id="run_direct_recordings",
+            recording_case_directory=case_directory,
+        )
+    )
+
+    assert captured["case_directory"] == case_directory
+
+
+def test_recording_case_directory_rejects_multi_persona_run(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires a single-persona scenario"):
+        asyncio.run(
+            LiveKitEngine().run(
+                agent_definition=_agent(room_name="room-{test_case_id}"),
+                scenario=_scenario(2),
+                recording_case_directory=tmp_path / "recordings",
+            )
+        )
 
 
 def test_default_customer_agent_supports_elevenlabs(monkeypatch) -> None:
@@ -225,6 +283,62 @@ def test_report_messages_use_target_perspective_roles() -> None:
     assert livekit._canonical_report_messages(session) == [
         {"role": "user", "content": "Simulator opens the call."},
         {"role": "assistant", "content": "Target agent responds."},
+    ]
+
+
+def test_report_messages_merge_interrupted_same_role_fragments() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="user",
+                    text_content="Your parcel is",
+                    interrupted=True,
+                ),
+                SimpleNamespace(
+                    type="message",
+                    role="user",
+                    text_content="still in transit.",
+                ),
+                SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    text_content="Thanks.",
+                ),
+            ]
+        )
+    )
+
+    assert livekit._canonical_report_messages(session) == [
+        {"role": "assistant", "content": "Your parcel is still in transit."},
+        {"role": "user", "content": "Thanks."},
+    ]
+
+
+def test_report_messages_preserve_distinct_same_role_turns() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="user",
+                    text_content="First update.",
+                    interrupted=False,
+                ),
+                SimpleNamespace(
+                    type="message",
+                    role="user",
+                    text_content="Second update.",
+                    interrupted=False,
+                ),
+            ]
+        )
+    )
+
+    assert livekit._canonical_report_messages(session) == [
+        {"role": "assistant", "content": "First update."},
+        {"role": "assistant", "content": "Second update."},
     ]
 
 
@@ -405,6 +519,7 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
     class FakeCustomerAgent:
         def __init__(self):
             self.end_requested = asyncio.Event()
+            self.end_requested.set()
 
         async def start_session(self, _room, **_kwargs):
             return FakeSession()
@@ -461,12 +576,11 @@ def test_simulator_subscribes_to_sip_participant_audio(monkeypatch) -> None:
         def __init__(self, **kwargs):
             captured["session_options"] = kwargs
 
-        async def start(self, _agent, *, room, room_input_options, room_output_options):
-            captured["input_options"] = room_input_options
-            captured["output_options"] = room_output_options
+        def on(self, event, callback):
+            captured[event] = callback
 
-        def update_options(self, **kwargs):
-            captured["updated_options"] = kwargs
+        async def start(self, _agent, *, room, room_options):
+            captured["room_options"] = room_options
 
     monkeypatch.setattr(livekit, "AgentSession", FakeSession)
     agent = livekit._TestRunnerAgent(
@@ -477,8 +591,78 @@ def test_simulator_subscribes_to_sip_participant_audio(monkeypatch) -> None:
 
     assert (
         livekit.rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-        in captured["input_options"].participant_kinds
+        in captured["room_options"].participant_kinds
     )
+    assert captured["room_options"].close_on_disconnect is False
+    assert captured["room_options"].text_output is False
+    assert captured["room_options"].audio_input.pre_connect_audio is False
+    assert "turn_handling" in captured["session_options"]
+    assert "allow_interruptions" not in captured["session_options"]
+    assert "min_endpointing_delay" not in captured["session_options"]
+
+
+def test_simulator_collects_normalized_model_usage(monkeypatch) -> None:
+    from livekit.agents.metrics.base import Metadata
+
+    captured = {}
+
+    class FakeSession:
+        def __init__(self, **_kwargs):
+            pass
+
+        def on(self, event, callback):
+            captured[event] = callback
+
+        async def start(self, _agent, *, room, room_options):
+            pass
+
+    monkeypatch.setattr(livekit, "AgentSession", FakeSession)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+    )
+    asyncio.run(agent.start_session(SimpleNamespace()))
+    captured["metrics_collected"](
+        SimpleNamespace(
+            metrics=livekit.metrics.LLMMetrics(
+                label="llm",
+                request_id="request-1",
+                timestamp=1.0,
+                duration=0.2,
+                ttft=0.1,
+                cancelled=False,
+                completion_tokens=5,
+                prompt_tokens=7,
+                prompt_cached_tokens=2,
+                total_tokens=12,
+                tokens_per_second=25.0,
+                metadata=Metadata(
+                    model_provider="google",
+                    model_name="gemini-test",
+                ),
+            )
+        )
+    )
+
+    assert agent.model_usage == [
+        {
+            "type": "llm_usage",
+            "provider": "google",
+            "model": "gemini-test",
+            "input_tokens": 7,
+            "input_cached_tokens": 2,
+            "input_audio_tokens": 0,
+            "input_cached_audio_tokens": 0,
+            "input_text_tokens": 0,
+            "input_cached_text_tokens": 0,
+            "input_image_tokens": 0,
+            "input_cached_image_tokens": 0,
+            "output_tokens": 5,
+            "output_audio_tokens": 0,
+            "output_text_tokens": 0,
+            "session_duration": 0.0,
+        }
+    ]
 
 
 def test_open_conversation_generates_opener_without_reading_situation() -> None:
@@ -496,7 +680,71 @@ def test_open_conversation_generates_opener_without_reading_situation() -> None:
     assert calls == [{}]
 
 
-def test_conversation_completes_after_minimum_messages() -> None:
+def test_end_call_waits_for_minimum_balanced_conversation() -> None:
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    text_content="Hello.",
+                )
+            ]
+        )
+
+        async def aclose(self):
+            raise AssertionError("session must remain open")
+
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=2,
+    )
+    agent._session = FakeSession()
+
+    result = asyncio.run(agent.end_call())
+
+    assert "at least 2 messages" in result
+    assert not agent.end_requested.is_set()
+
+
+def test_end_call_closes_after_minimum_balanced_conversation() -> None:
+    closed = []
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    text_content="Hello.",
+                ),
+                SimpleNamespace(
+                    type="message",
+                    role="user",
+                    text_content="Goodbye.",
+                ),
+            ]
+        )
+
+        async def aclose(self):
+            closed.append(True)
+
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=2,
+    )
+    agent._session = FakeSession()
+
+    result = asyncio.run(agent.end_call())
+
+    assert result == "Conversation ended."
+    assert agent.end_requested.is_set()
+    assert closed == [True]
+
+
+def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
     calls = []
 
     class FakeSession:
@@ -523,21 +771,98 @@ def test_conversation_completes_after_minimum_messages() -> None:
         def off(self, _event, _callback):
             return None
 
-    reason = asyncio.run(
-        livekit._wait_for_conversation_end(
-            FakeRoom(),
-            FakeSession(),
-            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
-            target_identity="target-agent",
-            min_turn_messages=2,
-            timeout=1,
-            conversation_direction="simulator_first",
-            agent_first_silence_timeout_seconds=30,
-        )
+    async def run() -> str:
+        end_requested = asyncio.Event()
+
+        async def end_naturally() -> None:
+            await asyncio.sleep(0.01)
+            end_requested.set()
+
+        task = asyncio.create_task(end_naturally())
+        try:
+            return await livekit._wait_for_conversation_end(
+                FakeRoom(),
+                FakeSession(),
+                customer_agent=SimpleNamespace(end_requested=end_requested),
+                target_identity="target-agent",
+                min_turn_messages=2,
+                timeout=1,
+                conversation_direction="simulator_first",
+                agent_first_silence_timeout_seconds=30,
+            )
+        finally:
+            await task
+
+    reason = asyncio.run(run())
+
+    assert reason == "simulator_end_call"
+    assert calls == []
+
+
+def test_safe_provider_error_details_include_sip_status_metadata() -> None:
+    error = SimpleNamespace(
+        code="failed_precondition",
+        status=412,
+        metadata={"sip_status_code": "486", "private": "do-not-copy"},
     )
 
-    assert reason == "minimum_messages_reached"
-    assert calls == []
+    details = livekit._safe_provider_error_details(
+        error,
+        operation="sip_dial",
+    )
+
+    assert details == {
+        "operation": "sip_dial",
+        "exception_type": "SimpleNamespace",
+        "provider_code": "failed_precondition",
+        "http_status": 412,
+        "sip_status_code": "486",
+    }
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "messages", "failure_code"),
+    [
+        (
+            "session_closed",
+            [
+                {"role": "assistant", "content": "One"},
+                {"role": "user", "content": "Two"},
+                {"role": "assistant", "content": "Three"},
+                {"role": "user", "content": "Four"},
+                {"role": "assistant", "content": "Five"},
+                {"role": "user", "content": "Six"},
+            ],
+            "session_closed",
+        ),
+        (
+            "conversation_silence_timeout",
+            [
+                {"role": "assistant", "content": "One"},
+                {"role": "user", "content": "Two"},
+                {"role": "assistant", "content": "Three"},
+                {"role": "user", "content": "Four"},
+                {"role": "assistant", "content": "Five"},
+                {"role": "user", "content": "Six"},
+            ],
+            "conversation_silence_timeout",
+        ),
+    ],
+)
+def test_failed_stop_reasons_never_report_completed(
+    stop_reason: str,
+    messages: list[dict[str, str]],
+    failure_code: str,
+) -> None:
+    outcome = livekit._conversation_outcome(
+        stop_reason,
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == failure_code
 
 
 def test_unsupported_provider_lists_supported_options() -> None:
@@ -554,6 +879,104 @@ def test_unsupported_provider_lists_supported_options() -> None:
             )
         )
     assert "Supported:" in str(exc_info.value)
+
+
+def test_google_tts_uses_linear16_for_non_streaming_synthesis(monkeypatch) -> None:
+    from google.cloud import texttospeech
+
+    from fi.simulate.agent.definition import TTSConfig
+
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google.json")
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda _name: SimpleNamespace(TTS=lambda **kwargs: kwargs),
+    )
+
+    tts = livekit_models._google_tts(
+        TTSConfig(provider="google", voice="en-US-Chirp3-HD-Kore"),
+        None,
+    )
+
+    assert tts["audio_encoding"] == texttospeech.AudioEncoding.LINEAR16
+
+
+def test_google_stt_defers_requests_until_vad_detects_speech(monkeypatch) -> None:
+    from fi.simulate.agent.definition import STTConfig
+
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google.json")
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda _name: SimpleNamespace(STT=lambda **kwargs: kwargs),
+    )
+
+    stt = livekit_models._google_stt(
+        STTConfig(provider="google", language="en-US, es-ES"),
+        None,
+    )
+
+    assert stt["languages"] == ["en-US", "es-ES"]
+    assert stt["use_streaming"] is False
+
+
+def test_gemini_three_defaults_vertex_location_to_global(monkeypatch) -> None:
+    from fi.simulate.agent.definition import LLMConfig
+
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google.json")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project")
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda _name: SimpleNamespace(LLM=lambda **kwargs: kwargs),
+    )
+
+    llm = livekit_models._google_llm(
+        LLMConfig(provider="google", model="gemini-3.6-flash")
+    )
+
+    assert llm["location"] == "global"
+
+
+def test_cartesia_stt_and_tts_use_configured_models(monkeypatch) -> None:
+    from fi.simulate.agent.definition import STTConfig, TTSConfig
+
+    monkeypatch.setenv("CARTESIA_API_KEY", "cartesia-key")
+    plugin = SimpleNamespace(
+        STT=lambda **kwargs: ("stt", kwargs),
+        TTS=lambda **kwargs: ("tts", kwargs),
+    )
+    monkeypatch.setattr(livekit_models, "_import_plugin", lambda _name: plugin)
+
+    stt = livekit_models._cartesia_stt(
+        STTConfig(provider="cartesia", model="ink-2", language="en"),
+        "session",
+    )
+    tts = livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="voice-id"),
+        "session",
+    )
+
+    assert stt == (
+        "stt",
+        {
+            "api_key": "cartesia-key",
+            "http_session": "session",
+            "model": "ink-2",
+            "language": "en",
+        },
+    )
+    assert tts == (
+        "tts",
+        {
+            "api_key": "cartesia-key",
+            "http_session": "session",
+            "model": "sonic-3",
+            "voice": "voice-id",
+        },
+    )
 
 
 class _FakeRoomAudio:
@@ -605,6 +1028,7 @@ class _FakeSipSession:
 class _FakeCustomerAgent:
     def __init__(self) -> None:
         self.end_requested = asyncio.Event()
+        self.end_requested.set()
 
     async def start_session(self, _room, **_kwargs):
         return _FakeSipSession()

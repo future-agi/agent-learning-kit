@@ -13,10 +13,10 @@ from uuid import uuid4
 
 try:
     from livekit import api, rtc
-    from livekit.agents import Agent, AgentSession, function_tool
+    from livekit.agents import Agent, AgentSession, function_tool, metrics
     from livekit.agents.voice import ModelSettings
     from livekit.agents.voice.io import TimedString
-    from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
+    from livekit.agents.voice.room_io import AudioInputOptions, RoomOptions
     from livekit.api import AccessToken, VideoGrants
     from livekit.plugins import silero
     from livekit.protocol.sip import (
@@ -102,12 +102,48 @@ class _CaseOutcome:
     provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
 
 
+def _simulator_turn_handling(
+    *,
+    vad: object | None,
+    allow_interruptions: bool | None = None,
+    min_endpointing_delay: float | None = None,
+    max_endpointing_delay: float | None = None,
+) -> dict[str, object]:
+    return {
+        "turn_detection": "vad" if vad is not None else "stt",
+        "endpointing": {
+            "mode": "fixed",
+            "min_delay": min_endpointing_delay or 0.4,
+            "max_delay": max_endpointing_delay or 2.2,
+        },
+        "interruption": {
+            "enabled": (True if allow_interruptions is None else allow_interruptions),
+            "discard_audio_if_uninterruptible": True,
+            "min_duration": 0.3,
+        },
+        "preemptive_generation": {"enabled": False},
+    }
+
+
 class _TestRunnerAgent(Agent):
-    def __init__(self, persona: Persona, **kwargs):
+    def __init__(
+        self,
+        persona: Persona,
+        *,
+        min_turn_messages: int = 0,
+        **kwargs,
+    ):
+        turn_handling = kwargs.setdefault(
+            "turn_handling",
+            _simulator_turn_handling(vad=kwargs.get("vad")),
+        )
         super().__init__(**kwargs)
         self._persona = persona
+        self._min_turn_messages = min_turn_messages
+        self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
+        self._usage_collector = metrics.ModelUsageCollector()
 
     @function_tool(
         name="endCall",
@@ -117,9 +153,18 @@ class _TestRunnerAgent(Agent):
         ),
     )
     async def end_call(self) -> str:
+        if self._session is None:
+            return "Continue the conversation before ending the call."
+        messages = _session_messages(self._session)
+        if len(messages) < self._min_turn_messages or not _has_role_alternation(
+            messages
+        ):
+            return (
+                "Continue the conversation until both speakers have participated "
+                f"and at least {self._min_turn_messages} messages are complete."
+            )
         self._end_requested.set()
-        if self._session is not None:
-            await self._session.aclose()
+        await self._session.aclose()
         return "Conversation ended."
 
     @property
@@ -130,6 +175,16 @@ class _TestRunnerAgent(Agent):
     def end_requested(self) -> asyncio.Event:
         return self._end_requested
 
+    @property
+    def model_usage(self) -> list[dict[str, object]]:
+        return [
+            usage.model_dump(mode="json")
+            for usage in sorted(
+                self._usage_collector.flatten(),
+                key=lambda usage: (usage.type, usage.provider, usage.model),
+            )
+        ]
+
     async def start_session(
         self,
         room: rtc.Room,
@@ -137,31 +192,18 @@ class _TestRunnerAgent(Agent):
         participant_kinds: list | None = None,
         participant_identity: str | None = None,
     ) -> AgentSession:
-        configured_min = getattr(self, "min_endpointing_delay", None)
-        configured_max = getattr(self, "max_endpointing_delay", None)
-        min_endpointing_delay = (
-            configured_min if isinstance(configured_min, (int, float)) else 0.4
-        )
-        max_endpointing_delay = (
-            configured_max if isinstance(configured_max, (int, float)) else 2.2
-        )
-        session_vad = getattr(self, "vad", None)
         session = AgentSession(
             stt=self.stt,
             llm=self.llm,
             tts=self.tts,
-            vad=session_vad,
-            allow_interruptions=True,
-            min_endpointing_delay=min_endpointing_delay,
-            max_endpointing_delay=max_endpointing_delay,
-            turn_detection="vad"
-            if session_vad is not None
-            else getattr(self, "turn_detection", "stt"),
-            preemptive_generation=False,
-            discard_audio_if_uninterruptible=True,
-            min_interruption_duration=0.3,
+            vad=self.vad,
+            turn_handling=self._session_turn_handling,
         )
         self._session = session
+        session.on(
+            "metrics_collected",
+            lambda event: self._usage_collector.collect(event.metrics),
+        )
         default_kinds = [
             rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
             getattr(
@@ -171,23 +213,22 @@ class _TestRunnerAgent(Agent):
             ),
             rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
         ]
-        input_kwargs: dict = {
+        room_kwargs: dict = {
+            "audio_input": AudioInputOptions(
+                pre_connect_audio=False,
+                pre_connect_audio_timeout=3.0,
+            ),
+            "text_output": False,
+            "close_on_disconnect": False,
             "delete_room_on_close": False,
             "participant_kinds": participant_kinds or default_kinds,
-            "pre_connect_audio": False,
-            "pre_connect_audio_timeout": 3.0,
         }
         if participant_identity:
-            input_kwargs["participant_identity"] = participant_identity
+            room_kwargs["participant_identity"] = participant_identity
         await session.start(
             self,
             room=room,
-            room_input_options=RoomInputOptions(**input_kwargs),
-            room_output_options=RoomOutputOptions(transcription_enabled=False),
-        )
-        session.update_options(
-            min_endpointing_delay=min_endpointing_delay,
-            max_endpointing_delay=max_endpointing_delay,
+            room_options=RoomOptions(**room_kwargs),
         )
         return session
 
@@ -233,6 +274,7 @@ class LiveKitEngine(BaseEngine):
         conversation_direction: str = "simulator_first",
         agent_first_silence_timeout_seconds: float = 30.0,
         recording_root: str | Path = "recordings",
+        recording_case_directory: str | Path | None = None,
         run_id: str | None = None,
         **kwargs,
     ) -> TestReport:
@@ -270,6 +312,8 @@ class LiveKitEngine(BaseEngine):
                 num_personas=num_scenarios,
             )
             scenario = Scenario(name="Generated Scenario", dataset=personas)
+        if runtime.room_name_verbatim and len(scenario.dataset) != 1:
+            raise ValueError("room_name_verbatim requires a single-persona scenario")
         if (
             runtime.room_mode == "external"
             and len(scenario.dataset) > 1
@@ -292,6 +336,10 @@ class LiveKitEngine(BaseEngine):
                 "need {run_id} or {test_case_id} in room_name"
             )
         current_run_id = run_id or new_run_id()
+        if recording_case_directory is not None and len(scenario.dataset) != 1:
+            raise ValueError(
+                "recording_case_directory requires a single-persona scenario"
+            )
         invocation_id = uuid4().hex[:12]
         report = TestReport()
         for index, persona in enumerate(scenario.dataset):
@@ -308,7 +356,11 @@ class LiveKitEngine(BaseEngine):
                 index=index,
                 invocation_id=invocation_id,
             )
-            case_directory = Path(recording_root) / current_run_id / test_case_id
+            case_directory = (
+                Path(recording_case_directory)
+                if recording_case_directory is not None
+                else Path(recording_root) / current_run_id / test_case_id
+            )
             outcome = await self._run_single_test_case(
                 agent_definition,
                 runtime,
@@ -572,6 +624,7 @@ class LiveKitEngine(BaseEngine):
                     else "outbound"
                 ),
                 agent_name=agent_definition.name,
+                min_turn_messages=min_turn_messages,
             )
             sip_participant_identity: str | None = None
             bridge_identity: str | None = None
@@ -792,40 +845,11 @@ class LiveKitEngine(BaseEngine):
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
             )
             messages = _canonical_report_messages(session)
-            transcript = "\n".join(
-                f"{message['role']}: {message['content']}" for message in messages
+            outcome = _conversation_outcome(
+                stop_reason,
+                messages,
+                min_turn_messages=min_turn_messages,
             )
-            if stop_reason == "timeout":
-                outcome = _failure_outcome(
-                    TestCaseStatus.TIMED_OUT,
-                    FailureStage.RUNNING,
-                    "conversation_timeout",
-                    "Conversation exceeded its deadline",
-                    transcript=transcript,
-                    messages=messages,
-                    retryable=True,
-                )
-            elif (
-                stop_reason == "target_disconnected"
-                and len(messages) < min_turn_messages
-                and not _has_role_alternation(messages)
-            ):
-                outcome = _failure_outcome(
-                    TestCaseStatus.FAILED,
-                    FailureStage.RUNNING,
-                    "target_disconnected",
-                    "Target agent disconnected before the conversation completed",
-                    transcript=transcript,
-                    messages=messages,
-                    retryable=True,
-                )
-            else:
-                outcome = _CaseOutcome(
-                    status=TestCaseStatus.COMPLETED,
-                    transcript=transcript,
-                    messages=messages,
-                    metadata={"stop_reason": stop_reason},
-                )
         except asyncio.TimeoutError:
             stage = (
                 FailureStage.READINESS
@@ -1083,6 +1107,12 @@ class LiveKitEngine(BaseEngine):
                 "retell_call_id": (
                     provider_call_id if transport.kind == "retell_webcall" else None
                 ),
+                "simulator_model_usage": (
+                    customer_agent.model_usage
+                    if customer_agent is not None
+                    and hasattr(customer_agent, "model_usage")
+                    else []
+                ),
             }
         )
         return outcome
@@ -1094,6 +1124,7 @@ class LiveKitEngine(BaseEngine):
         *,
         call_type: CallType = "inbound",
         agent_name: str | None = None,
+        min_turn_messages: int = 0,
     ) -> tuple[_TestRunnerAgent, LiveKitModels]:
         customer_prompt = build_voice_simulator_prompt(
             persona,
@@ -1139,16 +1170,21 @@ class LiveKitEngine(BaseEngine):
             stt_config=stt_config,
             tts_config=tts_config,
         )
+        vad = silero.VAD.load()
         agent = _TestRunnerAgent(
             persona=persona,
+            min_turn_messages=min_turn_messages,
             stt=models.stt,
             llm=models.llm,
             tts=models.tts,
-            vad=silero.VAD.load(),
+            vad=vad,
             instructions=instructions,
-            allow_interruptions=allow_interruptions,
-            min_endpointing_delay=min_endpointing_delay,
-            max_endpointing_delay=max_endpointing_delay,
+            turn_handling=_simulator_turn_handling(
+                vad=vad,
+                allow_interruptions=allow_interruptions,
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            ),
             use_tts_aligned_transcript=use_aligned_transcript,
         )
         return agent, models
@@ -1256,9 +1292,6 @@ async def _wait_for_conversation_end(
     tasks = {
         "closed": asyncio.create_task(closed.wait()),
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
-        "minimum_messages_reached": asyncio.create_task(
-            _wait_for_minimum_messages(session, min_turn_messages)
-        ),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
     }
     if conversation_direction == "agent_first":
@@ -1285,7 +1318,6 @@ async def _wait_for_conversation_end(
             "simulator_end_call",
             "target_disconnected",
             "conversation_silence_timeout",
-            "minimum_messages_reached",
             "closed",
         ):
             task = tasks.get(reason)
@@ -1311,31 +1343,21 @@ async def _wait_for_agent_first_silence(
     last_change = asyncio.get_running_loop().time()
     while True:
         messages = _session_messages(session)
-        signature = tuple(
-            (message["role"], message["content"]) for message in messages
-        )
+        signature = tuple((message["role"], message["content"]) for message in messages)
         if signature != last_signature:
             last_signature = signature
             last_change = asyncio.get_running_loop().time()
         roles = {message["role"] for message in messages if message["content"]}
-        if (
-            {"user", "assistant"}.issubset(roles)
-            and asyncio.get_running_loop().time() - last_change >= timeout_seconds
-        ):
+        if {"user", "assistant"}.issubset(
+            roles
+        ) and asyncio.get_running_loop().time() - last_change >= timeout_seconds:
             return
-        await asyncio.sleep(0.1)
-
-
-async def _wait_for_minimum_messages(
-    session: AgentSession,
-    min_turn_messages: int,
-) -> None:
-    while len(_session_messages(session)) < min_turn_messages:
         await asyncio.sleep(0.1)
 
 
 def _session_messages(session: AgentSession) -> list[dict[str, str]]:
     messages = []
+    last_interrupted = False
     for item in session.history.items:
         if getattr(item, "type", None) != "message":
             continue
@@ -1344,14 +1366,23 @@ def _session_messages(session: AgentSession) -> list[dict[str, str]]:
         if role is None or text is None:
             continue
         current = {"role": str(role), "content": str(text)}
+        interrupted = bool(getattr(item, "interrupted", False))
         if messages and messages[-1]["role"] == current["role"]:
             previous = messages[-1]["content"]
-            if current["content"].startswith(previous) or previous.startswith(
-                current["content"]
-            ):
+            if current["content"].startswith(previous):
                 messages[-1] = current
-                continue
+                last_interrupted = interrupted
+            elif previous.startswith(current["content"]):
+                last_interrupted = last_interrupted or interrupted
+            elif last_interrupted or interrupted:
+                messages[-1]["content"] = f"{previous} {current['content']}".strip()
+                last_interrupted = interrupted
+            else:
+                messages.append(current)
+                last_interrupted = interrupted
+            continue
         messages.append(current)
+        last_interrupted = interrupted
     return messages
 
 
@@ -1369,6 +1400,69 @@ def _canonical_report_messages(session: AgentSession) -> list[dict[str, str]]:
 def _has_role_alternation(messages: list[dict[str, str]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
+
+
+def _conversation_outcome(
+    stop_reason: str,
+    messages: list[dict[str, str]],
+    *,
+    min_turn_messages: int,
+) -> _CaseOutcome:
+    transcript = "\n".join(
+        f"{message['role']}: {message['content']}" for message in messages
+    )
+    if stop_reason == "timeout":
+        return _failure_outcome(
+            TestCaseStatus.TIMED_OUT,
+            FailureStage.RUNNING,
+            "conversation_timeout",
+            "Conversation exceeded its deadline",
+            transcript=transcript,
+            messages=messages,
+            retryable=True,
+        )
+    if stop_reason in {"conversation_silence_timeout", "session_closed"}:
+        code = stop_reason
+        message = (
+            "Agent-first conversation stalled after it began"
+            if stop_reason == "conversation_silence_timeout"
+            else "Conversation session closed before a natural end condition"
+        )
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            code,
+            message,
+            transcript=transcript,
+            messages=messages,
+            retryable=True,
+        )
+    if len(messages) < min_turn_messages or not _has_role_alternation(messages):
+        code = (
+            "target_disconnected"
+            if stop_reason == "target_disconnected"
+            else "insufficient_conversation"
+        )
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            code,
+            "Conversation ended before the required alternating turns completed",
+            transcript=transcript,
+            messages=messages,
+            retryable=stop_reason in {"target_disconnected", "session_closed"},
+            details={
+                "stop_reason": stop_reason,
+                "turn_count": str(len(messages)),
+                "minimum_turn_count": str(min_turn_messages),
+            },
+        )
+    return _CaseOutcome(
+        status=TestCaseStatus.COMPLETED,
+        transcript=transcript,
+        messages=messages,
+        metadata={"stop_reason": stop_reason},
+    )
 
 
 def _failure_outcome(
@@ -1512,7 +1606,7 @@ def _resolve_room_name(
         index=index,
         invocation_id=invocation_id,
     )
-    if runtime.room_mode == "external":
+    if runtime.room_mode == "external" or getattr(runtime, "room_name_verbatim", False):
         return rendered
     prefix = _SAFE_ROOM.sub("-", rendered).strip("-._") or "simulation"
     suffix_parts = []
@@ -1606,6 +1700,13 @@ def _safe_provider_error_details(
             details["http_status"] = int(status)
         except (TypeError, ValueError):
             details["http_status"] = str(status)
+    metadata = getattr(exc, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("sip_status_code", "sip_status", "sip-code"):
+            value = metadata.get(key)
+            if value is not None:
+                details["sip_status_code"] = str(value)
+                break
     return details
 
 

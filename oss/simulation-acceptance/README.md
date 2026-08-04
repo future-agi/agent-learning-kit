@@ -17,9 +17,15 @@ cp oss/simulation-acceptance/.env.example .env.acceptance
 set -a && source .env.acceptance && set +a
 ```
 
-The scripts use an explicit scenario and Deepgram for simulator STT/TTS. The simulator LLM defaults to Gemini and can be changed with `SIMULATOR_LLM_PROVIDER` and `SIMULATOR_LLM_MODEL`. Every voice run creates a fresh run ID, a managed invocation-unique room, a manifest, recordings, and a typed report under `artifacts/simulation-acceptance/`.
+The scripts use an explicit scenario. The simulator LLM defaults to Gemini; STT/TTS default to Deepgram. Configure each independently with `SIMULATOR_{LLM,STT,TTS}_PROVIDER` and the matching model variables. STT/TTS support Deepgram, Google, OpenAI, ElevenLabs, and Cartesia (`CARTESIA_API_KEY`; defaults `ink-2` and `sonic-3`). Every voice run creates a fresh run ID, a managed invocation-unique room, a manifest, recordings, and a typed report under `artifacts/simulation-acceptance/`.
+
+For `gemini-3.x` on Vertex, the SDK selects the global endpoint unless `GOOGLE_CLOUD_LOCATION` or `VERTEX_LOCATION` is explicitly set. Google-only voice runs need no Deepgram key and receive a 210-second call budget. Google STT accepts comma-separated languages through `SIMULATOR_STT_LANGUAGE=en-US,es-ES`. Use `start`, not `dev`, for a target worker during measured runs; hot reload can replace a registered worker while a dispatch is pending.
 
 For direct Vapi/Retell cases, copy the target's current system prompt into the matching `*_TARGET_SYSTEM_PROMPT` variable. Provider keys remain environment-only.
+
+Use a real company name in test prompts and greetings. Do not pass instructional placeholders such as "identify yourself as the parcel carrier's support line"; a target can speak that wording literally.
+
+Each single-case harness run writes audio directly under `<output-root>/<run-id>/<case-id>/recordings/audio/`; it does not repeat the run and case directories inside `recordings/`. The SDK report paths are authoritative.
 
 ## Voice commands
 
@@ -45,6 +51,8 @@ Remove `--dry-run` to execute. A blocked case is still runnable for diagnosis; i
 | 3.1.2 | Retell inbound web | Proven | `python .../run_voice_case.py 3.1.2` | Retell API key and agent ID |
 
 Prefix the commands with `uv run --extra livekit` when the virtual environment is not activated.
+
+`status=completed` means the transport produced a sufficiently balanced conversation. It is not a behavioral grade. The harness also attaches `evaluation_passed` and `evaluation_score`; use those fields to gate outcome adherence.
 
 ### Telephony notes
 
@@ -82,6 +90,7 @@ Platform generation accepts 10–20,000 rows. For a cheap smoke, generate 10 onc
 ## External references
 
 - [Vapi List Calls API](https://docs.vapi.ai/api-reference/calls/list)
+- [Vapi private call artifact retrieval](https://docs.vapi.ai/security-and-privacy/retrieve-call-artifacts)
 - [Vapi Get Phone Number API](https://docs.vapi.ai/api-reference/phone-numbers/get)
 - [Retell List Calls API](https://docs.retellai.com/api-references/list-calls)
 - [LiveKit SIP API](https://docs.livekit.io/reference/telephony/sip-api/)

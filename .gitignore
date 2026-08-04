@@ -13,6 +13,7 @@ coverage/
 .DS_Store
 .env
 .env.*
+!**/.env.example
 artifacts/
 !src/fi/simulate/artifacts/
 !src/fi/simulate/artifacts/*.py

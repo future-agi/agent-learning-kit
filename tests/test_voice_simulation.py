@@ -109,6 +109,9 @@ def test_build_voice_run_manifest_serializes_typed_inputs_without_secrets() -> N
         "VAPI_ASSISTANT_ID",
     ]
     assert "VAPI_API_KEY" not in str(manifest["agent_definition"])
+    assert "llm" not in manifest["agent_definition"]
+    assert "stt" not in manifest["agent_definition"]
+    assert "tts" not in manifest["agent_definition"]
 
 
 def test_run_voice_simulation_delegates_typed_inputs(
@@ -131,6 +134,7 @@ def test_run_voice_simulation_delegates_typed_inputs(
             livekit_runtime=_runtime(),
             simulation_run_id="run_direct",
             recording_root=tmp_path,
+            recording_case_directory=tmp_path / "case-recordings",
             record_audio=True,
             max_seconds=90,
         )
@@ -142,6 +146,7 @@ def test_run_voice_simulation_delegates_typed_inputs(
     assert captured["livekit_runtime"] == _runtime()
     assert captured["simulation_run_id"] == "run_direct"
     assert captured["recording_root"] == tmp_path
+    assert captured["recording_case_directory"] == tmp_path / "case-recordings"
     assert captured["max_seconds"] == 90
 
 
@@ -192,6 +197,7 @@ def test_explicit_vapi_target_manifest_keeps_runtime_and_secrets_separate() -> N
         "url": "wss://futureagi-livekit.example.com/",
         "room_name": "sdk-{test_case_id}",
         "room_mode": "managed",
+        "room_name_verbatim": False,
         "api_key_env": "FAGI_LIVEKIT_KEY",
         "api_secret_env": "FAGI_LIVEKIT_SECRET",
     }

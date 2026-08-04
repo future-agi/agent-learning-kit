@@ -39,6 +39,12 @@ from .base import (
 _VAPI_API_BASE = "https://api.vapi.ai"
 _TERMINAL_STATUSES = {"ended", "failed", "cancelled"}
 _ADAPTER = "vapi"
+_RECORDING_ENDPOINTS = {
+    "combined": "mono-recording",
+    "assistant": "assistant-recording",
+    "customer": "customer-recording",
+    "stereo": "stereo-recording",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -175,7 +181,7 @@ class VapiEvidenceSource:
             if not url:
                 continue
             try:
-                data = await self._get_bytes(url)
+                data = await self._get_recording(call_id, label)
             except httpx.HTTPError as exc:
                 logger.warning(
                     "vapi recording download failed",
@@ -203,15 +209,14 @@ class VapiEvidenceSource:
             )
         return entries
 
-    async def _get_bytes(self, url: str) -> bytes:
-        # Recording URLs are pre-signed by Vapi and do NOT accept our
-        # Authorization header — fetch through a bare client instead.
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0)
-        ) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.content
+    async def _get_recording(self, call_id: str, label: str) -> bytes:
+        endpoint = _RECORDING_ENDPOINTS[label]
+        response = await self._client.get(
+            f"/call/{call_id}/{endpoint}",
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        return response.content
 
     def _summarize(
         self,
@@ -226,8 +231,9 @@ class VapiEvidenceSource:
             or payload.get("performanceMetrics")
             or {}
         )
-        transcript_messages = payload.get("messages") or artifact.get("messages") or []
+        transcript_messages = artifact.get("messages") or payload.get("messages") or []
         tool_calls = _extract_tool_calls(transcript_messages)
+        tool_results = _extract_tool_results(transcript_messages)
         cost_summary = _cost_summary(payload)
         metadata: dict[str, Any] = {
             "provider": "vapi",
@@ -237,6 +243,9 @@ class VapiEvidenceSource:
             "started_at": payload.get("startedAt"),
             "ended_at": payload.get("endedAt"),
             "tool_call_count": len(tool_calls),
+            "tool_calls": tool_calls or None,
+            "tool_result_count": len(tool_results),
+            "tool_results": tool_results or None,
             "message_count": len(transcript_messages),
             "latency": coerce_json(performance) or None,
             "cost": cost_summary,
@@ -302,7 +311,9 @@ def _matches_call_numbers(
             or payload.get("phoneNumberNumber")
             or payload.get("toNumber")
         )
-        if target_number and _normalized_phone(target_number) != _normalized_phone(callee):
+        if target_number and _normalized_phone(target_number) != _normalized_phone(
+            callee
+        ):
             return False
     return True
 
@@ -316,12 +327,19 @@ def _extract_vapi_recording_urls(payload: dict[str, Any]) -> dict[str, str | Non
     recording = artifact.get("recording") or payload.get("recording") or {}
     mono = recording.get("mono") if isinstance(recording, dict) else {}
     urls: dict[str, str | None] = {
-        "combined": (mono or {}).get("combinedUrl") if isinstance(mono, dict) else None,
+        "combined": (
+            (mono or {}).get("combinedUrl") if isinstance(mono, dict) else None
+        )
+        or (recording if isinstance(recording, str) else None)
+        or artifact.get("recordingUrl")
+        or payload.get("recordingUrl"),
         "assistant": (mono or {}).get("assistantUrl")
         if isinstance(mono, dict)
         else None,
         "customer": (mono or {}).get("customerUrl") if isinstance(mono, dict) else None,
-        "stereo": recording.get("stereoUrl") if isinstance(recording, dict) else None,
+        "stereo": (recording.get("stereoUrl") if isinstance(recording, dict) else None)
+        or artifact.get("stereoRecordingUrl")
+        or payload.get("stereoRecordingUrl"),
     }
     return urls
 
@@ -331,19 +349,73 @@ def _extract_tool_calls(messages: list[Any]) -> list[dict[str, Any]]:
     for entry in messages:
         if not isinstance(entry, dict):
             continue
-        tool_calls = entry.get("toolCalls") or entry.get("tool_calls") or []
+        tool_calls = (
+            entry.get("toolCalls")
+            or entry.get("tool_calls")
+            or entry.get("toolCallList")
+            or []
+        )
+        if not tool_calls and isinstance(entry.get("toolWithToolCallList"), list):
+            tool_calls = [
+                wrapped.get("toolCall")
+                for wrapped in entry["toolWithToolCallList"]
+                if isinstance(wrapped, dict)
+                and isinstance(wrapped.get("toolCall"), dict)
+            ]
         if not isinstance(tool_calls, list):
             continue
         for call in tool_calls:
             if isinstance(call, dict):
+                function = call.get("function") or {}
                 calls.append(
                     {
-                        "id": call.get("id"),
-                        "name": (call.get("function") or {}).get("name")
-                        or call.get("name"),
+                        key: value
+                        for key, value in {
+                            "id": call.get("id") or call.get("toolCallId"),
+                            "name": function.get("name") or call.get("name"),
+                            "arguments": function.get("arguments")
+                            or call.get("parameters")
+                            or call.get("arguments"),
+                        }.items()
+                        if value is not None
                     }
                 )
     return calls
+
+
+def _extract_tool_results(messages: list[Any]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for entry in messages:
+        if not isinstance(entry, dict):
+            continue
+        candidates = (
+            entry.get("toolCallResultList")
+            or entry.get("tool_call_results")
+            or entry.get("results")
+            or []
+        )
+        if not candidates and entry.get("role") == "tool":
+            candidates = [entry]
+        if not isinstance(candidates, list):
+            continue
+        for result in candidates:
+            if not isinstance(result, dict):
+                continue
+            results.append(
+                {
+                    key: value
+                    for key, value in {
+                        "tool_call_id": result.get("toolCallId")
+                        or result.get("tool_call_id"),
+                        "name": result.get("name"),
+                        "result": result.get("result"),
+                        "content": result.get("content") or result.get("message"),
+                        "error": result.get("error"),
+                    }.items()
+                    if value is not None
+                }
+            )
+    return results
 
 
 def _cost_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
