@@ -50,7 +50,24 @@ def _import_plugin(name: str) -> ModuleType:
 
 def _openai_llm(config: LLMConfig) -> livekit_llm.LLM:
     openai = _import_plugin("openai")
-    return openai.LLM(model=config.model, temperature=config.temperature)
+    kwargs: dict[str, object] = {
+        "model": config.model,
+        "temperature": config.temperature,
+    }
+    api_key = os.environ.get("SIMULATOR_LLM_API_KEY") or os.environ.get(
+        "OPENAI_API_KEY"
+    )
+    base_url = os.environ.get("SIMULATOR_LLM_BASE_URL") or os.environ.get(
+        "OPENAI_BASE_URL"
+    )
+    if api_key:
+        kwargs["api_key"] = api_key
+    if base_url:
+        kwargs["base_url"] = base_url.rstrip("/")
+    header_name = os.environ.get("SIMULATOR_LLM_API_KEY_HEADER")
+    if api_key and header_name:
+        kwargs["extra_headers"] = {header_name: api_key}
+    return openai.LLM(**kwargs)
 
 
 def _openai_stt(

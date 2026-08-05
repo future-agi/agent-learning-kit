@@ -164,7 +164,6 @@ class _TestRunnerAgent(Agent):
                 f"and at least {self._min_turn_messages} messages are complete."
             )
         self._end_requested.set()
-        await self._session.aclose()
         return "Conversation ended."
 
     @property
@@ -843,6 +842,7 @@ class LiveKitEngine(BaseEngine):
                 timeout=max_seconds,
                 conversation_direction=conversation_direction,
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                provider_task=bridge_task,
             )
             messages = _canonical_report_messages(session)
             outcome = _conversation_outcome(
@@ -902,14 +902,10 @@ class LiveKitEngine(BaseEngine):
             )
             if session_to_close is not None:
                 try:
-                    close_session = getattr(session_to_close, "aclose", None)
-                    if close_session is not None:
-                        await asyncio.wait_for(
-                            close_session(),
-                            timeout=cleanup_timeout,
-                        )
-                    else:
-                        session_to_close.shutdown(drain=False)
+                    await _close_agent_session(
+                        session_to_close,
+                        timeout=cleanup_timeout,
+                    )
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -1276,6 +1272,7 @@ async def _wait_for_conversation_end(
     timeout: float,
     conversation_direction: str,
     agent_first_silence_timeout_seconds: float,
+    provider_task: asyncio.Task[None] | None = None,
 ) -> str:
     closed = asyncio.Event()
     target_disconnected = asyncio.Event()
@@ -1293,6 +1290,9 @@ async def _wait_for_conversation_end(
         "closed": asyncio.create_task(closed.wait()),
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
+        "minimum_messages_reached": asyncio.create_task(
+            _wait_for_stable_minimum_messages(session, min_turn_messages)
+        ),
     }
     if conversation_direction == "agent_first":
         tasks["conversation_silence_timeout"] = asyncio.create_task(
@@ -1301,29 +1301,35 @@ async def _wait_for_conversation_end(
                 timeout_seconds=agent_first_silence_timeout_seconds,
             )
         )
+    if provider_task is not None:
+        tasks["provider_disconnected"] = provider_task
     try:
         done, pending = await asyncio.wait(
             set(tasks.values()),
             timeout=timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        for task in pending:
+        owned_pending = {
+            task
+            for name, task in tasks.items()
+            if task in pending and name != "provider_disconnected"
+        }
+        for task in owned_pending:
             task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        if owned_pending:
+            await asyncio.gather(*owned_pending, return_exceptions=True)
         if not done:
-            session.shutdown(drain=False)
             return "timeout"
         for reason in (
             "simulator_end_call",
             "target_disconnected",
             "conversation_silence_timeout",
+            "minimum_messages_reached",
+            "provider_disconnected",
             "closed",
         ):
             task = tasks.get(reason)
             if task is not None and task in done:
-                if reason in {"target_disconnected", "conversation_silence_timeout"}:
-                    session.shutdown(drain=False)
                 return "session_closed" if reason == "closed" else reason
         return "session_closed"
     finally:
@@ -1332,6 +1338,38 @@ async def _wait_for_conversation_end(
             "participant_disconnected",
             on_participant_disconnected,
         )
+
+
+async def _wait_for_stable_minimum_messages(
+    session: AgentSession,
+    min_turn_messages: int,
+    *,
+    quiet_seconds: float = 5.0,
+) -> None:
+    """Finish after the message floor and a short period without a new turn."""
+    if min_turn_messages <= 0:
+        return
+    last_signature: tuple[tuple[str, str], ...] | None = None
+    stable_since: float | None = None
+    loop = asyncio.get_running_loop()
+    while True:
+        messages = _session_messages(session)
+        signature = tuple((message["role"], message["content"]) for message in messages)
+        eligible = len(messages) >= min_turn_messages and _has_role_alternation(
+            messages
+        )
+        participant_speaking = (
+            getattr(session, "agent_state", None) == "speaking"
+            or getattr(session, "user_state", None) == "speaking"
+        )
+        if not eligible or participant_speaking:
+            stable_since = None
+        elif stable_since is None or signature != last_signature:
+            stable_since = loop.time()
+        elif stable_since is not None and loop.time() - stable_since >= quiet_seconds:
+            return
+        last_signature = signature
+        await asyncio.sleep(0.1)
 
 
 async def _wait_for_agent_first_silence(
@@ -1355,9 +1393,25 @@ async def _wait_for_agent_first_silence(
         await asyncio.sleep(0.1)
 
 
-def _session_messages(session: AgentSession) -> list[dict[str, str]]:
-    messages = []
-    last_interrupted = False
+def _session_messages(session: AgentSession) -> list[dict[str, Any]]:
+    """Return normalized transcript messages with real per-item speech timing.
+
+    Each dict carries:
+      role, content: str
+      started_speaking_at, stopped_speaking_at: float | None
+          Real audio timing from ``ChatMessage.metrics`` (seconds since epoch).
+          See livekit.agents.llm.chat_context.MetricsReport.
+      created_at: float
+          Fallback wall-clock stamp from ``ChatMessage.created_at`` (used when
+          the metrics timestamps are missing, e.g. text-only turns).
+      interrupted: bool
+      e2e_latency: float | None
+          Agent-side turn latency, when reported by LiveKit.
+
+    Downstream code turns these into millisecond offsets so the platform can
+    recompute WPM, talk-ratio and interruption counts with real overlap data.
+    """
+    messages: list[dict[str, Any]] = []
     for item in session.history.items:
         if getattr(item, "type", None) != "message":
             continue
@@ -1365,39 +1419,95 @@ def _session_messages(session: AgentSession) -> list[dict[str, str]]:
         text = getattr(item, "text_content", None)
         if role is None or text is None:
             continue
-        current = {"role": str(role), "content": str(text)}
         interrupted = bool(getattr(item, "interrupted", False))
+        created_at = float(getattr(item, "created_at", 0.0) or 0.0)
+        metrics = getattr(item, "metrics", None) or {}
+        started_speaking_at = _maybe_float(metrics.get("started_speaking_at"))
+        stopped_speaking_at = _maybe_float(metrics.get("stopped_speaking_at"))
+        e2e_latency = _maybe_float(metrics.get("e2e_latency"))
+        current: dict[str, Any] = {
+            "role": str(role),
+            "content": str(text),
+            "created_at": created_at,
+            "started_speaking_at": started_speaking_at,
+            "stopped_speaking_at": stopped_speaking_at,
+            "interrupted": interrupted,
+            "e2e_latency": e2e_latency,
+        }
         if messages and messages[-1]["role"] == current["role"]:
-            previous = messages[-1]["content"]
-            if current["content"].startswith(previous):
+            previous = messages[-1]
+            previous_text = previous["content"]
+            if current["content"].startswith(previous_text):
+                # Newer emission extends the previous partial — keep the
+                # earliest start we saw, adopt the latest stop.
+                current["started_speaking_at"] = (
+                    previous.get("started_speaking_at")
+                    or current["started_speaking_at"]
+                )
+                current["created_at"] = previous["created_at"] or created_at
                 messages[-1] = current
-                last_interrupted = interrupted
-            elif previous.startswith(current["content"]):
-                last_interrupted = last_interrupted or interrupted
-            elif last_interrupted or interrupted:
-                messages[-1]["content"] = f"{previous} {current['content']}".strip()
-                last_interrupted = interrupted
+            elif previous_text.startswith(current["content"]):
+                previous["interrupted"] = previous.get("interrupted") or interrupted
+                previous["stopped_speaking_at"] = (
+                    previous.get("stopped_speaking_at")
+                    or current["stopped_speaking_at"]
+                )
+            elif previous.get("interrupted") or interrupted:
+                previous["content"] = (
+                    f"{previous_text} {current['content']}".strip()
+                )
+                previous["interrupted"] = interrupted
+                previous["stopped_speaking_at"] = (
+                    current["stopped_speaking_at"]
+                    or previous.get("stopped_speaking_at")
+                )
             else:
                 messages.append(current)
-                last_interrupted = interrupted
             continue
         messages.append(current)
-        last_interrupted = interrupted
     return messages
 
 
-def _canonical_report_messages(session: AgentSession) -> list[dict[str, str]]:
+def _maybe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
+    """Emit report messages with roles remapped to the test-agent perspective.
+
+    LiveKit reports our simulator as ``assistant`` and the target agent as
+    ``user`` (the SDK connects with role ``agent``); we swap those so the
+    downstream platform sees:
+      role="user"      → simulator / customer
+      role="assistant" → agent-under-test
+    which matches the CallTranscript convention.
+
+    Timing anchors (``started_speaking_at`` / ``stopped_speaking_at``) travel
+    through unchanged so the platform can derive ms offsets.
+    """
     role_map = {"assistant": "user", "user": "assistant"}
-    return [
-        {
-            "role": role_map.get(message["role"], message["role"]),
-            "content": message["content"],
-        }
-        for message in _session_messages(session)
-    ]
+    messages: list[dict[str, Any]] = []
+    for source in _session_messages(session):
+        messages.append(
+            {
+                "role": role_map.get(source["role"], source["role"]),
+                "content": source["content"],
+                "created_at": source.get("created_at"),
+                "started_speaking_at": source.get("started_speaking_at"),
+                "stopped_speaking_at": source.get("stopped_speaking_at"),
+                "interrupted": source.get("interrupted", False),
+                "e2e_latency": source.get("e2e_latency"),
+            }
+        )
+    return messages
 
 
-def _has_role_alternation(messages: list[dict[str, str]]) -> bool:
+def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
 
@@ -1637,6 +1747,27 @@ def _remove_room_listener(room: rtc.Room, event: str, listener) -> None:
         room.off(event, listener)
     except (AttributeError, ValueError):
         logger.debug("LiveKit listener was already removed", extra={"event": event})
+
+
+async def _close_agent_session(session: AgentSession, *, timeout: float) -> None:
+    """Close without cancelling LiveKit's recursive activity teardown on timeout."""
+    close_session = getattr(session, "aclose", None)
+    if close_session is None:
+        session.shutdown(drain=False)
+        return
+    close_task = asyncio.create_task(close_session())
+    try:
+        await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
+    except asyncio.TimeoutError:
+        close_task.add_done_callback(_consume_background_task_result)
+        raise
+
+
+def _consume_background_task_result(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except (Exception, asyncio.CancelledError):
+        pass
 
 
 def _is_not_found(exc: Exception) -> bool:

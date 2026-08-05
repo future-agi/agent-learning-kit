@@ -284,7 +284,11 @@ def _simulator_required_env() -> tuple[str, ...]:
     if "cartesia" in providers:
         required.append("CARTESIA_API_KEY")
     if "openai" in providers or "openai_compatible" in providers:
-        required.append("OPENAI_API_KEY")
+        required.append(
+            "SIMULATOR_LLM_API_KEY"
+            if os.environ.get("SIMULATOR_LLM_API_KEY")
+            else "OPENAI_API_KEY"
+        )
     if "elevenlabs" in providers:
         required.append(
             "ELEVEN_API_KEY"

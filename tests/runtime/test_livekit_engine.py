@@ -708,9 +708,7 @@ def test_end_call_waits_for_minimum_balanced_conversation() -> None:
     assert not agent.end_requested.is_set()
 
 
-def test_end_call_closes_after_minimum_balanced_conversation() -> None:
-    closed = []
-
+def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     class FakeSession:
         history = SimpleNamespace(
             items=[
@@ -728,7 +726,7 @@ def test_end_call_closes_after_minimum_balanced_conversation() -> None:
         )
 
         async def aclose(self):
-            closed.append(True)
+            raise AssertionError("the outer runner owns session teardown")
 
     agent = livekit._TestRunnerAgent(
         persona=_scenario().dataset[0],
@@ -741,7 +739,6 @@ def test_end_call_closes_after_minimum_balanced_conversation() -> None:
 
     assert result == "Conversation ended."
     assert agent.end_requested.is_set()
-    assert closed == [True]
 
 
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
@@ -797,6 +794,164 @@ def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
 
     assert reason == "simulator_end_call"
     assert calls == []
+
+
+def test_provider_disconnect_can_end_a_balanced_conversation() -> None:
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="One"),
+                SimpleNamespace(type="message", role="user", text_content="Two"),
+                SimpleNamespace(type="message", role="assistant", text_content="Three"),
+                SimpleNamespace(type="message", role="user", text_content="Four"),
+                SimpleNamespace(type="message", role="assistant", text_content="Five"),
+                SimpleNamespace(type="message", role="user", text_content="Six"),
+            ]
+        )
+
+        def on(self, _event, _callback):
+            return None
+
+    class FakeRoom:
+        def on(self, _event, _callback):
+            return None
+
+        def off(self, _event, _callback):
+            return None
+
+    async def provider_finished() -> None:
+        await asyncio.sleep(0.01)
+
+    async def run() -> str:
+        return await livekit._wait_for_conversation_end(
+            FakeRoom(),
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            min_turn_messages=6,
+            timeout=1,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
+            provider_task=asyncio.create_task(provider_finished()),
+        )
+
+    reason = asyncio.run(run())
+
+    assert reason == "provider_disconnected"
+    outcome = livekit._conversation_outcome(
+        reason,
+        livekit._session_messages(FakeSession()),
+        min_turn_messages=6,
+    )
+    assert outcome.status == CaseStatus.COMPLETED
+
+
+def test_stable_minimum_messages_ends_conversation_after_quiet_grace() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hello"),
+                SimpleNamespace(type="message", role="user", text_content="Resolved"),
+            ]
+        )
+    )
+
+    asyncio.run(
+        asyncio.wait_for(
+            livekit._wait_for_stable_minimum_messages(
+                session,
+                2,
+                quiet_seconds=0.01,
+            ),
+            timeout=1,
+        )
+    )
+
+
+def test_minimum_message_grace_waits_until_speech_has_finished() -> None:
+    session = SimpleNamespace(
+        agent_state="speaking",
+        user_state="listening",
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hello"),
+                SimpleNamespace(type="message", role="user", text_content="Resolved"),
+            ]
+        ),
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            livekit._wait_for_stable_minimum_messages(
+                session,
+                2,
+                quiet_seconds=0.01,
+            )
+        )
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        session.agent_state = "listening"
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run())
+
+
+def test_conversation_timeout_does_not_start_session_teardown() -> None:
+    calls = []
+
+    class FakeSession:
+        history = SimpleNamespace(items=[])
+
+        def on(self, _event, _callback):
+            return None
+
+        def shutdown(self, *, drain=True):
+            calls.append(("shutdown", drain))
+
+    class FakeRoom:
+        def on(self, _event, _callback):
+            return None
+
+        def off(self, _event, _callback):
+            return None
+
+    reason = asyncio.run(
+        livekit._wait_for_conversation_end(
+            FakeRoom(),
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            min_turn_messages=2,
+            timeout=0.01,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
+        )
+    )
+
+    assert reason == "timeout"
+    assert calls == []
+
+
+def test_session_cleanup_timeout_does_not_cancel_livekit_close_task() -> None:
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+    close_finished = asyncio.Event()
+
+    class FakeSession:
+        async def aclose(self):
+            close_started.set()
+            await allow_close.wait()
+            close_finished.set()
+
+    async def run() -> None:
+        with pytest.raises(asyncio.TimeoutError):
+            await livekit._close_agent_session(FakeSession(), timeout=0.01)
+        assert close_started.is_set()
+        assert not close_finished.is_set()
+        allow_close.set()
+        await asyncio.wait_for(close_finished.wait(), timeout=1)
+
+    asyncio.run(run())
 
 
 def test_safe_provider_error_details_include_sip_status_metadata() -> None:
