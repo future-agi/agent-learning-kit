@@ -54,6 +54,14 @@ _RUN_TEST_ID_ENV = (
     "AGENT_LEARNING_RUN_TEST_ID",
 )
 _HTTP_TIMEOUT_SECONDS = 60.0
+_RECORDING_UPLOAD_TIMEOUT_SECONDS = 300.0
+_CONTENT_TYPE_BY_EXT = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".m4a": "audio/mp4",
+}
 
 
 class FutureAGIResultSink:
@@ -219,6 +227,9 @@ def _submit_via_http(
         failed: list[dict[str, Any]] = []
         for call_id, case in zip(call_execution_ids, report.test_cases):
             payload = _build_result_payload(case)
+            recording_url = _maybe_upload_recording(client, call_id, case)
+            if recording_url:
+                payload["recording_url"] = recording_url
             resp = client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -266,13 +277,24 @@ def _build_result_payload(case) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": _STATUS_MAP.get(case.status.value, "failed"),
     }
-    if case.started_at is not None:
-        payload["started_at"] = case.started_at.isoformat()
-    if case.ended_at is not None:
-        payload["ended_at"] = case.ended_at.isoformat()
-    if case.started_at is not None and case.ended_at is not None:
+
+    started_at = case.started_at
+    ended_at = case.ended_at
+    # Case-level timestamps are unset for LiveKit runs (the engine does not
+    # stamp them). Fall back to the observed speech timing carried on each
+    # message so duration/start-time populate on the platform.
+    if started_at is None or ended_at is None:
+        speech_start, speech_end = _speech_bounds(case)
+        started_at = started_at or speech_start
+        ended_at = ended_at or speech_end
+
+    if started_at is not None:
+        payload["started_at"] = started_at.isoformat()
+    if ended_at is not None:
+        payload["ended_at"] = ended_at.isoformat()
+    if started_at is not None and ended_at is not None:
         payload["duration_seconds"] = max(
-            int((case.ended_at - case.started_at).total_seconds()), 0
+            int((ended_at - started_at).total_seconds()), 0
         )
 
     if case.failure is not None:
@@ -285,6 +307,10 @@ def _build_result_payload(case) -> dict[str, Any]:
         transcript_segments = _extract_transcript_segments(result)
         if transcript_segments:
             payload["transcript"] = transcript_segments
+        if "ended_reason" not in payload:
+            stop_reason = result.metadata.get("stop_reason")
+            if isinstance(stop_reason, str) and stop_reason:
+                payload["ended_reason"] = stop_reason
 
         recording_uri = _extract_recording_uri(result)
         if recording_uri:
@@ -384,6 +410,85 @@ def _extract_transcript_segments(result) -> list[dict[str, Any]]:
             }
         )
     return segments
+
+
+def _maybe_upload_recording(
+    client: httpx.Client, call_execution_id: str, case
+) -> str | None:
+    """Upload the case's audio file (if any) via a multipart POST.
+
+    Prefers a combined/mixed WAV, falls back to output-only then input-only.
+    Skips silently when no on-disk audio exists (e.g. ``record_audio=False``
+    on the runner, or the SDK already surfaced an HTTPS URL via
+    ``result.artifacts``). Returns the persisted ``recording_url`` to attach
+    to the ingestion PATCH, or None.
+    """
+    if case.result is None:
+        return None
+    audio_path = _select_audio_path(case.result)
+    if audio_path is None:
+        return None
+
+    filename = audio_path.name
+    content_type = _CONTENT_TYPE_BY_EXT.get(
+        audio_path.suffix.lower(), "application/octet-stream"
+    )
+    with audio_path.open("rb") as fh:
+        files = {"file": (filename, fh, content_type)}
+        data = {"filename": filename}
+        resp = client.post(
+            f"/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/",
+            files=files,
+            data=data,
+            timeout=_RECORDING_UPLOAD_TIMEOUT_SECONDS,
+        )
+    if resp.is_error:
+        return None
+    body = _unwrap(resp.json())
+    return body.get("recording_url")
+
+
+def _select_audio_path(result) -> Path | None:
+    for candidate in (
+        result.audio_combined_path,
+        result.audio_output_path,
+        result.audio_input_path,
+    ):
+        if not candidate:
+            continue
+        path = Path(str(candidate)).expanduser()
+        if path.exists() and path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _speech_bounds(case) -> tuple[Any, Any]:
+    """Return (start, end) datetimes from a case's message speech timing.
+
+    LiveKit messages carry ``started_speaking_at`` / ``stopped_speaking_at``
+    as epoch seconds; the earliest start and latest stop bound the actual
+    conversation. Returns (None, None) when no timing is available.
+    """
+    if case.result is None:
+        return None, None
+    starts: list[float] = []
+    ends: list[float] = []
+    for msg in case.result.messages:
+        if not isinstance(msg, dict):
+            continue
+        start = msg.get("started_speaking_at") or msg.get("created_at")
+        stop = msg.get("stopped_speaking_at") or msg.get("created_at")
+        if isinstance(start, (int, float)) and start > 0:
+            starts.append(float(start))
+        if isinstance(stop, (int, float)) and stop > 0:
+            ends.append(float(stop))
+    if not starts or not ends:
+        return None, None
+    start_dt = datetime.fromtimestamp(min(starts), tz=timezone.utc)
+    end_dt = datetime.fromtimestamp(max(ends), tz=timezone.utc)
+    if end_dt < start_dt:
+        end_dt = start_dt
+    return start_dt, end_dt
 
 
 def _first_speech_anchor(messages: list[dict[str, Any]]) -> float | None:
