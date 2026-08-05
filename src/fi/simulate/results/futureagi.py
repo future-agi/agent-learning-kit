@@ -316,8 +316,32 @@ def _build_result_payload(case) -> dict[str, Any]:
         if recording_uri:
             payload["recording_url"] = recording_uri
 
-        provider_call_data = result.metadata.get("provider_call_data")
-        if isinstance(provider_call_data, dict) and provider_call_data:
+        provider_call_data: dict[str, Any] = {}
+        existing_pcd = result.metadata.get("provider_call_data")
+        if isinstance(existing_pcd, dict):
+            provider_call_data = dict(existing_pcd)
+
+        # Fold the target agent's provider-reported usage/cost (captured by the
+        # SDK evidence layer — Vapi costBreakdown, Retell call_cost, LiveKit
+        # usage) into provider_call_data under the normalized ``usage.llm``
+        # shape the platform already reads for native voice. This is the
+        # agent-under-test's real usage — not the FutureAGI simulator's.
+        target = _target_provider_usage(case)
+        if target is not None:
+            provider_bucket = dict(provider_call_data.get(target.provider) or {})
+            if target.usage:
+                provider_bucket["usage"] = {
+                    **(provider_bucket.get("usage") or {}),
+                    "llm": target.usage,
+                }
+            if target.raw:
+                provider_bucket.setdefault("costBreakdown", target.raw)
+            if provider_bucket:
+                provider_call_data[target.provider] = provider_bucket
+            if target.cost_cents is not None:
+                payload["costs"] = {"cost_cents": target.cost_cents}
+
+        if provider_call_data:
             payload["provider_call_data"] = provider_call_data
 
         summary = result.metadata.get("call_summary") or result.metadata.get("summary")
@@ -460,6 +484,161 @@ def _select_audio_path(result) -> Path | None:
         if path.exists() and path.is_file() and path.stat().st_size > 0:
             return path
     return None
+
+
+_TARGET_PROVIDERS = ("vapi", "retell", "livekit")
+
+
+class _TargetUsage:
+    """Normalized target-agent usage extracted from one provider's evidence."""
+
+    __slots__ = ("provider", "usage", "cost_cents", "raw")
+
+    def __init__(
+        self,
+        provider: str,
+        usage: dict[str, int] | None,
+        cost_cents: int | None,
+        raw: dict[str, Any] | None,
+    ) -> None:
+        self.provider = provider
+        self.usage = usage
+        self.cost_cents = cost_cents
+        self.raw = raw
+
+
+def _target_provider_usage(case) -> _TargetUsage | None:
+    """Pull the target agent's provider-reported usage from case evidence.
+
+    Provider-agnostic: dispatches to a per-provider extractor because each
+    provider reports cost/tokens in a different shape (Vapi costBreakdown,
+    Retell call_cost + llm_token_usage, LiveKit normalized usage). Returns a
+    ``_TargetUsage`` with a normalized ``usage`` (``prompt_tokens`` /
+    ``completion_tokens`` / ``total_tokens``) and ``cost_cents``, or None when
+    no target evidence surfaced usage (e.g. a black-box self-hosted target).
+    """
+    evidence = getattr(case, "evidence", None) or []
+    for source in evidence:
+        metadata = getattr(source, "metadata", None) or {}
+        provider = metadata.get("provider")
+        if provider not in _TARGET_PROVIDERS:
+            continue
+        extractor = _PROVIDER_USAGE_EXTRACTORS.get(provider)
+        if extractor is None:
+            continue
+        result = extractor(metadata)
+        if result is not None:
+            return result
+    return None
+
+
+def _vapi_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
+    cost = metadata.get("cost") if isinstance(metadata.get("cost"), dict) else {}
+    breakdown = cost.get("breakdown") if isinstance(cost.get("breakdown"), dict) else None
+    usage = None
+    if breakdown:
+        prompt = breakdown.get("llmPromptTokens", breakdown.get("promptTokens"))
+        completion = breakdown.get(
+            "llmCompletionTokens", breakdown.get("completionTokens")
+        )
+        usage = _normalized_usage(prompt, completion)
+    cost_cents = _dollars_to_cents(cost.get("total"))
+    if usage is None and cost_cents is None:
+        return None
+    return _TargetUsage("vapi", usage, cost_cents, breakdown)
+
+
+def _retell_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
+    token_usage = metadata.get("usage")
+    usage = None
+    if isinstance(token_usage, dict):
+        # Retell may report prompt/completion directly, or per-request `values`
+        # (total tokens only, no split).
+        prompt = token_usage.get("num_input_tokens", token_usage.get("prompt_tokens"))
+        completion = token_usage.get(
+            "num_output_tokens", token_usage.get("completion_tokens")
+        )
+        if prompt is not None or completion is not None:
+            usage = _normalized_usage(prompt, completion)
+        else:
+            values = token_usage.get("values")
+            if isinstance(values, list) and values:
+                total = sum(_coerce_int(v) for v in values)
+                if total:
+                    usage = {"total_tokens": total}
+    call_cost = metadata.get("cost") if isinstance(metadata.get("cost"), dict) else {}
+    # Retell reports combined_cost already in cents.
+    cost_cents = _coerce_int_or_none(call_cost.get("combined_cost"))
+    if usage is None and cost_cents is None:
+        return None
+    return _TargetUsage("retell", usage, cost_cents, call_cost or None)
+
+
+def _livekit_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
+    # A LiveKit target that reports a normalized usage blob back through the
+    # evidence layer (self-hosted worker). Absent for black-box targets.
+    usage_blob = metadata.get("usage")
+    if not isinstance(usage_blob, dict):
+        return None
+    llm = usage_blob.get("llm") if isinstance(usage_blob.get("llm"), dict) else usage_blob
+    prompt = llm.get("prompt_tokens", llm.get("promptTokens"))
+    completion = llm.get("completion_tokens", llm.get("completionTokens"))
+    usage = _normalized_usage(prompt, completion)
+    cost_cents = _dollars_to_cents(
+        (metadata.get("cost") or {}).get("total")
+        if isinstance(metadata.get("cost"), dict)
+        else None
+    )
+    if usage is None and cost_cents is None:
+        return None
+    return _TargetUsage("livekit", usage, cost_cents, None)
+
+
+_PROVIDER_USAGE_EXTRACTORS = {
+    "vapi": _vapi_usage,
+    "retell": _retell_usage,
+    "livekit": _livekit_usage,
+}
+
+
+def _normalized_usage(prompt: Any, completion: Any) -> dict[str, int] | None:
+    if prompt is None and completion is None:
+        return None
+    prompt_i = _coerce_int(prompt)
+    completion_i = _coerce_int(completion)
+    return {
+        "prompt_tokens": prompt_i,
+        "completion_tokens": completion_i,
+        "total_tokens": prompt_i + completion_i,
+    }
+
+
+def _dollars_to_cents(value: Any) -> int | None:
+    dollars = _coerce_float(value)
+    return int(round(dollars * 100)) if dollars is not None else None
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _speech_bounds(case) -> tuple[Any, Any]:
