@@ -44,7 +44,8 @@ describe('Protect', () => {
 
     describe('Input and Rule Validation', () => {
         it('should throw an error for invalid inputs', async () => {
-            await expect(protect.protect(null as any)).rejects.toThrow('inputs with value null is of type object, but expected from string or list of strings');
+            // TS side currently accepts a single string only (Python parity gap - Python accepts string | list).
+            await expect(protect.protect(null as any)).rejects.toThrow('inputs with value null is of type object, but expected from string');
         });
 
         it('should throw an error for invalid protectRules', async () => {
@@ -78,19 +79,64 @@ describe('Protect', () => {
                 requestSpy.mockResolvedValue({
                     eval_results: [{ data: ['Not Toxic'], failure: false, reason: '' }]
                 });
-                const result = await protect.protect(mockInput, [{ metric: 'Toxicity' }]);
+                const result = await protect.protect(mockInput, [{ metric: 'toxicity' }]);
                 expect(result.status).toBe('passed');
-                expect(result.completed_rules).toContain('Toxicity');
+                expect(result.completed_rules).toContain('toxicity');
             });
 
             it('should return "failed" when a rule is triggered', async () => {
                 requestSpy.mockResolvedValue({
                     eval_results: [{ data: ['Failed'], failure: true, reason: 'High toxicity score' }]
                 });
-                const result = await protect.protect(mockInput, [{ metric: 'Toxicity' }], 'Blocked', true);
+                const result = await protect.protect(mockInput, [{ metric: 'toxicity' }], 'Blocked', true);
                 expect(result.status).toBe('failed');
                 expect(result.reasons).toBe('High toxicity score');
             });
         });
     });
-}); 
+
+    describe('Canonical + legacy metric parity with Python', () => {
+        const canonical = [
+            'toxicity',
+            'bias_detection',
+            'prompt_injection',
+            'data_privacy_compliance',
+        ];
+        const legacyAliases = [
+            'Toxicity',
+            'Sexism',
+            'Prompt Injection',
+            'Data Privacy',
+            'content_moderation',
+            'security',
+        ];
+
+        beforeEach(() => {
+            requestSpy.mockResolvedValue({
+                eval_results: [{ data: ['Not Toxic'], failure: false, reason: '' }],
+            });
+        });
+
+        it.each(canonical)('accepts canonical metric %s', async (metric) => {
+            const result = await protect.protect('hi', [{ metric }]);
+            expect(result.status).toBe('passed');
+            expect(result.completed_rules).toContain(metric);
+        });
+
+        it.each(legacyAliases)('accepts legacy alias %s with a deprecation warning', async (metric) => {
+            const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            const result = await protect.protect('hi', [{ metric }]);
+            expect(result.status).toBe('passed');
+            expect(warnSpy).toHaveBeenCalledWith(
+                expect.stringContaining(`Protect metric "${metric}" is deprecated`),
+            );
+            warnSpy.mockRestore();
+        });
+
+        it('rejects the previously-supported "Tone" metric', async () => {
+            await expect(
+                protect.protect('hi', [{ metric: 'Tone', contains: ['friendly'] }]),
+            ).rejects.toThrow(/metric in Rule at index 0/);
+        });
+    });
+});

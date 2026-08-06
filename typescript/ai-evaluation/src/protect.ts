@@ -14,6 +14,17 @@ import { BatchRunResult } from './types';
 
 const PROTECT_FLASH_ID = "76";
 
+// Warning fires once per legacy name per process (matches Python's default FutureWarning cadence).
+const DEPRECATED_METRICS: Record<string, string> = {
+    content_moderation: "toxicity",
+    security: "prompt_injection",
+    Toxicity: "toxicity",
+    Sexism: "bias_detection",
+    "Prompt Injection": "prompt_injection",
+    "Data Privacy": "data_privacy_compliance",
+};
+const _warnedMetrics = new Set<string>();
+
 export class Protect {
     public evaluator: Evaluator;
     private metric_map: Record<string, any>;
@@ -34,16 +45,22 @@ export class Protect {
             if (!fiApiKey || !fiSecretKey) {
                 throw new InvalidAuthError("API key or secret key is missing for Protect initialization.");
             }
-            
+
             this.evaluator = new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl });
         }
 
+        // Keep in sync with python/fi/evals/protect.py.
         this.metric_map = {
+            "toxicity": Templates.Toxicity,
+            "bias_detection": Templates.BiasDetection,
+            "prompt_injection": Templates.PromptInjection,
+            "data_privacy_compliance": Templates.DataPrivacyCompliance,
             "Toxicity": Templates.Toxicity,
-            "Tone": Templates.Tone,
-            "Sexism": Templates.Sexist,
+            "Sexism": Templates.BiasDetection,
             "Prompt Injection": Templates.PromptInjection,
             "Data Privacy": Templates.DataPrivacyCompliance,
+            "content_moderation": Templates.Toxicity,
+            "security": Templates.PromptInjection,
         };
     }
 
@@ -55,7 +72,7 @@ export class Protect {
         const templateInfo = this.metric_map[rule.metric];
         const templateConfig: Record<string, any> = { call_type: "protect" };
 
-        if (rule.metric === "Data Privacy") {
+        if (templateInfo === Templates.DataPrivacyCompliance) {
             templateConfig.check_internet = false;
         }
 
@@ -163,7 +180,7 @@ export class Protect {
         let protectRulesCopy: Record<string, any>[] = protectRules ? JSON.parse(JSON.stringify(protectRules)) : [];
 
         if (useFlash && protectRulesCopy.length === 0) {
-            protectRulesCopy = [{ metric: "Toxicity" }];
+            protectRulesCopy = [{ metric: "toxicity" }];
         } else if (useFlash) {
             console.log("Note: When using ProtectFlash, Rules are not considered as it performs binary harmful/not harmful classification only.");
         }
@@ -223,7 +240,6 @@ export class Protect {
         }
 
         const validMetrics = new Set(Object.keys(this.metric_map));
-        const validTypes = new Set(['any', 'all']);
 
         for (let i = 0; i < protectRulesCopy.length; i++) {
             const rule = protectRulesCopy[i];
@@ -236,32 +252,22 @@ export class Protect {
             if (!validMetrics.has(rule.metric)) {
                 throw new InvalidValueType(`metric in Rule at index ${i}`, rule.metric, `one of ${[...validMetrics]}`);
             }
-            
-            const isToneMetric = rule.metric === "Tone";
 
-            if (isToneMetric) {
-                if (!rule.contains) {
-                    throw new MissingRequiredKey(`Rule for Tone metric at index ${i}`, "contains");
-                }
-                if (!Array.isArray(rule.contains) || rule.contains.length === 0) {
-                    throw new InvalidValueType(`'contains' in Tone rule at index ${i}`, rule.contains, "non-empty list");
-                }
-                if (rule.type && !validTypes.has(rule.type)) {
-                    throw new InvalidValueType(`'type' in Tone rule at index ${i}`, rule.type, `one of ${[...validTypes]}`);
-                }
-                if (!rule.type) {
-                    rule.type = "any"; // Default
-                }
-            } else {
-                if (rule.contains) {
-                     throw new SDKException(`'contains' should not be specified for ${rule.metric} metric at index ${i}. Provide it only for 'Tone' metric.`);
-                }
-                 if (rule.type) {
-                    throw new SDKException(`'type' should not be specified for ${rule.metric} metric at index ${i}. Provide it only for 'Tone' metric.`);
-                }
-                rule.contains = ["Failed"];
-                rule.type = "any";
+            if (rule.metric in DEPRECATED_METRICS && !_warnedMetrics.has(rule.metric)) {
+                _warnedMetrics.add(rule.metric);
+                console.warn(
+                    `Protect metric "${rule.metric}" is deprecated and will be removed in a future release. Please use "${DEPRECATED_METRICS[rule.metric]}" instead.`,
+                );
             }
+
+            if (rule.contains) {
+                throw new SDKException(`'contains' should not be specified for ${rule.metric} metric at index ${i}.`);
+            }
+            if (rule.type) {
+                throw new SDKException(`'type' should not be specified for ${rule.metric} metric at index ${i}.`);
+            }
+            rule.contains = ["Failed"];
+            rule.type = "any";
 
             rule._internal_reason_flag = reason;
             if (!rule.action) rule.action = action;
