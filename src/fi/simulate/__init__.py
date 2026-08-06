@@ -241,6 +241,7 @@ from .manifest import (
 from .suite import (
     EVAL_SUITE_SCHEMA_VERSION,
     EvalSuiteOptions,
+    evaluate_assertions,
     load_eval_suite_file,
     run_eval_suite,
     run_eval_suite_file,
@@ -495,6 +496,7 @@ __all__ = [
     "replay_manifests",
     "run_eval_suite",
     "run_eval_suite_file",
+    "evaluate_assertions",
     "run_local_text_manifest",
     "run_voice_simulation",
     "generate_platform_voice_scenario",
