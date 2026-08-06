@@ -105,8 +105,8 @@ class TuringBackend(BaseBackend):
                 response = self._protect.protect(
                     inputs=content,
                     protect_rules=[
-                        {"metric": "content_moderation"},
-                        {"metric": "security"},
+                        {"metric": "toxicity"},
+                        {"metric": "prompt_injection"},
                         {"metric": "bias_detection"},
                     ],
                     timeout=30000,
@@ -195,12 +195,13 @@ class TuringBackend(BaseBackend):
         """
         categories = set()
 
-        # Map rule names to categories
         rule_to_category = {
-            "content_moderation": "toxicity",
-            "security": "prompt_injection",
+            "toxicity": "toxicity",
+            "prompt_injection": "prompt_injection",
             "bias_detection": "hate_speech",
             "data_privacy_compliance": "pii",
+            "content_moderation": "toxicity",
+            "security": "prompt_injection",
             "ProtectFlash": "harmful_content",
         }
 

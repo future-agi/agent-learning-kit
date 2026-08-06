@@ -9,10 +9,10 @@ from urllib.parse import urlparse
 from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.evaluator import EvalResponseHandler, Evaluator
 from fi.evals.templates import (
+    BiasDetection,
     DataPrivacyCompliance,
     PromptInjection,
     Toxicity,
-    BiasDetection,
 )
 from fi.evals.protect_input_adapter import ProtectInputAdapter
 from fi.utils.routes import Routes
@@ -50,19 +50,26 @@ class Protect:
             fi_base_url=fi_base_url
         )
 
-        # Map metric names to their corresponding template classes
+        # Keep in sync with typescript/agent-learning-kit/src/protect.ts.
         self.metric_map = {
             "toxicity": Toxicity,
             "bias_detection": BiasDetection,
             "prompt_injection": PromptInjection,
             "data_privacy_compliance": DataPrivacyCompliance,
-            # Deprecated aliases (still supported)
             "content_moderation": Toxicity,
             "security": PromptInjection,
+            "Toxicity": Toxicity,
+            "Sexism": BiasDetection,
+            "Prompt Injection": PromptInjection,
+            "Data Privacy": DataPrivacyCompliance,
         }
         self._deprecated_metrics = {
             "content_moderation": "toxicity",
             "security": "prompt_injection",
+            "Toxicity": "toxicity",
+            "Sexism": "bias_detection",
+            "Prompt Injection": "prompt_injection",
+            "Data Privacy": "data_privacy_compliance",
         }
 
     def _sanitize_reason(self, text: Optional[str]) -> Optional[str]:
@@ -92,14 +99,12 @@ class Protect:
         # print(f"Starting rule check for {rule['metric']} in thread {thread_name} at {start_time}")
 
         template_class = self.metric_map[rule["metric"]]
-        if rule["metric"] == "Data Privacy":
+        if template_class is DataPrivacyCompliance:
             template = template_class(
                 config={"call_type": "protect", "check_internet": False}
             )
-            # template = template_class(config={"check_internet": False})
         else:
             template = template_class(config={"call_type": "protect"})
-            # template = template_class(config={})
 
         payload = {
             "inputs": [test_case.model_dump()],
@@ -341,7 +346,7 @@ class Protect:
             inputs: Text or list of texts to check for harmful content
             timeout: Time limit for evaluation in milliseconds (default: 30000)
             protect_rules: Rules to check against. Each rule needs:
-                metric: What to check (e.g. 'content_moderation', 'bias_detection')
+                metric: What to check (e.g. 'toxicity', 'bias_detection')
                 contains: Values to look for
                 type: 'any' or 'all' matching required
                 action: Message to show if rule fails
@@ -373,12 +378,12 @@ class Protect:
         if use_flash and not SUPPORT_PROTECT_FLASH:
             # Provide a sensible default so behavior is still helpful.
             if not protect_rules:
-                protect_rules = [{"metric": "content_moderation"}]
+                protect_rules = [{"metric": "toxicity"}]
             use_flash = False  # force normal path
 
         # When using ProtectFlash and no protect_rules provided, create default rules
         if use_flash and not protect_rules:
-            protect_rules = [{"metric": "content_moderation"}]
+            protect_rules = [{"metric": "toxicity"}]
         elif use_flash and protect_rules:
             print("Note: When using ProtectFlash, Rules are not considered as it performs binary harmful/not harmful classification only.")
 
@@ -512,7 +517,6 @@ class Protect:
             raise InvalidValueType(value_name="protect_rules", value=protect_rules_copy, correct_type="non-empty list")
 
         valid_metrics = set(self.metric_map.keys())
-        valid_types = {"any", "all"}
 
         for i, rule in enumerate(protect_rules_copy):
 
@@ -544,35 +548,13 @@ class Protect:
                     stacklevel=2,
                 )
 
-            is_tone_metric = rule["metric"] == "Tone"
+            if "contains" in rule:
+                raise SDKException(f"'contains' should not be specified for {rule['metric']} metric at index {i}.")
+            if "type" in rule:
+                raise SDKException(f"'type' should not be specified for {rule['metric']} metric at index {i}.")
 
-            if is_tone_metric:
-                if "contains" not in rule:
-                    raise MissingRequiredKey(field_name=f"Rule for Tone metric at index {i}", missing_key="contains")
-                if not isinstance(rule["contains"], list):
-                    raise InvalidValueType(value_name=f"'contains' in Tone rule at index {i}", value=rule["contains"], correct_type="list")
-                if not rule["contains"]:
-                    raise InvalidValueType(value_name=f"'contains' in Tone rule at index {i}", value=rule["contains"], correct_type="non-empty list")
-                
-                # Type for Tone metric
-                if "type" not in rule:
-                    rule["type"] = "any" # Default if not present
-                elif rule["type"] not in valid_types:
-                    raise InvalidValueType(
-                        value_name=f"'type' in Tone rule at index {i}", 
-                        value=rule["type"], 
-                        correct_type=f"one of {valid_types}"
-                    )
-            else: # For non-Tone metrics
-                if "contains" in rule:
-                    # This indicates an invalid configuration for a non-Tone metric
-                    raise SDKException(f"'contains' should not be specified for {rule['metric']} metric at index {i}. Provide it only for 'Tone' metric.")
-                if "type" in rule:
-                    raise SDKException(f"'type' should not be specified for {rule['metric']} metric at index {i}. Provide it only for 'Tone' metric.")
-                
-                # Set default values for internal processing of non-Tone metrics
-                rule["contains"] = ["Failed"] # Predefined internal value to check against for non-Tone metrics
-                rule["type"] = "any" # Default type for non-Tone metrics
+            rule["contains"] = ["Failed"]
+            rule["type"] = "any"
 
             # Validate action 
             if "action" not in rule:
