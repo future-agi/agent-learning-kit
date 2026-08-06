@@ -549,7 +549,75 @@ def _provider_output(
         if inspect.isawaitable(value):
             value = asyncio.run(value)
         return str(value)
+    if provider_type in {"litellm", "llm", "vertex", "vertex_ai", "gemini"}:
+        return _litellm_provider_output(
+            provider=provider,
+            prompt=prompt,
+            variables=variables,
+            provider_type=provider_type,
+        )
     raise ManifestError(f"unsupported eval suite provider type: {provider_type}")
+
+
+def _litellm_provider_output(
+    *,
+    provider: Mapping[str, Any],
+    prompt: str,
+    variables: Mapping[str, Any],
+    provider_type: str,
+) -> str:
+    """Call a live LLM through litellm.
+
+    Routes any litellm-supported model. Use ``type: vertex`` (or ``gemini``)
+    with a bare ``model`` name to reach Vertex AI — authentication comes from
+    ``GOOGLE_APPLICATION_CREDENTIALS`` and routing from the ``vertex_project`` /
+    ``vertex_location`` provider fields (or the matching ``VERTEXAI_*`` env
+    vars). Use ``type: litellm`` with a fully-qualified model string
+    (``vertex_ai/gemini-2.5-flash``, ``gpt-4o-mini``, ``claude-3-5-sonnet``)
+    for any other provider.
+    """
+    try:
+        import litellm
+    except Exception as exc:  # pragma: no cover - import guard
+        raise ManifestError(
+            f"provider type `{provider_type}` requires litellm; reinstall "
+            "agent-learning-kit"
+        ) from exc
+
+    model = str(provider.get("model") or "").strip()
+    if not model:
+        raise ManifestError(f"provider `{provider.get('id')}` requires a model")
+    if provider_type in {"vertex", "vertex_ai", "gemini"} and "/" not in model:
+        model = f"vertex_ai/{model}"
+
+    render_ctx = {**variables, "prompt": prompt, "input": prompt}
+    messages: List[Dict[str, Any]] = []
+    system_prompt = provider.get("system") or provider.get("system_prompt")
+    if system_prompt:
+        messages.append(
+            {"role": "system", "content": _render_template(str(system_prompt), render_ctx)}
+        )
+    messages.append({"role": "user", "content": prompt})
+
+    kwargs: Dict[str, Any] = dict(_as_dict(provider.get("params")))
+    for key in (
+        "vertex_project",
+        "vertex_location",
+        "vertex_credentials",
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "api_base",
+        "api_key",
+    ):
+        value = provider.get(key)
+        if value is not None and key not in kwargs:
+            kwargs[key] = value
+
+    litellm.drop_params = True
+    response = litellm.completion(model=model, messages=messages, **kwargs)
+    content = response.choices[0].message.content
+    return str(content or "")
 
 
 def _artifact_provider_output(
