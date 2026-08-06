@@ -67,8 +67,10 @@ class ProTeGi(BaseOptimizer):
         errors_per_gradient: int = 4,
         prompts_per_gradient: int = 1,
         beam_size: int = 4,
+        task_model: Optional[str] = None,
     ):
         self.teacher = teacher_generator
+        self.task_model = task_model
         self.num_gradients = num_gradients
         self.errors_per_gradient = errors_per_gradient
         self.prompts_per_gradient = prompts_per_gradient
@@ -208,7 +210,9 @@ class ProTeGi(BaseOptimizer):
         sample_size: int = 32,
     ) -> List[Dict[str, Any]]:
         subset = random.sample(dataset, min(len(dataset), sample_size))
-        temp_generator = LiteLLMGenerator("gpt-4o-mini", prompt)
+        temp_generator = LiteLLMGenerator(
+                self.task_model or self.teacher.model_name, prompt
+            )
 
         generated_outputs = [temp_generator.generate(example) for example in subset]
         eval_inputs = [
@@ -264,7 +268,9 @@ class ProTeGi(BaseOptimizer):
             logging.info(
                 f"--> Scoring prompt {i + 1}/{len(prompts)}: '{prompt[:100]}...'"
             )
-            temp_generator = LiteLLMGenerator("gpt-4o-mini", prompt)
+            temp_generator = LiteLLMGenerator(
+                self.task_model or self.teacher.model_name, prompt
+            )
             generated_outputs = [
                 temp_generator.generate(example) for example in dataset
             ]
