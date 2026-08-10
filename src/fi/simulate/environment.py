@@ -81,6 +81,11 @@ class ToolMockEnvironment(EnvironmentAdapter):
     Handlers can return plain values, dictionaries, or ToolExecutionResult. A
     dictionary can include `content`, `result`, `success`, `error`,
     `state_updates`, `artifacts`, and `events`.
+
+    Canon correspondence (assessment §8 Gap D): this is the executor behind
+    ``mock.level="static_fixture"`` (``contract.TOOL_MOCK_LEVELS``) — canned,
+    deterministic responses. The higher tiers (``recorded_replay`` / ``emulated``
+    / ``live``) are typed in the contract but not executed here.
     """
 
     name = "tool_mock"

@@ -15,6 +15,7 @@ pytest.importorskip("livekit")
 from fi.simulate.agent.definition import AgentDefinition
 from fi.simulate.recording.room_recorder import mix_recordings
 from fi.simulate.runtime import TestCaseStatus as CaseStatus
+from fi.simulate.simulation import bridge as _bridge
 from fi.simulate.simulation.engines import livekit
 from fi.simulate.simulation.engines.livekit import LiveKitEngine
 from fi.simulate.simulation import livekit_models
@@ -262,6 +263,17 @@ def test_two_ten_case_suites_do_not_share_room_names(monkeypatch) -> None:
     assert first_rooms.isdisjoint(second_rooms)
 
 
+def _role_content(messages: list[dict]) -> list[dict]:
+    """Project canonical report messages to just role+content.
+
+    ``_canonical_report_messages`` enriches each message with voice-timing
+    metadata (created_at, started/stopped_speaking_at, interrupted, e2e_latency);
+    these tests assert the role-perspective + interruption-merge behavior, which
+    lives entirely in role/content.
+    """
+    return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+
 def test_report_messages_use_target_perspective_roles() -> None:
     session = SimpleNamespace(
         history=SimpleNamespace(
@@ -280,7 +292,7 @@ def test_report_messages_use_target_perspective_roles() -> None:
         )
     )
 
-    assert livekit._canonical_report_messages(session) == [
+    assert _role_content(livekit._canonical_report_messages(session)) == [
         {"role": "user", "content": "Simulator opens the call."},
         {"role": "assistant", "content": "Target agent responds."},
     ]
@@ -310,7 +322,7 @@ def test_report_messages_merge_interrupted_same_role_fragments() -> None:
         )
     )
 
-    assert livekit._canonical_report_messages(session) == [
+    assert _role_content(livekit._canonical_report_messages(session)) == [
         {"role": "assistant", "content": "Your parcel is still in transit."},
         {"role": "user", "content": "Thanks."},
     ]
@@ -336,7 +348,7 @@ def test_report_messages_preserve_distinct_same_role_turns() -> None:
         )
     )
 
-    assert livekit._canonical_report_messages(session) == [
+    assert _role_content(livekit._canonical_report_messages(session)) == [
         {"role": "assistant", "content": "First update."},
         {"role": "assistant", "content": "Second update."},
     ]
@@ -1575,7 +1587,9 @@ def test_web_bridge_joins_as_target_without_sip(
             audio_track_sid="bridge-track",
         )
 
-    connector_type = getattr(livekit, connector_name)
+    # Connector construction moved into endpoints.profiles (slice 3); it imports
+    # the connector from simulation.bridge, so patch from_target on that class.
+    connector_type = getattr(_bridge, connector_name)
     received_targets = []
     connector_kwargs = []
 

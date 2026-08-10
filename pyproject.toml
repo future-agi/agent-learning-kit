@@ -88,6 +88,10 @@ a2a = [
 nli = ["transformers>=5.2.0,<6", "torch>=2.10.0,<3"]
 embeddings = ["sentence-transformers>=5.2.3,<6"]
 feedback = ["chromadb>=0.4.0"]
+notebook = [
+  "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb
+  "nbformat>=5",
+]
 trinity = [
   "aiohttp>=3.10",
   "audioop-lts>=0.2.1; python_version >= '3.13'",

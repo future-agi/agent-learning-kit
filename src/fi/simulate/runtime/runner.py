@@ -10,7 +10,8 @@ from fi.simulate._logging import redacted_exc_info
 from fi.simulate.agent.wrapper import AgentWrapper, SimulationArtifact, SimulationEvent
 from fi.simulate.artifacts import ArtifactManifest
 from fi.simulate.environment import EnvironmentAdapter
-from fi.simulate.environments.chat import ChatEnvironment
+import fi.simulate.environments  # noqa: F401  (registers builtin environment plugins)
+from fi.simulate.registry import environment_registry
 from fi.simulate.evidence import EvidenceSourceSummary
 from fi.simulate.results.base import ResultSink
 from fi.simulate.simulation.models import Persona
@@ -31,7 +32,7 @@ class SimulationRunner:
         self,
         spec: SimulationSpec,
         *,
-        target: Callable[..., Any] | AgentWrapper | Any,
+        target: Callable[..., Any] | AgentWrapper | Any = None,
         result_sink: ResultSink | None = None,
         artifacts: list[SimulationArtifact | dict[str, Any]] | None = None,
         events: list[SimulationEvent | dict[str, Any]] | None = None,
@@ -56,18 +57,11 @@ class SimulationRunner:
                     sequence=0,
                 ),
             )
-            if spec.environment.adapter != "chat":
-                raise ValueError(
-                    f"environment_adapter_unsupported: {spec.environment.adapter}"
-                )
+            plugin = environment_registry.create(spec.environment.adapter)
             legacy_report = await asyncio.wait_for(
-                ChatEnvironment().run(
-                    scenario=spec.scenario,
-                    agent_callback=target,
-                    max_turns=int(spec.environment.config.get("max_turns", 6)),
-                    min_turns=int(spec.environment.config.get("min_turns", 2)),
-                    attacks=spec.environment.config.get("attacks"),
-                    modality=str(spec.environment.config.get("modality", "text")),
+                plugin.run(
+                    spec,
+                    target=target,
                     artifacts=artifacts,
                     events=events,
                     environment=environment,
@@ -138,6 +132,12 @@ class SimulationRunner:
             report = SimulationReport.model_validate(
                 report.model_dump(exclude={"report_hash"})
             )
+            # Environments enforce terminal conditions (plan §3): let the plugin
+            # override the run status from per-case results (e.g. voice marks an
+            # all-cases-failed run FAILED). Absent hook -> COMPLETED, as before.
+            finalize = getattr(plugin, "finalize_run_status", None)
+            if finalize is not None:
+                report = finalize(report)
             self._write_event(
                 result_sink,
                 CanonicalEvent.create(

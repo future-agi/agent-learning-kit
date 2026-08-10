@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
-from typing import AsyncIterable
+from typing import Any, AsyncIterable
 from uuid import uuid4
 
 try:
@@ -57,11 +57,7 @@ from fi.simulate.evidence.providers import (
     VapiEvidenceSource,
 )
 from fi.simulate.endpoints.vapi import VapiCallOriginator
-from fi.simulate.simulation.bridge import (
-    LiveKitAudioBridge,
-    RetellWebCallConnector,
-    VapiWebSocketConnector,
-)
+from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
 from fi.simulate.recording.room_recorder import RoomRecorder, mix_recordings
 from fi.simulate.runtime import (
@@ -100,6 +96,19 @@ class _CaseOutcome:
     metadata: dict[str, object] = field(default_factory=dict)
     evidence: list[EvidenceSourceSummary] = field(default_factory=list)
     provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
+
+
+def _resolve_target_profile(kind: str):
+    """Look up the target adapter's profile — the factory that replaced the
+    engine's ``transport.kind`` branching. Unknown kinds fail loudly, which is
+    what makes it safe to open ``TelephonyTransport.kind`` from a Literal to a
+    free string later."""
+    from fi.simulate.endpoints.profiles import get_profile
+
+    profile = get_profile(kind)
+    if profile is None:
+        raise ValueError(f"unsupported_transport_kind: {kind}")
+    return profile
 
 
 def _simulator_turn_handling(
@@ -323,10 +332,11 @@ class LiveKitEngine(BaseEngine):
                 "need {run_id}, {test_case_id}, or {index} in room_name"
             )
         transport = agent_definition.transport or TelephonyTransport()
-        if transport.kind != "webrtc" and runtime.room_mode != "managed":
+        profile = _resolve_target_profile(transport.kind)
+        if not profile.uses_external_room and runtime.room_mode != "managed":
             raise ValueError("managed_transport_requires_managed_room")
         if (
-            transport.kind == "sip_inbound"
+            profile.receives_inbound_call
             and len(scenario.dataset) > 1
             and not _has_room_template(runtime.room_name)
         ):
@@ -473,11 +483,12 @@ class LiveKitEngine(BaseEngine):
         bridge_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
         transport = agent_definition.transport or TelephonyTransport()
+        profile = _resolve_target_profile(transport.kind)
         provider_target = agent_definition.target
         effective_target_identity = agent_definition.target_participant_identity
         effective_readiness_timeout = (
             transport.readiness_timeout_seconds
-            if transport.kind == "sip_inbound"
+            if profile.receives_inbound_call
             and transport.readiness_timeout_seconds is not None
             else readiness_timeout
         )
@@ -491,7 +502,7 @@ class LiveKitEngine(BaseEngine):
                     api_key,
                     api_secret,
                 )
-                if transport.kind != "sip_outbound":
+                if not profile.places_outbound_call:
                     try:
                         await asyncio.wait_for(
                             api_client.room.create_room(
@@ -526,7 +537,7 @@ class LiveKitEngine(BaseEngine):
                                 exc, operation="room_create"
                             ),
                         )
-                if outcome is None and transport.kind == "webrtc":
+                if outcome is None and profile.uses_external_room:
                     await asyncio.wait_for(
                         api_client.agent_dispatch.create_dispatch(
                             api.CreateAgentDispatchRequest(
@@ -546,7 +557,7 @@ class LiveKitEngine(BaseEngine):
                         ),
                         timeout=connect_timeout,
                     )
-                elif outcome is None and transport.kind == "sip_inbound":
+                elif outcome is None and profile.receives_inbound_call:
                     try:
                         (
                             sip_dispatch_rule_id,
@@ -627,7 +638,7 @@ class LiveKitEngine(BaseEngine):
             )
             sip_participant_identity: str | None = None
             bridge_identity: str | None = None
-            if transport.kind == "sip_outbound":
+            if profile.places_outbound_call:
                 identity_template = (
                     transport.participant_identity
                     or "sip-caller-{invocation_id}-{test_case_id}"
@@ -639,18 +650,14 @@ class LiveKitEngine(BaseEngine):
                 )
                 if effective_target_identity is None:
                     effective_target_identity = sip_participant_identity
-            elif transport.kind in {"vapi_websocket", "retell_webcall"}:
-                provider_name = transport.kind.split("_", maxsplit=1)[0]
-                bridge_identity = f"fagi-{provider_name}-bridge-{test_case_id[-12:]}"
+            elif profile.uses_web_audio_bridge:
+                bridge_identity = (
+                    f"fagi-{profile.bridge_provider}-bridge-{test_case_id[-12:]}"
+                )
                 effective_target_identity = bridge_identity
             session_participant_kinds = None
             session_participant_identity: str | None = None
-            if transport.kind in (
-                "sip_outbound",
-                "sip_inbound",
-                "vapi_websocket",
-                "retell_webcall",
-            ):
+            if profile.joins_as_sip_participant:
                 session_participant_kinds = [rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
                 session_participant_identity = (
                     effective_target_identity or sip_participant_identity
@@ -663,29 +670,12 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
-            if transport.kind in {"vapi_websocket", "retell_webcall"}:
+            if profile.uses_web_audio_bridge:
                 try:
-                    if transport.kind == "vapi_websocket" and isinstance(
-                        provider_target, VapiTargetConfig
-                    ):
-                        connector = VapiWebSocketConnector.from_target(
-                            provider_target,
-                            first_message_mode=(
-                                "assistant-waits-for-user"
-                                if conversation_direction == "simulator_first"
-                                else "assistant-speaks-first"
-                            ),
-                        )
-                    elif transport.kind == "retell_webcall" and isinstance(
-                        provider_target, RetellTargetConfig
-                    ):
-                        connector = RetellWebCallConnector.from_target(provider_target)
-                    else:
-                        connector = (
-                            VapiWebSocketConnector.from_env()
-                            if transport.kind == "vapi_websocket"
-                            else RetellWebCallConnector.from_env()
-                        )
+                    connector = profile.build_connector(
+                        provider_target,
+                        conversation_direction=conversation_direction,
+                    )
                     audio_bridge = LiveKitAudioBridge(
                         url=str(runtime.url),
                         api_key=api_key,
@@ -728,7 +718,7 @@ class LiveKitEngine(BaseEngine):
                         ),
                     )
                     return outcome
-            if transport.kind == "sip_outbound" and api_client is not None:
+            if profile.places_outbound_call and api_client is not None:
                 try:
                     logger.info(
                         "sip_outbound_dialing",
@@ -779,7 +769,7 @@ class LiveKitEngine(BaseEngine):
                         details=_safe_provider_error_details(exc, operation="sip_dial"),
                     )
                     return outcome
-            if transport.kind == "sip_inbound":
+            if profile.receives_inbound_call:
                 logger.info(
                     "sip_inbound_ready",
                     extra={
@@ -856,7 +846,7 @@ class LiveKitEngine(BaseEngine):
                 if session is not None and target is None
                 else FailureStage.PREPARING
             )
-            if stage == FailureStage.READINESS and transport.kind == "sip_inbound":
+            if stage == FailureStage.READINESS and profile.receives_inbound_call:
                 code = "sip_inbound_no_participant"
                 message = "No inbound SIP participant joined before deadline"
             elif stage == FailureStage.READINESS:
@@ -1096,12 +1086,14 @@ class LiveKitEngine(BaseEngine):
                 "provider_call_id": provider_call_id,
                 "vapi_call_id": (
                     provider_call_id
-                    if transport.kind == "vapi_websocket"
+                    if profile.evidence_provider == "vapi"
                     or transport.inbound_call_originator == "vapi"
                     else None
                 ),
                 "retell_call_id": (
-                    provider_call_id if transport.kind == "retell_webcall" else None
+                    provider_call_id
+                    if profile.evidence_provider == "retell"
+                    else None
                 ),
                 "simulator_model_usage": (
                     customer_agent.model_usage

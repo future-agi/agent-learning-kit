@@ -204,30 +204,11 @@ def _voice_required_env(
     if target is not None:
         names.append(target.api_key_env)
     if transport is not None:
-        if transport.kind == "vapi_websocket" and target is None:
-            names.extend(("VAPI_API_KEY", "VAPI_ASSISTANT_ID"))
-        elif transport.kind == "retell_webcall" and target is None:
-            names.extend(("RETELL_API_KEY", "RETELL_AGENT_ID"))
-        elif transport.kind == "sip_inbound":
-            if not transport.dispatch_rule_name:
-                names.append("LIVEKIT_INBOUND_TRUNK_ID")
-            if transport.inbound_call_originator == "vapi":
-                names.extend(
-                    (
-                        (
-                            target.api_key_env
-                            if target is not None and target.provider == "vapi"
-                            else "VAPI_API_KEY"
-                        ),
-                        (
-                            ""
-                            if target is not None and target.provider == "vapi"
-                            else "VAPI_ASSISTANT_ID"
-                        ),
-                        "VAPI_PHONE_NUMBER_ID",
-                        "LIVEKIT_INBOUND_DID",
-                    )
-                )
+        from fi.simulate.endpoints.profiles import get_profile
+
+        profile = get_profile(transport.kind)
+        if profile is not None:
+            names.extend(profile.required_env(agent_definition))
     return list(dict.fromkeys(str(name) for name in names if str(name).strip()))
 
 

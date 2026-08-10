@@ -10,23 +10,57 @@ from fi.simulate.runtime.plan import (
 )
 from fi.simulate.runtime.spec import SimulationSpec
 
-_ENDPOINT_CAPABILITIES = {
-    "callable": {"text", "transcript_events", "tool_events"},
-    "http": {"text", "transcript_events", "tool_events"},
-    "websocket": {"text", "streaming", "transcript_events", "tool_events"},
-    "livekit": {
-        "audio",
-        "streaming",
-        "interruption",
-        "recording",
-        "transcript_events",
-        "web_rtc",
-    },
-}
+# Import for the registration side effect: builtin endpoint profiles populate
+# the endpoint_registry that build_plan reads capabilities from, and builtin
+# simulator descriptors populate the simulator_registry that build_plan validates.
+from fi.simulate.endpoints import profiles as _endpoint_profiles  # noqa: F401
+from fi.simulate.simulator import builtins as _simulator_builtins  # noqa: F401
+from fi.simulate.registry import (
+    AdapterNotFound,
+    endpoint_registry,
+    environment_registry,
+    simulator_registry,
+)
+
+
+class UnsupportedWorldKind(ValueError):
+    """Raised when a spec's ``world_kind`` isn't one the environment declares."""
+
+    def __init__(self, adapter: str, world_kind: str, supported: list[str]) -> None:
+        self.adapter = adapter
+        self.world_kind = world_kind
+        self.supported = sorted(supported)
+        super().__init__(
+            f"world_kind_unsupported: {world_kind!r} is not supported by "
+            f"environment {adapter!r}; supported: {self.supported}"
+        )
 
 
 def build_plan(spec: SimulationSpec) -> SimulationPlan:
-    supported = sorted(_ENDPOINT_CAPABILITIES.get(spec.target.adapter, set()))
+    # Validate the simulator adapter against the registry (typo → clear error).
+    # Only enforce when the registry is populated with named builtins, so a
+    # third-party simulator registered by an integrator still passes.
+    if simulator_registry.get_or_none(spec.simulator.adapter) is None:
+        known = simulator_registry.names()
+        if known:
+            raise AdapterNotFound("simulator", spec.simulator.adapter, known)
+    # Validate world_kind against what the environment plugin declares. Empty
+    # declaration = unrestricted (third-party plugins that don't declare stay
+    # unbroken); a declared, non-empty list is enforced (typo → clear error).
+    env_factory = environment_registry.get_or_none(spec.environment.adapter)
+    supported_world_kinds = list(
+        getattr(getattr(env_factory, "manifest", None), "world_kinds", []) or []
+    )
+    if supported_world_kinds and spec.environment.world_kind not in supported_world_kinds:
+        raise UnsupportedWorldKind(
+            spec.environment.adapter,
+            spec.environment.world_kind,
+            supported_world_kinds,
+        )
+    profile = endpoint_registry.get_or_none(spec.target.adapter)
+    supported = (
+        sorted(profile.manifest.capabilities.supported()) if profile else []
+    )
     root_directory = spec.artifacts.root_directory or f".fagi/runs/{spec.run_id}"
     return SimulationPlan(
         plan_id=new_plan_id(),

@@ -270,9 +270,19 @@ from .simulator import (
 )
 from .results import FutureAGIResultSink
 from .instrumentation.livekit import FutureAGIObserver
+from .adapters import (
+    EnvironmentAdapters,
+    SimulatorAdapters,
+    TargetAdapters,
+    WorldKinds,
+)
 
 __all__ = [
     "AgentDefinition",
+    "EnvironmentAdapters",
+    "SimulatorAdapters",
+    "TargetAdapters",
+    "WorldKinds",
     "LiveKitSimulatorRuntime",
     "VapiTargetConfig",
     "RetellTargetConfig",
