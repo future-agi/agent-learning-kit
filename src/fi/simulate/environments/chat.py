@@ -19,6 +19,9 @@ from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
 from fi.simulate.simulation.synthetic import SyntheticDataGenerator
+from fi.simulate.environments.base import EnvironmentManifest
+from fi.simulate.registry import register_environment
+from fi.simulate.runtime.capabilities import EndpointCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +219,13 @@ class ChatEnvironment:
                 },
             )
 
+            _agent_t0 = time.perf_counter()
             raw_response = await wrapper.call(agent_input)
+            _agent_latency_ms = int((time.perf_counter() - _agent_t0) * 1000)
             response = raw_response if isinstance(raw_response, AgentResponse) else AgentResponse(content=str(raw_response))
-            assistant_message = {"role": "assistant", "content": response.content}
+            # Per-turn agent latency (wall-clock around the target call) so the
+            # platform's avg_latency_ms populates for every target type.
+            assistant_message = {"role": "assistant", "content": response.content, "latency_ms": _agent_latency_ms}
             if response.tool_calls:
                 assistant_message["tool_calls"] = response.tool_calls
                 tool_calls.extend(response.tool_calls)
@@ -602,3 +609,83 @@ def _deep_merge(target: Dict[str, Any], updates: Mapping[str, Any]) -> None:
             _deep_merge(target[key], value)
         else:
             target[key] = value
+
+
+def _mock_world_from_config(config: Mapping[str, Any]):
+    """Build a tool-mock world from serializable config, or ``None``.
+
+    ``config["mock_tools"]`` maps a tool name to its canned response (a plain
+    value, or a dict with ``content``/``result``/``state_updates``/``error``).
+    Optional ``config["tool_schemas"]`` advertises the tool list to the agent;
+    ``config["tool_initial_state"]`` seeds world state. Lets any chat run mock
+    tools declaratively — no live object, hosted-safe.
+
+    Canon correspondence (assessment §8 Gap D): each ``mock_tools`` entry is the
+    runtime shorthand for a canon ``contract.ToolBinding`` at
+    ``mock.level="static_fixture"`` (``contract.TOOL_MOCK_LEVELS`` tier 1 — the
+    only tier v1 executes). That is intentionally the whole of what runs here; do
+    **not** grow this to accept a full ``ToolBinding`` and execute only the
+    ``static_fixture`` level — partial acceptance of the typed contract is the
+    disconnect this documents, not a feature.
+    """
+    mocks = config.get("mock_tools")
+    if not isinstance(mocks, Mapping) or not mocks:
+        return None
+    from fi.simulate.environment import ToolMockEnvironment
+
+    return ToolMockEnvironment(
+        tools=dict(mocks),
+        tool_schemas=config.get("tool_schemas"),
+        initial_state=config.get("tool_initial_state"),
+    )
+
+
+@register_environment("chat")
+class ChatEnvironmentPlugin:
+    """Registry-facing wrapper around :class:`ChatEnvironment`.
+
+    Reads the chat-specific knobs from ``spec.environment.config`` so the runner
+    never has to. Byte-identical to the call the runner used to inline.
+    """
+
+    manifest = EnvironmentManifest(
+        name="chat",
+        world_kinds=["conversation", "tool_api", "chat", "text"],
+        capabilities=EndpointCapabilities(
+            text=True, transcript_events=True, tool_events=True
+        ),
+    )
+
+    async def run(
+        self,
+        spec,
+        *,
+        target,
+        artifacts=None,
+        events=None,
+        environment=None,
+        auto_execute_tools: bool = True,
+        stop_when=None,
+        agent_wrapper_kwargs=None,
+    ) -> TestReport:
+        config = spec.environment.config
+        # Tool mocking is a world capability, not a separate environment. Any chat
+        # run can declare mocked tools in `config["mock_tools"]` (name -> canned
+        # response) — a JSON-serializable, hosted-safe alternative to passing a live
+        # `environment=` object. A live object, when given, always wins.
+        if environment is None:
+            environment = _mock_world_from_config(config)
+        return await ChatEnvironment().run(
+            scenario=spec.scenario,
+            agent_callback=target,
+            max_turns=int(config.get("max_turns", 6)),
+            min_turns=int(config.get("min_turns", 2)),
+            attacks=config.get("attacks"),
+            modality=str(config.get("modality", "text")),
+            artifacts=artifacts,
+            events=events,
+            environment=environment,
+            auto_execute_tools=auto_execute_tools,
+            stop_when=stop_when,
+            agent_wrapper_kwargs=agent_wrapper_kwargs,
+        )

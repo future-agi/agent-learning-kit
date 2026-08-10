@@ -14,6 +14,8 @@ target is not set:
   FI_API_KEY / FUTURE_AGI_API_KEY / AGENT_LEARNING_API_KEY — x-api-key
   FI_SECRET_KEY / FUTURE_AGI_SECRET_KEY / AGENT_LEARNING_SECRET_KEY — x-secret-key
   FI_RUN_TEST_ID / FUTURE_AGI_RUN_TEST_ID / AGENT_LEARNING_RUN_TEST_ID — target run test
+  FI_TEST_EXECUTION_ID / … — optional pre-created TestExecution (hosted runs); when
+    set the sink submits into it instead of creating one from the run test.
 
 When any of those are absent the sink records ``status: "not_configured"``
 in ``submission.json`` and returns cleanly — no HTTP is attempted.
@@ -53,6 +55,11 @@ _RUN_TEST_ID_ENV = (
     "FUTURE_AGI_RUN_TEST_ID",
     "AGENT_LEARNING_RUN_TEST_ID",
 )
+_TEST_EXECUTION_ID_ENV = (
+    "FI_TEST_EXECUTION_ID",
+    "FUTURE_AGI_TEST_EXECUTION_ID",
+    "AGENT_LEARNING_TEST_EXECUTION_ID",
+)
 _HTTP_TIMEOUT_SECONDS = 60.0
 _RECORDING_UPLOAD_TIMEOUT_SECONDS = 300.0
 _CONTENT_TYPE_BY_EXT = {
@@ -75,12 +82,16 @@ class FutureAGIResultSink:
         api_key_env: tuple[str, ...] = _API_KEY_ENV,
         secret_key_env: tuple[str, ...] = _SECRET_KEY_ENV,
         run_test_id: str | None = None,
+        test_execution_id: str | None = None,
     ) -> None:
         self._local = LocalFilesystemResultSink(root=root)
         self._api_url = api_url or _first_env(_API_URL_ENV)
         self._api_key_env = api_key_env
         self._secret_key_env = secret_key_env
         self._run_test_id = run_test_id or _first_env(_RUN_TEST_ID_ENV)
+        self._test_execution_id = test_execution_id or _first_env(
+            _TEST_EXECUTION_ID_ENV
+        )
         self._event_count = 0
         self._spec: SimulationSpec | None = None
         self._plan: SimulationPlan | None = None
@@ -125,6 +136,7 @@ class FutureAGIResultSink:
             "events_recorded": self._event_count,
             "api_url": self._api_url,
             "run_test_id": self._run_test_id,
+            "test_execution_id": self._test_execution_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -147,6 +159,7 @@ class FutureAGIResultSink:
                 api_key=api_key,
                 secret_key=secret_key,
                 run_test_id=self._run_test_id,
+                test_execution_id=self._test_execution_id,
             )
             submission.update(outcome)
             submission["status"] = "submitted"
@@ -192,24 +205,30 @@ def _submit_via_http(
     api_key: str,
     secret_key: str,
     run_test_id: str,
+    test_execution_id: str | None = None,
 ) -> dict[str, Any]:
+    # No client-level Content-Type: httpx sets application/json for json= calls
+    # and multipart/form-data (with boundary) for the files= recording upload.
+    # A fixed application/json here silently breaks the multipart upload.
     headers = {
         "x-api-key": api_key,
         "x-secret-key": secret_key,
-        "Content-Type": "application/json",
     }
     with httpx.Client(
         base_url=base_url.rstrip("/"),
         headers=headers,
         timeout=_HTTP_TIMEOUT_SECONDS,
     ) as client:
-        start = client.post(
-            f"/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/",
-            json={},
-        )
-        start.raise_for_status()
-        start_data = _unwrap(start.json())
-        test_execution_id = start_data["test_execution_id"]
+        # Hosted runs submit into a TestExecution the platform pre-created; local
+        # runs create one here from the run test.
+        if not test_execution_id:
+            start = client.post(
+                f"/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/",
+                json={},
+            )
+            start.raise_for_status()
+            start_data = _unwrap(start.json())
+            test_execution_id = start_data["test_execution_id"]
 
         call_execution_ids: list[str] = []
         for _ in range(64):  # hard cap to prevent runaway
@@ -384,28 +403,56 @@ def _extract_transcript_segments(result) -> list[dict[str, Any]]:
     for msg in typed_messages:
         role = msg.get("role")
         content = msg.get("content")
+        tool_calls = _normalize_tool_calls(msg.get("tool_calls"))
+        start_ms, end_ms = _resolve_message_timing_ms(msg, anchor)
+        latency_ms = _message_latency_ms(msg)
+
+        if role == "assistant":
+            # An assistant turn can carry text, tool calls, or both. Tool-call
+            # turns usually have empty content — emit them anyway as a
+            # ``tool_calls`` segment so the agent's real tool activity survives
+            # ingestion instead of being dropped by the empty-content guard.
+            if isinstance(content, str) and content:
+                segments.append(
+                    _segment("assistant", content, start_ms, end_ms, latency_ms)
+                )
+            if tool_calls:
+                segments.append(
+                    _segment(
+                        "tool_calls",
+                        _render_tool_calls(tool_calls),
+                        start_ms,
+                        end_ms,
+                        latency_ms,
+                        tool_calls=tool_calls,
+                    )
+                )
+            continue
+
+        if role == "tool":
+            if isinstance(content, str) and content:
+                segments.append(
+                    _segment(
+                        "tool_call_result",
+                        content,
+                        start_ms,
+                        end_ms,
+                        None,
+                        tool_call_id=msg.get("tool_call_id") or msg.get("id"),
+                    )
+                )
+            continue
+
         if not isinstance(content, str) or not content:
             continue
-        if role == "assistant":
-            speaker_role = "assistant"
-        elif role in {"user", "customer"}:
+        if role in {"user", "customer"}:
             speaker_role = "user"
-        elif role == "tool":
-            speaker_role = "tool_call_result"
         elif role == "system":
             speaker_role = "system"
         else:
             speaker_role = "unknown"
+        segments.append(_segment(speaker_role, content, start_ms, end_ms, None))
 
-        start_ms, end_ms = _resolve_message_timing_ms(msg, anchor)
-        segments.append(
-            {
-                "speaker_role": speaker_role,
-                "content": content,
-                "start_time_ms": start_ms,
-                "end_time_ms": end_ms,
-            }
-        )
     if segments:
         return segments
 
@@ -434,6 +481,92 @@ def _extract_transcript_segments(result) -> list[dict[str, Any]]:
             }
         )
     return segments
+
+
+def _segment(
+    speaker_role: str,
+    content: str,
+    start_ms: int,
+    end_ms: int,
+    latency_ms: int | None,
+    *,
+    tool_calls: list[dict[str, Any]] | None = None,
+    tool_call_id: str | None = None,
+) -> dict[str, Any]:
+    seg: dict[str, Any] = {
+        "speaker_role": speaker_role,
+        "content": content,
+        "start_time_ms": start_ms,
+        "end_time_ms": end_ms,
+    }
+    if latency_ms is not None:
+        seg["latency_ms"] = latency_ms
+    if tool_calls:
+        seg["tool_calls"] = tool_calls
+    if tool_call_id:
+        seg["tool_call_id"] = tool_call_id
+    return seg
+
+
+def _normalize_tool_calls(raw: Any) -> list[dict[str, Any]] | None:
+    """Coerce a message's tool_calls into a stable [{id, name, arguments}] shape.
+
+    Accepts both the flat SDK shape (``{"name", "arguments", "id"}``) and the
+    OpenAI/LiteLLM nested shape (``{"function": {"name", "arguments"}}``);
+    ``arguments`` is JSON-decoded when the provider ships it as a string.
+    """
+    if not raw or not isinstance(raw, (list, tuple)):
+        return None
+    calls: list[dict[str, Any]] = []
+    for tc in raw:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        name = tc.get("name") or fn.get("name")
+        if not name:
+            continue
+        arguments = tc.get("arguments")
+        if arguments is None:
+            arguments = fn.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except (ValueError, TypeError):
+                pass
+        calls.append(
+            {
+                "id": tc.get("id") or name,
+                "name": name,
+                "arguments": arguments if arguments is not None else {},
+            }
+        )
+    return calls or None
+
+
+def _render_tool_calls(calls: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for call in calls:
+        args = call.get("arguments")
+        try:
+            rendered = json.dumps(args, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            rendered = str(args)
+        lines.append(f"{call['name']}({rendered})")
+    return "\n".join(lines)
+
+
+def _message_latency_ms(msg: dict[str, Any]) -> int | None:
+    for key in ("latency_ms", "latency"):
+        value = msg.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+    metrics = msg.get("metrics")
+    if isinstance(metrics, dict):
+        for key in ("latency_ms", "latency"):
+            value = metrics.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value)
+    return None
 
 
 def _maybe_upload_recording(
