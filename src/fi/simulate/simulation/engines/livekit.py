@@ -130,7 +130,7 @@ def _simulator_turn_handling(
             "discard_audio_if_uninterruptible": True,
             "min_duration": 0.3,
         },
-        "preemptive_generation": {"enabled": False},
+        "preemptive_generation": {"enabled": True},
     }
 
 
