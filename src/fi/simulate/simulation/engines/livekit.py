@@ -1153,6 +1153,20 @@ class LiveKitEngine(BaseEngine):
             min_endpointing_delay = simulator.min_endpointing_delay
             max_endpointing_delay = simulator.max_endpointing_delay
             use_aligned_transcript = simulator.use_tts_aligned_transcript
+        # Per-persona voice: a persona may carry a ``voice`` (or ``voice_id``)
+        # attribute so different simulated customers sound different. Deepgram
+        # encodes the voice in the model name (``aura-*``); every other provider
+        # uses the dedicated ``voice`` field. Falls back to the simulator/global
+        # default when the persona does not specify one.
+        persona_attrs = getattr(persona, "persona", None)
+        persona_voice = (
+            (persona_attrs.get("voice") or persona_attrs.get("voice_id"))
+            if isinstance(persona_attrs, dict)
+            else None
+        )
+        if persona_voice:
+            field = "model" if tts_config.provider == "deepgram" else "voice"
+            tts_config = tts_config.model_copy(update={field: str(persona_voice)})
         models = await build_livekit_models(
             llm_config=llm_config,
             stt_config=stt_config,
