@@ -1805,6 +1805,9 @@ def _record_cleanup_error(
 
 
 _LIVEKIT_INBOUND_TRUNK_ENV = "LIVEKIT_INBOUND_TRUNK_ID"
+# Name prefix for dispatch rules this SDK provisions, so a later run can tell
+# its own orphaned rules apart from routing configured by someone else.
+_SIP_DISPATCH_RULE_PREFIX = "sim-inbound-"
 
 
 def _safe_provider_error_details(
@@ -1890,12 +1893,30 @@ async def _ensure_sip_inbound_dispatch(
             f"sip_inbound_trunk_missing: set {_LIVEKIT_INBOUND_TRUNK_ENV}"
         )
     for rule in existing.items:
-        if trunk_id and trunk_id in rule.trunk_ids:
-            raise RuntimeError(
-                "sip_inbound_route_conflict: existing dispatch rule "
-                f"{rule.sip_dispatch_rule_id} already covers this trunk"
+        if not trunk_id or trunk_id not in rule.trunk_ids:
+            continue
+        # A rule this SDK created and failed to tear down (crash, kill, or a
+        # cleanup error) would otherwise block every later inbound run. Those
+        # are identifiable by the generated name prefix, so reclaim them.
+        # Rules we did not create still fail loudly: silently deleting someone
+        # else's routing would be far worse than refusing to run.
+        if rule.name.startswith(_SIP_DISPATCH_RULE_PREFIX):
+            logger.warning(
+                "reclaiming orphaned sip dispatch rule",
+                extra={
+                    "sip_dispatch_rule_id": rule.sip_dispatch_rule_id,
+                    "rule_name": rule.name,
+                    "trunk_id": trunk_id,
+                },
             )
-    rule_name = f"sim-inbound-{room_name[-24:]}"
+            await _delete_sip_dispatch_rule(api_client, rule.sip_dispatch_rule_id)
+            continue
+        raise RuntimeError(
+            "sip_inbound_route_conflict: existing dispatch rule "
+            f"{rule.sip_dispatch_rule_id} ({rule.name}) already covers this "
+            "trunk and was not created by the SDK"
+        )
+    rule_name = f"{_SIP_DISPATCH_RULE_PREFIX}{room_name[-24:]}"
     resp = await api_client.sip.create_sip_dispatch_rule(
         CreateSIPDispatchRuleRequest(
             rule=SIPDispatchRule(
