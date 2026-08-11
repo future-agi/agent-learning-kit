@@ -49,6 +49,11 @@ _STATUS_MAP = {
 }
 _API_KEY_ENV = ("FI_API_KEY", "FUTURE_AGI_API_KEY", "AGENT_LEARNING_API_KEY")
 _SECRET_KEY_ENV = ("FI_SECRET_KEY", "FUTURE_AGI_SECRET_KEY", "AGENT_LEARNING_SECRET_KEY")
+_INTERNAL_SECRET_ENV = (
+    "FI_INTERNAL_SUBMIT_SECRET",
+    "ALK_RUNNER_INTERNAL_SECRET",
+    "INTERNAL_API_SECRET",
+)
 _API_URL_ENV = ("FI_BASE_URL", "FUTURE_AGI_API_URL", "AGENT_LEARNING_API_URL")
 _RUN_TEST_ID_ENV = (
     "FI_RUN_TEST_ID",
@@ -126,6 +131,7 @@ class FutureAGIResultSink:
 
         api_key = _first_env(self._api_key_env)
         secret_key = _first_env(self._secret_key_env)
+        internal_secret = _first_env(_INTERNAL_SECRET_ENV)
 
         submission: dict[str, Any] = {
             "schema_version": "futureagi.submission.v1",
@@ -158,6 +164,7 @@ class FutureAGIResultSink:
                 base_url=self._api_url,
                 api_key=api_key,
                 secret_key=secret_key,
+                internal_secret=internal_secret,
                 run_test_id=self._run_test_id,
                 test_execution_id=self._test_execution_id,
             )
@@ -205,6 +212,7 @@ def _submit_via_http(
     api_key: str,
     secret_key: str,
     run_test_id: str,
+    internal_secret: str | None = None,
     test_execution_id: str | None = None,
 ) -> dict[str, Any]:
     # No client-level Content-Type: httpx sets application/json for json= calls
@@ -214,6 +222,8 @@ def _submit_via_http(
         "x-api-key": api_key,
         "x-secret-key": secret_key,
     }
+    if internal_secret:
+        headers["Authorization"] = f"Bearer {internal_secret}"
     with httpx.Client(
         base_url=base_url.rstrip("/"),
         headers=headers,
