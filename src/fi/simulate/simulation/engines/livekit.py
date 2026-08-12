@@ -15,6 +15,10 @@ from uuid import uuid4
 try:
     from livekit import api, rtc
     from livekit.agents import Agent, AgentSession, function_tool, metrics
+    from livekit.agents.types import (
+        ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+        TOPIC_TRANSCRIPTION,
+    )
     from livekit.agents.voice import ModelSettings
     from livekit.agents.voice.io import TimedString
     from livekit.agents.voice.room_io import AudioInputOptions, RoomOptions
@@ -565,6 +569,9 @@ class LiveKitEngine(BaseEngine):
         session: AgentSession | None = None
         api_client: api.LiveKitAPI | None = None
         target: _TargetParticipant | None = None
+        target_transcription_mode = False
+        target_transcription_handler_registered = False
+        target_transcription_tasks: set[asyncio.Task[None]] = set()
         managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
         cleanup_errors: list[str] = []
@@ -908,6 +915,45 @@ class LiveKitEngine(BaseEngine):
                 target_identity=effective_target_identity,
                 timeout=effective_readiness_timeout,
             )
+            # RoomIO auto-links to the first participant that joined — the
+            # recorder, which publishes no audio — so the simulator's STT never
+            # hears the target. Re-point it at the target readiness selected.
+            target_room_io = getattr(session, "room_io", None)
+            if target_room_io is not None:
+                target_room_io.set_participant(target.identity)
+
+            # The target's mic track stays open for the whole call, so STT never
+            # finalizes a turn; the agent's authoritative turns arrive on its
+            # lk.transcription stream instead. Consume that stream and feed each
+            # completed target utterance into the simulator as a user turn.
+            def on_target_transcription(
+                reader: "rtc.TextStreamReader",
+                participant_identity: str,
+            ) -> None:
+                nonlocal target_transcription_mode
+                attrs = reader.info.attributes or {}
+                transcribed_track_id = attrs.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID)
+                if transcribed_track_id:
+                    if transcribed_track_id != target.audio_track_sid:
+                        return
+                elif str(participant_identity) != target.identity:
+                    return
+                # First target transcription means the target is speaking — stop
+                # the redundant simulator STT so it cannot emit duplicate turns.
+                if not target_transcription_mode:
+                    session.input.set_audio_enabled(False)
+                    session.clear_user_turn()
+                    target_transcription_mode = True
+                task = asyncio.create_task(
+                    _forward_target_transcription(reader, session)
+                )
+                target_transcription_tasks.add(task)
+                task.add_done_callback(target_transcription_tasks.discard)
+
+            room.register_text_stream_handler(
+                TOPIC_TRANSCRIPTION, on_target_transcription
+            )
+            target_transcription_handler_registered = True
             if conversation_direction == "simulator_first":
                 customer_agent.open_conversation()
             stop_reason = await _wait_for_conversation_end(
@@ -971,6 +1017,13 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            if target_transcription_handler_registered:
+                room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+            pending_transcriptions = list(target_transcription_tasks)
+            for pending in pending_transcriptions:
+                pending.cancel()
+            if pending_transcriptions:
+                await asyncio.gather(*pending_transcriptions, return_exceptions=True)
             session_to_close = session or (
                 getattr(customer_agent, "started_session", None)
                 if customer_agent is not None
@@ -1311,6 +1364,21 @@ async def _wait_for_target_audio(
     if selected is None:
         raise asyncio.TimeoutError
     return selected
+
+
+async def _forward_target_transcription(
+    reader: "rtc.TextStreamReader",
+    session: "AgentSession",
+) -> None:
+    try:
+        transcript = (await reader.read_all()).strip()
+        if transcript:
+            session.generate_reply(user_input=transcript)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to consume target transcription stream",
+            exc_info=redacted_exc_info(exc),
+        )
 
 
 def _find_target_audio(
