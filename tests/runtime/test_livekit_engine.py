@@ -1635,3 +1635,127 @@ def test_web_bridge_joins_as_target_without_sip(
     assert ("bridge_connect",) in calls
     assert ("bridge_close",) in calls
     assert not [call for call in calls if call[0] in {"dispatch", "sip_dial"}]
+
+
+# ---------------------------------------------------------------------------
+# Bounded-concurrent case execution (per-run concurrency + ordering)
+# ---------------------------------------------------------------------------
+
+
+def _concurrency_probe(monkeypatch, *, fail_index: int | None = None):
+    """Stub ``_run_single_test_case`` to record in-flight concurrency and use
+    inverted per-case delays so completion order differs from dataset order."""
+    engine = LiveKitEngine()
+    state = {"in_flight": 0, "max_in_flight": 0}
+
+    async def _fake_run_case(_agent, _runtime, persona, _simulator, **kwargs):
+        name = persona.persona["name"]
+        index = int(name.rsplit(" ", 1)[1])
+        state["in_flight"] += 1
+        state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        try:
+            if fail_index is not None and index == fail_index:
+                raise RuntimeError("boom")
+            # Inverted delay: earlier cases finish later, so completion order
+            # would scramble results if the loop relied on completion order.
+            await asyncio.sleep(0.02 * (10 - index))
+            return livekit._CaseOutcome(
+                status=CaseStatus.COMPLETED,
+                metadata={"case_name": name},
+            )
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+    return engine, state
+
+
+def test_cases_run_concurrently_and_preserve_dataset_order(monkeypatch) -> None:
+    engine, state = _concurrency_probe(monkeypatch)
+    agent = _agent(room_mode="managed", agent_name="support-agent")
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            scenario=_scenario(6),
+            run_id="run_concurrent",
+            max_concurrency=5,
+        )
+    )
+
+    # Actual overlap happened, capped at the ceiling.
+    assert state["max_in_flight"] == 5
+    # Despite inverted completion order, results stay in dataset order.
+    order = [r.persona.persona["name"] for r in report.results]
+    assert order == [f"Caller {i}" for i in range(6)]
+
+
+def test_default_concurrency_is_sequential(monkeypatch) -> None:
+    engine, state = _concurrency_probe(monkeypatch)
+    agent = _agent(room_mode="managed", agent_name="support-agent")
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            scenario=_scenario(4),
+            run_id="run_serial_default",
+        )
+    )
+
+    assert state["max_in_flight"] == 1
+    order = [r.persona.persona["name"] for r in report.results]
+    assert order == [f"Caller {i}" for i in range(4)]
+
+
+def test_sip_transport_forces_serial_even_with_high_concurrency(monkeypatch) -> None:
+    engine, state = _concurrency_probe(monkeypatch)
+    agent = _agent(
+        room_mode="managed",
+        room_name="sdk-suite-{test_case_id}",
+        transport={
+            "kind": "sip_outbound",
+            "sip_trunk_id": "ST_test",
+            "sip_number": "+12068956991",
+            "sip_call_to": "+14155551234",
+        },
+    )
+
+    asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            scenario=_scenario(4),
+            run_id="run_sip_serial",
+            max_concurrency=5,
+        )
+    )
+
+    # A run leases one DID — telephone cases must never overlap.
+    assert state["max_in_flight"] == 1
+
+
+def test_case_crash_yields_dense_failed_result_without_shifting_order(
+    monkeypatch,
+) -> None:
+    engine, _state = _concurrency_probe(monkeypatch, fail_index=2)
+    agent = _agent(room_mode="managed", agent_name="support-agent")
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            scenario=_scenario(5),
+            run_id="run_crash",
+            max_concurrency=5,
+        )
+    )
+
+    # No hole: every dataset slot has a result, still in order.
+    assert len(report.results) == 5
+    order = [r.persona.persona["name"] for r in report.results]
+    assert order == [f"Caller {i}" for i in range(5)]
+    # The crashed case is a typed failure in its own slot; others complete.
+    statuses = [r.metadata["status"] for r in report.results]
+    assert statuses[2] == CaseStatus.FAILED.value
+    assert report.results[2].metadata["failure"]["code"] == "case_execution_error"
+    assert all(
+        statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4)
+    )

@@ -284,6 +284,7 @@ class LiveKitEngine(BaseEngine):
         recording_root: str | Path = "recordings",
         recording_case_directory: str | Path | None = None,
         run_id: str | None = None,
+        max_concurrency: int = 1,
         **kwargs,
     ) -> TestReport:
         if agent_definition is None:
@@ -351,73 +352,123 @@ class LiveKitEngine(BaseEngine):
             )
         invocation_id = uuid4().hex[:12]
         report = TestReport()
-        for index, persona in enumerate(scenario.dataset):
-            persona_ref = persona.version or persona.content_hash()
-            test_case_id = derive_test_case_id(
-                current_run_id,
-                persona_ref,
-                index,
-            )
-            room_name = _resolve_room_name(
-                runtime,
-                run_id=current_run_id,
-                test_case_id=test_case_id,
-                index=index,
-                invocation_id=invocation_id,
-            )
-            case_directory = (
-                Path(recording_case_directory)
-                if recording_case_directory is not None
-                else Path(recording_root) / current_run_id / test_case_id
-            )
-            outcome = await self._run_single_test_case(
-                agent_definition,
-                runtime,
-                persona,
-                simulator,
-                run_id=current_run_id,
-                test_case_id=test_case_id,
-                invocation_id=invocation_id,
-                room_name=room_name,
-                case_directory=case_directory,
-                record_audio=record_audio,
-                recorder_sample_rate=recorder_sample_rate,
-                recorder_join_delay=recorder_join_delay,
-                min_turn_messages=min_turn_messages,
-                max_seconds=max_seconds,
-                connect_timeout=connect_timeout,
-                readiness_timeout=readiness_timeout,
-                cleanup_timeout=cleanup_timeout,
-                conversation_direction=conversation_direction,
-                agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
-            )
-            metadata = {
-                "engine": "livekit",
-                "run_id": current_run_id,
-                "test_case_id": test_case_id,
-                "invocation_id": invocation_id,
-                "status": outcome.status.value,
-                "room_name": room_name,
-                "room_mode": runtime.room_mode,
-                **outcome.metadata,
-            }
-            if outcome.failure is not None:
-                metadata["failure"] = outcome.failure.model_dump(
-                    mode="json",
-                    exclude_none=True,
+
+        # Cases run concurrently up to ``max_concurrency`` (bounded by the
+        # customer agent's own session capacity). SIP legs stay serial: a run
+        # leases a single DID, so overlapping calls would collide. Ask the
+        # resolved profile rather than re-branching on ``transport.kind``.
+        case_concurrency = (
+            1
+            if profile.is_sip
+            else max(1, min(int(max_concurrency or 1), len(scenario.dataset)))
+        )
+        case_semaphore = asyncio.Semaphore(case_concurrency)
+
+        async def _run_case(index: int, persona: Persona) -> TestCaseResult:
+            async with case_semaphore:
+                persona_ref = persona.version or persona.content_hash()
+                test_case_id = derive_test_case_id(
+                    current_run_id,
+                    persona_ref,
+                    index,
                 )
-            if outcome.evidence:
-                metadata["evidence"] = [
-                    item.model_dump(mode="json", exclude_none=True)
-                    for item in outcome.evidence
-                ]
-            if outcome.provider_artifacts:
-                metadata["provider_artifacts"] = [
-                    entry.model_dump(mode="json", exclude_none=True)
-                    for entry in outcome.provider_artifacts
-                ]
-            report.results.append(
-                TestCaseResult(
+                room_name = _resolve_room_name(
+                    runtime,
+                    run_id=current_run_id,
+                    test_case_id=test_case_id,
+                    index=index,
+                    invocation_id=invocation_id,
+                )
+                case_directory = (
+                    Path(recording_case_directory)
+                    if recording_case_directory is not None
+                    else Path(recording_root) / current_run_id / test_case_id
+                )
+                try:
+                    outcome = await self._run_single_test_case(
+                        agent_definition,
+                        runtime,
+                        persona,
+                        simulator,
+                        run_id=current_run_id,
+                        test_case_id=test_case_id,
+                        invocation_id=invocation_id,
+                        room_name=room_name,
+                        case_directory=case_directory,
+                        record_audio=record_audio,
+                        recorder_sample_rate=recorder_sample_rate,
+                        recorder_join_delay=recorder_join_delay,
+                        min_turn_messages=min_turn_messages,
+                        max_seconds=max_seconds,
+                        connect_timeout=connect_timeout,
+                        readiness_timeout=readiness_timeout,
+                        cleanup_timeout=cleanup_timeout,
+                        conversation_direction=conversation_direction,
+                        agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    # One case crashing must neither sink the batch nor leave a
+                    # hole that shifts the positional result-to-CallExecution
+                    # mapping — emit a dense failed case in its slot.
+                    logger.error(
+                        "voice case crashed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": current_run_id,
+                            "test_case_id": test_case_id,
+                        },
+                    )
+                    failure = SimulationFailure(
+                        stage=FailureStage.RUNNING,
+                        code="case_execution_error",
+                        message=f"{type(exc).__name__}: {exc}",
+                        retryable=False,
+                    )
+                    return TestCaseResult(
+                        persona=persona,
+                        transcript="",
+                        messages=[],
+                        metadata={
+                            "engine": "livekit",
+                            "run_id": current_run_id,
+                            "test_case_id": test_case_id,
+                            "invocation_id": invocation_id,
+                            "status": TestCaseStatus.FAILED.value,
+                            "room_name": room_name,
+                            "room_mode": runtime.room_mode,
+                            "failure": failure.model_dump(
+                                mode="json", exclude_none=True
+                            ),
+                        },
+                    )
+                metadata = {
+                    "engine": "livekit",
+                    "run_id": current_run_id,
+                    "test_case_id": test_case_id,
+                    "invocation_id": invocation_id,
+                    "status": outcome.status.value,
+                    "room_name": room_name,
+                    "room_mode": runtime.room_mode,
+                    **outcome.metadata,
+                }
+                if outcome.failure is not None:
+                    metadata["failure"] = outcome.failure.model_dump(
+                        mode="json",
+                        exclude_none=True,
+                    )
+                if outcome.evidence:
+                    metadata["evidence"] = [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in outcome.evidence
+                    ]
+                if outcome.provider_artifacts:
+                    metadata["provider_artifacts"] = [
+                        entry.model_dump(mode="json", exclude_none=True)
+                        for entry in outcome.provider_artifacts
+                    ]
+                return TestCaseResult(
                     persona=persona,
                     transcript=outcome.transcript,
                     messages=outcome.messages,
@@ -426,7 +477,17 @@ class LiveKitEngine(BaseEngine):
                     audio_output_path=outcome.audio_output_path,
                     audio_combined_path=outcome.audio_combined_path,
                 )
+
+        # ``gather`` preserves argument order regardless of completion order, so
+        # ``report.results`` stays in dataset order — the positional contract the
+        # FutureAGI sink relies on to map results to pre-allocated CallExecutions.
+        results = await asyncio.gather(
+            *(
+                _run_case(index, persona)
+                for index, persona in enumerate(scenario.dataset)
             )
+        )
+        report.results.extend(results)
         return report
 
     async def _run_single_test_case(

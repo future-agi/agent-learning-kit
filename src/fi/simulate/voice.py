@@ -40,6 +40,7 @@ async def run_voice_simulation(
     cleanup_timeout: float = 30.0,
     conversation_direction: str = "simulator_first",
     agent_first_silence_timeout_seconds: float = 30.0,
+    max_concurrency: int = 1,
 ) -> TestReport:
     """Run a LiveKit voice simulation directly from typed SDK objects."""
 
@@ -67,6 +68,7 @@ async def run_voice_simulation(
         cleanup_timeout=cleanup_timeout,
         conversation_direction=conversation_direction,
         agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+        max_concurrency=max_concurrency,
     )
 
 
