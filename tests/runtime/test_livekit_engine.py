@@ -794,7 +794,6 @@ def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
                 FakeSession(),
                 customer_agent=SimpleNamespace(end_requested=end_requested),
                 target_identity="target-agent",
-                min_turn_messages=2,
                 timeout=1,
                 conversation_direction="simulator_first",
                 agent_first_silence_timeout_seconds=30,
@@ -806,6 +805,49 @@ def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
 
     assert reason == "simulator_end_call"
     assert calls == []
+
+
+def test_conversation_end_returns_settled_when_silence_backstop_fires(
+    monkeypatch,
+) -> None:
+    # Wiring check: task-dict key -> reason tuple -> returned string. With no
+    # endCall and no disconnect, a fired silence backstop ends as
+    # "conversation_settled" (which classifies COMPLETED).
+    class FakeRoom:
+        def on(self, _event, _callback):
+            return None
+
+        def off(self, _event, _callback):
+            return None
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+                SimpleNamespace(type="message", role="user", text_content="Hello"),
+            ]
+        )
+
+        def on(self, _event, _callback):
+            return None
+
+    async def _immediate_silence(session, **kwargs):
+        return None
+
+    monkeypatch.setattr(livekit, "_wait_for_conversation_silence", _immediate_silence)
+
+    async def run() -> str:
+        return await livekit._wait_for_conversation_end(
+            FakeRoom(),
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            timeout=1,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
+        )
+
+    assert asyncio.run(run()) == "conversation_settled"
 
 
 def test_provider_disconnect_can_end_a_balanced_conversation() -> None:
@@ -840,7 +882,6 @@ def test_provider_disconnect_can_end_a_balanced_conversation() -> None:
             FakeSession(),
             customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
             target_identity="target-agent",
-            min_turn_messages=6,
             timeout=1,
             conversation_direction="simulator_first",
             agent_first_silence_timeout_seconds=30,
@@ -858,29 +899,54 @@ def test_provider_disconnect_can_end_a_balanced_conversation() -> None:
     assert outcome.status == CaseStatus.COMPLETED
 
 
-def test_stable_minimum_messages_ends_conversation_after_quiet_grace() -> None:
+def test_conversation_silence_backstop_ends_after_quiet_grace() -> None:
+    # Ends purely on a silence gap — no message-count floor. A single message is
+    # enough; the backstop only cares that nothing new has happened.
     session = SimpleNamespace(
         history=SimpleNamespace(
             items=[
                 SimpleNamespace(type="message", role="assistant", text_content="Hello"),
-                SimpleNamespace(type="message", role="user", text_content="Resolved"),
             ]
         )
     )
 
     asyncio.run(
         asyncio.wait_for(
-            livekit._wait_for_stable_minimum_messages(
-                session,
-                2,
-                quiet_seconds=0.01,
-            ),
+            livekit._wait_for_conversation_silence(session, quiet_seconds=0.01),
             timeout=1,
         )
     )
 
 
-def test_minimum_message_grace_waits_until_speech_has_finished() -> None:
+def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
+    # The old behaviour ended the call the moment it hit the floor + a short lull.
+    # Now a floor-length exchange with a sub-backstop lull keeps running.
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+                SimpleNamespace(type="message", role="user", text_content="Hello"),
+                SimpleNamespace(type="message", role="assistant", text_content="More?"),
+                SimpleNamespace(type="message", role="user", text_content="Yes"),
+                SimpleNamespace(type="message", role="assistant", text_content="Go on"),
+                SimpleNamespace(type="message", role="user", text_content="Sure"),
+            ]
+        )
+    )
+
+    async def run() -> bool:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(session, quiet_seconds=5.0)
+        )
+        await asyncio.sleep(0.05)
+        done = task.done()
+        task.cancel()
+        return done
+
+    assert asyncio.run(run()) is False
+
+
+def test_conversation_silence_waits_until_speech_has_finished() -> None:
     session = SimpleNamespace(
         agent_state="speaking",
         user_state="listening",
@@ -894,11 +960,7 @@ def test_minimum_message_grace_waits_until_speech_has_finished() -> None:
 
     async def run() -> None:
         task = asyncio.create_task(
-            livekit._wait_for_stable_minimum_messages(
-                session,
-                2,
-                quiet_seconds=0.01,
-            )
+            livekit._wait_for_conversation_silence(session, quiet_seconds=0.01)
         )
         await asyncio.sleep(0.02)
         assert not task.done()
@@ -906,6 +968,22 @@ def test_minimum_message_grace_waits_until_speech_has_finished() -> None:
         await asyncio.wait_for(task, timeout=1)
 
     asyncio.run(run())
+
+
+def test_conversation_settled_reason_classifies_completed() -> None:
+    messages = [
+        {"role": "assistant", "content": "One"},
+        {"role": "user", "content": "Two"},
+        {"role": "assistant", "content": "Three"},
+        {"role": "user", "content": "Four"},
+        {"role": "assistant", "content": "Five"},
+        {"role": "user", "content": "Six"},
+    ]
+    outcome = livekit._conversation_outcome(
+        "conversation_settled", messages, min_turn_messages=6
+    )
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.metadata["stop_reason"] == "conversation_settled"
 
 
 def test_conversation_timeout_does_not_start_session_teardown() -> None:
@@ -933,7 +1011,6 @@ def test_conversation_timeout_does_not_start_session_teardown() -> None:
             FakeSession(),
             customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
             target_identity="target-agent",
-            min_turn_messages=2,
             timeout=0.01,
             conversation_direction="simulator_first",
             agent_first_silence_timeout_seconds=30,

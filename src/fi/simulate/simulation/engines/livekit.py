@@ -910,7 +910,6 @@ class LiveKitEngine(BaseEngine):
                 session,
                 customer_agent=customer_agent,
                 target_identity=target.identity,
-                min_turn_messages=min_turn_messages,
                 timeout=max_seconds,
                 conversation_direction=conversation_direction,
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
@@ -1350,13 +1349,19 @@ def _find_target_audio(
     return sorted(candidates, key=lambda item: (item[0], item[1].identity))[0][1]
 
 
+# A run ends naturally when the simulator calls ``endCall``; this is only the
+# backstop for a conversation that has genuinely stalled or already finished but
+# never hung up. Kept long so normal turn-gaps (STT endpoint + LLM + TTS latency)
+# never trip it — the run is never cut off at a message count.
+_SILENCE_BACKSTOP_SECONDS = 60.0
+
+
 async def _wait_for_conversation_end(
     room: rtc.Room,
     session: AgentSession,
     *,
     customer_agent: _TestRunnerAgent,
     target_identity: str,
-    min_turn_messages: int,
     timeout: float,
     conversation_direction: str,
     agent_first_silence_timeout_seconds: float,
@@ -1378,8 +1383,8 @@ async def _wait_for_conversation_end(
         "closed": asyncio.create_task(closed.wait()),
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
-        "minimum_messages_reached": asyncio.create_task(
-            _wait_for_stable_minimum_messages(session, min_turn_messages)
+        "conversation_settled": asyncio.create_task(
+            _wait_for_conversation_silence(session)
         ),
     }
     if conversation_direction == "agent_first":
@@ -1412,7 +1417,7 @@ async def _wait_for_conversation_end(
             "simulator_end_call",
             "target_disconnected",
             "conversation_silence_timeout",
-            "minimum_messages_reached",
+            "conversation_settled",
             "provider_disconnected",
             "closed",
         ):
@@ -1428,33 +1433,35 @@ async def _wait_for_conversation_end(
         )
 
 
-async def _wait_for_stable_minimum_messages(
+async def _wait_for_conversation_silence(
     session: AgentSession,
-    min_turn_messages: int,
     *,
-    quiet_seconds: float = 5.0,
+    quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
 ) -> None:
-    """Finish after the message floor and a short period without a new turn."""
-    if min_turn_messages <= 0:
-        return
+    """Finish only after a long, genuine stretch of mutual silence.
+
+    The simulator ends a call by calling ``endCall`` once the scenario is done;
+    this is only the backstop for a conversation that has actually stalled (or
+    already finished but never hung up). It deliberately does **not** look at the
+    message count — a run is never cut off at a floor, it runs as long as turns
+    keep flowing. The timer resets on every new message and while either side is
+    speaking, so only a real ``quiet_seconds`` gap of nothing ends the call.
+    """
     last_signature: tuple[tuple[str, str], ...] | None = None
     stable_since: float | None = None
     loop = asyncio.get_running_loop()
     while True:
         messages = _session_messages(session)
         signature = tuple((message["role"], message["content"]) for message in messages)
-        eligible = len(messages) >= min_turn_messages and _has_role_alternation(
-            messages
-        )
         participant_speaking = (
             getattr(session, "agent_state", None) == "speaking"
             or getattr(session, "user_state", None) == "speaking"
         )
-        if not eligible or participant_speaking:
+        if participant_speaking:
             stable_since = None
         elif stable_since is None or signature != last_signature:
             stable_since = loop.time()
-        elif stable_since is not None and loop.time() - stable_since >= quiet_seconds:
+        elif loop.time() - stable_since >= quiet_seconds:
             return
         last_signature = signature
         await asyncio.sleep(0.1)

@@ -365,6 +365,35 @@ def test_begin_stream_is_noop_for_local_run_without_execution(tmp_path):
     assert sink._streaming is False
 
 
+def test_livekit_run_stamps_provider_marker_for_role_resolution():
+    from fi.simulate.results.futureagi import _build_result_payload
+    from fi.simulate.runtime import TestCaseStatus
+    from fi.simulate.runtime.report import SimulationTestCaseResult
+    from fi.simulate.simulation.models import Persona, TestCaseResult
+
+    persona = Persona(persona={"name": "C"}, situation="s", outcome="o")
+    result = TestCaseResult(
+        persona=persona,
+        transcript="hi",
+        messages=[],
+        metadata={"engine": "livekit"},
+    )
+    case = SimulationTestCaseResult(
+        test_case_id="tc",
+        status=TestCaseStatus.COMPLETED,
+        persona=persona,
+        result=result,
+    )
+
+    payload = _build_result_payload(case)
+
+    # A truthy livekit marker lets the platform SpeakerRoleResolver detect the
+    # provider as LiveKit even for a black-box target with no usage evidence, so
+    # eval transcript labels don't fall back to the VAPI-inbound (swapped) map.
+    pcd = payload.get("provider_call_data") or {}
+    assert pcd.get("livekit")
+
+
 def _import(ref: str):
     import importlib
 

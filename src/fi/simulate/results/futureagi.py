@@ -547,6 +547,18 @@ def _build_result_payload(case) -> dict[str, Any]:
             if target.cost_cents is not None:
                 payload["costs"] = {"cost_cents": target.cost_cents}
 
+        # Every LiveKit-engine run carries a truthy ``livekit`` marker so the
+        # platform's SpeakerRoleResolver detects the provider as LiveKit — its
+        # role map is direction-independent and already matches the SDK's
+        # tested-agent-perspective transcript. Without this a black-box target
+        # (no usage evidence) leaves ``provider_call_data`` empty, the platform
+        # falls back to VAPI, and an inbound default swaps agent/customer labels.
+        # A falsy ``{}`` is not enough — ``detect_provider`` treats it as absent.
+        if str(result.metadata.get("engine")) == "livekit" and not provider_call_data.get(
+            "livekit"
+        ):
+            provider_call_data["livekit"] = {"engine": "livekit"}
+
         if provider_call_data:
             payload["provider_call_data"] = provider_call_data
 
