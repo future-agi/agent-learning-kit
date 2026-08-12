@@ -99,6 +99,19 @@ class _CaseOutcome:
     provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
 
 
+def _dispatch_metadata_json(agent_definition) -> str:
+    """Metadata for the target agent's LiveKit dispatch.
+
+    EMPTY by default: a target agent built from a LiveKit template branches on
+    ``ctx.job.metadata`` and treats any non-empty payload as an outbound/no-greet
+    job, so it never publishes an audio track and readiness times out
+    (``agent_unavailable``). Only a target explicitly built to consume dispatch
+    metadata sets ``agent_definition.dispatch_metadata``.
+    """
+    meta = getattr(agent_definition, "dispatch_metadata", None)
+    return json.dumps(meta, sort_keys=True) if meta else ""
+
+
 def _resolve_target_profile(kind: str):
     """Look up the target adapter's profile — the factory that replaced the
     engine's ``transport.kind`` branching. Unknown kinds fail loudly, which is
@@ -626,15 +639,7 @@ class LiveKitEngine(BaseEngine):
                                 agent_name=agent_definition.agent_name
                                 or agent_definition.name,
                                 room=room_name,
-                                metadata=json.dumps(
-                                    {
-                                        "simulation_run_id": run_id,
-                                        "test_case_id": test_case_id,
-                                        "simulator_participant_identity": simulator_identity,
-                                        "target_instructions": agent_definition.system_prompt,
-                                    },
-                                    sort_keys=True,
-                                ),
+                                metadata=_dispatch_metadata_json(agent_definition),
                             )
                         ),
                         timeout=connect_timeout,

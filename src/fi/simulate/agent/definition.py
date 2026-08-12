@@ -303,6 +303,16 @@ class AgentDefinition(BaseModel):
         None,
         description="Exact registered LiveKit target agent name used for managed dispatch.",
     )
+    dispatch_metadata: Optional[dict] = Field(
+        None,
+        description=(
+            "Metadata sent to the target agent's LiveKit dispatch. Default None "
+            "sends EMPTY metadata: agents built from LiveKit templates treat any "
+            "job metadata as an outbound/no-greet call and stop publishing audio, "
+            "so injecting simulation context makes readiness time out. Set this "
+            "only for agents that are built to consume dispatch metadata."
+        ),
+    )
     target_participant_identity: Optional[str] = Field(
         None,
         description="Exact target participant identity when it is known in advance.",

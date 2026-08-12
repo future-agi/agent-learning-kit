@@ -1898,3 +1898,18 @@ def test_on_case_complete_error_never_fails_the_case(monkeypatch) -> None:
     assert [r.persona.persona["name"] for r in report.results] == [
         f"Caller {i}" for i in range(3)
     ]
+
+
+def test_dispatch_metadata_empty_by_default():
+    # A real target agent flips to outbound/no-greet on any dispatch metadata,
+    # so the default must be an empty string (not our simulation context).
+    assert livekit._dispatch_metadata_json(_agent()) == ""
+    assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata={})) == ""
+
+
+def test_dispatch_metadata_forwarded_when_set():
+    out = livekit._dispatch_metadata_json(
+        SimpleNamespace(dispatch_metadata={"b": 2, "a": 1})
+    )
+    assert out == json.dumps({"a": 1, "b": 2}, sort_keys=True)
