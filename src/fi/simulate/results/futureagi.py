@@ -100,6 +100,14 @@ class FutureAGIResultSink:
         self._event_count = 0
         self._spec: SimulationSpec | None = None
         self._plan: SimulationPlan | None = None
+        # Streaming state (hosted runs only). ``begin_stream`` opens the client
+        # and allocates rows up front; ``submit_case`` PATCHes one row by index as
+        # its case finishes; ``finalize_stream`` reconciles + closes.
+        self._streaming = False
+        self._stream_client: httpx.Client | None = None
+        self._stream_call_ids: list[str] = []
+        self._streamed_indices: set[int] = set()
+        self._stream_failures: dict[int, dict[str, Any]] = {}
 
     @property
     def run_directory(self) -> Path | None:
@@ -121,8 +129,155 @@ class FutureAGIResultSink:
 
     def write_report(self, report: SimulationReport) -> Path:
         report_path = self._local.write_report(report)
-        self.submit(report)
+        # When streaming, cases were already PATCHed one-by-one as they finished;
+        # finalize only reconciles the stragglers and writes submission.json.
+        # Otherwise the whole report is submitted here in one batch (local/chat).
+        if self._streaming:
+            self.finalize_stream(report)
+        else:
+            self.submit(report)
         return report_path
+
+    def begin_stream(
+        self,
+        spec: SimulationSpec,
+        plan: SimulationPlan | None = None,
+    ) -> bool:
+        """Open a run-scoped submission session for per-case streaming.
+
+        Hosted only: a pre-created ``test_execution_id`` is the signal. Local and
+        chat runs (no pre-created execution) return ``False`` and keep the
+        batch-at-end path untouched. On any setup error we also return ``False``
+        and fall back to that path — streaming setup must never break the run.
+        """
+        if not self._test_execution_id:
+            return False
+        api_key = _first_env(self._api_key_env)
+        secret_key = _first_env(self._secret_key_env)
+        internal_secret = _first_env(_INTERNAL_SECRET_ENV)
+        if _missing_config(
+            api_url=self._api_url,
+            api_key=api_key,
+            secret_key=secret_key,
+            run_test_id=self._run_test_id,
+        ):
+            return False
+        try:
+            client = _open_client(
+                self._api_url, api_key, secret_key, internal_secret
+            )
+            call_ids = _allocate_call_ids(client, self._test_execution_id)
+        except Exception:
+            if self._stream_client is not None:
+                self._stream_client.close()
+            self._stream_client = None
+            return False
+
+        self._stream_client = client
+        self._stream_call_ids = call_ids
+        self._streamed_indices = set()
+        self._stream_failures = {}
+        self._streaming = True
+        return True
+
+    def submit_case(self, index: int, case: Any) -> None:
+        """PATCH one finished case into its pre-allocated CallExecution row.
+
+        Called off the event loop (``asyncio.to_thread``) from the runner's
+        per-case callback; ``httpx.Client`` is thread-safe, so the run-scoped
+        client is shared across concurrent case submissions. Failures are logged
+        and left for ``finalize_stream`` to reconcile — never raised.
+        """
+        if not self._streaming or self._stream_client is None:
+            return
+        if index >= len(self._stream_call_ids):
+            # More results than allocated rows: the platform under-provisioned.
+            # The batch path drops these silently via ``zip``; record it here so
+            # submission.json shows the drop.
+            self._stream_failures[index] = {"index": index, "reason": "no_allocated_row"}
+            return
+        call_id = self._stream_call_ids[index]
+        try:
+            payload = _build_result_payload(case)
+            recording_url = _maybe_upload_recording(
+                self._stream_client, call_id, case
+            )
+            if recording_url:
+                payload["recording_url"] = recording_url
+            resp = self._stream_client.patch(
+                f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
+                json=payload,
+            )
+            if resp.is_error:
+                self._stream_failures[index] = {
+                    "index": index,
+                    "call_execution_id": call_id,
+                    "status_code": resp.status_code,
+                    "body": _safe_body(resp),
+                }
+                return
+            self._streamed_indices.add(index)
+            self._stream_failures.pop(index, None)
+        except Exception as exc:
+            self._stream_failures[index] = {
+                "index": index,
+                "call_execution_id": call_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def finalize_stream(self, report: SimulationReport) -> dict[str, Any]:
+        """Reconcile any case the stream missed, then close the session.
+
+        Runs after the engine returns, so no cases are in flight. Any index not
+        already streamed (PATCH failure, or a whole-report failure that never fired
+        callbacks) is retried here. ``submission.json`` records ``status:
+        submitted`` when at least one case landed and ``failed`` when none did —
+        ``child_entrypoint`` gates job success on that field.
+        """
+        run_directory = self._local.run_directory
+        for index, case in enumerate(report.test_cases):
+            if index in self._streamed_indices:
+                continue
+            self.submit_case(index, case)
+
+        submitted = [
+            self._stream_call_ids[i] for i in sorted(self._streamed_indices)
+        ]
+        failed = [detail for _, detail in sorted(self._stream_failures.items())]
+        # Every allocated row failing to submit is a failed submission — not a
+        # green job with zero results landed (the batch path signalled this by
+        # letting the exception propagate to ``submit``). Partial failures stay
+        # "submitted": the cases that did land are real.
+        all_failed = (
+            bool(report.test_cases)
+            and bool(self._stream_call_ids)
+            and not self._streamed_indices
+        )
+        submission: dict[str, Any] = {
+            "schema_version": "futureagi.submission.v1",
+            "run_id": report.run_id,
+            "report_hash": report.report_hash,
+            "test_cases": len(report.test_cases),
+            "events_recorded": self._event_count,
+            "api_url": self._api_url,
+            "run_test_id": self._run_test_id,
+            "test_execution_id": self._test_execution_id,
+            "streamed": True,
+            "status": "failed" if all_failed else "submitted",
+            "allocated_call_executions": list(self._stream_call_ids),
+            "submitted_call_executions": submitted,
+            "failed_call_executions": failed,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if all_failed:
+            submission["reason"] = "stream_all_cases_failed"
+        if self._stream_client is not None:
+            self._stream_client.close()
+            self._stream_client = None
+        self._streaming = False
+        if run_directory is not None:
+            _write_submission(run_directory, submission)
+        return submission
 
     def submit(self, report: SimulationReport) -> dict[str, Any]:
         run_directory = self._local.run_directory
@@ -205,6 +360,57 @@ def _missing_config(
     return missing
 
 
+def _open_client(
+    base_url: str,
+    api_key: str,
+    secret_key: str,
+    internal_secret: str | None = None,
+) -> httpx.Client:
+    """Build the ALK ingestion HTTP client (shared by batch + streaming paths).
+
+    No client-level Content-Type: httpx sets application/json for ``json=`` calls
+    and multipart/form-data (with boundary) for the ``files=`` recording upload.
+    A fixed application/json here silently breaks the multipart upload.
+    """
+    headers = {
+        "x-api-key": api_key,
+        "x-secret-key": secret_key,
+    }
+    if internal_secret:
+        headers["Authorization"] = f"Bearer {internal_secret}"
+    return httpx.Client(
+        base_url=base_url.rstrip("/"),
+        headers=headers,
+        timeout=_HTTP_TIMEOUT_SECONDS,
+    )
+
+
+def _ensure_test_execution(client: httpx.Client, run_test_id: str) -> str:
+    """Create a TestExecution from the run test (local runs only)."""
+    start = client.post(
+        f"/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/",
+        json={},
+    )
+    start.raise_for_status()
+    return _unwrap(start.json())["test_execution_id"]
+
+
+def _allocate_call_ids(client: httpx.Client, test_execution_id: str) -> list[str]:
+    """Claim every CallExecution row for the execution (adopts precreated rows)."""
+    call_execution_ids: list[str] = []
+    for _ in range(64):  # hard cap to prevent runaway
+        resp = client.post(
+            f"/simulate/api/alk-simulate/test-executions/{test_execution_id}/batch/",
+            json={},
+        )
+        resp.raise_for_status()
+        body = _unwrap(resp.json())
+        call_execution_ids.extend(body["call_execution_ids"])
+        if not body.get("has_more"):
+            break
+    return call_execution_ids
+
+
 def _submit_via_http(
     *,
     report: SimulationReport,
@@ -215,42 +421,13 @@ def _submit_via_http(
     internal_secret: str | None = None,
     test_execution_id: str | None = None,
 ) -> dict[str, Any]:
-    # No client-level Content-Type: httpx sets application/json for json= calls
-    # and multipart/form-data (with boundary) for the files= recording upload.
-    # A fixed application/json here silently breaks the multipart upload.
-    headers = {
-        "x-api-key": api_key,
-        "x-secret-key": secret_key,
-    }
-    if internal_secret:
-        headers["Authorization"] = f"Bearer {internal_secret}"
-    with httpx.Client(
-        base_url=base_url.rstrip("/"),
-        headers=headers,
-        timeout=_HTTP_TIMEOUT_SECONDS,
-    ) as client:
+    with _open_client(base_url, api_key, secret_key, internal_secret) as client:
         # Hosted runs submit into a TestExecution the platform pre-created; local
         # runs create one here from the run test.
         if not test_execution_id:
-            start = client.post(
-                f"/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/",
-                json={},
-            )
-            start.raise_for_status()
-            start_data = _unwrap(start.json())
-            test_execution_id = start_data["test_execution_id"]
+            test_execution_id = _ensure_test_execution(client, run_test_id)
 
-        call_execution_ids: list[str] = []
-        for _ in range(64):  # hard cap to prevent runaway
-            resp = client.post(
-                f"/simulate/api/alk-simulate/test-executions/{test_execution_id}/batch/",
-                json={},
-            )
-            resp.raise_for_status()
-            body = _unwrap(resp.json())
-            call_execution_ids.extend(body["call_execution_ids"])
-            if not body.get("has_more"):
-                break
+        call_execution_ids = _allocate_call_ids(client, test_execution_id)
 
         submitted_ids: list[str] = []
         failed: list[dict[str, Any]] = []

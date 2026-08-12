@@ -1759,3 +1759,65 @@ def test_case_crash_yields_dense_failed_result_without_shifting_order(
     assert all(
         statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4)
     )
+
+
+def test_on_case_complete_streams_every_index_including_failed_slot(
+    monkeypatch,
+) -> None:
+    # The streaming hook must fire once per dataset slot — success AND the dense
+    # FAILED slot — so no case is silently dropped from the platform.
+    engine, _state = _concurrency_probe(monkeypatch, fail_index=2)
+    agent = _agent(room_mode="managed", agent_name="support-agent")
+
+    streamed: list[tuple[int, str, str]] = []
+    lock = asyncio.Lock()
+
+    async def _on_case_complete(index, case):
+        async with lock:
+            streamed.append(
+                (index, case.persona.persona["name"], case.metadata["status"])
+            )
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            scenario=_scenario(5),
+            run_id="run_stream",
+            max_concurrency=5,
+            on_case_complete=_on_case_complete,
+        )
+    )
+
+    # Exactly one callback per dataset slot; indices complete and unique.
+    assert sorted(i for i, _, _ in streamed) == [0, 1, 2, 3, 4]
+    by_index = {i: (name, status) for i, name, status in streamed}
+    # Every streamed case matches its finalized report slot (name + status).
+    for i, result in enumerate(report.results):
+        assert by_index[i][0] == result.persona.persona["name"]
+        assert by_index[i][1] == result.metadata["status"]
+    assert by_index[2][1] == CaseStatus.FAILED.value
+
+
+def test_on_case_complete_error_never_fails_the_case(monkeypatch) -> None:
+    # A raising stream callback must not sink the case — the run still completes
+    # and every slot is present (finalize reconciles the un-streamed ones).
+    engine, _state = _concurrency_probe(monkeypatch)
+    agent = _agent(room_mode="managed", agent_name="support-agent")
+
+    async def _boom(index, case):
+        raise RuntimeError("sink down")
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            scenario=_scenario(3),
+            run_id="run_stream_err",
+            max_concurrency=3,
+            on_case_complete=_boom,
+        )
+    )
+
+    assert len(report.results) == 3
+    assert [r.persona.persona["name"] for r in report.results] == [
+        f"Caller {i}" for i in range(3)
+    ]

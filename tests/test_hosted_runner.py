@@ -187,6 +187,184 @@ def test_sink_submits_into_pre_created_execution(tmp_path, monkeypatch):
     assert seen["result"], "expected a result PATCH per test case"
 
 
+def _canonical_case(index: int):
+    from fi.simulate.runtime import TestCaseStatus
+    from fi.simulate.runtime.report import SimulationTestCaseResult
+    from fi.simulate.simulation.models import Persona as _Persona
+    from fi.simulate.simulation.models import TestCaseResult
+
+    persona = _Persona(
+        persona={"name": f"Caller {index}"}, situation="s", outcome="o"
+    )
+    return SimulationTestCaseResult(
+        test_case_id=f"tc-{index}",
+        status=TestCaseStatus.COMPLETED,
+        persona=persona,
+        result=TestCaseResult(persona=persona, transcript="hi", messages=[]),
+    )
+
+
+def _mock_streaming_client(monkeypatch, seen, *, result_status: int = 200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/test-executions/"):
+            seen["create"].append(path)
+            return httpx.Response(200, json={"result": {"test_execution_id": "BAD"}})
+        if path.endswith("/batch/"):
+            seen["batch"].append(path)
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "call_execution_ids": ["ce-0", "ce-1", "ce-2"],
+                        "has_more": False,
+                    }
+                },
+            )
+        if path.endswith("/result/"):
+            seen["result"].append(path)
+            if result_status >= 400:
+                return httpx.Response(result_status, json={"detail": "down"})
+            return httpx.Response(200, json={"result": {"status": "ingested"}})
+        return httpx.Response(404)
+
+    original_client = httpx.Client
+
+    def client_factory(**kwargs):
+        kwargs.setdefault("transport", httpx.MockTransport(handler))
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", client_factory)
+
+
+def test_sink_streams_each_case_and_finalizes_submitted(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    sink = FutureAGIResultSink(
+        root=str(tmp_path / "runs"),
+        api_url="http://localhost:8000",
+        run_test_id="rt-1",
+        test_execution_id="te-1",
+    )
+    spec = _chat_spec("callable", {"target": "x:y"})
+    sink.prepare(spec)
+
+    seen = {"create": [], "batch": [], "result": []}
+    _mock_streaming_client(monkeypatch, seen)
+    monkeypatch.setenv("FI_API_KEY", "k")
+    monkeypatch.setenv("FI_SECRET_KEY", "s")
+
+    # Hosted gate opens; rows allocated up front, create endpoint untouched.
+    assert sink.begin_stream(spec) is True
+    assert seen["create"] == []
+    assert any("te-1" in path for path in seen["batch"])
+
+    cases = [_canonical_case(i) for i in range(3)]
+    # Stream slots 0 and 2 as they "finish"; slot 1 is left for finalize.
+    sink.submit_case(0, cases[0])
+    sink.submit_case(2, cases[2])
+    assert len(seen["result"]) == 2
+
+    report = SimpleNamespace(run_id="r", report_hash="h", test_cases=cases)
+    submission = sink.finalize_stream(report)
+
+    # finalize reconciles the missed slot -> three PATCHes total, all submitted.
+    assert len(seen["result"]) == 3
+    assert submission["status"] == "submitted"
+    assert submission["streamed"] is True
+    assert sorted(submission["submitted_call_executions"]) == [
+        "ce-0",
+        "ce-1",
+        "ce-2",
+    ]
+    assert submission["failed_call_executions"] == []
+    # submission.json on disk says submitted — child_entrypoint gates on this.
+    on_disk = json.loads((sink.run_directory / "submission.json").read_text())
+    assert on_disk["status"] == "submitted"
+
+
+def test_finalize_reports_failed_when_every_case_fails_to_submit(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    sink = FutureAGIResultSink(
+        root=str(tmp_path / "runs"),
+        api_url="http://localhost:8000",
+        run_test_id="rt-1",
+        test_execution_id="te-1",
+    )
+    spec = _chat_spec("callable", {"target": "x:y"})
+    sink.prepare(spec)
+
+    seen = {"create": [], "batch": [], "result": []}
+    _mock_streaming_client(monkeypatch, seen, result_status=500)
+    monkeypatch.setenv("FI_API_KEY", "k")
+    monkeypatch.setenv("FI_SECRET_KEY", "s")
+
+    assert sink.begin_stream(spec) is True
+    cases = [_canonical_case(i) for i in range(3)]
+    for i, case in enumerate(cases):
+        sink.submit_case(i, case)
+    # Backend rejects every PATCH -> nothing landed.
+    assert sink._streamed_indices == set()
+
+    report = SimpleNamespace(run_id="r", report_hash="h", test_cases=cases)
+    submission = sink.finalize_stream(report)
+
+    # A total submission failure must surface as FAILED, not a green empty job —
+    # child_entrypoint would otherwise report COMPLETED with zero results.
+    assert submission["status"] == "failed"
+    assert submission["submitted_call_executions"] == []
+    assert len(submission["failed_call_executions"]) == 3
+    assert submission["failed_call_executions"][0]["status_code"] == 500
+
+
+def test_runner_streaming_callback_patches_by_index(tmp_path, monkeypatch):
+    from fi.simulate.simulation.models import Persona, TestCaseResult
+
+    sink = FutureAGIResultSink(
+        root=str(tmp_path / "runs"),
+        api_url="http://localhost:8000",
+        run_test_id="rt-1",
+        test_execution_id="te-1",
+    )
+    spec = _chat_spec("callable", {"target": "x:y"})
+    sink.prepare(spec)
+
+    seen = {"create": [], "batch": [], "result": []}
+    _mock_streaming_client(monkeypatch, seen)
+    monkeypatch.setenv("FI_API_KEY", "k")
+    monkeypatch.setenv("FI_SECRET_KEY", "s")
+
+    # The runner's real closure: begin_stream + legacy->canonical + to_thread PATCH.
+    callback = SimulationRunner()._begin_streaming(sink, spec, None)
+    assert callback is not None
+
+    persona = Persona(persona={"name": "C0"}, situation="s", outcome="o")
+    legacy = TestCaseResult(
+        persona=persona, transcript="hi", messages=[], metadata={"status": "completed"}
+    )
+    asyncio.run(callback(0, legacy))
+
+    assert any(path.endswith("/result/") for path in seen["result"])
+    assert 0 in sink._streamed_indices
+
+
+def test_begin_stream_is_noop_for_local_run_without_execution(tmp_path):
+    # No pre-created test_execution_id -> local/chat run keeps the batch-at-end
+    # path; streaming never activates.
+    sink = FutureAGIResultSink(
+        root=str(tmp_path / "runs"),
+        api_url="http://localhost:8000",
+        run_test_id="rt-1",
+    )
+    spec = _chat_spec("callable", {"target": "x:y"})
+    sink.prepare(spec)
+    assert sink.begin_stream(spec) is False
+    assert sink._streaming is False
+
+
 def _import(ref: str):
     import importlib
 

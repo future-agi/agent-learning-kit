@@ -54,6 +54,7 @@ class VoiceEnvironmentPlugin:
         auto_execute_tools: bool = True,
         stop_when=None,
         agent_wrapper_kwargs=None,
+        on_case_complete=None,
     ) -> TestReport:
         from fi.simulate import voice as voice_api
         from fi.simulate.agent.definition import (
@@ -76,44 +77,65 @@ class VoiceEnvironmentPlugin:
         )
         params = dict(config.get("params") or {})
 
+        # When streaming, score the case's goal (if any) BEFORE the case is
+        # submitted, so the streamed payload carries ``goal_machine`` metadata
+        # identically to the post-run report — then forward to the runner's sink
+        # callback. Absent streaming, the report-level pass below is authoritative.
+        streamed_callback = None
+        if on_case_complete is not None:
+            scenario = spec.scenario
+
+            async def streamed_callback(index, case):  # noqa: ANN001
+                self._attach_goal_to_case(scenario, case)
+                await on_case_complete(index, case)
+
         report = await voice_api.run_voice_simulation(
             agent_definition=agent_definition,
             livekit_runtime=livekit_runtime,
             scenario=spec.scenario,
             simulator=simulator,
             simulation_run_id=spec.run_id,
+            on_case_complete=streamed_callback,
             **params,
         )
         self._attach_goal_machine(spec.scenario, report)
         return report
 
-    @staticmethod
-    def _attach_goal_machine(scenario, report: TestReport) -> None:
+    @classmethod
+    def _attach_goal_machine(cls, scenario, report: TestReport) -> None:
         """Voice world-contract (plan §1.9, settle-only). A declared
         ``scenario.goal`` is scored over each case transcript at episode end and
         attached as metadata — the same idiom chat uses. No declared goal ⇒ no-op
         (byte-identical). Voice has no per-turn hook, so this scores the run; it
         does not (and must not) early-stop a live call or fail the run.
+
+        Idempotent: overwrites ``goal_machine`` with the same value the streaming
+        path already wrote, so streamed and reconciled cases stay identical.
         """
+        for case in report.results:
+            cls._attach_goal_to_case(scenario, case)
+
+    @staticmethod
+    def _attach_goal_to_case(scenario, case) -> None:
+        """Score ``scenario.goal`` over one case's transcript, in place."""
         goal = getattr(scenario, "goal", None)
         if goal is None:
             return
         from fi.simulate.simulation import goal_machine
 
         verification = getattr(scenario, "verification", None)
-        for case in report.results:
-            settle = goal_machine.evaluate_settle(
-                goal,
-                verification,
-                environment_state={},
-                world_status={},
-                messages=getattr(case, "messages", None) or [],
-            )
-            case.metadata["goal_machine"] = {
-                "states_reached": settle.get("states_reached", []),
-                "stop_reason": None,
-                "checks": settle.get("checks", []),
-            }
+        settle = goal_machine.evaluate_settle(
+            goal,
+            verification,
+            environment_state={},
+            world_status={},
+            messages=getattr(case, "messages", None) or [],
+        )
+        case.metadata["goal_machine"] = {
+            "states_reached": settle.get("states_reached", []),
+            "stop_reason": None,
+            "checks": settle.get("checks", []),
+        }
 
     def finalize_run_status(self, report: SimulationReport) -> SimulationReport:
         """A voice run whose only case(s) failed is a failed job, not COMPLETED.

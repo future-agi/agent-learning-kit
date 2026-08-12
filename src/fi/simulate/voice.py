@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +41,7 @@ async def run_voice_simulation(
     conversation_direction: str = "simulator_first",
     agent_first_silence_timeout_seconds: float = 30.0,
     max_concurrency: int = 1,
+    on_case_complete: Callable[[int, Any], Awaitable[None]] | None = None,
 ) -> TestReport:
     """Run a LiveKit voice simulation directly from typed SDK objects."""
 
@@ -69,6 +70,7 @@ async def run_voice_simulation(
         conversation_direction=conversation_direction,
         agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
         max_concurrency=max_concurrency,
+        on_case_complete=on_case_complete,
     )
 
 

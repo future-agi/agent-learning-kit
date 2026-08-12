@@ -20,7 +20,7 @@ from .events import CanonicalEvent
 from .failures import FailureStage, SimulationFailure
 from .plan import SimulationPlan
 from .planner import build_plan
-from .report import SimulationReport
+from .report import SimulationReport, SimulationTestCaseResult
 from .run import CleanupStatus, RunStatus
 from .spec import SimulationSpec
 
@@ -47,6 +47,11 @@ class SimulationRunner:
             plan = build_plan(spec)
             if result_sink is not None:
                 result_sink.prepare(spec, plan)
+            # Hosted runs stream each case to the platform the moment it finishes
+            # (allocate CallExecution rows up front, PATCH by index). The sink
+            # decides eligibility; a non-streaming sink (local/chat, or missing
+            # config) returns False and we fall back to the batch-at-end path.
+            on_case_complete = self._begin_streaming(result_sink, spec, plan)
             self._write_event(
                 result_sink,
                 CanonicalEvent.create(
@@ -68,6 +73,7 @@ class SimulationRunner:
                     auto_execute_tools=auto_execute_tools,
                     stop_when=stop_when,
                     agent_wrapper_kwargs=agent_wrapper_kwargs,
+                    on_case_complete=on_case_complete,
                 ),
                 timeout=spec.execution.timeout.run_seconds,
             )
@@ -151,6 +157,64 @@ class SimulationRunner:
             )
         self._write_report(result_sink, report)
         return report
+
+    def _begin_streaming(
+        self,
+        result_sink: ResultSink | None,
+        spec: SimulationSpec,
+        plan: SimulationPlan | None,
+    ) -> Callable[[int, Any], Any] | None:
+        """Open the sink's streaming session; return a per-case callback or None.
+
+        The callback converts a legacy ``TestCaseResult`` to its canonical form
+        (identical to the finalized report) and submits it off the event loop so a
+        slow result PATCH never blocks case concurrency. A streaming error is
+        swallowed here — the case is left un-streamed and ``finalize`` reconciles
+        it; a broken upload must never fail a simulation case.
+        """
+        if result_sink is None:
+            return None
+        begin = getattr(result_sink, "begin_stream", None)
+        submit_case = getattr(result_sink, "submit_case", None)
+        if begin is None or submit_case is None:
+            return None
+        try:
+            streaming = bool(begin(spec, plan))
+        except Exception as exc:
+            logger.error(
+                "Simulation stream begin failed",
+                exc_info=redacted_exc_info(exc),
+                extra={"run_id": spec.run_id},
+            )
+            return None
+        if not streaming:
+            return None
+
+        evidence = [
+            EvidenceSourceSummary(
+                source_id=source.source_id,
+                adapter=source.adapter,
+                evidence_class=source.evidence_class,
+                capabilities=source.capabilities,
+            )
+            for source in spec.evidence.sources
+        ]
+        run_id = spec.run_id
+
+        async def _on_case_complete(index: int, legacy_case: Any) -> None:
+            try:
+                canonical = SimulationTestCaseResult.from_legacy_case(
+                    legacy_case, index=index, run_id=run_id, evidence=evidence
+                )
+                await asyncio.to_thread(submit_case, index, canonical)
+            except Exception as exc:
+                logger.error(
+                    "Simulation stream case submit failed",
+                    exc_info=redacted_exc_info(exc),
+                    extra={"run_id": run_id, "case_index": index},
+                )
+
+        return _on_case_complete
 
     def _failure_report(
         self,

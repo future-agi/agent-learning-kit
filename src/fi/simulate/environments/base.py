@@ -12,7 +12,16 @@ negotiate capabilities the same way for environments and target endpoints.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -56,6 +65,7 @@ class EnvironmentPlugin(Protocol):
         auto_execute_tools: bool = True,
         stop_when: Optional[Callable[[list[dict[str, Any]], Persona], bool]] = None,
         agent_wrapper_kwargs: Optional[dict[str, Any]] = None,
+        on_case_complete: Optional[Callable[[int, Any], Awaitable[None]]] = None,
     ) -> TestReport: ...
 
 

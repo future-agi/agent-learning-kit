@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any, AsyncIterable
 from uuid import uuid4
 
@@ -285,6 +286,8 @@ class LiveKitEngine(BaseEngine):
         recording_case_directory: str | Path | None = None,
         run_id: str | None = None,
         max_concurrency: int = 1,
+        on_case_complete: Callable[[int, TestCaseResult], Awaitable[None]]
+        | None = None,
         **kwargs,
     ) -> TestReport:
         if agent_definition is None:
@@ -426,7 +429,7 @@ class LiveKitEngine(BaseEngine):
                         message=f"{type(exc).__name__}: {exc}",
                         retryable=False,
                     )
-                    return TestCaseResult(
+                    result = TestCaseResult(
                         persona=persona,
                         transcript="",
                         messages=[],
@@ -443,40 +446,58 @@ class LiveKitEngine(BaseEngine):
                             ),
                         },
                     )
-                metadata = {
-                    "engine": "livekit",
-                    "run_id": current_run_id,
-                    "test_case_id": test_case_id,
-                    "invocation_id": invocation_id,
-                    "status": outcome.status.value,
-                    "room_name": room_name,
-                    "room_mode": runtime.room_mode,
-                    **outcome.metadata,
-                }
-                if outcome.failure is not None:
-                    metadata["failure"] = outcome.failure.model_dump(
-                        mode="json",
-                        exclude_none=True,
+                else:
+                    metadata = {
+                        "engine": "livekit",
+                        "run_id": current_run_id,
+                        "test_case_id": test_case_id,
+                        "invocation_id": invocation_id,
+                        "status": outcome.status.value,
+                        "room_name": room_name,
+                        "room_mode": runtime.room_mode,
+                        **outcome.metadata,
+                    }
+                    if outcome.failure is not None:
+                        metadata["failure"] = outcome.failure.model_dump(
+                            mode="json",
+                            exclude_none=True,
+                        )
+                    if outcome.evidence:
+                        metadata["evidence"] = [
+                            item.model_dump(mode="json", exclude_none=True)
+                            for item in outcome.evidence
+                        ]
+                    if outcome.provider_artifacts:
+                        metadata["provider_artifacts"] = [
+                            entry.model_dump(mode="json", exclude_none=True)
+                            for entry in outcome.provider_artifacts
+                        ]
+                    result = TestCaseResult(
+                        persona=persona,
+                        transcript=outcome.transcript,
+                        messages=outcome.messages,
+                        metadata=metadata,
+                        audio_input_path=outcome.audio_input_path,
+                        audio_output_path=outcome.audio_output_path,
+                        audio_combined_path=outcome.audio_combined_path,
                     )
-                if outcome.evidence:
-                    metadata["evidence"] = [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in outcome.evidence
-                    ]
-                if outcome.provider_artifacts:
-                    metadata["provider_artifacts"] = [
-                        entry.model_dump(mode="json", exclude_none=True)
-                        for entry in outcome.provider_artifacts
-                    ]
-                return TestCaseResult(
-                    persona=persona,
-                    transcript=outcome.transcript,
-                    messages=outcome.messages,
-                    metadata=metadata,
-                    audio_input_path=outcome.audio_input_path,
-                    audio_output_path=outcome.audio_output_path,
-                    audio_combined_path=outcome.audio_combined_path,
-                )
+
+            # Stream the finished case AFTER releasing the semaphore — a slow
+            # result PATCH (recording upload) must not hold a concurrency slot.
+            # A streaming error never fails the case; finalize reconciles it.
+            if on_case_complete is not None:
+                try:
+                    await on_case_complete(index, result)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "voice case stream callback failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": current_run_id,
+                            "test_case_id": test_case_id,
+                        },
+                    )
+            return result
 
         # ``gather`` preserves argument order regardless of completion order, so
         # ``report.results`` stays in dataset order — the positional contract the
