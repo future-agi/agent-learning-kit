@@ -74,7 +74,7 @@ def _validate_definition(
         problems.append(f"{where}:unknown-id:{','.join(unknown_ids)[:100]}")
     if kind == "tool_call_args":
         tool = definition.get("tool")
-        if tool not in tool_names:
+        if not isinstance(tool, str) or tool not in tool_names:
             problems.append(f"{where}:unknown-tool:{tool}")
         if not definition.get("args_equal") and not definition.get("args_present"):
             problems.append(f"{where}:tool_call_args-without-args")
@@ -88,10 +88,13 @@ def _validate_definition(
         ):
             problems.append(f"{where}:conveyed-without-variants")
     elif kind == "absent":
-        inner = definition.get("no_tool_call_with") or {}
+        inner = definition.get("no_tool_call_with")
+        inner = inner if isinstance(inner, dict) else {}
         tool = definition.get("no_tool_call") or inner.get("tool")
         if not tool:
             problems.append(f"{where}:absent-without-tool")
+        elif not isinstance(tool, str):
+            problems.append(f"{where}:absent-tool-not-a-single-name:{str(tool)[:60]}")
         elif tool not in tool_names:
             problems.append(f"{where}:unknown-tool:{tool}")
     elif kind == "judge":
@@ -234,6 +237,11 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
+            )
+        elif ":absent-tool-not-a-single-name" in problem:
+            lines.append(
+                "- An absent checkpoint names several tools at once; write one absent checkpoint "
+                "per tool, each with a single tool name."
             )
         elif ":conveyed-without-variants" in problem:
             lines.append(

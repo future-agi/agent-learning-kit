@@ -307,3 +307,23 @@ def test_validator_rejects_transposed_identifier():
     )
     problems = validate_scenario(bad, contract)
     assert any("unknown-id" in p for p in problems)
+
+
+def test_validator_survives_malformed_definition_shapes():
+    """Model JSON is arbitrary; the validator reports problems, never raises."""
+    contract = AgentContract.model_validate(CONTRACT)
+    bad = json.loads(json.dumps(SCENARIO))
+    bad["sub_goals"].append(
+        {
+            "name": "no_extra_items",
+            "milestone": "nothing else ordered",
+            "checkpoint": {
+                "kind": "absent",
+                "detail": "no other tool fires",
+                "deterministic": True,
+                "definition": {"no_tool_call": ["add_item", "list_order"]},
+            },
+        }
+    )
+    problems = validate_scenario(bad, contract)
+    assert any("absent-tool-not-a-single-name" in p for p in problems)
