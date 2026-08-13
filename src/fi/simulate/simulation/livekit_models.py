@@ -294,6 +294,41 @@ def _google_tts(
     )
 
 
+def _gemini_tts(
+    config: TTSConfig,
+    _http_session: aiohttp.ClientSession | None,
+) -> livekit_tts.TTS:
+    """Streaming Gemini TTS over the genai/Vertex endpoint (multilingual).
+
+    Cloud TTS (``_google_tts``) needs the Text-to-Speech API the Vertex SA
+    lacks; the genai speech endpoint works with the same ADC and streams audio
+    for gemini-3.1, keeping time-to-first-byte low.
+    """
+    from fi.simulate.simulation.gemini_tts_stream import StreamingGeminiTTS
+
+    kwargs = _google_credentials_kwargs()
+    model = _provider_model(
+        config.model,
+        default="gpt-4o-mini-tts",
+        replacement="gemini-3.1-flash-tts-preview",
+    )
+    if not model.startswith("gemini-"):
+        model = "gemini-3.1-flash-tts-preview"
+    voice = config.voice if config.voice not in {"alloy", ""} else "Kore"
+    if kwargs.get("vertexai") is True:
+        location = kwargs.get("location")
+        if model.startswith("gemini-3"):
+            location = "global"
+        return StreamingGeminiTTS(
+            model=model,
+            voice_name=voice,
+            vertexai=True,
+            project=kwargs.get("project"),
+            location=location,
+        )
+    return StreamingGeminiTTS(model=model, voice_name=voice, api_key=kwargs["api_key"])
+
+
 _LLM_FACTORIES: dict[str, LLMFactory] = {
     "openai": _openai_llm,
     "openai_compatible": _openai_llm,
@@ -316,6 +351,8 @@ _TTS_FACTORIES: dict[str, TTSFactory] = {
     "cartesia": _cartesia_tts,
     "google": _google_tts,
     "vertex": _google_tts,
+    "gemini": _gemini_tts,
+    "gemini_tts": _gemini_tts,
 }
 _HTTP_PROVIDERS = {"cartesia", "deepgram", "elevenlabs"}
 
