@@ -572,6 +572,8 @@ class LiveKitEngine(BaseEngine):
         target_transcription_mode = False
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
+        pending_target_transcriptions: list[tuple["rtc.TextStreamReader", str]] = []
+        target_dispatch_deferred = False
         managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
         cleanup_errors: list[str] = []
@@ -597,6 +599,55 @@ class LiveKitEngine(BaseEngine):
         sip_answer_timeout = transport.answer_timeout_seconds or max(
             connect_timeout, 60.0
         )
+
+        # A target may publish its greeting as soon as it starts. Agent-first
+        # registration happens immediately after room.connect(), and streams are
+        # buffered until session/audio readiness supplies the filter inputs.
+        def on_target_transcription(
+            reader: "rtc.TextStreamReader",
+            participant_identity: str,
+        ) -> None:
+            nonlocal target_transcription_mode
+            if session is None or target is None:
+                logger.info(
+                    "target_transcription_buffered_before_readiness",
+                    extra={
+                        "run_id": run_id,
+                        "test_case_id": test_case_id,
+                        "participant_identity": str(participant_identity),
+                    },
+                )
+                pending_target_transcriptions.append(
+                    (reader, str(participant_identity))
+                )
+                return
+            attrs = reader.info.attributes or {}
+            transcribed_track_id = attrs.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID)
+            if transcribed_track_id:
+                if transcribed_track_id != target.audio_track_sid:
+                    return
+            elif str(participant_identity) != target.identity:
+                return
+            # First target transcription means the target is speaking — stop
+            # the redundant simulator STT so it cannot emit duplicate turns.
+            if not target_transcription_mode:
+                logger.info(
+                    "target_transcription_mode_enabled",
+                    extra={
+                        "run_id": run_id,
+                        "test_case_id": test_case_id,
+                        "target_identity": target.identity,
+                    },
+                )
+                session.input.set_audio_enabled(False)
+                session.clear_user_turn()
+                target_transcription_mode = True
+            task = asyncio.create_task(
+                _forward_target_transcription(reader, session)
+            )
+            target_transcription_tasks.add(task)
+            task.add_done_callback(target_transcription_tasks.discard)
+
         try:
             if managed_room_owned:
                 api_client = api.LiveKitAPI(
@@ -640,17 +691,20 @@ class LiveKitEngine(BaseEngine):
                             ),
                         )
                 if outcome is None and profile.uses_external_room:
-                    await asyncio.wait_for(
-                        api_client.agent_dispatch.create_dispatch(
-                            api.CreateAgentDispatchRequest(
-                                agent_name=agent_definition.agent_name
-                                or agent_definition.name,
-                                room=room_name,
-                                metadata=_dispatch_metadata_json(agent_definition),
-                            )
-                        ),
-                        timeout=connect_timeout,
-                    )
+                    if conversation_direction == "agent_first":
+                        target_dispatch_deferred = True
+                    else:
+                        await asyncio.wait_for(
+                            api_client.agent_dispatch.create_dispatch(
+                                api.CreateAgentDispatchRequest(
+                                    agent_name=agent_definition.agent_name
+                                    or agent_definition.name,
+                                    room=room_name,
+                                    metadata=_dispatch_metadata_json(agent_definition),
+                                )
+                            ),
+                            timeout=connect_timeout,
+                        )
                 elif outcome is None and profile.receives_inbound_call:
                     try:
                         (
@@ -704,6 +758,11 @@ class LiveKitEngine(BaseEngine):
                 timeout=connect_timeout,
             )
             room_connected = True
+            if conversation_direction == "agent_first":
+                room.register_text_stream_handler(
+                    TOPIC_TRANSCRIPTION, on_target_transcription
+                )
+                target_transcription_handler_registered = True
             if record_audio:
                 recorder = RoomRecorder(
                     url=str(runtime.url),
@@ -764,6 +823,28 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+            target_room_io = getattr(session, "room_io", None)
+            if (
+                conversation_direction == "agent_first"
+                and target_room_io is not None
+                and effective_target_identity is not None
+            ):
+                # RoomIO accepts a participant identity before it joins.
+                target_room_io.set_participant(effective_target_identity)
+
+            if target_dispatch_deferred:
+                assert api_client is not None
+                await asyncio.wait_for(
+                    api_client.agent_dispatch.create_dispatch(
+                        api.CreateAgentDispatchRequest(
+                            agent_name=agent_definition.agent_name
+                            or agent_definition.name,
+                            room=room_name,
+                            metadata=_dispatch_metadata_json(agent_definition),
+                        )
+                    ),
+                    timeout=connect_timeout,
+                )
             if profile.uses_web_audio_bridge:
                 try:
                     connector = profile.build_connector(
@@ -918,43 +999,21 @@ class LiveKitEngine(BaseEngine):
             # RoomIO auto-links to the first participant that joined — the
             # recorder, which publishes no audio — so the simulator's STT never
             # hears the target. Re-point it at the target readiness selected.
-            target_room_io = getattr(session, "room_io", None)
             if target_room_io is not None:
                 target_room_io.set_participant(target.identity)
 
-            # The target's mic track stays open for the whole call, so STT never
-            # finalizes a turn; the agent's authoritative turns arrive on its
-            # lk.transcription stream instead. Consume that stream and feed each
-            # completed target utterance into the simulator as a user turn.
-            def on_target_transcription(
-                reader: "rtc.TextStreamReader",
-                participant_identity: str,
-            ) -> None:
-                nonlocal target_transcription_mode
-                attrs = reader.info.attributes or {}
-                transcribed_track_id = attrs.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID)
-                if transcribed_track_id:
-                    if transcribed_track_id != target.audio_track_sid:
-                        return
-                elif str(participant_identity) != target.identity:
-                    return
-                # First target transcription means the target is speaking — stop
-                # the redundant simulator STT so it cannot emit duplicate turns.
-                if not target_transcription_mode:
-                    session.input.set_audio_enabled(False)
-                    session.clear_user_turn()
-                    target_transcription_mode = True
-                task = asyncio.create_task(
-                    _forward_target_transcription(reader, session)
-                )
-                target_transcription_tasks.add(task)
-                task.add_done_callback(target_transcription_tasks.discard)
+            buffered_transcriptions = list(pending_target_transcriptions)
+            pending_target_transcriptions.clear()
+            for reader, participant_identity in buffered_transcriptions:
+                on_target_transcription(reader, participant_identity)
 
-            room.register_text_stream_handler(
-                TOPIC_TRANSCRIPTION, on_target_transcription
-            )
-            target_transcription_handler_registered = True
+            # Simulator-first targets cannot speak before the simulator opens
+            # the conversation, so retain the existing registration point.
             if conversation_direction == "simulator_first":
+                room.register_text_stream_handler(
+                    TOPIC_TRANSCRIPTION, on_target_transcription
+                )
+                target_transcription_handler_registered = True
                 customer_agent.open_conversation()
             stop_reason = await _wait_for_conversation_end(
                 room,
@@ -1019,6 +1078,7 @@ class LiveKitEngine(BaseEngine):
         finally:
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+            pending_target_transcriptions.clear()
             pending_transcriptions = list(target_transcription_tasks)
             for pending in pending_transcriptions:
                 pending.cancel()
