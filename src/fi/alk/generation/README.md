@@ -50,7 +50,7 @@ semantics; plain code does structure, dedup, and grounding checks; nothing hardc
 4. **Checkpoints assert the right arguments.** Asked for 11 PM, a 10 PM booking must fail. A check
    is `deterministic: true` only when it carries an executable definition.
 5. **Extensible by registry, not by edit.** New agent connections implement `AgentSource` (three
-   members) and register; new modalities add one entry to `AGENT_INPUT_BY_MODALITY`; the LLM is a
+   members) and register; a new environment adds one profile to `environments.py`; the LLM is a
    two-method protocol with the model string as config.
 
 ## Extending
@@ -58,7 +58,7 @@ semantics; plain code does structure, dedup, and grounding checks; nothing hardc
 | Want | Do |
 |---|---|
 | New agent connection (Vapi, Retell, platform id) | implement `AgentSource`, `@register_source("vapi")` |
-| New modality (computer-use, code, ...) | add an `AGENT_INPUT_BY_MODALITY` entry; contract `modality` is open vocabulary |
+| New environment (browser, code, computer-use) | add one `EnvironmentProfile` to `environments.py` once `fi.simulate` carries a plugin for it; until then `--environment` refuses it by name |
 | Different model | `--model vertex_ai/gemini-2.5-pro` or any litellm string; `LLMClient` is a protocol for non-litellm backends |
 | Different budget | `--budget-usd 5` (hard stop, raises `BudgetExceeded`) |
 | Stricter or looser QA | critic threshold and retry counts are `GenerationConfig` fields |
