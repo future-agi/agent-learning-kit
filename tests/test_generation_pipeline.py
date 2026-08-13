@@ -82,6 +82,7 @@ SCENARIO = {
     "id": "latte-medium",
     "use_case": "Order a single item",
     "situation": "The caller wants one medium latte and confirms",
+    "target_failure": "The agent adds the wrong item or size, or never confirms the order",
     "goal": "A medium latte is ordered and confirmed",
     "description": "A caller orders one medium latte, nothing else. The menu has lattes and mochas; "
     "the order starts empty and the agent must add the right item at the right size.",

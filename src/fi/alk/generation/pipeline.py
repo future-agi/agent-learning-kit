@@ -187,7 +187,14 @@ def materialize_row(
             if isinstance(raw, dict)
             else next((x for x in raw if isinstance(x, dict)), {})
         )
-        for key in ("id", "use_case", "situation", "goal"):
+        for key in (
+            "id",
+            "use_case",
+            "situation",
+            "goal",
+            "target_failure",
+            "unique_end_state",
+        ):
             record.setdefault(key, row.get(key))
         record["id"] = _slugify(record.get("id") or row.get("id", ""))
 

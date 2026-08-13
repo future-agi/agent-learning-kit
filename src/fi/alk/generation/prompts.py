@@ -358,6 +358,8 @@ def critic_prompt(brief: str, scenario: dict) -> str:
     return f"""CONTRACT (the ground truth this test must respect):
 {brief}
 
+{CHECKPOINT_VOCABULARY}
+
 PROPOSED TEST SCENARIO:
 {json.dumps(scenario)[:7000]}
 
