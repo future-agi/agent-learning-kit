@@ -75,7 +75,7 @@ def _eval_tool_call_args(
         f"only {matched} of {required} required matching calls to {tool}"
         if required > 1
         else f"no call to {tool} carried the expected arguments"
-    )"
+    )
 
 
 def _eval_state(
