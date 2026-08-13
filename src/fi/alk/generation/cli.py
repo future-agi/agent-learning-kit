@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-critic", action="store_true", help="skip the QA review pass"
     )
+    parser.add_argument(
+        "--guidance",
+        default="",
+        help="operator instructions steering what to test (or @path/to/file to read them)",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -57,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     source = resolve_source(args.source, **source_kwargs)
     llm = LiteLLMClient(model=args.model, budget_usd=args.budget_usd)
     config = GenerationConfig(
-        n=args.n, critic_enabled=not args.no_critic, out_dir=args.out
+        n=args.n, critic_enabled=not args.no_critic, guidance=guidance, out_dir=args.out
     )
 
     result = generate(source, llm, config)
