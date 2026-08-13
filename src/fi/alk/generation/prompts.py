@@ -59,9 +59,14 @@ allows; `judge` exists only for sub-goals no state, call, or data value can witn
   listed carried the expected value. definition: {"tool": "<exact tool name>", "args_equal":
   {"<exact arg name>": <expected value>, ...}, "args_present": ["<arg required with any reasonable
   value>"]}. args_equal holds each argument whose correct value the user's request determines; an
-  argument left out of args_equal is a requirement the test does not protect. A value that only
-  comes into existence during the run (a generated id, a session handle) cannot be known in advance
-  and belongs in args_present, never in args_equal. When the same call must happen several times
+  argument left out of args_equal is a requirement the test does not protect. An argument earns a
+  pinned value only when this scenario's user actually determines it or a rule the agent enforces
+  fixes it; where the user says nothing about an argument and no rule settles it, the correct value
+  is genuinely open, and pinning one there fails an agent that did nothing wrong, which is worse
+  than not testing the argument at all. Such an argument goes in args_present, so the test still
+  requires the agent to supply something without inventing a requirement it was never given. A value
+  that only comes into existence during the run (a generated id, a session handle) cannot be known
+  in advance and belongs in args_present, never in args_equal. When the same call must happen several times
   (a quantity of identical items), one checkpoint with "min_count": <how many> asserts it; separate
   identical checkpoints do not.
 - state (deterministic): passes when the world's final state carries the expected values.
@@ -446,6 +451,9 @@ engineer who owns the agent. Review in this order:
 4. CHECKABLE. Every deterministic checkpoint is computable from the seeded environment plus the
    expected calls; expected values match what the input implies (an input asking for a large drink
    must not be checked as medium); conversational checkpoints do not depend on question order.
+   Every pinned argument value must be traceable to something this scenario's user states or a rule
+   the agent enforces. Where the scenario asserts a value the user never gave and no rule fixes, a
+   correct agent fails the test; demand it move to args_present.
    When more than half the checkpoints are judges, demand deterministic replacements for every one
    the vocabulary can express deterministically before accepting.
 5. SEPARATION. The input reveals nothing the user would not know: no seeded availability, no
