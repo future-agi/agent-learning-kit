@@ -64,7 +64,11 @@ from fi.simulate.evidence.providers import (
 from fi.simulate.endpoints.vapi import VapiCallOriginator
 from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
-from fi.simulate.recording.room_recorder import RoomRecorder, mix_recordings
+from fi.simulate.recording.room_recorder import (
+    RoomRecorder,
+    mix_recordings,
+    mix_recordings_stereo,
+)
 from fi.simulate.runtime import (
     FailureStage,
     SimulationFailure,
@@ -98,6 +102,7 @@ class _CaseOutcome:
     audio_input_path: str | None = None
     audio_output_path: str | None = None
     audio_combined_path: str | None = None
+    audio_stereo_path: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
     evidence: list[EvidenceSourceSummary] = field(default_factory=list)
     provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
@@ -497,6 +502,7 @@ class LiveKitEngine(BaseEngine):
                         audio_input_path=outcome.audio_input_path,
                         audio_output_path=outcome.audio_output_path,
                         audio_combined_path=outcome.audio_combined_path,
+                        audio_stereo_path=outcome.audio_stereo_path,
                     )
 
             # Stream the finished case AFTER releasing the semaphore — a slow
@@ -1889,11 +1895,18 @@ def _attach_recordings(
         audio_directory / "combined.wav",
         sample_rate=sample_rate,
     )
+    stereo_path = mix_recordings_stereo(
+        [path for path in (input_path,) if path is not None],
+        [path for path in (output_path,) if path is not None],
+        audio_directory / "stereo.wav",
+        sample_rate=sample_rate,
+    )
     outcome.audio_input_path = str(input_path) if input_path is not None else None
     outcome.audio_output_path = str(output_path) if output_path is not None else None
     outcome.audio_combined_path = (
         str(combined_path) if combined_path is not None else None
     )
+    outcome.audio_stereo_path = str(stereo_path) if stereo_path is not None else None
     outcome.metadata["recording_tracks"] = [
         {
             "participant_identity": record.participant_identity,

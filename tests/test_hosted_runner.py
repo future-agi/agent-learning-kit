@@ -365,6 +365,88 @@ def test_begin_stream_is_noop_for_local_run_without_execution(tmp_path):
     assert sink._streaming is False
 
 
+def test_sink_uploads_stereo_recording_and_sets_url(tmp_path, monkeypatch):
+    import wave
+
+    import numpy as np
+
+    from fi.simulate.runtime import TestCaseStatus
+    from fi.simulate.runtime.report import SimulationTestCaseResult
+    from fi.simulate.simulation.models import Persona, TestCaseResult
+
+    sink = FutureAGIResultSink(
+        root=str(tmp_path / "runs"),
+        api_url="http://localhost:8000",
+        run_test_id="rt-1",
+        test_execution_id="te-1",
+    )
+    spec = _chat_spec("callable", {"target": "x:y"})
+    sink.prepare(spec)
+
+    stereo_path = tmp_path / "stereo.wav"
+    with wave.open(str(stereo_path), "wb") as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(8000)
+        wav_file.writeframes(
+            np.array([1000, 2000, 1000, 2000], dtype=np.int16).tobytes()
+        )
+
+    seen = {"batch": [], "recording": [], "result": []}
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/batch/"):
+            seen["batch"].append(path)
+            return httpx.Response(
+                200,
+                json={"result": {"call_execution_ids": ["ce-0"], "has_more": False}},
+            )
+        if path.endswith("/recording/"):
+            seen["recording"].append(path)
+            return httpx.Response(
+                200, json={"result": {"recording_url": "https://cdn/stereo.wav"}}
+            )
+        if path.endswith("/result/"):
+            seen["result"].append(path)
+            captured["payload"] = json.loads(request.content)
+            return httpx.Response(200, json={"result": {"status": "ingested"}})
+        return httpx.Response(404)
+
+    original_client = httpx.Client
+
+    def client_factory(**kwargs):
+        kwargs.setdefault("transport", httpx.MockTransport(handler))
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", client_factory)
+    monkeypatch.setenv("FI_API_KEY", "k")
+    monkeypatch.setenv("FI_SECRET_KEY", "s")
+
+    assert sink.begin_stream(spec) is True
+
+    persona = Persona(persona={"name": "C0"}, situation="s", outcome="o")
+    case = SimulationTestCaseResult(
+        test_case_id="tc-0",
+        status=TestCaseStatus.COMPLETED,
+        persona=persona,
+        result=TestCaseResult(
+            persona=persona,
+            transcript="hi",
+            messages=[],
+            audio_stereo_path=str(stereo_path),
+        ),
+    )
+    sink.submit_case(0, case)
+
+    # Only the stereo file exists -> exactly one /recording/ POST, and the PATCH
+    # carries stereo_recording_url (combined/output/input are absent).
+    assert len(seen["recording"]) == 1
+    assert captured["payload"].get("stereo_recording_url") == "https://cdn/stereo.wav"
+    assert "recording_url" not in captured["payload"]
+
+
 def test_livekit_run_stamps_provider_marker_for_role_resolution():
     from fi.simulate.results.futureagi import _build_result_payload
     from fi.simulate.runtime import TestCaseStatus

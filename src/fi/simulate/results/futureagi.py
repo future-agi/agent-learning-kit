@@ -204,6 +204,11 @@ class FutureAGIResultSink:
             )
             if recording_url:
                 payload["recording_url"] = recording_url
+            stereo_url = _maybe_upload_stereo_recording(
+                self._stream_client, call_id, case
+            )
+            if stereo_url:
+                payload["stereo_recording_url"] = stereo_url
             resp = self._stream_client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -436,6 +441,9 @@ def _submit_via_http(
             recording_url = _maybe_upload_recording(client, call_id, case)
             if recording_url:
                 payload["recording_url"] = recording_url
+            stereo_url = _maybe_upload_stereo_recording(client, call_id, case)
+            if stereo_url:
+                payload["stereo_recording_url"] = stereo_url
             resp = client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -790,6 +798,42 @@ def _maybe_upload_recording(
         audio_path.suffix.lower(), "application/octet-stream"
     )
     with audio_path.open("rb") as fh:
+        files = {"file": (filename, fh, content_type)}
+        data = {"filename": filename}
+        resp = client.post(
+            f"/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/",
+            files=files,
+            data=data,
+            timeout=_RECORDING_UPLOAD_TIMEOUT_SECONDS,
+        )
+    if resp.is_error:
+        return None
+    body = _unwrap(resp.json())
+    return body.get("recording_url")
+
+
+def _maybe_upload_stereo_recording(
+    client: httpx.Client, call_execution_id: str, case
+) -> str | None:
+    """Upload the case's 2-channel stereo WAV (ch0 customer, ch1 assistant).
+
+    Uses the same multipart endpoint as ``_maybe_upload_recording`` and returns
+    the persisted URL for ``stereo_recording_url``, or None when absent.
+    """
+    if case.result is None:
+        return None
+    stereo_path = getattr(case.result, "audio_stereo_path", None)
+    if not stereo_path:
+        return None
+    path = Path(str(stereo_path)).expanduser()
+    if not (path.exists() and path.is_file() and path.stat().st_size > 0):
+        return None
+
+    filename = path.name
+    content_type = _CONTENT_TYPE_BY_EXT.get(
+        path.suffix.lower(), "application/octet-stream"
+    )
+    with path.open("rb") as fh:
         files = {"file": (filename, fh, content_type)}
         data = {"filename": filename}
         resp = client.post(

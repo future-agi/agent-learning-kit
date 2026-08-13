@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("livekit")
 
 from fi.simulate.agent.definition import AgentDefinition
-from fi.simulate.recording.room_recorder import mix_recordings
+from fi.simulate.recording.room_recorder import mix_recordings, mix_recordings_stereo
 from fi.simulate.runtime import TestCaseStatus as CaseStatus
 from fi.simulate.simulation import bridge as _bridge
 from fi.simulate.simulation.engines import livekit
@@ -409,6 +409,69 @@ def test_recording_mix_uses_only_explicit_paths(tmp_path: Path) -> None:
             dtype=np.int16,
         )
     assert samples.tolist() == [3000, 3000]
+
+
+def test_stereo_mix_interleaves_and_zero_pads(tmp_path: Path) -> None:
+    left = tmp_path / "simulator.wav"
+    right = tmp_path / "target.wav"
+    _write_wav(left, np.array([1000, 1000], dtype=np.int16))
+    _write_wav(right, np.array([2000], dtype=np.int16))
+
+    destination = tmp_path / "stereo.wav"
+    result = mix_recordings_stereo([left], [right], destination, sample_rate=8000)
+
+    assert result == destination
+    with wave.open(str(destination), "rb") as wav_file:
+        assert wav_file.getnchannels() == 2
+        samples = np.frombuffer(
+            wav_file.readframes(wav_file.getnframes()),
+            dtype=np.int16,
+        )
+    assert samples.tolist() == [1000, 2000, 1000, 0]
+
+
+def test_stereo_mix_sums_each_side_independently(tmp_path: Path) -> None:
+    left_a = tmp_path / "sim_a.wav"
+    left_b = tmp_path / "sim_b.wav"
+    right = tmp_path / "target.wav"
+    _write_wav(left_a, np.array([100, 100], dtype=np.int16))
+    _write_wav(left_b, np.array([200, 200], dtype=np.int16))
+    _write_wav(right, np.array([500, 500], dtype=np.int16))
+
+    destination = tmp_path / "stereo.wav"
+    mix_recordings_stereo([left_a, left_b], [right], destination, sample_rate=8000)
+
+    with wave.open(str(destination), "rb") as wav_file:
+        samples = np.frombuffer(
+            wav_file.readframes(wav_file.getnframes()),
+            dtype=np.int16,
+        )
+    assert samples.tolist() == [300, 500, 300, 500]
+
+
+def test_stereo_mix_leaves_missing_side_silent(tmp_path: Path) -> None:
+    right = tmp_path / "target.wav"
+    _write_wav(right, np.array([2000, 2000], dtype=np.int16))
+
+    destination = tmp_path / "stereo.wav"
+    result = mix_recordings_stereo([], [right], destination, sample_rate=8000)
+
+    assert result == destination
+    with wave.open(str(destination), "rb") as wav_file:
+        assert wav_file.getnchannels() == 2
+        samples = np.frombuffer(
+            wav_file.readframes(wav_file.getnframes()),
+            dtype=np.int16,
+        )
+    assert samples.tolist() == [0, 2000, 0, 2000]
+
+
+def test_stereo_mix_returns_none_when_both_sides_empty(tmp_path: Path) -> None:
+    destination = tmp_path / "stereo.wav"
+    result = mix_recordings_stereo([], [], destination, sample_rate=8000)
+
+    assert result is None
+    assert not destination.exists()
 
 
 def test_livekit_api_url_normalizes_websocket_schemes() -> None:

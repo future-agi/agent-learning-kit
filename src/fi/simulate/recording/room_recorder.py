@@ -192,12 +192,7 @@ class RoomRecorder:
         )
 
 
-def mix_recordings(
-    paths: list[Path],
-    destination: Path,
-    *,
-    sample_rate: int,
-) -> Path | None:
+def _read_mono_int16(paths: list[Path], *, sample_rate: int) -> list[np.ndarray]:
     arrays = []
     for path in paths:
         if not path.exists() or path.stat().st_size == 0:
@@ -213,18 +208,57 @@ def mix_recordings(
                     dtype=np.int16,
                 )
             )
+    return arrays
+
+
+def _sum_int16(arrays: list[np.ndarray], length: int) -> np.ndarray:
+    mixed = np.zeros(length, dtype=np.int32)
+    for array in arrays:
+        mixed[: array.size] += array.astype(np.int32)
+    return np.clip(mixed, -32768, 32767).astype(np.int16)
+
+
+def mix_recordings(
+    paths: list[Path],
+    destination: Path,
+    *,
+    sample_rate: int,
+) -> Path | None:
+    arrays = _read_mono_int16(paths, sample_rate=sample_rate)
     if not arrays:
         return None
     max_length = max(array.size for array in arrays)
-    mixed = np.zeros(max_length, dtype=np.int32)
-    for array in arrays:
-        mixed[: array.size] += array.astype(np.int32)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(destination), "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
-        wav_file.writeframes(np.clip(mixed, -32768, 32767).astype(np.int16).tobytes())
+        wav_file.writeframes(_sum_int16(arrays, max_length).tobytes())
+    return destination
+
+
+def mix_recordings_stereo(
+    left_paths: list[Path],
+    right_paths: list[Path],
+    destination: Path,
+    *,
+    sample_rate: int,
+) -> Path | None:
+    left = _read_mono_int16(left_paths, sample_rate=sample_rate)
+    right = _read_mono_int16(right_paths, sample_rate=sample_rate)
+    if not left and not right:
+        return None
+    max_length = max(array.size for array in (*left, *right))
+    interleaved = np.stack(
+        [_sum_int16(left, max_length), _sum_int16(right, max_length)],
+        axis=1,
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(destination), "wb") as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(interleaved.tobytes())
     return destination
 
 

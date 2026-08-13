@@ -5,6 +5,7 @@
       "audio_combined_path": null,
       "audio_input_path": null,
       "audio_output_path": null,
+      "audio_stereo_path": null,
       "evaluation": null,
       "events": [],
       "messages": [
