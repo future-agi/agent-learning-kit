@@ -98,6 +98,21 @@ For conversational agents, checkpoints must be ORDER-INDEPENDENT: the agent may 
 in any order, so assert final tool calls, final state, and captured facts, never a question order."""
 
 
+def guidance_block(guidance: str) -> str:
+    """Operator instructions, injected wherever they can steer the work.
+
+    They choose WHAT to test (focus areas, situations to include or skip, emphasis); they never
+    override the contract's ground truth and never lower the quality bar.
+    """
+    if not str(guidance or "").strip():
+        return ""
+    return (
+        "\nINSTRUCTIONS FROM THE TEST OWNER (follow them when choosing what to test; they never "
+        "permit inventing interfaces or weakening checkpoints):\n"
+        f"{str(guidance).strip()[:2000]}\n"
+    )
+
+
 def subgoal_catalog_prompt(brief: str) -> str:
     return f"""{brief}
 
@@ -132,6 +147,7 @@ def derive_rows_prompt(
     existing: list[dict],
     feedback: str,
     first_round: bool,
+    guidance: str = "",
 ) -> str:
     must = ""
     if first_round and signature_cases:
@@ -161,30 +177,54 @@ def derive_rows_prompt(
     )
     return f"""{brief}
 
-Task: plan {want} distinct test scenarios for this agent. You are both the engineer who built it and
-the product manager who answers for it in production; plan the tests those two people would insist
-on before shipping.
+Task: plan {want} distinct test scenarios for this agent.
 
-For each scenario return one line of planning, not the full test yet:
+How to author each scenario. Work through these steps in order, in your head, before writing its
+plan line:
+1. Pick the failure to catch. Name one specific wrong behavior a plausible implementation of THIS
+   agent could produce: it drops a detail the user stated, acts on an unstated assumption instead of
+   asking, mishandles a mid-conversation correction, ignores a rule it must enforce, proceeds when
+   the world cannot satisfy the request, loses track across several items. The scenario exists to
+   catch that failure; if you cannot name one, the scenario is not worth running.
+2. Construct the request so exactly ONE final state is correct. The user's specific requirements are
+   what pin it down: each concrete detail they want (which item, which size, which time, what to
+   exclude) removes ambiguity about the correct end state, and each is something the agent can get
+   wrong. A request whose correct outcome is vague cannot be graded; sharpen it until one end state
+   is right and everything else is wrong.
+3. Place the information. Decide what the user states up front, what they hold until asked, and what
+   only the environment knows (availability, stock, an existing record). The agent should have to
+   gather before it acts; a scenario where everything is handed over in the first sentence tests
+   only transcription.
+4. Let steps interact when the use case allows it. Several requests where handling one affects
+   another (modify the earlier one, remove one of them, a running total) make an early mistake
+   visible in the final state. One isolated request hides errors; interacting ones expose them.
+5. Define done. The final state that must hold, what the agent must have told the user, and what
+   must be left untouched. Everything is graded from that end state and transcript, never from
+   which path the agent took.
+
+For each scenario return one plan line, not the full test yet:
 - id: a short slug
 - use_case: the user-facing job it belongs to (sentence case; scenarios sharing a job repeat the
   same use_case wording exactly)
-- situation: ONE line naming the specific condition of the world or the user that this scenario
-  fixes, phrased from the user or world side. It must not mention the agent's tools, must not
-  prescribe what the agent should do, and must not contain the expected outcome.
-- why_distinct: one line naming the distinct correct OUTCOME this situation produces
-- goal: one line, the single end-objective of the test
+- situation: ONE line naming the specific condition of the world or the user this scenario fixes,
+  phrased from the user or world side. It must not mention the agent's tools, must not prescribe
+  what the agent should do, and must not contain the expected outcome.
+- target_failure: the specific wrong behavior from step 1 that this scenario would catch
+- unique_end_state: one line, the single correct final state from step 2
+- goal: one line, the end-objective of the test from the user's side
 
-{uses}{must}Coverage rules:
-- Different situations with the same correct outcome are ONE scenario; pick the strongest.
-- Cover the failure-shaped situations a production owner worries about, where the contract makes
-  them real: the requested thing does not exist or is unavailable, the request is ambiguous and
-  needs a clarifying question, the user changes their mind or corrects an earlier statement mid-way,
-  the request violates one of the agent's hard constraints and must be declined, the user abandons.
-- Also cover the core successful paths, including ones with several steps or several items.
+{uses}{must}Coverage across the set:
+- Different situations with the same correct end state are ONE scenario; keep the strongest.
+- Spread the target failures: a set where ten scenarios catch the same failure type is worth two
+  scenarios, not ten.
+- Include the situations the agent's own rules and data make real: a rule that forces a clarifying
+  question or a refusal, a requested thing that does not exist or is unavailable, a correction after
+  something was already handled, a request spanning several items or steps.
+- Include the core successful paths too, at real complexity (several items, specific requirements),
+  not toy versions.
 - No scenarios about internal machinery (logging, config, retries): users never bring those.
-{dedupe}{feedback_block}Return JSON: {{"rows": [{{"id": "...", "use_case": "...", "situation": "...",
-"why_distinct": "...", "goal": "..."}}]}}"""
+{dedupe}{feedback_block}{guidance_block(guidance)}Return JSON: {{"rows": [{{"id": "...", "use_case": "...", "situation": "...",
+"target_failure": "...", "unique_end_state": "...", "goal": "..."}}]}}"""
 
 
 def materialize_prompt(
@@ -196,6 +236,7 @@ def materialize_prompt(
     modality: str,
     conversational: bool,
     hint: str = "",
+    guidance: str = "",
 ) -> str:
     input_spec = AGENT_INPUT_BY_MODALITY.get(
         modality, AGENT_INPUT_BY_MODALITY["_default"]
@@ -237,7 +278,17 @@ SCENARIO PLAN to expand into a full test: {json.dumps(row)}
 
 Write the complete test. Every value must be a real value from the contract's data. Keep the three
 parts separate: the input never reveals the environment seeding, the checkpoints, or the outcome.
-{conv}
+
+The plan names a target_failure: the wrong behavior this test exists to catch. Design the
+checkpoints so that if the agent committed exactly that failure, at least one deterministic
+checkpoint fails. Then cover the rest of "done":
+- every specific requirement the user states becomes an asserted value somewhere (a tool argument, a
+  final-state field, or a conveyed fact); a requirement no checkpoint asserts is a requirement the
+  test silently allows the agent to drop;
+- assert what must be left alone as well as what must change: a final checkpoint on the exact end
+  state (these items, nothing more) or an `absent` checkpoint catches collateral actions that
+  per-step checks miss.
+{conv}{guidance_block(guidance)}
 Return JSON with ALL of these keys, none empty:
 - id, use_case, situation, goal: carried from the plan (sharpen wording if needed, keep meaning)
 - description: 2-3 sentences for a human reviewer: what is seeded, what the user wants, and what a
@@ -266,9 +317,11 @@ Role: you are the reviewer who decides whether a proposed test scenario enters t
 You did not write it, and your default answer is no. Approve only what you would defend to the
 engineer who owns the agent. Review in this order:
 
-1. WORTH. Could a competent implementation of this agent plausibly fail this test? If every correct
-   implementation passes it for free, reject it however well it is written, and say what a good
-   agent could actually get wrong here if anything.
+1. WORTH. The scenario declares a target_failure: the wrong behavior it exists to catch. Ask two
+   questions. Could a plausible implementation of this agent actually commit that failure? And if it
+   did, would at least one deterministic checkpoint fail? If the checkpoints would still pass while
+   the target failure happens, the test is broken; reject or demand the missing checkpoint. If no
+   plausible implementation could commit it, the test wastes a run; reject.
 2. REAL. Would a real user plausibly bring this situation?
 3. GROUNDED. Every tool, argument name, value, and id exists in the contract, spelled exactly.
    Nothing contradicts the agent's hard constraints. Any invented interface or id is fatal.
@@ -309,7 +362,7 @@ genuinely complete."""
 )
 
 
-def suite_review_prompt(brief: str, records: list[dict]) -> str:
+def suite_review_prompt(brief: str, records: list[dict], guidance: str = "") -> str:
     summary = [
         {
             "id": r.get("id"),
@@ -325,4 +378,4 @@ def suite_review_prompt(brief: str, records: list[dict]) -> str:
 ACCEPTED SCENARIOS so far:
 {json.dumps(summary)[:6000]}
 
-What situations that matter in production are missing, and which pairs are near-duplicates?"""
+{guidance_block(guidance)}What situations that matter in production are missing, and which pairs are near-duplicates?"""

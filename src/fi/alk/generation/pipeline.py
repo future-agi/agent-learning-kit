@@ -44,6 +44,7 @@ class GenerationConfig:
     max_suite_rounds: int = 2
     max_explore_turns: int = 20
     critic_enabled: bool = True
+    guidance: str = ""
     out_dir: str = "artifacts/generated-scenarios"
 
 
@@ -133,6 +134,7 @@ def derive_rows(
                 ],
                 feedback=feedback,
                 first_round=round_index == 0 and not existing,
+                guidance=config.guidance,
             ),
             temperature=0.4,
             max_tokens=6000,
@@ -175,6 +177,7 @@ def materialize_row(
                 modality=contract.modality,
                 conversational=contract.conversational,
                 hint=hint,
+                guidance=config.guidance,
             ),
             temperature=0.35,
             max_tokens=9000,
@@ -230,12 +233,12 @@ def materialize_row(
 
 
 def suite_review(
-    contract: AgentContract, records: list[dict], llm: LLMClient
+    contract: AgentContract, records: list[dict], llm: LLMClient, *, guidance: str = ""
 ) -> tuple[list[dict], list[str], str]:
     """Coverage pass over the accepted set: (gap rows feedback, duplicate ids to drop, feedback)."""
     raw = llm.complete_json(
         prompts.SUITE_REVIEW_SYSTEM,
-        prompts.suite_review_prompt(contract.brief(), records),
+        prompts.suite_review_prompt(contract.brief(), records, guidance=guidance),
         temperature=0.2,
         max_tokens=2500,
     )
@@ -307,7 +310,9 @@ def generate(
                 else:
                     rejected.append({**row, "_reject_reason": reason})
             if suite_round < config.max_suite_rounds and records:
-                gaps, duplicate_ids, feedback = suite_review(contract, records, llm)
+                gaps, duplicate_ids, feedback = suite_review(
+                    contract, records, llm, guidance=config.guidance
+                )
                 if duplicate_ids:
                     dropped = [
                         r for r in records if str(r.get("id")) in set(duplicate_ids)

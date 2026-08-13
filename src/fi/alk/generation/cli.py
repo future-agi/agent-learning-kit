@@ -50,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
             print("--repo is required for the repo source", file=sys.stderr)
             return 2
         source_kwargs["path"] = args.repo
+    guidance = args.guidance
+    if guidance.startswith("@"):
+        with open(guidance[1:], encoding="utf-8") as fh:
+            guidance = fh.read()
     source = resolve_source(args.source, **source_kwargs)
     llm = LiteLLMClient(model=args.model, budget_usd=args.budget_usd)
     config = GenerationConfig(
