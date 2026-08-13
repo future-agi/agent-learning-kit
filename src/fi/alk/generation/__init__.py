@@ -1,5 +1,6 @@
 """Local-first scenario generation: point at an agent, get reviewed, checkable test scenarios."""
 
+from .checks import CheckResult, evaluate_checkpoint, evaluate_scenario
 from .contract import AgentContract, ToolSpec, extract_contract, validate_contract
 from .emit import smoke_manifest, to_alk_scenario, write_outputs
 from .llm import (
@@ -23,6 +24,9 @@ from .validators import banned_tokens, repair_hint, validate_scenario
 
 __all__ = [
     "AgentContract",
+    "CheckResult",
+    "evaluate_checkpoint",
+    "evaluate_scenario",
     "AgentEvidence",
     "AgentSource",
     "AuthFailed",

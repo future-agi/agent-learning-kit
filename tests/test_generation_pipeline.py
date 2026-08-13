@@ -248,3 +248,51 @@ def test_alk_scenario_is_typed_and_content_addressed():
     assert scenario.kind == "task"
     assert scenario.version and scenario.version.startswith("sha256:")
     assert scenario.constraints.declared_tools == ["add_item"]
+
+
+def test_record_drives_runtime_mock_and_python_checks_directly():
+    """The golden-artifact property: a generated record feeds the real runtime mock builder and the
+    pure-Python checker with no translation step in between."""
+    from fi.simulate.environments.chat import _mock_world_from_config
+
+    from fi.alk.generation.checks import evaluate_scenario
+
+    # 1. The record's environment block IS the runtime mock config, verbatim.
+    world = _mock_world_from_config(
+        {
+            "mock_tools": SCENARIO["environment"]["mock_responses"],
+            "tool_initial_state": SCENARIO["environment"]["seed"],
+        }
+    )
+    assert world is not None
+    world.reset()
+
+    # 2. The agent under test calls a tool; the mock answers and mutates world state.
+    result = world.handle_tool_call(
+        {"id": "c1", "name": "add_item", "arguments": {"item_id": "latte", "size": "M"}}
+    )
+    assert result is not None and result.success
+
+    # 3. Run evidence (tool-call log, transcript, final state) feeds plain-Python checks.
+    tool_calls = [{"name": "add_item", "arguments": {"item_id": "latte", "size": "M"}}]
+    verdicts = evaluate_scenario(
+        SCENARIO,
+        tool_calls=tool_calls,
+        transcript_turns=["That is one medium latte, 4.5 total. Anything else?"],
+        final_state=world.state,
+    )
+    by_name = {v.name: v for v in verdicts}
+    assert by_name["item_added"].passed is True
+    assert by_name["order_confirmed"].passed is True
+    assert by_name["price_conveyed"].passed is True
+
+    # 4. Wrong arguments fail the argument checkpoint: the check tests values, not activity.
+    wrong = evaluate_scenario(
+        SCENARIO,
+        tool_calls=[
+            {"name": "add_item", "arguments": {"item_id": "mocha", "size": "L"}}
+        ],
+        transcript_turns=[],
+        final_state=world.state,
+    )
+    assert {v.name: v for v in wrong}["item_added"].passed is False
