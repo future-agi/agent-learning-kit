@@ -390,3 +390,14 @@ def test_validator_rejects_disallowed_arg_value():
     bad["sub_goals"][0]["checkpoint"]["definition"]["args_equal"]["size"] = "XL"
     problems = validate_scenario(bad, contract)
     assert any("arg-value-not-allowed:size=XL" in p for p in problems)
+
+
+def test_validator_rejects_pinned_value_absent_from_contract():
+    contract = AgentContract.model_validate(CONTRACT)
+    bad = json.loads(json.dumps(SCENARIO))
+    bad["sub_goals"][0]["checkpoint"]["definition"] = {
+        "tool": "list_order",
+        "args_equal": {"order_ref": "def2x"},
+    }
+    problems = validate_scenario(bad, contract)
+    assert any("pinned-value-not-in-contract" in p for p in problems)

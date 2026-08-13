@@ -81,11 +81,22 @@ def _validate_definition(
             problems.append(f"{where}:tool_call_args-without-args")
         for arg, value in (definition.get("args_equal") or {}).items():
             allowed = arg_values.get(str(tool), {}).get(str(arg))
-            if not isinstance(allowed, list) or not allowed:
+            if isinstance(allowed, list) and allowed:
+                candidates = {str(item).lower() for item in allowed} | {"null", "none"}
+                if value is not None and str(value).lower() not in candidates:
+                    problems.append(f"{where}:arg-value-not-allowed:{arg}={value}")
                 continue
-            candidates = {str(item).lower() for item in allowed} | {"null", "none"}
-            if value is not None and str(value).lower() not in candidates:
-                problems.append(f"{where}:arg-value-not-allowed:{arg}={value}")
+            # No listed valid values for this argument: a pinned string must still come from
+            # the contract's own vocabulary. A value found nowhere in the contract is either
+            # invented or runtime-generated; neither can be pinned in advance.
+            if (
+                isinstance(value, str)
+                and len(value) >= 3
+                and not value.replace(".", "").replace("-", "").isdigit()
+                and value.lower() not in ("null", "none")
+                and value.lower() not in legit_vocabulary
+            ):
+                problems.append(f"{where}:pinned-value-not-in-contract:{arg}={value}")
     elif kind == "state":
         if not definition.get("must") and not definition.get("forbidden"):
             problems.append(f"{where}:state-without-must-or-forbidden")
@@ -249,6 +260,12 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
+            )
+        elif ":pinned-value-not-in-contract:" in problem:
+            lines.append(
+                f"- A checkpoint pins an argument to a value found nowhere in the contract "
+                f"({problem.split(':')[-1]}). If the value is real, copy it from the contract's "
+                "data; if it only exists at run time, move the argument to args_present."
             )
         elif ":arg-value-not-allowed:" in problem:
             lines.append(
