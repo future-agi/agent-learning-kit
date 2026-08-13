@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+from .environments import EnvironmentProfile
+
 # The scenario model, written as definitions a fresh model can act on.
 SCENARIO_MODEL = """You help test an AI agent by designing test scenarios. Definitions used throughout:
 
@@ -50,28 +52,6 @@ Quality bar for every scenario you write:
 - Every concrete value is a real entry from the contract's data; a value that cannot be found in
   the contract does not belong in a test.
 - User personality, accent, or language is NOT varied unless the scenario is specifically about it."""
-
-AGENT_INPUT_BY_MODALITY = {
-    "voice": (
-        "a situation instruction for the simulated caller, written in second person as the caller's "
-        "own lived circumstance: who they are, what is happening, and what they want. It describes "
-        "their experience and goal, never instructions about what to say, and never the other "
-        "side's turns. Facts the agent is expected to ask for live in `facts`, not here. No accent "
-        "or voice notes"
-    ),
-    "chat": (
-        "a situation instruction for the simulated user, second person, lived circumstance: their "
-        "goal and what they know. Facts the agent should elicit are listed separately in `facts`"
-    ),
-    "data_sql": "the plain-English question only: no SQL, no table or column names, no answer",
-    "code": (
-        "the command the agent is invoked with (a real command from the contract) or the issue text "
-        "handed to it: never the fix, the patch, or the expected review"
-    ),
-    "browser": "the natural-language task plus only the starting URL: no selectors, no answer",
-    "research": "the research question or brief only: no expected findings",
-    "_default": "exactly what the agent receives at the start, in natural form: never the answer",
-}
 
 CHECKPOINT_VOCABULARY = """CHECKPOINT kinds, strongest first. Choose the strongest kind the sub-goal
 allows; `judge` exists only for sub-goals no state, call, or data value can witness.
@@ -177,8 +157,15 @@ Rules:
   that can.
 - Angles within a node must each produce a DIFFERENT correct outcome, not the same outcome under
   different wording.
+Where the source left something genuinely ambiguous, decide it yourself and keep going, then record
+what you decided as a question the person requesting these tests could answer. A question earns its
+place only when a different answer would have produced a materially different set of tests: which of
+two plausible readings of a rule is the real one, whether an area of the agent is in scope for
+testing at all, which of several user populations the suite should assume. Do not record questions
+whose answer is already in the contract.
 {guidance_block(guidance)}Return JSON: {{"nodes": [{{"use_case": "...", "description": "<one line>",
-"count": <int>, "angles": ["<one line>", ...]}}]}}"""
+"count": <int>, "angles": ["<one line>", ...]}}], "open_questions": ["<what you had to assume, and
+what you assumed>", ...]}}"""
 
 
 # Contributor stances: benchmark suites get their diversity from many independent contributors
@@ -355,16 +342,14 @@ def materialize_prompt(
     row: dict,
     base_environment: dict,
     catalog: list[dict],
-    modality: str,
-    conversational: bool,
+    environment: EnvironmentProfile,
     hint: str = "",
     guidance: str = "",
 ) -> str:
-    input_spec = AGENT_INPUT_BY_MODALITY.get(
-        modality, AGENT_INPUT_BY_MODALITY["_default"]
-    )
+    input_spec = environment.input_spec
+    witnessable = ", ".join(environment.witnessable)
     conv = ""
-    if conversational:
+    if environment.conversational:
         conv = """- This agent is conversational: `agent_input` is the situation instruction handed to the
   simulated user, and `facts` lists what that user knows. Every fact the agent is supposed to ask
   for gets disclosure "on_request"; the simulated user volunteers only "volunteer" facts.
@@ -398,6 +383,9 @@ names the one thing this scenario checks; invent a new sub-goal name only when n
 SCENARIO PLAN to expand into a full test: {json.dumps(row)}
 
 {CHECKPOINT_VOCABULARY}
+
+This test will be staged as a {environment.label}, where {environment.mock_surface}. Only these
+checkpoint kinds can be observed there, so every sub-goal must use one of them: {witnessable}.
 
 Write the complete test. Every value must be a real value from the contract's data. Keep the three
 parts separate: the input never reveals the environment seeding, the checkpoints, or the outcome.

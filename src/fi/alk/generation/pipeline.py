@@ -17,21 +17,23 @@ every loop's exit condition.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import prompts
+from . import environments, prompts
 from .contract import AgentContract, extract_contract
 from .dedup import near_duplicate
 from .emit import write_outputs
+from .environments import EnvironmentProfile
 from .oracle import oracle_hint, oracle_problems
 from .explorer import explore_contract
 from .llm import LLMClient
 from .sources import AgentSource
-from .traces import load_traces, mine_traces
+from .traces import amplify_plans, explore_traces, load_traces, mine_traces
 from .validators import repair_hint, validate_scenario
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,10 @@ _ACCEPT_FLOOR = (
 
 @dataclass
 class GenerationConfig:
+    # Which runtime the suite is staged in. Chosen by the operator, never inferred: one agent can be
+    # reachable by several, and only the chosen one determines the input shape and the gradable
+    # checkpoint kinds.
+    environment: EnvironmentProfile = environments.VOICE
     n: int = 20
     max_row_rounds: int = 4
     max_repairs: int = 3
@@ -62,6 +68,7 @@ class GenerationResult:
     catalog: list[dict] = field(default_factory=list)
     records: list[dict] = field(default_factory=list)
     rejected: list[dict] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
 
 
@@ -122,9 +129,13 @@ def derive_coverage_plan(
     config: GenerationConfig,
     *,
     total: int | None = None,
-) -> list[dict]:
-    """Partition the target count across use-case nodes. The plan is O(use cases), never O(n),
-    so planning context stays bounded at any scenario count."""
+) -> tuple[list[dict], list[str]]:
+    """Partition the target count across use-case nodes, and surface what had to be assumed.
+
+    The plan is O(use cases), never O(n), so planning context stays bounded at any scenario count.
+    The questions come back with it: this stage makes the largest assumptions in the run, and the
+    operator can answer them in the next run's guidance instead of discovering them in the output.
+    """
     target = config.n if total is None else total
     raw = llm.complete_json(
         prompts.COVERAGE_PLAN_SYSTEM,
@@ -135,6 +146,11 @@ def derive_coverage_plan(
         max_tokens=16_000,
     )
     nodes = raw.get("nodes", raw) if isinstance(raw, dict) else raw
+    questions = [
+        str(q)
+        for q in (raw.get("open_questions") or [] if isinstance(raw, dict) else [])
+        if str(q).strip()
+    ]
     plan: list[dict] = []
     for node in nodes if isinstance(nodes, list) else []:
         if not isinstance(node, dict) or not node.get("use_case"):
@@ -151,7 +167,7 @@ def derive_coverage_plan(
             scaled[scaled.index(min(scaled))] += 1
         for node, count in zip(plan, scaled):
             node["count"] = count
-    return plan
+    return plan, questions
 
 
 def derive_rows(
@@ -291,8 +307,7 @@ def materialize_row(
                 row=row,
                 base_environment=contract.base_environment,
                 catalog=catalog,
-                modality=contract.modality,
-                conversational=contract.conversational,
+                environment=config.environment,
                 hint=hint,
                 guidance=config.guidance,
             ),
@@ -311,6 +326,7 @@ def materialize_row(
             "goal",
             "target_failure",
             "unique_end_state",
+            "provenance",
         ):
             record.setdefault(key, row.get(key))
         record["id"] = _slugify(record.get("id") or row.get("id", ""))
@@ -405,10 +421,17 @@ def generate(
     logger.info(
         "contract ready", extra={"agent": contract.agent, "tools": len(contract.tools)}
     )
+    # The operator's environment choice is authoritative; a disagreement with what the source looks
+    # like is worth saying out loud, because the scenarios will follow the choice either way.
+    mismatch = environments.modality_mismatch(config.environment, contract.modality)
+    if mismatch:
+        logger.warning("environment mismatch: %s", mismatch)
+        print(f"[generation] NOTE: {mismatch}", flush=True)
 
     catalog = derive_catalog(contract, llm)
     records: list[dict] = []
     rejected: list[dict] = []
+    open_questions: list[str] = []
     feedback = ""
 
     def _flush() -> None:
@@ -418,6 +441,8 @@ def generate(
             catalog=catalog,
             records=records,
             rejected=rejected,
+            open_questions=open_questions,
+            environment=config.environment,
             usage=llm.usage.as_dict(),
         )
 
@@ -473,16 +498,36 @@ def generate(
         # invented one, so mined plans take their share of N before coverage planning fills
         # the remainder. Mined plans pass the same gates as everything else.
         if config.traces_path:
-            raw_traces = load_traces(config.traces_path)
+            # A folder of recordings has an unknown shape, so the model navigates it and chooses
+            # what is worth mining, failing interactions first. A single file needs no exploring.
+            raw_traces: list[dict] = []
+            if os.path.isdir(config.traces_path):
+                raw_traces = explore_traces(config.traces_path, llm)
+            if not raw_traces:
+                raw_traces = load_traces(config.traces_path)
             if raw_traces:
                 mined = mine_traces(contract, raw_traces, llm, guidance=config.guidance)
+                # Amplification: a recreation of a real failure protects that one interaction.
+                # Its neighbours fence the class the failure belongs to, so the suite behaves like
+                # a regression suite rather than a single pinned data point.
+                headroom = config.n - len(mined)
+                neighbours = (
+                    amplify_plans(contract, mined, llm, limit=headroom)
+                    if headroom > 0
+                    else []
+                )
+                mined = mined + neighbours
                 for row in mined:
                     row["id"] = _slugify(row.get("id") or row.get("situation", ""))
                 if config.critic_enabled:
                     mined = review_plan(contract, mined, llm)
                 logger.info(
                     "trace mining",
-                    extra={"traces": len(raw_traces), "plans": len(mined)},
+                    extra={
+                        "traces": len(raw_traces),
+                        "plans": len(mined),
+                        "amplified": len(neighbours),
+                    },
                 )
                 _materialize_batch(mined[: config.n])
 
@@ -521,12 +566,26 @@ def generate(
         # separately. Planning context is bounded by the node, never by the whole suite;
         # cross-node overlap is prevented structurally and by the deterministic dedup filter.
         remaining_target = config.n - len(records)
-        plan = (
+        plan, questions = (
             derive_coverage_plan(contract, llm, config, total=remaining_target)
             if remaining_target > 0
-            else []
+            else ([], [])
         )
+        open_questions.extend(questions)
         logger.info("coverage plan", extra={"nodes": len(plan)})
+
+        # Nodes planned in parallel cannot see each other, so overlap is caught here instead.
+        claimed: list[dict] = []
+
+        def _claim(rows: list[dict]) -> list[dict]:
+            with lock:
+                kept = []
+                for row in rows:
+                    if near_duplicate(row, claimed):
+                        continue
+                    claimed.append(row)
+                    kept.append(row)
+                return kept
 
         def _plan_node(node: dict) -> list[dict]:
             rows = derive_rows(
@@ -539,22 +598,37 @@ def generate(
             )
             if config.critic_enabled:
                 rows = review_plan(contract, rows, llm)
-            return rows
+            return _claim(rows)
 
-        if config.max_workers > 1 and len(plan) > 1:
-            with ThreadPoolExecutor(
+        # Each node flows plan -> review -> materialize on its own, with no barrier between the
+        # stages: a node whose planning finished early has its scenarios being written while a
+        # slower node is still planning. Wall-clock becomes the slowest single node rather than
+        # the sum of the slowest stage in each.
+        if plan and config.max_workers > 1:
+            planners = ThreadPoolExecutor(
                 max_workers=min(config.max_workers, len(plan))
-            ) as pool:
-                node_rows = list(pool.map(_plan_node, plan))
+            )
+            writers = ThreadPoolExecutor(max_workers=config.max_workers)
+            try:
+
+                def _node_flow(node: dict) -> list:
+                    # Submits and returns; never waits, so a planner thread cannot be blocked
+                    # behind the writer pool it is feeding.
+                    return [
+                        writers.submit(_materialize_one, row)
+                        for row in _plan_node(node)
+                    ]
+
+                node_futures = [planners.submit(_node_flow, node) for node in plan]
+                for node_future in node_futures:
+                    for write_future in node_future.result():
+                        write_future.result()
+            finally:
+                planners.shutdown(wait=True)
+                writers.shutdown(wait=True)
         else:
-            node_rows = [_plan_node(node) for node in plan]
-        # Cross-node near-dup guard after parallel planning (nodes could not see each other).
-        vetted: list[dict] = []
-        for rows in node_rows:
-            for row in rows:
-                if not near_duplicate(row, vetted):
-                    vetted.append(row)
-        _materialize_batch(vetted)
+            for node in plan:
+                _materialize_batch(_plan_node(node))
 
         # Replenishment: coverage review names gaps and near-duplicates, then plans the
         # shortfall suite-wide. Termination is by PROGRESS, not a fixed round count: the loop
@@ -616,6 +690,7 @@ def generate(
         catalog=catalog,
         records=records,
         rejected=rejected,
+        open_questions=open_questions,
         usage=llm.usage.as_dict(),
     )
     _flush()

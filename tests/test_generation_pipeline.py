@@ -593,3 +593,261 @@ def test_operator_request_scenarios_come_first_with_provenance(agent_repo, tmp_p
     assert len(result.records) == 1
     assert result.records[0]["provenance"]["kind"] == "operator_request"
     assert not llm.responses  # request filled N; coverage planning never ran
+
+
+# ---------------------------------------------------------------------------
+# Environment selection
+# ---------------------------------------------------------------------------
+
+
+def test_unsupported_environment_is_refused_by_name():
+    from fi.alk.generation import environments
+
+    for key in ("browser", "computer_use", "code", "telepathy"):
+        with pytest.raises(NotImplementedError) as excinfo:
+            environments.resolve(key)
+        message = str(excinfo.value)
+        assert "voice" in message and "chat" in message
+
+
+def test_supported_environments_resolve_case_insensitively():
+    from fi.alk.generation import environments
+
+    assert environments.resolve("VOICE").key == "voice"
+    assert environments.resolve(" chat ").alk_plugin == "chat"
+
+
+def test_modality_disagreement_warns_without_overriding_the_choice():
+    from fi.alk.generation import environments
+
+    assert not environments.modality_mismatch(environments.CHAT, "data_sql")
+    warning = environments.modality_mismatch(environments.VOICE, "browser")
+    assert "browser" in warning and "voice" in warning
+
+
+# ---------------------------------------------------------------------------
+# Trace exploration and amplification
+# ---------------------------------------------------------------------------
+
+
+def _odd_trace_folder(root, shallow: int = 240):
+    """A folder nobody documented: nested session dirs, a flat archive, mixed formats."""
+    for index in range(shallow):
+        day = f"2026-08-{(index % 28) + 1:02d}"
+        session = root / "sessions" / day / f"sess_{index:04d}"
+        session.mkdir(parents=True, exist_ok=True)
+        failed = index % 40 == 0
+        (session / "transcript.json").write_text(
+            json.dumps(
+                {
+                    "id": f"sess_{index:04d}",
+                    "status": "error" if failed else "completed",
+                    "turns": [
+                        {"role": "user", "text": "one large coffee"},
+                        {
+                            "role": "agent",
+                            "text": "sorry, I did not catch that"
+                            if failed
+                            else "one large coffee, that is 3.5",
+                        },
+                    ],
+                }
+            )
+        )
+    archive = root / "archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    (archive / "old_call.log").write_text(
+        "USER: I asked for no onions\nAGENT: added onions\nUSER: that is wrong, again, no onions"
+    )
+    return root
+
+
+def test_trace_explorer_reads_an_unknown_layout_and_puts_failures_first(tmp_path):
+    from fi.alk.generation.traces import explore_traces
+
+    root = _odd_trace_folder(tmp_path / "traces")
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "tool_calls": [
+                    {"id": "t1", "name": "list_dir", "arguments": {"path": ""}}
+                ]
+            },
+            {
+                "tool_calls": [
+                    {
+                        "id": "t2",
+                        "name": "submit_selection",
+                        "arguments": {
+                            "format_notes": "one json transcript per session folder",
+                            "total_seen": 241,
+                            "selected": [
+                                {
+                                    "path": "sessions/2026-08-02/sess_0001/transcript.json",
+                                    "outcome": "succeeded",
+                                    "why": "the common happy path",
+                                },
+                                {
+                                    "path": "archive/old_call.log",
+                                    "outcome": "failed",
+                                    "why": "the agent ignored a stated exclusion",
+                                },
+                            ],
+                        },
+                    }
+                ]
+            },
+        ]
+    )
+    selected = explore_traces(str(root), llm)
+    assert len(selected) == 2
+    # Failing interactions lead, whatever order the model submitted them in.
+    assert selected[0]["outcome"] == "failed"
+    assert selected[0]["ref"] == "archive/old_call.log"
+    assert "no onions" in selected[0]["text"]
+
+
+def test_trace_explorer_refuses_paths_outside_the_folder(tmp_path):
+    from fi.alk.generation.traces import explore_traces
+
+    root = _odd_trace_folder(tmp_path / "traces", shallow=2)
+    (tmp_path / "secret.txt").write_text("not a trace")
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "tool_calls": [
+                    {
+                        "id": "t1",
+                        "name": "submit_selection",
+                        "arguments": {
+                            "format_notes": "n/a",
+                            "total_seen": 3,
+                            "selected": [
+                                {
+                                    "path": "../secret.txt",
+                                    "outcome": "failed",
+                                    "why": "escaping the sandbox",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+            {
+                "tool_calls": [
+                    {
+                        "id": "t2",
+                        "name": "submit_selection",
+                        "arguments": {
+                            "format_notes": "flat archive",
+                            "total_seen": 3,
+                            "selected": [
+                                {
+                                    "path": "archive/old_call.log",
+                                    "outcome": "failed",
+                                    "why": "stated exclusion ignored",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+        ]
+    )
+    selected = explore_traces(str(root), llm)
+    assert len(selected) == 1
+    assert selected[0]["ref"] == "archive/old_call.log"
+
+
+def test_failing_traces_are_marked_for_amplification_and_fenced(tmp_path):
+    from fi.alk.generation.traces import amplify_plans, mine_traces
+
+    contract = AgentContract.model_validate(CONTRACT)
+    traces = [
+        {
+            "ref": "archive/old_call.log",
+            "text": "USER: no onions\nAGENT: added onions",
+            "outcome": "failed",
+            "why": "stated exclusion ignored",
+        },
+        {
+            "ref": "sessions/ok.json",
+            "text": "USER: one coffee\nAGENT: one coffee, 3.5",
+            "outcome": "succeeded",
+            "why": "happy path",
+        },
+    ]
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "rows": [
+                    {
+                        "id": "recreate-onion",
+                        "trace_ref": "archive/old_call.log",
+                        "use_case": "Order with an exclusion",
+                        "situation": "A caller states an exclusion the agent must honour",
+                        "target_failure": "The agent drops the stated exclusion",
+                        "why_it_matters": "A real customer received the wrong food",
+                        "unique_end_state": "The item is ordered without the excluded ingredient",
+                        "goal": "Order the item as stated",
+                    },
+                    {
+                        "id": "recreate-coffee",
+                        "trace_ref": "sessions/ok.json",
+                        "use_case": "Order a single item",
+                        "situation": "A caller orders one coffee",
+                        "target_failure": "The agent misprices the order",
+                        "why_it_matters": "This interaction happens constantly",
+                        "unique_end_state": "One coffee ordered at 3.5",
+                        "goal": "Order one coffee",
+                    },
+                ]
+            },
+            {
+                "rows": [
+                    {
+                        "id": "exclusion-different-item",
+                        "use_case": "Order with an exclusion",
+                        "situation": "The same exclusion is stated against a different item",
+                        "target_failure": "The agent drops the stated exclusion",
+                        "why_it_matters": "The same weakness reaches every item on the menu",
+                        "unique_end_state": "The other item is ordered without the ingredient",
+                        "goal": "Order the other item as stated",
+                    }
+                ]
+            },
+        ]
+    )
+    plans = mine_traces(contract, traces, llm)
+    assert [p["amplify"] for p in plans] == [True, False]
+
+    neighbours = amplify_plans(contract, plans, llm, per_plan=1)
+    assert len(neighbours) == 1
+    assert neighbours[0]["provenance"] == {
+        "kind": "trace_amplified",
+        "trace_ref": "archive/old_call.log",
+        "amplifies": "recreate-onion",
+    }
+
+
+def test_report_names_the_environment_and_the_open_questions():
+    from fi.alk.generation import environments
+    from fi.alk.generation.emit import render_report
+
+    contract = AgentContract.model_validate(CONTRACT)
+    record = json.loads(json.dumps(SCENARIO))
+    record["provenance"] = {"kind": "production_trace", "trace_ref": "call_001.txt"}
+    report = render_report(
+        contract,
+        [],
+        [record],
+        [],
+        {"usd": 0.1},
+        open_questions=["Assumed refunds are out of scope for this suite"],
+        environment=environments.VOICE,
+    )
+    assert "environment: **voice**" in report
+    assert "Assumed refunds are out of scope" in report
+    assert "production_trace" in report
+    # Voice cannot grade world state today, and the report has to say so rather than imply it can.
+    assert "cannot grade yet" in report and "state" in report

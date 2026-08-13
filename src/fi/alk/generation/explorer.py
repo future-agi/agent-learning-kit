@@ -73,7 +73,7 @@ applies):
 
 If submit_contract returns validation problems, fix them and submit again."""
 
-_TOOLS: list[dict[str, Any]] = [
+READ_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -122,6 +122,9 @@ _TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+]
+
+_TOOLS: list[dict[str, Any]] = READ_TOOLS + [
     {
         "type": "function",
         "function": {
@@ -153,20 +156,20 @@ _SKIP_DIRS = {
 }
 
 
-class _RepoTools:
-    """Path-sandboxed read tools over one repository root."""
+class ReadOnlyTree:
+    """Path-sandboxed read tools over one directory root, shared by every explorer loop."""
 
     def __init__(self, root: str) -> None:
         self.root = os.path.abspath(root)
 
-    def _resolve(self, path: str) -> str:
+    def resolve(self, path: str) -> str:
         resolved = os.path.abspath(os.path.join(self.root, str(path or "").lstrip("/")))
         if resolved != self.root and not resolved.startswith(self.root + os.sep):
             raise ValueError(f"path escapes the repository root: {path}")
         return resolved
 
     def list_dir(self, path: str = "") -> str:
-        target = self._resolve(path)
+        target = self.resolve(path)
         if not os.path.isdir(target):
             return f"not a directory: {path}"
         entries = []
@@ -181,7 +184,7 @@ class _RepoTools:
         return "\n".join(entries) or "(empty)"
 
     def read_file(self, path: str, offset: int = 0) -> str:
-        target = self._resolve(path)
+        target = self.resolve(path)
         if not os.path.isfile(target):
             return f"not a file: {path}"
         try:
@@ -225,7 +228,7 @@ def explore_contract(
     root: str, llm: LLMClient, *, max_turns: int = _MAX_TURNS
 ) -> AgentContract:
     """Run the exploration loop until a valid contract is submitted."""
-    tools = _RepoTools(root)
+    tools = ReadOnlyTree(root)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM},
         {
@@ -263,7 +266,7 @@ def explore_contract(
                 }
             )
             continue
-        messages.append(_assistant_message(reply))
+        messages.append(assistant_message(reply))
         for call in calls:
             name = call.get("name")
             arguments = call.get("arguments") or {}
@@ -283,7 +286,7 @@ def explore_contract(
                         "Then submit_contract again, extended or unchanged if truly complete."
                     )
             else:
-                result = _run_tool(tools, name, arguments)
+                result = run_read_tool(tools, name, arguments)
             messages.append(
                 {
                     "role": "tool",
@@ -299,7 +302,7 @@ def explore_contract(
     )
 
 
-def _assistant_message(reply: dict[str, Any]) -> dict[str, Any]:
+def assistant_message(reply: dict[str, Any]) -> dict[str, Any]:
     raw = reply.get("raw")
     if raw is not None:
         try:
@@ -323,7 +326,7 @@ def _assistant_message(reply: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_tool(tools: _RepoTools, name: str, arguments: dict[str, Any]) -> str:
+def run_read_tool(tools: ReadOnlyTree, name: str, arguments: dict[str, Any]) -> str:
     try:
         if name == "list_dir":
             return tools.list_dir(arguments.get("path", ""))

@@ -25,6 +25,7 @@ from fi.simulate.simulation.models import (
 )
 
 from .contract import AgentContract
+from .environments import VOICE, EnvironmentProfile
 
 _KIND_TO_GOAL_MACHINE = {
     "state": "world_success_condition",
@@ -189,6 +190,8 @@ def write_outputs(
     records: list[dict],
     rejected: list[dict],
     usage: dict[str, Any],
+    open_questions: list[str] | None = None,
+    environment: EnvironmentProfile = VOICE,
 ) -> None:
     scenarios_dir = os.path.join(out_dir, "scenarios")
     alk_dir = os.path.join(out_dir, "alk")
@@ -217,7 +220,17 @@ def write_outputs(
             smoke_manifest(records[0], contract),
         )
     with open(os.path.join(out_dir, "report.md"), "w", encoding="utf-8") as fh:
-        fh.write(render_report(contract, catalog, records, rejected, usage))
+        fh.write(
+            render_report(
+                contract,
+                catalog,
+                records,
+                rejected,
+                usage,
+                open_questions=open_questions or [],
+                environment=environment,
+            )
+        )
 
 
 def render_report(
@@ -226,6 +239,8 @@ def render_report(
     records: list[dict],
     rejected: list[dict],
     usage: dict[str, Any],
+    open_questions: list[str] | None = None,
+    environment: EnvironmentProfile = VOICE,
 ) -> str:
     catalog_names = {str(entry.get("name")) for entry in catalog}
     reuse: dict[str, int] = {}
@@ -243,6 +258,8 @@ def render_report(
     lines = [
         f"# Generated scenarios: {contract.agent}",
         "",
+        f"- environment: **{environment.key}** ({environment.label}), "
+        f"staged by the `{environment.alk_plugin}` runtime",
         f"- scenarios accepted: **{len(records)}**, rejected by review: {len(rejected)}",
         f"- checkpoints: {total_checks}, deterministic: {deterministic} "
         f"({(100 * deterministic // max(total_checks, 1))}%)",
@@ -270,6 +287,37 @@ def render_report(
             f"- **{record.get('id')}**: catches `{record.get('target_failure', '')}`. "
             f"Matters because: {record.get('why_it_matters', '')}"
         )
+    origins: dict[str, int] = {}
+    for record in records:
+        kind = str((record.get("provenance") or {}).get("kind") or "baseline_coverage")
+        origins[kind] = origins.get(kind, 0) + 1
+    # Worth printing whenever anything came from somewhere other than plain coverage planning,
+    # including a suite built entirely from production traces.
+    if origins and set(origins) != {"baseline_coverage"}:
+        lines += ["", "## Where these scenarios came from", ""]
+        for kind, count in sorted(origins.items(), key=lambda item: -item[1]):
+            lines.append(f"- `{kind}`: {count}")
+    pending = environment.pending_kinds()
+    if pending:
+        lines += [
+            "",
+            "## Checkpoints this environment cannot grade yet",
+            "",
+            f"Scenarios express `{'`, `'.join(pending)}` checkpoints, which the "
+            f"{environment.label} runtime does not evaluate today. They are recorded in the "
+            "scenario and graded once that runtime lands; every other checkpoint kind is live.",
+        ]
+    if open_questions:
+        lines += [
+            "",
+            "## Assumptions worth confirming",
+            "",
+            "Each of these was decided during planning. Answering any of them in the next run's "
+            "guidance changes what gets generated.",
+            "",
+        ]
+        for question in open_questions:
+            lines.append(f"- {question}")
     if reuse:
         lines += ["", "## Sub-goal roll-up (appearances across scenarios)", ""]
         for name, count in sorted(reuse.items(), key=lambda item: -item[1]):

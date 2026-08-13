@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 
+from . import environments
 from .llm import DEFAULT_MODEL, LiteLLMClient
 from .pipeline import GenerationConfig, generate
 from .sources import resolve_source
@@ -22,6 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--repo", help="path to the agent's repository folder (repo source)"
+    )
+    parser.add_argument(
+        "--environment",
+        required=True,
+        help="runtime the scenarios are staged in: "
+        + ", ".join(sorted(environments.SUPPORTED)),
     )
     parser.add_argument("--n", type=int, default=20, help="target number of scenarios")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="litellm model string")
@@ -75,9 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     if guidance.startswith("@"):
         with open(guidance[1:], encoding="utf-8") as fh:
             guidance = fh.read()
+    try:
+        environment = environments.resolve(args.environment)
+    except NotImplementedError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     source = resolve_source(args.source, **source_kwargs)
     llm = LiteLLMClient(model=args.model, budget_usd=args.budget_usd)
     config = GenerationConfig(
+        environment=environment,
         n=args.n,
         critic_enabled=not args.no_critic,
         guidance=guidance,
@@ -92,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "agent": result.contract.agent,
+                "environment": environment.key,
                 "scenarios": len(result.records),
                 "rejected": len(result.rejected),
                 "out": args.out,
