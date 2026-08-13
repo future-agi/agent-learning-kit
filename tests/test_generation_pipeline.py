@@ -885,3 +885,83 @@ def test_plan_fields_survive_materialization_even_when_the_model_omits_them():
     assert record["why_it_matters"] == "The customer is handed the wrong drink"
     assert record["target_failure"] == "The agent drops the stated size"
     assert record["provenance"]["kind"] == "production_trace"
+
+
+def test_composed_argument_values_are_not_required_to_exist_in_the_contract():
+    """A query the agent writes is authored per scenario; a contract cannot list it.
+
+    The grounding rule exists to catch transposed identifiers. Applied to composed text it made
+    every query-writing agent ungeneratable: each scenario was rejected for pinning the very SQL
+    the test exists to check.
+    """
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(
+        {
+            **CONTRACT,
+            "conversational": False,
+            "tools": [
+                {
+                    "name": "sql_db_query",
+                    "args": ["query"],
+                    "arg_values": {},
+                    "description": "Run a SQL query",
+                },
+                {
+                    "name": "sql_db_list_tables",
+                    "args": [],
+                    "arg_values": {},
+                    "description": "List tables",
+                },
+            ],
+        }
+    )
+    record = json.loads(json.dumps(SCENARIO))
+    record["facts"] = []
+    record["sub_goals"] = [
+        {
+            "name": "listed_the_tables",
+            "milestone": "The agent inspects the schema",
+            "checkpoint": {
+                "kind": "tool_call_args",
+                "deterministic": True,
+                "detail": "The agent listed the tables",
+                # A tool with no parameters is asserted by the call alone.
+                "definition": {"tool": "sql_db_list_tables"},
+            },
+        },
+        {
+            "name": "ran_the_expected_query",
+            "milestone": "The agent runs the query",
+            "checkpoint": {
+                "kind": "tool_call_args",
+                "deterministic": True,
+                "detail": "The agent ran the expected query",
+                "definition": {
+                    "tool": "sql_db_query",
+                    "args_equal": {
+                        "query": "SELECT BillingCountry, SUM(Total) FROM Invoice GROUP BY BillingCountry"
+                    },
+                },
+            },
+        },
+    ]
+    problems = validate_scenario(record, contract)
+    assert not [p for p in problems if "pinned-value-not-in-contract" in p], problems
+    assert not [p for p in problems if "tool_call_args-without-args" in p], problems
+
+
+def test_identifier_shaped_values_are_still_grounded():
+    """The original guard must survive: a transposed id is still caught."""
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(CONTRACT)
+    record = json.loads(json.dumps(SCENARIO))
+    for sub_goal in record["sub_goals"]:
+        definition = sub_goal["checkpoint"].get("definition") or {}
+        if definition.get("args_equal"):
+            key = sorted(definition["args_equal"])[0]
+            definition["args_equal"][key] = "combo_not_a_real_id"
+            break
+    problems = validate_scenario(record, contract)
+    assert any("combo_not_a_real_id" in p for p in problems), problems

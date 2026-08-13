@@ -40,6 +40,11 @@ def banned_tokens(contract: AgentContract) -> set[str]:
     return banned
 
 
+def _is_identifier_shaped(value: str) -> bool:
+    """An id or enum token, as opposed to text a scenario composes (a query, a message body)."""
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}", value))
+
+
 def _identifier_values(payload) -> set[str]:
     """Underscore-shaped string values anywhere in a definition (the id-like ones)."""
     values: set[str] = set()
@@ -62,6 +67,7 @@ def _validate_definition(
     where: str,
     legit_vocabulary: set[str],
     arg_values: dict[str, dict],
+    argless_tools: frozenset[str] = frozenset(),
 ) -> list[str]:
     problems: list[str] = []
     unknown_ids = sorted(
@@ -77,7 +83,12 @@ def _validate_definition(
         tool = definition.get("tool")
         if not isinstance(tool, str) or tool not in tool_names:
             problems.append(f"{where}:unknown-tool:{tool}")
-        if not definition.get("args_equal") and not definition.get("args_present"):
+        # A tool that genuinely declares no parameters is asserted by the call alone.
+        if (
+            not definition.get("args_equal")
+            and not definition.get("args_present")
+            and str(tool) not in argless_tools
+        ):
             problems.append(f"{where}:tool_call_args-without-args")
         for arg, value in (definition.get("args_equal") or {}).items():
             allowed = arg_values.get(str(tool), {}).get(str(arg))
@@ -86,12 +97,16 @@ def _validate_definition(
                 if value is not None and str(value).lower() not in candidates:
                     problems.append(f"{where}:arg-value-not-allowed:{arg}={value}")
                 continue
-            # No listed valid values for this argument: a pinned string must still come from
-            # the contract's own vocabulary. A value found nowhere in the contract is either
-            # invented or runtime-generated; neither can be pinned in advance.
+            # No listed valid values for this argument: a pinned identifier must still come from
+            # the contract's own vocabulary, because an id found nowhere in the contract is either
+            # invented or runtime-generated and neither can be pinned in advance. This applies to
+            # identifiers only. Arguments that carry composed text (a query the agent writes, a
+            # message it sends) are authored per scenario and cannot appear in a contract, so
+            # requiring them to would make every such agent ungeneratable.
             if (
                 isinstance(value, str)
                 and len(value) >= 3
+                and _is_identifier_shaped(value)
                 and not value.replace(".", "").replace("-", "").isdigit()
                 and value.lower() not in ("null", "none")
                 and value.lower() not in legit_vocabulary
@@ -130,6 +145,7 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     tool_names = contract.tool_names()
     legit_vocabulary = _legit_vocabulary(contract)
     arg_values = {tool.name: dict(tool.arg_values or {}) for tool in contract.tools}
+    argless_tools = frozenset(tool.name for tool in contract.tools if not tool.args)
 
     for field in (
         "id",
@@ -184,7 +200,13 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
                 problems.append(f"{where}:no-definition")
             else:
                 problems += _validate_definition(
-                    kind, definition, tool_names, where, legit_vocabulary, arg_values
+                    kind,
+                    definition,
+                    tool_names,
+                    where,
+                    legit_vocabulary,
+                    arg_values,
+                    argless_tools,
                 )
             deterministic = bool(checkpoint.get("deterministic"))
             if deterministic and kind == "judge":
