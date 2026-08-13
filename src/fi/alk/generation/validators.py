@@ -234,6 +234,13 @@ def repair_hint(problems: list[str]) -> str:
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
             )
+        elif ":conveyed-without-variants" in problem:
+            lines.append(
+                "- A conveyed checkpoint listed no values. must_include_any needs at least one real "
+                "value from the contract data; when no data value can witness this sub-goal, change "
+                "the checkpoint to the kind that can (absent for something that must not happen, "
+                "judge as the last resort)."
+            )
         elif ":" in problem:
             lines.append(f"- Fix: {problem}")
     return "\n".join(dict.fromkeys(lines))
