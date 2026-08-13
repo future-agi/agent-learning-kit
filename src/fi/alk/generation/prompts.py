@@ -63,8 +63,12 @@ allows; `judge` exists only for sub-goals no state, call, or data value can witn
   pinned value only when this scenario's user actually determines it or a rule the agent enforces
   fixes it; where the user says nothing about an argument and no rule settles it, the correct value
   is genuinely open, and pinning one there fails an agent that did nothing wrong, which is worse
-  than not testing the argument at all. Such an argument goes in args_present, so the test still
-  requires the agent to supply something without inventing a requirement it was never given. A value
+  than not testing the argument at all. Such an argument goes in args_present, inside this same
+  checkpoint, so the test still requires the agent to supply something without inventing a
+  requirement it was never given. An open argument is a reason to move that one argument into
+  args_present; it is never a reason to give up the tool_call_args checkpoint or to replace it with
+  a judge, because the call itself and every argument the user did determine remain exactly
+  checkable. A value
   that only comes into existence during the run (a generated id, a session handle) cannot be known
   in advance and belongs in args_present, never in args_equal. When the same call must happen several times
   (a quantity of identical items), one checkpoint with "min_count": <how many> asserts it; separate
