@@ -404,8 +404,16 @@ def generate(
     lock = threading.Lock()
 
     def _materialize_one(row: dict) -> None:
+        with lock:
+            if len(records) >= config.n:
+                return  # target reached; spend nothing further on this batch
         record, reason = materialize_row(contract, row, catalog, llm, config)
         with lock:
+            if record is not None and len(records) >= config.n:
+                rejected.append(
+                    {**row, "_reject_reason": "surplus: target already reached"}
+                )
+                return
             if record is not None:
                 records.append(record)
             else:
@@ -472,11 +480,17 @@ def generate(
         _materialize_batch(vetted)
 
         # Replenishment: coverage review names gaps and near-duplicates, then plans the
-        # shortfall suite-wide until the target count or the round cap is reached.
-        for suite_round in range(config.max_suite_rounds):
+        # shortfall suite-wide. Termination is by PROGRESS, not a fixed round count: the loop
+        # continues while rounds still produce accepted scenarios and ends the first time a
+        # round yields none, which is the empirical signal that the agent's genuinely distinct
+        # scenario space is exhausted below the requested target.
+        suite_round = 0
+        while suite_round < max(config.max_suite_rounds, 8):
+            suite_round += 1
             want = config.n - len(records)
-            if want <= 0 and suite_round > 0:
+            if want <= 0 and suite_round > 1:
                 break
+            accepted_before = len(records)
             gaps, duplicate_ids, feedback = suite_review(
                 contract, records, llm, guidance=config.guidance
             )
@@ -504,6 +518,18 @@ def generate(
             if config.critic_enabled:
                 rows = review_plan(contract, rows, llm)
             _materialize_batch(rows)
+            if len(records) == accepted_before:
+                logger.warning(
+                    "scenario space exhausted at %d of %d requested; a round produced no accepts",
+                    len(records),
+                    config.n,
+                )
+                print(
+                    f"[generation] EXHAUSTED: {len(records)} of {config.n} requested; "
+                    "the last replenishment round produced no new accepted scenario",
+                    flush=True,
+                )
+                break
     except Exception:
         _flush()
         raise
