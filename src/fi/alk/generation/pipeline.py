@@ -171,6 +171,7 @@ def derive_rows(
         remaining = want - len(rows)
         if remaining <= 0:
             break
+        added_before = len(rows)
         raw = llm.complete_json(
             prompts.SCENARIO_MODEL,
             prompts.derive_rows_prompt(
@@ -204,6 +205,10 @@ def derive_rows(
             seen.add(key)
             row["id"] = _slugify(row.get("id") or row.get("situation", ""))
             rows.append(row)
+        if len(rows) == added_before:
+            # A whole round survived neither exact nor near-dup filtering: this
+            # planning space is dry. Stop paying for rewordings of it.
+            break
     return rows[:want]
 
 
