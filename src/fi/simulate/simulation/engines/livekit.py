@@ -83,9 +83,11 @@ from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
-# Grace window to let the target's final in-flight transcription land in the
-# transcript after the conversation ends, before the snapshot + teardown.
-_FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS = 3.0
+# After the conversation ends, keep draining the target's transcription tasks
+# until it stays quiet for this gap (it may still be delivering a closing), then
+# snapshot. Bounded by the hard cap so a stuck stream can't hang teardown.
+_FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS = 3.0
+_FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -594,6 +596,13 @@ class LiveKitEngine(BaseEngine):
         # be recorded into the transcript, but WITHOUT triggering another
         # simulator reply (the call is over).
         conversation_ended = asyncio.Event()
+        # Every target utterance, captured straight off its transcription stream
+        # independently of the simulator session. Once the session starts
+        # draining it rejects new input ("speech scheduling is paused"), so a
+        # target closing delivered after the simulator is done never reaches the
+        # chat context. These are merged into the report so the trailing target
+        # turn is never lost.
+        captured_target_turns: list[str] = []
         # agent_first (target greets first): the target can publish its greeting
         # transcription before the main handler is registered post-readiness, and
         # the LiveKit client DROPS a text-stream header that arrives with no
@@ -1047,7 +1056,10 @@ class LiveKitEngine(BaseEngine):
                     target_transcription_mode = True
                 task = asyncio.create_task(
                     _forward_target_transcription(
-                        reader, session, conversation_ended=conversation_ended
+                        reader,
+                        session,
+                        conversation_ended=conversation_ended,
+                        captured_target_turns=captured_target_turns,
                     )
                 )
                 target_transcription_tasks.add(task)
@@ -1078,18 +1090,27 @@ class LiveKitEngine(BaseEngine):
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
                 provider_task=bridge_task,
             )
-            # The target's final utterance transcription may still be in flight
-            # when the conversation ends. Signal record-only mode, then let those
-            # tasks finish (bounded) so the last target turn is committed to
-            # history before we snapshot — otherwise it is lost when the `finally`
-            # cancels them.
+            # The target often delivers a closing AFTER the end condition fired
+            # (it wraps up once the customer is done). Its transcription stream is
+            # read to completion by a background task, which only then records the
+            # turn. Drain those tasks — including ones that START after the end —
+            # until the target stays quiet for a short gap, so the closing is
+            # captured before we snapshot. Bounded by a hard cap.
             conversation_ended.set()
-            pending_final = [t for t in target_transcription_tasks if not t.done()]
-            if pending_final:
-                await asyncio.wait(
-                    pending_final, timeout=_FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS
-                )
+            _loop = asyncio.get_running_loop()
+            _hard_deadline = _loop.time() + _FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS
+            _quiet_until = _loop.time() + _FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS
+            while _loop.time() < _hard_deadline:
+                _pending = [t for t in target_transcription_tasks if not t.done()]
+                if _pending:
+                    await asyncio.wait(_pending, timeout=1.0)
+                    _quiet_until = _loop.time() + _FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS
+                elif _loop.time() >= _quiet_until:
+                    break
+                else:
+                    await asyncio.sleep(0.2)
             messages = _canonical_report_messages(session)
+            messages = _merge_captured_target_turns(messages, captured_target_turns)
             outcome = _conversation_outcome(
                 stop_reason,
                 messages,
@@ -1495,19 +1516,25 @@ async def _forward_target_transcription(
     session: "AgentSession",
     *,
     conversation_ended: "asyncio.Event | None" = None,
+    captured_target_turns: list[str] | None = None,
 ) -> None:
     try:
         transcript = (await reader.read_all()).strip()
         if not transcript:
             return
-        # Always commit the target's turn straight onto the chat context. Doing
-        # it via ``generate_reply(user_input=...)`` only records the turn as a
-        # side effect of producing a simulator reply, and it drops the turn (or
-        # raises "AgentSession is closing") whenever the simulator won't/can't
-        # answer — e.g. the target's trailing closing after the customer is
-        # already done. ``add_message`` records it regardless of session state
-        # (LiveKit reports the target as ``user``).
-        session.history.add_message(role="user", content=transcript)
+        # Capture the target's turn independently of the simulator session FIRST.
+        # Once the session drains it rejects new input ("speech scheduling is
+        # paused"), so a closing delivered after the simulator is done never
+        # reaches the chat context. This list is merged into the report so the
+        # trailing target turn survives regardless of session state.
+        if captured_target_turns is not None:
+            captured_target_turns.append(transcript)
+        # Best-effort commit onto the chat context too (keeps the live
+        # conversation coherent while the session is still running).
+        try:
+            session.history.add_message(role="user", content=transcript)
+        except Exception:  # noqa: BLE001
+            pass
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent.
@@ -1816,6 +1843,61 @@ def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
             }
         )
     return messages
+
+
+def _merge_captured_target_turns(
+    messages: list[dict[str, Any]],
+    captured_target_turns: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Append target turns captured off the transcription stream that never
+    reached the session history.
+
+    The target's closing is often delivered after the simulator session has
+    started draining (it rejects new input with "speech scheduling is paused"),
+    so it is recorded in ``captured_target_turns`` but missing from the report.
+    Each captured turn is the target (``assistant`` in the report perspective).
+    Deduped against existing content — including partial/extended emissions of
+    the same turn — so nothing already recorded is doubled. Appended after the
+    existing turns (they are trailing utterances) with a synthetic timing just
+    past the last message so downstream ms-offset ordering keeps them last.
+    """
+    if not captured_target_turns:
+        return messages
+    assistant_texts = [
+        (m.get("content") or "").strip()
+        for m in messages
+        if m.get("role") == "assistant" and m.get("content")
+    ]
+
+    def _already_present(text: str) -> bool:
+        return any(text in existing or existing in text for existing in assistant_texts)
+
+    last_ts = 0.0
+    for m in messages:
+        for key in ("stopped_speaking_at", "started_speaking_at", "created_at"):
+            value = m.get(key)
+            if isinstance(value, (int, float)) and value > last_ts:
+                last_ts = value
+
+    merged = list(messages)
+    for offset, raw in enumerate(captured_target_turns, start=1):
+        text = (raw or "").strip()
+        if not text or _already_present(text):
+            continue
+        ts = (last_ts + offset) if last_ts else None
+        merged.append(
+            {
+                "role": "assistant",
+                "content": text,
+                "created_at": ts,
+                "started_speaking_at": ts,
+                "stopped_speaking_at": ts,
+                "interrupted": False,
+                "e2e_latency": None,
+            }
+        )
+        assistant_texts.append(text)
+    return merged
 
 
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
