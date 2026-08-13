@@ -10,9 +10,24 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .llm import LLMClient
+
+_STRING_FIELDS = (
+    "agent",
+    "one_liner",
+    "modality",
+    "system_prompt_excerpt",
+    "grading_notes",
+)
+_LIST_FIELDS = (
+    "hard_constraints",
+    "real_use_cases",
+    "signature_cases",
+    "anti_hallucination",
+)
+_DICT_FIELDS = ("data_schema", "base_environment")
 
 
 class ToolSpec(BaseModel):
@@ -24,6 +39,33 @@ class ToolSpec(BaseModel):
 
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_shapes(cls, payload: Any) -> Any:
+        """Model JSON varies in benign ways (a list where prose was asked, a bare string where a
+        list was). Normalize instead of rejecting: shape variance is not a grounding error."""
+        if not isinstance(payload, dict):
+            return payload
+        for key in _STRING_FIELDS:
+            value = payload.get(key)
+            if isinstance(value, list):
+                payload[key] = "\n".join(str(item) for item in value)
+            elif value is not None and not isinstance(value, str):
+                payload[key] = str(value)
+        for key in _LIST_FIELDS:
+            value = payload.get(key)
+            if isinstance(value, str):
+                payload[key] = [value]
+            elif isinstance(value, list):
+                payload[key] = [
+                    str(item) if not isinstance(item, str) else item for item in value
+                ]
+        for key in _DICT_FIELDS:
+            value = payload.get(key)
+            if value is not None and not isinstance(value, dict):
+                payload[key] = {"value": value}
+        return payload
 
     agent: str
     one_liner: str = ""

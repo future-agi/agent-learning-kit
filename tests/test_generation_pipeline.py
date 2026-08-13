@@ -371,3 +371,14 @@ def test_oracle_rejects_internally_contradictory_scenario():
     )
     problems = oracle_problems(contradiction)
     assert any("no_add_item_call" in p for p in problems)
+
+
+def test_contract_normalizes_benign_shape_variance():
+    payload = json.loads(json.dumps(CONTRACT))
+    payload["grading_notes"] = ["line one", "line two"]
+    payload["hard_constraints"] = "a single rule as a bare string"
+    payload["one_liner"] = ["joined", "sentence"]
+    contract = AgentContract.model_validate(payload)
+    assert contract.grading_notes == "line one\nline two"
+    assert contract.hard_constraints == ["a single rule as a bare string"]
+    assert "joined" in contract.one_liner
