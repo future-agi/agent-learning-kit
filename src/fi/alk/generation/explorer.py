@@ -237,6 +237,7 @@ def explore_contract(
         },
     ]
     submitted: AgentContract | None = None
+    challenged = False
     for turn in range(max_turns):
         forced = turn == max_turns - 1
         if forced:
@@ -268,6 +269,19 @@ def explore_contract(
             arguments = call.get("arguments") or {}
             if name == "submit_contract":
                 result, submitted = _try_submit(arguments)
+                if submitted is not None and not challenged and turn < max_turns - 1:
+                    # Completeness challenge: a structurally valid contract can still be
+                    # missing tools, and everything downstream inherits that hole. The first
+                    # valid submission is challenged once; only the resubmission is accepted.
+                    challenged = True
+                    submitted = None
+                    result = (
+                        "Before this is accepted, verify completeness: search the repository "
+                        "for tool or function registrations you have not listed (decorators, "
+                        "registries, dispatch tables, configuration files that add tools). "
+                        "Also verify the data section holds the real entries, not examples. "
+                        "Then submit_contract again, extended or unchanged if truly complete."
+                    )
             else:
                 result = _run_tool(tools, name, arguments)
             messages.append(

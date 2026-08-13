@@ -173,6 +173,15 @@ def test_full_pipeline_offline(agent_repo, tmp_path):
                     }
                 ]
             },
+            {
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "submit_contract",
+                        "arguments": {"contract": CONTRACT},
+                    }
+                ]
+            },
             CATALOG,
             {
                 "nodes": [
@@ -470,6 +479,15 @@ def test_exactly_n_scenarios_never_more(agent_repo, tmp_path):
                     }
                 ]
             },
+            {
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "submit_contract",
+                        "arguments": {"contract": CONTRACT},
+                    }
+                ]
+            },
             CATALOG,
             {
                 "nodes": [
@@ -543,6 +561,15 @@ def test_operator_request_scenarios_come_first_with_provenance(agent_repo, tmp_p
                 "tool_calls": [
                     {
                         "id": "c1",
+                        "name": "submit_contract",
+                        "arguments": {"contract": CONTRACT},
+                    }
+                ]
+            },
+            {
+                "tool_calls": [
+                    {
+                        "id": "c2",
                         "name": "submit_contract",
                         "arguments": {"contract": CONTRACT},
                     }

@@ -20,6 +20,7 @@ from .prompts import SCENARIO_MODEL, guidance_block
 _TRACE_EXTENSIONS = (".json", ".jsonl", ".txt", ".md", ".csv")
 _MAX_TRACE_CHARS = 7000
 _MAX_TRACES_PER_CALL = 4
+_MAX_TRACES_MINED = 40
 
 
 def load_traces(path: str) -> list[dict[str, str]]:
@@ -35,11 +36,17 @@ def load_traces(path: str) -> list[dict[str, str]]:
     for file_path in paths:
         try:
             with open(file_path, encoding="utf-8", errors="ignore") as fh:
-                text = fh.read(_MAX_TRACE_CHARS)
+                text = fh.read()
         except OSError:
             continue
-        if text.strip():
-            traces.append({"ref": os.path.basename(file_path), "text": text})
+        if not text.strip():
+            continue
+        if len(text) > _MAX_TRACE_CHARS:
+            # Keep the head (intent) AND the tail (resolution): truncating only the end
+            # of a long call would drop the part that says how it actually ended.
+            half = _MAX_TRACE_CHARS // 2
+            text = text[:half] + "\n... [middle omitted] ...\n" + text[-half:]
+        traces.append({"ref": os.path.basename(file_path), "text": text})
     return traces
 
 
@@ -89,6 +96,22 @@ def mine_traces(
 ) -> list[dict[str, Any]]:
     """Distill raw traces into scenario plans carrying trace provenance."""
     brief = contract.brief()
+    # Large trace sets: drop near-duplicate transcripts deterministically (same token-set
+    # similarity used for scenario dedup), then cap what is mined. Ten thousand calls are
+    # mostly repeats of the same few dozen situations; representatives carry the signal.
+    from .dedup import similarity
+
+    unique: list[dict[str, str]] = []
+    for trace in traces:
+        row = {"situation": trace["text"][:1500]}
+        if not any(
+            similarity(row, {"situation": kept["text"][:1500]}) >= 0.75
+            for kept in unique
+        ):
+            unique.append(trace)
+    if len(unique) > _MAX_TRACES_MINED:
+        unique = unique[:_MAX_TRACES_MINED]
+    traces = unique
     plans: list[dict[str, Any]] = []
     for start in range(0, len(traces), _MAX_TRACES_PER_CALL):
         batch = traces[start : start + _MAX_TRACES_PER_CALL]
