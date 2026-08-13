@@ -175,7 +175,7 @@ def derive_rows_prompt(
     if existing:
         dedupe = (
             "Scenarios already planned. Yours must test DIFFERENT situations with DIFFERENT "
-            f"correct outcomes; do not repeat or reword any of these:\n{json.dumps(existing)[:2200]}\n"
+            f"correct outcomes; do not repeat or reword any of these:\n{json.dumps(existing)[:12000]}\n"
         )
     feedback_block = (
         f"\nReviewer feedback on the previous round; act on all of it:\n{feedback}\n"
@@ -395,6 +395,6 @@ def suite_review_prompt(brief: str, records: list[dict], guidance: str = "") -> 
 {brief}
 
 ACCEPTED SCENARIOS so far:
-{json.dumps(summary)[:6000]}
+{json.dumps(summary)[:20000]}
 
 {guidance_block(guidance)}What situations that matter in production are missing, and which pairs are near-duplicates?"""

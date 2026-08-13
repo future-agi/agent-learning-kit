@@ -117,7 +117,8 @@ def derive_rows(
         )
         for r in existing
     }
-    for round_index in range(config.max_row_rounds):
+    rounds = max(config.max_row_rounds, -(-want // 25) + 1)
+    for round_index in range(rounds):
         remaining = want - len(rows)
         if remaining <= 0:
             break
@@ -125,7 +126,7 @@ def derive_rows(
             prompts.SCENARIO_MODEL,
             prompts.derive_rows_prompt(
                 brief,
-                want=remaining,
+                want=min(remaining, 25),
                 signature_cases=contract.signature_cases,
                 real_use_cases=contract.real_use_cases,
                 existing=[
