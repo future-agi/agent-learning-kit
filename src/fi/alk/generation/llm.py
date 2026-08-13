@@ -22,7 +22,14 @@ DEFAULT_MODEL = os.environ.get("ALK_GENERATION_MODEL", "vertex_ai/gemini-2.5-fla
 DEFAULT_INPUT_COST_PER_TOKEN = 0.30 / 1_000_000
 DEFAULT_OUTPUT_COST_PER_TOKEN = 2.50 / 1_000_000
 
-_AUTH_MARKERS = ("401", "403", "unauthorized", "unauthenticated", "permission", "credential")
+_AUTH_MARKERS = (
+    "401",
+    "403",
+    "unauthorized",
+    "unauthenticated",
+    "permission",
+    "credential",
+)
 
 
 class BudgetExceeded(RuntimeError):
@@ -53,7 +60,12 @@ class LLMClient(Protocol):
     """What the pipeline needs from a model. Implementations own transport and retries."""
 
     def complete_json(
-        self, system: str, user: str, *, temperature: float = 0.3, max_tokens: int = 8000
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 8000,
     ) -> Any: ...
 
     def complete_turn(
@@ -97,7 +109,9 @@ def _extract_json(text: str) -> Any:
                         return json.loads(text[start : i + 1])
                     except json.JSONDecodeError:
                         break
-    raise ValueError(f"model returned no parseable JSON (first 200 chars: {text[:200]!r})")
+    raise ValueError(
+        f"model returned no parseable JSON (first 200 chars: {text[:200]!r})"
+    )
 
 
 @dataclass
@@ -118,7 +132,12 @@ class LiteLLMClient:
         return self._usage
 
     def complete_json(
-        self, system: str, user: str, *, temperature: float = 0.3, max_tokens: int = 8000
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 8000,
     ) -> Any:
         self._check_budget()
         text = self._chat(system, user, temperature=temperature, max_tokens=max_tokens)
@@ -136,7 +155,9 @@ class LiteLLMClient:
         try:
             import litellm
         except Exception as exc:  # pragma: no cover - import guard
-            raise RuntimeError("fi.alk.generation requires litellm; reinstall agent-learning-kit") from exc
+            raise RuntimeError(
+                "fi.alk.generation requires litellm; reinstall agent-learning-kit"
+            ) from exc
         litellm.drop_params = True
         kwargs = self._provider_kwargs()
         kwargs.update({"temperature": temperature, "max_tokens": max_tokens})
@@ -145,28 +166,39 @@ class LiteLLMClient:
         last: Exception | None = None
         for attempt in range(self.max_attempts):
             try:
-                response = litellm.completion(model=self.model, messages=messages, **kwargs)
+                response = litellm.completion(
+                    model=self.model, messages=messages, **kwargs
+                )
                 self._meter(response)
                 message = response.choices[0].message
                 calls = []
                 for call in getattr(message, "tool_calls", None) or []:
                     function = getattr(call, "function", None)
                     try:
-                        arguments = json.loads(getattr(function, "arguments", "") or "{}")
+                        arguments = json.loads(
+                            getattr(function, "arguments", "") or "{}"
+                        )
                     except json.JSONDecodeError:
                         arguments = {}
                     calls.append(
-                        {"id": getattr(call, "id", ""), "name": getattr(function, "name", ""),
-                         "arguments": arguments}
+                        {
+                            "id": getattr(call, "id", ""),
+                            "name": getattr(function, "name", ""),
+                            "arguments": arguments,
+                        }
                     )
                 return {"content": message.content, "tool_calls": calls, "raw": message}
             except Exception as exc:  # noqa: BLE001 - classified below
                 text = str(exc).lower()
                 if any(marker in text for marker in _AUTH_MARKERS):
-                    raise AuthFailed(f"provider auth failed for {self.model}: {exc}") from exc
+                    raise AuthFailed(
+                        f"provider auth failed for {self.model}: {exc}"
+                    ) from exc
                 last = exc
                 time.sleep(min(2**attempt, 8))
-        raise RuntimeError(f"model call failed after {self.max_attempts} attempts: {last}")
+        raise RuntimeError(
+            f"model call failed after {self.max_attempts} attempts: {last}"
+        )
 
     def _check_budget(self) -> None:
         if self._usage.usd >= self.budget_usd:
@@ -187,20 +219,29 @@ class LiteLLMClient:
                     pass
         return kwargs
 
-    def _chat(self, system: str, user: str, *, temperature: float, max_tokens: int) -> str:
+    def _chat(
+        self, system: str, user: str, *, temperature: float, max_tokens: int
+    ) -> str:
         try:
             import litellm
         except Exception as exc:  # pragma: no cover - import guard
-            raise RuntimeError("fi.alk.generation requires litellm; reinstall agent-learning-kit") from exc
+            raise RuntimeError(
+                "fi.alk.generation requires litellm; reinstall agent-learning-kit"
+            ) from exc
 
         litellm.drop_params = True
         kwargs = self._provider_kwargs()
         kwargs.update({"temperature": temperature, "max_tokens": max_tokens})
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
         last: Exception | None = None
         for attempt in range(self.max_attempts):
             try:
-                response = litellm.completion(model=self.model, messages=messages, **kwargs)
+                response = litellm.completion(
+                    model=self.model, messages=messages, **kwargs
+                )
                 self._meter(response)
                 content = response.choices[0].message.content
                 if not content or not str(content).strip():
@@ -209,10 +250,14 @@ class LiteLLMClient:
             except Exception as exc:  # noqa: BLE001 - classified below
                 message = str(exc).lower()
                 if any(marker in message for marker in _AUTH_MARKERS):
-                    raise AuthFailed(f"provider auth failed for {self.model}: {exc}") from exc
+                    raise AuthFailed(
+                        f"provider auth failed for {self.model}: {exc}"
+                    ) from exc
                 last = exc
                 time.sleep(min(2**attempt, 8))
-        raise RuntimeError(f"model call failed after {self.max_attempts} attempts: {last}")
+        raise RuntimeError(
+            f"model call failed after {self.max_attempts} attempts: {last}"
+        )
 
     def _meter(self, response: Any) -> None:
         self._usage.calls += 1
@@ -221,7 +266,9 @@ class LiteLLMClient:
         completion = int(getattr(usage, "completion_tokens", 0) or 0)
         self._usage.prompt_tokens += prompt
         self._usage.completion_tokens += completion
-        self._usage.usd += prompt * self.input_cost_per_token + completion * self.output_cost_per_token
+        self._usage.usd += (
+            prompt * self.input_cost_per_token + completion * self.output_cost_per_token
+        )
 
 
 @dataclass
@@ -236,7 +283,12 @@ class FakeLLMClient:
         return self._usage
 
     def complete_json(
-        self, system: str, user: str, *, temperature: float = 0.3, max_tokens: int = 8000
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 8000,
     ) -> Any:
         if not self.responses:
             raise AssertionError("FakeLLMClient exhausted; queue more responses")
@@ -256,5 +308,8 @@ class FakeLLMClient:
         self._usage.calls += 1
         turn = self.responses.pop(0)
         if isinstance(turn, dict) and ("tool_calls" in turn or "content" in turn):
-            return {"content": turn.get("content"), "tool_calls": turn.get("tool_calls", [])}
+            return {
+                "content": turn.get("content"),
+                "tool_calls": turn.get("tool_calls", []),
+            }
         return {"content": json.dumps(turn), "tool_calls": []}

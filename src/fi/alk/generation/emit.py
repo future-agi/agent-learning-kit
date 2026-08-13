@@ -56,7 +56,11 @@ def _referenced_tools(record: dict, contract: AgentContract) -> list[str]:
 
 def to_alk_scenario(record: dict, contract: AgentContract) -> Scenario:
     sub_goals = record.get("sub_goals") or []
-    names = [str(sg.get("name")) for sg in sub_goals if isinstance(sg, dict) and sg.get("name")]
+    names = [
+        str(sg.get("name"))
+        for sg in sub_goals
+        if isinstance(sg, dict) and sg.get("name")
+    ]
     checks: list[dict[str, Any]] = []
     for sub_goal in sub_goals:
         if not isinstance(sub_goal, dict) or not sub_goal.get("name"):
@@ -89,7 +93,9 @@ def to_alk_scenario(record: dict, contract: AgentContract) -> Scenario:
     referenced = _referenced_tools(record, contract)
     return Scenario(
         name=str(record.get("id") or record.get("use_case", "scenario")),
-        description=f"{record.get('use_case', '')} :: {record.get('situation', '')}".strip(" :"),
+        description=f"{record.get('use_case', '')} :: {record.get('situation', '')}".strip(
+            " :"
+        ),
         dataset=[persona],
         kind="task",
         goal=ScenarioGoal(states=names, success_state=names[-1] if names else None),
@@ -122,7 +128,11 @@ def smoke_manifest(record: dict, contract: AgentContract) -> dict[str, Any]:
                 {
                     "name": str(sub_goal.get("name")),
                     "must": definition["must"],
-                    **({"forbidden": definition["forbidden"]} if definition.get("forbidden") else {}),
+                    **(
+                        {"forbidden": definition["forbidden"]}
+                        if definition.get("forbidden")
+                        else {}
+                    ),
                 }
             )
     states = [c["name"] for c in conditions]
@@ -137,7 +147,9 @@ def smoke_manifest(record: dict, contract: AgentContract) -> dict[str, Any]:
                 {
                     "persona": dict(record.get("persona") or {"name": "Caller"}),
                     "situation": str(record.get("agent_input", "")),
-                    "outcome": str((record.get("expected_outcome") or {}).get("world_state", "")),
+                    "outcome": str(
+                        (record.get("expected_outcome") or {}).get("world_state", "")
+                    ),
                 }
             ],
             "goal": {"states": states, "success_state": states[-1] if states else None},
@@ -196,7 +208,10 @@ def write_outputs(
         alk = to_alk_scenario(record, contract)
         _dump(os.path.join(alk_dir, f"{slug}.json"), alk.model_dump(exclude_none=True))
     if records:
-        _dump(os.path.join(out_dir, "smoke_manifest.json"), smoke_manifest(records[0], contract))
+        _dump(
+            os.path.join(out_dir, "smoke_manifest.json"),
+            smoke_manifest(records[0], contract),
+        )
     with open(os.path.join(out_dir, "report.md"), "w", encoding="utf-8") as fh:
         fh.write(render_report(contract, catalog, records, rejected, usage))
 
@@ -236,7 +251,11 @@ def render_report(
     ]
     for index, record in enumerate(records, 1):
         sub_goals = record.get("sub_goals") or []
-        det = sum(1 for sg in sub_goals if ((sg or {}).get("checkpoint") or {}).get("deterministic"))
+        det = sum(
+            1
+            for sg in sub_goals
+            if ((sg or {}).get("checkpoint") or {}).get("deterministic")
+        )
         lines.append(
             f"| {index} | {record.get('use_case', '')} | {record.get('situation', '')} "
             f"| {len(sub_goals)} | {det}/{len(sub_goals)} |"
@@ -248,5 +267,7 @@ def render_report(
     if rejected:
         lines += ["", "## Rejected in review", ""]
         for record in rejected:
-            lines.append(f"- {record.get('id', '?')}: {record.get('_reject_reason', 'rejected')}")
+            lines.append(
+                f"- {record.get('id', '?')}: {record.get('_reject_reason', 'rejected')}"
+            )
     return "\n".join(lines) + "\n"

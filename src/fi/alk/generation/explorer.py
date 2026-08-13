@@ -81,7 +81,12 @@ _TOOLS: list[dict[str, Any]] = [
             "description": "List entries of a directory inside the agent repository.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Relative path; '' for the root."}},
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path; '' for the root.",
+                    }
+                },
                 "required": [],
             },
         },
@@ -96,7 +101,10 @@ _TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "offset": {"type": "integer", "description": "Character offset to start from."},
+                    "offset": {
+                        "type": "integer",
+                        "description": "Character offset to start from.",
+                    },
                 },
                 "required": ["path"],
             },
@@ -121,14 +129,28 @@ _TOOLS: list[dict[str, Any]] = [
             "description": "Submit the finished contract. Call exactly once, after verifying.",
             "parameters": {
                 "type": "object",
-                "properties": {"contract": {"type": "object", "description": "The full contract JSON."}},
+                "properties": {
+                    "contract": {
+                        "type": "object",
+                        "description": "The full contract JSON.",
+                    }
+                },
                 "required": ["contract"],
             },
         },
     },
 ]
 
-_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".omega"}
+_SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".omega",
+}
 
 
 class _RepoTools:
@@ -152,7 +174,9 @@ class _RepoTools:
             if entry in _SKIP_DIRS:
                 continue
             full = os.path.join(target, entry)
-            suffix = "/" if os.path.isdir(full) else f"  ({os.path.getsize(full)} bytes)"
+            suffix = (
+                "/" if os.path.isdir(full) else f"  ({os.path.getsize(full)} bytes)"
+            )
             entries.append(f"{entry}{suffix}")
         return "\n".join(entries) or "(empty)"
 
@@ -166,7 +190,11 @@ class _RepoTools:
                 body = fh.read(_MAX_READ_CHARS)
         except OSError as exc:
             return f"read failed: {exc}"
-        marker = "" if len(body) < _MAX_READ_CHARS else f"\n... truncated; continue with offset={offset + _MAX_READ_CHARS}"
+        marker = (
+            ""
+            if len(body) < _MAX_READ_CHARS
+            else f"\n... truncated; continue with offset={offset + _MAX_READ_CHARS}"
+        )
         return body + marker
 
     def search_text(self, query: str) -> str:
@@ -183,7 +211,9 @@ class _RepoTools:
                         for line_number, line in enumerate(fh, 1):
                             if query in line:
                                 rel = os.path.relpath(full, self.root)
-                                hits.append(f"{rel}:{line_number}: {line.strip()[:160]}")
+                                hits.append(
+                                    f"{rel}:{line_number}: {line.strip()[:160]}"
+                                )
                                 if len(hits) >= 60:
                                     return "\n".join(hits) + "\n... (capped at 60 hits)"
                 except OSError:
@@ -191,7 +221,9 @@ class _RepoTools:
         return "\n".join(hits) or "no hits"
 
 
-def explore_contract(root: str, llm: LLMClient, *, max_turns: int = _MAX_TURNS) -> AgentContract:
+def explore_contract(
+    root: str, llm: LLMClient, *, max_turns: int = _MAX_TURNS
+) -> AgentContract:
     """Run the exploration loop until a valid contract is submitted."""
     tools = _RepoTools(root)
     messages: list[dict[str, Any]] = [
@@ -218,9 +250,14 @@ def explore_contract(root: str, llm: LLMClient, *, max_turns: int = _MAX_TURNS) 
         reply = llm.complete_turn(messages, tools=_TOOLS, temperature=0.15)
         calls = reply.get("tool_calls") or []
         if not calls:
-            messages.append({"role": "assistant", "content": reply.get("content") or ""})
             messages.append(
-                {"role": "user", "content": "Use the tools. Explore the repository, then call submit_contract."}
+                {"role": "assistant", "content": reply.get("content") or ""}
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Use the tools. Explore the repository, then call submit_contract.",
+                }
             )
             continue
         messages.append(_assistant_message(reply))
@@ -241,7 +278,9 @@ def explore_contract(root: str, llm: LLMClient, *, max_turns: int = _MAX_TURNS) 
             if submitted is not None:
                 logger.info("contract submitted", extra={"turns": turn + 1})
                 return submitted
-    raise RuntimeError(f"exploration ended after {max_turns} turns without a valid contract")
+    raise RuntimeError(
+        f"exploration ended after {max_turns} turns without a valid contract"
+    )
 
 
 def _assistant_message(reply: dict[str, Any]) -> dict[str, Any]:
@@ -258,7 +297,10 @@ def _assistant_message(reply: dict[str, Any]) -> dict[str, Any]:
             {
                 "id": call.get("id") or call.get("name"),
                 "type": "function",
-                "function": {"name": call.get("name"), "arguments": json.dumps(call.get("arguments") or {})},
+                "function": {
+                    "name": call.get("name"),
+                    "arguments": json.dumps(call.get("arguments") or {}),
+                },
             }
             for call in reply.get("tool_calls") or []
         ],
@@ -270,7 +312,9 @@ def _run_tool(tools: _RepoTools, name: str, arguments: dict[str, Any]) -> str:
         if name == "list_dir":
             return tools.list_dir(arguments.get("path", ""))
         if name == "read_file":
-            return tools.read_file(arguments.get("path", ""), int(arguments.get("offset") or 0))
+            return tools.read_file(
+                arguments.get("path", ""), int(arguments.get("offset") or 0)
+            )
         if name == "search_text":
             return tools.search_text(arguments.get("query", ""))
     except ValueError as exc:
@@ -286,11 +330,17 @@ def _try_submit(arguments: dict[str, Any]) -> tuple[str, AgentContract | None]:
         except json.JSONDecodeError:
             payload = None
     if not isinstance(payload, dict):
-        return "submit_contract requires a JSON object under the 'contract' key; fix and resubmit", None
+        return (
+            "submit_contract requires a JSON object under the 'contract' key; fix and resubmit",
+            None,
+        )
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as exc:  # noqa: BLE001 - fed back to the model
-        return f"contract failed schema validation; fix and resubmit: {_short(exc)}", None
+        return (
+            f"contract failed schema validation; fix and resubmit: {_short(exc)}",
+            None,
+        )
     problems = validate_contract(contract)
     if problems:
         return f"contract failed checks; fix and resubmit: {problems}", None

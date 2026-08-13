@@ -31,7 +31,12 @@ CONTRACT = {
             "arg_values": {"item_id": ["latte", "mocha"], "size": ["M", "L"]},
             "description": "Add an item to the order.",
         },
-        {"name": "list_order", "args": [], "arg_values": {}, "description": "Read back the order."},
+        {
+            "name": "list_order",
+            "args": [],
+            "arg_values": {},
+            "description": "Read back the order.",
+        },
     ],
     "data_schema": {"menu": {"latte": {"price": 4.5}, "mocha": {"price": 5.0}}},
     "base_environment": {"summary": "empty order", "seed": {"order": {"items": []}}},
@@ -47,7 +52,10 @@ CATALOG = {
             "name": "item_added",
             "description": "The requested item is in the order with the right attributes.",
             "default_kind": "tool_call_args",
-            "definition_template": {"tool": "add_item", "args_equal": {"item_id": "<FILL>", "size": "<FILL>"}},
+            "definition_template": {
+                "tool": "add_item",
+                "args_equal": {"item_id": "<FILL>", "size": "<FILL>"},
+            },
         },
         {
             "name": "order_confirmed",
@@ -98,7 +106,10 @@ SCENARIO = {
                 "kind": "tool_call_args",
                 "detail": "add_item called with item_id=latte, size=M",
                 "deterministic": True,
-                "definition": {"tool": "add_item", "args_equal": {"item_id": "latte", "size": "M"}},
+                "definition": {
+                    "tool": "add_item",
+                    "args_equal": {"item_id": "latte", "size": "M"},
+                },
             },
         },
         {
@@ -150,7 +161,15 @@ def agent_repo(tmp_path):
 def test_full_pipeline_offline(agent_repo, tmp_path):
     llm = FakeLLMClient(
         responses=[
-            {"tool_calls": [{"id": "c1", "name": "submit_contract", "arguments": {"contract": CONTRACT}}]},
+            {
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "submit_contract",
+                        "arguments": {"contract": CONTRACT},
+                    }
+                ]
+            },
             CATALOG,
             ROWS,
             SCENARIO,
@@ -195,7 +214,11 @@ def test_validators_catch_hallucinated_tool():
 def test_smoke_manifest_state_checks_fire_through_goal_machine():
     contract = AgentContract.model_validate(CONTRACT)
     manifest = smoke_manifest(SCENARIO, contract)
-    world = next(e for e in manifest["simulation"]["environments"] if e["type"] == "world_contract")
+    world = next(
+        e
+        for e in manifest["simulation"]["environments"]
+        if e["type"] == "world_contract"
+    )
     assert world["success_conditions"][0]["name"] == "order_confirmed"
 
     from fi.simulate.environment import WorldContractEnvironment
@@ -211,7 +234,9 @@ def test_smoke_manifest_state_checks_fire_through_goal_machine():
     verdict = goal_machine.evaluate_settle(
         ScenarioGoal(states=["order_confirmed"], success_state="order_confirmed"),
         VerificationSpec(checks=manifest["scenario"]["verification"]["checks"]),
-        environment_state={"world_contract": snapshot.state.get("world_contract", env._summary())},
+        environment_state={
+            "world_contract": snapshot.state.get("world_contract", env._summary())
+        },
     )
     assert verdict["stop"] == "goal_success"
     assert "order_confirmed" in verdict["states_reached"]

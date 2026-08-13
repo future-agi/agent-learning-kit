@@ -31,7 +31,9 @@ from .validators import repair_hint, validate_scenario
 
 logger = logging.getLogger(__name__)
 
-_ACCEPT_FLOOR = 3  # every reviewer score must reach this, and the verdict must not be reject
+_ACCEPT_FLOOR = (
+    3  # every reviewer score must reach this, and the verdict must not be reject
+)
 
 
 @dataclass
@@ -59,7 +61,9 @@ def _slugify(value: str) -> str:
     return slug[:60] or "scenario"
 
 
-def build_contract(source: AgentSource, llm: LLMClient, config: GenerationConfig) -> AgentContract:
+def build_contract(
+    source: AgentSource, llm: LLMClient, config: GenerationConfig
+) -> AgentContract:
     """Prefer the exploration loop when the source exposes a filesystem root."""
     evidence = source.describe()
     root = (evidence.metadata or {}).get("root")
@@ -67,7 +71,9 @@ def build_contract(source: AgentSource, llm: LLMClient, config: GenerationConfig
         try:
             return explore_contract(root, llm, max_turns=config.max_explore_turns)
         except Exception as exc:  # noqa: BLE001 - fall back to single-shot extraction
-            logger.warning("exploration failed, falling back to blob extraction: %s", exc)
+            logger.warning(
+                "exploration failed, falling back to blob extraction: %s", exc
+            )
     return extract_contract(evidence.text, llm)
 
 
@@ -104,7 +110,10 @@ def derive_rows(
     brief = contract.brief()
     rows: list[dict] = []
     seen = {
-        (str(r.get("use_case", "")).strip().lower(), str(r.get("situation", "")).strip().lower())
+        (
+            str(r.get("use_case", "")).strip().lower(),
+            str(r.get("situation", "")).strip().lower(),
+        )
         for r in existing
     }
     for round_index in range(config.max_row_rounds):
@@ -170,7 +179,11 @@ def materialize_row(
             temperature=0.35,
             max_tokens=9000,
         )
-        record = raw if isinstance(raw, dict) else next((x for x in raw if isinstance(x, dict)), {})
+        record = (
+            raw
+            if isinstance(raw, dict)
+            else next((x for x in raw if isinstance(x, dict)), {})
+        )
         for key in ("id", "use_case", "situation", "goal"):
             record.setdefault(key, row.get(key))
         record["id"] = _slugify(record.get("id") or row.get("id", ""))
@@ -183,19 +196,31 @@ def materialize_row(
         if not config.critic_enabled:
             return record, ""
         verdict = llm.complete_json(
-            prompts.CRITIC_SYSTEM, prompts.critic_prompt(brief, record), temperature=0.2, max_tokens=2500
+            prompts.CRITIC_SYSTEM,
+            prompts.critic_prompt(brief, record),
+            temperature=0.2,
+            max_tokens=2500,
         )
         if not isinstance(verdict, dict):
             verdict = {}
-        record["_review"] = {k: verdict.get(k) for k in ("verdict", "scores", "problems")}
+        record["_review"] = {
+            k: verdict.get(k) for k in ("verdict", "scores", "problems")
+        }
         decision = str(verdict.get("verdict", "revise")).lower()
         scores = verdict.get("scores") or {}
-        low = [k for k, v in scores.items() if isinstance(v, (int, float)) and v < _ACCEPT_FLOOR]
+        low = [
+            k
+            for k, v in scores.items()
+            if isinstance(v, (int, float)) and v < _ACCEPT_FLOOR
+        ]
         if decision == "accept" and not low:
             return record, ""
         if decision == "reject":
             return None, f"reviewer reject: {verdict.get('problems', [])[:4]}"
-        best, reason = record, f"reviewer revise (low: {low}): {verdict.get('problems', [])[:4]}"
+        best, reason = (
+            record,
+            f"reviewer revise (low: {low}): {verdict.get('problems', [])[:4]}",
+        )
         hint = str(verdict.get("fix_hints") or "") or repair_hint([])
     # Out of repair attempts: keep the best structurally-valid draft, flagged, rather than lose it.
     if best is not None and not validate_scenario(best, contract):
@@ -216,11 +241,17 @@ def suite_review(
     )
     if not isinstance(raw, dict):
         return [], [], ""
-    gaps = [g for g in raw.get("gaps") or [] if isinstance(g, dict) and g.get("situation")]
+    gaps = [
+        g for g in raw.get("gaps") or [] if isinstance(g, dict) and g.get("situation")
+    ]
     duplicate_ids: list[str] = []
     known = {str(r.get("id")) for r in records}
     for pair in raw.get("near_duplicates") or []:
-        if isinstance(pair, list) and len(pair) == 2 and all(str(p) in known for p in pair):
+        if (
+            isinstance(pair, list)
+            and len(pair) == 2
+            and all(str(p) in known for p in pair)
+        ):
             duplicate_ids.append(str(pair[1]))
     feedback = "; ".join(
         f"missing: {g['situation']} ({g.get('why_it_matters', '')})" for g in gaps
@@ -235,7 +266,9 @@ def generate(
 ) -> GenerationResult:
     config = config or GenerationConfig()
     contract = build_contract(source, llm, config)
-    logger.info("contract ready", extra={"agent": contract.agent, "tools": len(contract.tools)})
+    logger.info(
+        "contract ready", extra={"agent": contract.agent, "tools": len(contract.tools)}
+    )
 
     catalog = derive_catalog(contract, llm)
     records: list[dict] = []
@@ -258,7 +291,12 @@ def generate(
             if want <= 0:
                 break
             rows = derive_rows(
-                contract, llm, config, want=want, existing=records + rejected, feedback=feedback
+                contract,
+                llm,
+                config,
+                want=want,
+                existing=records + rejected,
+                feedback=feedback,
             )
             if not rows:
                 break
@@ -271,10 +309,16 @@ def generate(
             if suite_round < config.max_suite_rounds and records:
                 gaps, duplicate_ids, feedback = suite_review(contract, records, llm)
                 if duplicate_ids:
-                    dropped = [r for r in records if str(r.get("id")) in set(duplicate_ids)]
-                    records = [r for r in records if str(r.get("id")) not in set(duplicate_ids)]
+                    dropped = [
+                        r for r in records if str(r.get("id")) in set(duplicate_ids)
+                    ]
+                    records = [
+                        r for r in records if str(r.get("id")) not in set(duplicate_ids)
+                    ]
                     for record in dropped:
-                        record["_reject_reason"] = "near-duplicate of an accepted scenario"
+                        record["_reject_reason"] = (
+                            "near-duplicate of an accepted scenario"
+                        )
                         rejected.append(record)
                 if not gaps and len(records) >= config.n:
                     break

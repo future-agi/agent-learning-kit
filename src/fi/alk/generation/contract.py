@@ -46,12 +46,19 @@ class AgentContract(BaseModel):
         """The grounding block handed to the model on every downstream call."""
         lines: list[str] = []
         for tool in self.tools:
-            values = f"  [values: {json.dumps(tool.arg_values)[:300]}]" if tool.arg_values else ""
-            lines.append(f"  - {tool.name}({', '.join(tool.args)}){values} : {tool.description[:140]}")
+            values = (
+                f"  [values: {json.dumps(tool.arg_values)[:300]}]"
+                if tool.arg_values
+                else ""
+            )
+            lines.append(
+                f"  - {tool.name}({', '.join(tool.args)}){values} : {tool.description[:140]}"
+            )
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
             f"MODALITY: {self.modality}",
-            "REAL TOOLS (use ONLY these, with these exact arg names):\n" + ("\n".join(lines) or "  (none)"),
+            "REAL TOOLS (use ONLY these, with these exact arg names):\n"
+            + ("\n".join(lines) or "  (none)"),
         ]
         if self.hard_constraints:
             parts.append(
@@ -64,7 +71,9 @@ class AgentContract(BaseModel):
                 + json.dumps(self.data_schema)[:2400]
             )
         if self.grading_notes:
-            parts.append(f"GRADING NOTES (how checks must be written for THIS agent):\n{self.grading_notes[:900]}")
+            parts.append(
+                f"GRADING NOTES (how checks must be written for THIS agent):\n{self.grading_notes[:900]}"
+            )
         if self.anti_hallucination:
             parts.append(
                 "NEVER USE THESE (they do not exist / are wrong): "

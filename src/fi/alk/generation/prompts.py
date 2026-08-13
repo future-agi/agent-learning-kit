@@ -123,23 +123,42 @@ Return JSON: {{"catalog": [{{"name": "...", "description": "...", "default_kind"
 "definition_template": {{...}}, "justification_if_judge": "..."}}]}}"""
 
 
-def derive_rows_prompt(brief: str, *, want: int, signature_cases: list[str],
-                       real_use_cases: list[str], existing: list[dict], feedback: str,
-                       first_round: bool) -> str:
+def derive_rows_prompt(
+    brief: str,
+    *,
+    want: int,
+    signature_cases: list[str],
+    real_use_cases: list[str],
+    existing: list[dict],
+    feedback: str,
+    first_round: bool,
+) -> str:
     must = ""
     if first_round and signature_cases:
-        must = ("Include one scenario for EACH of these required cases first (they come from the "
-                "agent's own constraints and data):\n  - "
-                + "\n  - ".join(str(s) for s in signature_cases) + "\n")
+        must = (
+            "Include one scenario for EACH of these required cases first (they come from the "
+            "agent's own constraints and data):\n  - "
+            + "\n  - ".join(str(s) for s in signature_cases)
+            + "\n"
+        )
     uses = ""
     if real_use_cases:
-        uses = ("The agent's real use cases, to draw scenarios from:\n  - "
-                + "\n  - ".join(str(u) for u in real_use_cases) + "\n")
+        uses = (
+            "The agent's real use cases, to draw scenarios from:\n  - "
+            + "\n  - ".join(str(u) for u in real_use_cases)
+            + "\n"
+        )
     dedupe = ""
     if existing:
-        dedupe = ("Scenarios already planned. Yours must test DIFFERENT situations with DIFFERENT "
-                  f"correct outcomes; do not repeat or reword any of these:\n{json.dumps(existing)[:2200]}\n")
-    feedback_block = f"\nReviewer feedback on the previous round; act on all of it:\n{feedback}\n" if feedback else ""
+        dedupe = (
+            "Scenarios already planned. Yours must test DIFFERENT situations with DIFFERENT "
+            f"correct outcomes; do not repeat or reword any of these:\n{json.dumps(existing)[:2200]}\n"
+        )
+    feedback_block = (
+        f"\nReviewer feedback on the previous round; act on all of it:\n{feedback}\n"
+        if feedback
+        else ""
+    )
     return f"""{brief}
 
 Task: plan {want} distinct test scenarios for this agent. You are both the engineer who built it and
@@ -168,9 +187,19 @@ For each scenario return one line of planning, not the full test yet:
 "why_distinct": "...", "goal": "..."}}]}}"""
 
 
-def materialize_prompt(brief: str, *, row: dict, base_environment: dict, catalog: list[dict],
-                       modality: str, conversational: bool, hint: str = "") -> str:
-    input_spec = AGENT_INPUT_BY_MODALITY.get(modality, AGENT_INPUT_BY_MODALITY["_default"])
+def materialize_prompt(
+    brief: str,
+    *,
+    row: dict,
+    base_environment: dict,
+    catalog: list[dict],
+    modality: str,
+    conversational: bool,
+    hint: str = "",
+) -> str:
+    input_spec = AGENT_INPUT_BY_MODALITY.get(
+        modality, AGENT_INPUT_BY_MODALITY["_default"]
+    )
     conv = ""
     if conversational:
         conv = """- This agent is conversational: `agent_input` is the situation instruction handed to the
@@ -178,9 +207,15 @@ def materialize_prompt(brief: str, *, row: dict, base_environment: dict, catalog
   for gets disclosure "on_request"; the simulated user volunteers only "volunteer" facts.
 """
     catalog_block = json.dumps(
-        [{"name": c.get("name"), "description": c.get("description"),
-          "default_kind": c.get("default_kind"), "definition_template": c.get("definition_template")}
-         for c in catalog]
+        [
+            {
+                "name": c.get("name"),
+                "description": c.get("description"),
+                "default_kind": c.get("default_kind"),
+                "definition_template": c.get("definition_template"),
+            }
+            for c in catalog
+        ]
     )[:3600]
     fix = ""
     if hint:
@@ -202,7 +237,7 @@ SCENARIO PLAN to expand into a full test: {json.dumps(row)}
 
 Write the complete test. Every value must be a real value from the contract's data. Keep the three
 parts separate: the input never reveals the environment seeding, the checkpoints, or the outcome.
-
+{conv}
 Return JSON with ALL of these keys, none empty:
 - id, use_case, situation, goal: carried from the plan (sharpen wording if needed, keep meaning)
 - description: 2-3 sentences for a human reviewer: what is seeded, what the user wants, and what a
@@ -223,7 +258,9 @@ Return JSON with ALL of these keys, none empty:
 - max_reasonable_turns: how many user turns a competent agent needs, as an integer{fix}"""
 
 
-CRITIC_SYSTEM = SCENARIO_MODEL + """
+CRITIC_SYSTEM = (
+    SCENARIO_MODEL
+    + """
 
 Role: you are the reviewer who decides whether a proposed test scenario enters the team's test suite.
 You did not write it, and your default answer is no. Approve only what you would defend to the
@@ -246,6 +283,7 @@ Return JSON: {"verdict": "accept" | "revise" | "reject", "scores": {"worth": 1-5
 "fix_hints": "<imperative instructions that fix every problem; empty when accepting>"}
 Reject means the situation itself is not worth testing; revise means the situation is good but the
 execution has fixable problems."""
+)
 
 
 def critic_prompt(brief: str, scenario: dict) -> str:
@@ -258,7 +296,9 @@ PROPOSED TEST SCENARIO:
 Review it per your instructions and return the JSON verdict."""
 
 
-SUITE_REVIEW_SYSTEM = SCENARIO_MODEL + """
+SUITE_REVIEW_SYSTEM = (
+    SCENARIO_MODEL
+    + """
 
 Role: you review a whole set of accepted test scenarios for COVERAGE, not for individual quality.
 You answer one question: what is missing? Return specific, plannable gaps, each phrased as a
@@ -266,6 +306,7 @@ situation from the user or world side with its distinct correct outcome. Do not 
 the set already covers. Return JSON: {"gaps": [{"situation": "<one line>", "why_it_matters": "<one
 line>"}], "near_duplicates": [["<id>", "<id>"]]} with at most 6 gaps, empty lists when the set is
 genuinely complete."""
+)
 
 
 def suite_review_prompt(brief: str, records: list[dict]) -> str:

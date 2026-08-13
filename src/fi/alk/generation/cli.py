@@ -17,13 +17,23 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m fi.alk.generation",
         description="Generate grounded, checkable test scenarios for an agent.",
     )
-    parser.add_argument("--source", default="repo", help="agent connection kind (default: repo)")
-    parser.add_argument("--repo", help="path to the agent's repository folder (repo source)")
+    parser.add_argument(
+        "--source", default="repo", help="agent connection kind (default: repo)"
+    )
+    parser.add_argument(
+        "--repo", help="path to the agent's repository folder (repo source)"
+    )
     parser.add_argument("--n", type=int, default=20, help="target number of scenarios")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="litellm model string")
-    parser.add_argument("--budget-usd", type=float, default=2.0, help="hard spend ceiling for this run")
-    parser.add_argument("--out", default="artifacts/generated-scenarios", help="output directory")
-    parser.add_argument("--no-critic", action="store_true", help="skip the QA review pass")
+    parser.add_argument(
+        "--budget-usd", type=float, default=2.0, help="hard spend ceiling for this run"
+    )
+    parser.add_argument(
+        "--out", default="artifacts/generated-scenarios", help="output directory"
+    )
+    parser.add_argument(
+        "--no-critic", action="store_true", help="skip the QA review pass"
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -42,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
         source_kwargs["path"] = args.repo
     source = resolve_source(args.source, **source_kwargs)
     llm = LiteLLMClient(model=args.model, budget_usd=args.budget_usd)
-    config = GenerationConfig(n=args.n, critic_enabled=not args.no_critic, out_dir=args.out)
+    config = GenerationConfig(
+        n=args.n, critic_enabled=not args.no_critic, out_dir=args.out
+    )
 
     result = generate(source, llm, config)
     print(

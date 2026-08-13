@@ -19,7 +19,9 @@ _TOKEN = re.compile(r"/[a-z][a-z0-9_]{2,}|[A-Za-z_][A-Za-z0-9_]{2,}")
 
 
 def _interface_shaped(token: str) -> bool:
-    return "_" in token or token.startswith("/") or bool(re.search(r"[a-z][A-Z]", token))
+    return (
+        "_" in token or token.startswith("/") or bool(re.search(r"[a-z][A-Z]", token))
+    )
 
 
 def _legit_vocabulary(contract: AgentContract) -> set[str]:
@@ -38,7 +40,9 @@ def banned_tokens(contract: AgentContract) -> set[str]:
     return banned
 
 
-def _validate_definition(kind: str, definition: dict, tool_names: set[str], where: str) -> list[str]:
+def _validate_definition(
+    kind: str, definition: dict, tool_names: set[str], where: str
+) -> list[str]:
     problems: list[str] = []
     if kind == "tool_call_args":
         tool = definition.get("tool")
@@ -51,7 +55,9 @@ def _validate_definition(kind: str, definition: dict, tool_names: set[str], wher
             problems.append(f"{where}:state-without-must-or-forbidden")
     elif kind == "conveyed":
         variants = definition.get("must_include_any")
-        if not isinstance(variants, list) or not any(str(v).strip() for v in variants or []):
+        if not isinstance(variants, list) or not any(
+            str(v).strip() for v in variants or []
+        ):
             problems.append(f"{where}:conveyed-without-variants")
     elif kind == "absent":
         inner = definition.get("no_tool_call_with") or {}
@@ -73,7 +79,15 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     problems: list[str] = []
     tool_names = contract.tool_names()
 
-    for field in ("id", "use_case", "situation", "goal", "description", "agent_input", "expected_outcome"):
+    for field in (
+        "id",
+        "use_case",
+        "situation",
+        "goal",
+        "description",
+        "agent_input",
+        "expected_outcome",
+    ):
         if scenario.get(field) in (None, "", [], {}):
             problems.append(f"empty:{field}")
     description = scenario.get("description")
@@ -133,7 +147,7 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     if not isinstance(environment, dict):
         problems.append("environment-not-a-dict")
     else:
-        for tool in (environment.get("mock_responses") or {}):
+        for tool in environment.get("mock_responses") or {}:
             if tool not in tool_names:
                 problems.append(f"mock_responses:unknown-tool:{tool}")
 
@@ -141,7 +155,9 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     if re.search(r"\{[a-z_]+\}", blob):
         problems.append("template-placeholders-present")
     banned = banned_tokens(contract)
-    hits = sorted({b for b in banned if re.search(r"(?<![\w/])" + re.escape(b) + r"\b", blob)})
+    hits = sorted(
+        {b for b in banned if re.search(r"(?<![\w/])" + re.escape(b) + r"\b", blob)}
+    )
     if hits:
         problems.append("banned-interface:" + ",".join(hits)[:120])
     return problems
@@ -152,23 +168,35 @@ def repair_hint(problems: list[str]) -> str:
     lines: list[str] = []
     for problem in problems:
         if problem.startswith("empty:"):
-            lines.append(f"- Field '{problem.split(':', 1)[1]}' was empty; fill it with real, complete content.")
+            lines.append(
+                f"- Field '{problem.split(':', 1)[1]}' was empty; fill it with real, complete content."
+            )
         elif problem == "description-too-short":
             lines.append("- Write a proper 2-3 sentence description, not a stub.")
         elif problem == "sub_goals<3":
-            lines.append("- Provide at least 3 branch-specific sub_goals, each with a concrete checkpoint, "
-                         "ending with a final verification of the resulting state.")
+            lines.append(
+                "- Provide at least 3 branch-specific sub_goals, each with a concrete checkpoint, "
+                "ending with a final verification of the resulting state."
+            )
         elif ":unknown-tool:" in problem:
-            lines.append(f"- A checkpoint or mock references a tool that does not exist ({problem.split(':')[-1]}). "
-                         "Use ONLY the contract's real tools with exact names.")
+            lines.append(
+                f"- A checkpoint or mock references a tool that does not exist ({problem.split(':')[-1]}). "
+                "Use ONLY the contract's real tools with exact names."
+            )
         elif problem == "template-placeholders-present":
-            lines.append("- Remove every {placeholder}; write concrete values from the contract data.")
+            lines.append(
+                "- Remove every {placeholder}; write concrete values from the contract data."
+            )
         elif problem.startswith("banned-interface:"):
-            lines.append(f"- You referenced a non-existent interface ({problem.split(':', 1)[1]}). "
-                         "Use only the contract's real tools, args and ids.")
+            lines.append(
+                f"- You referenced a non-existent interface ({problem.split(':', 1)[1]}). "
+                "Use only the contract's real tools, args and ids."
+            )
         elif problem == "no-deterministic-checkpoint":
-            lines.append("- Every checkpoint is a judge; make the tool-argument and end-state checks "
-                         "deterministic per the vocabulary.")
+            lines.append(
+                "- Every checkpoint is a judge; make the tool-argument and end-state checks "
+                "deterministic per the vocabulary."
+            )
         elif ":" in problem:
             lines.append(f"- Fix: {problem}")
     return "\n".join(dict.fromkeys(lines))

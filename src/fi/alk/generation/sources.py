@@ -17,7 +17,9 @@ from fi.simulate.registry import AdapterRegistry
 
 SOURCE_ENTRY_POINT_GROUP = "fi.alk.generation.sources"
 
-source_registry: AdapterRegistry = AdapterRegistry("agent_source", SOURCE_ENTRY_POINT_GROUP)
+source_registry: AdapterRegistry = AdapterRegistry(
+    "agent_source", SOURCE_ENTRY_POINT_GROUP
+)
 
 
 def register_source(name: str, factory=None, *, override: bool = False):
@@ -43,15 +45,47 @@ class AgentSource(Protocol):
 
 # Path fragments that tend to hold the action surface: tools, prompts, commands, data.
 _SURFACE_HINTS = (
-    "controller", "tool", "tools", "action", "function", "command", "commands", "prompt",
-    "prompts", "skill", "skills", "registry", "capabilit", "agent", "database", "menu",
-    "order", "schema", "config", "assistant", "instruction",
+    "controller",
+    "tool",
+    "tools",
+    "action",
+    "function",
+    "command",
+    "commands",
+    "prompt",
+    "prompts",
+    "skill",
+    "skills",
+    "registry",
+    "capabilit",
+    "agent",
+    "database",
+    "menu",
+    "order",
+    "schema",
+    "config",
+    "assistant",
+    "instruction",
 )
 _EXAMPLE_HINTS = ("example", "examples", "demo", "cookbook", "recipe")
 _CODE_EXT = (".py", ".ts", ".js", ".yaml", ".yml", ".md", ".txt", ".toml", ".json")
 _SKIP_DIRS = {
-    ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next",
-    "frontend", "static", "assets", ".flox", "tests", "test", ".omega", "artifacts",
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".next",
+    "frontend",
+    "static",
+    "assets",
+    ".flox",
+    "tests",
+    "test",
+    ".omega",
+    "artifacts",
 }
 _MAX_FILE_CHARS = 9000
 _MAX_TOTAL_CHARS = 60_000
