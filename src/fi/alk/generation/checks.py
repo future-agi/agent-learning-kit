@@ -53,15 +53,29 @@ def _eval_tool_call_args(
     tool = str(definition.get("tool", ""))
     args_equal = definition.get("args_equal") or {}
     args_present = definition.get("args_present") or []
+    # min_count: how many matching calls the run must contain (quantity semantics).
+    # call_nth is a synonym models produce naturally; nth-call-exists == at least n matches.
+    raw_count = definition.get("min_count", definition.get("call_nth", 1))
+    try:
+        required = max(1, int(raw_count))
+    except (TypeError, ValueError):
+        required = 1
+    matched = 0
     for call in tool_calls:
         if not _call_matches(call, tool, args_equal):
             continue
         arguments = call.get("arguments") or call.get("args") or {}
-        missing = [arg for arg in args_present if arg not in arguments]
-        if missing:
+        if any(arg not in arguments for arg in args_present):
             continue
-        return True, f"call to {tool} matched"
-    return False, f"no call to {tool} carried the expected arguments"
+        matched += 1
+        if matched >= required:
+            suffix = f" x{matched}" if required > 1 else ""
+            return True, f"call to {tool} matched{suffix}"
+    return False, (
+        f"only {matched} of {required} required matching calls to {tool}"
+        if required > 1
+        else f"no call to {tool} carried the expected arguments"
+    )"
 
 
 def _eval_state(

@@ -401,3 +401,22 @@ def test_validator_rejects_pinned_value_absent_from_contract():
     }
     problems = validate_scenario(bad, contract)
     assert any("pinned-value-not-in-contract" in p for p in problems)
+
+
+def test_tool_call_args_min_count_requires_multiple_calls():
+    from fi.alk.generation.checks import evaluate_checkpoint
+
+    definition = {
+        "tool": "add_item",
+        "args_equal": {"item_id": "latte"},
+        "min_count": 2,
+    }
+    one = [{"name": "add_item", "arguments": {"item_id": "latte"}}]
+    passed, reason = evaluate_checkpoint("tool_call_args", definition, tool_calls=one)
+    assert passed is False and "1 of 2" in reason
+    passed, _ = evaluate_checkpoint("tool_call_args", definition, tool_calls=one * 2)
+    assert passed is True
+    # call_nth (the shape models produce unprompted) behaves as min_count
+    legacy = {"tool": "add_item", "args_equal": {"item_id": "latte"}, "call_nth": 2}
+    passed, _ = evaluate_checkpoint("tool_call_args", legacy, tool_calls=one)
+    assert passed is False
