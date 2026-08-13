@@ -216,8 +216,10 @@ def repair_hint(problems: list[str]) -> str:
         elif ":unknown-id:" in problem:
             lines.append(
                 f"- A checkpoint uses an identifier that does not exist in the contract "
-                f"({problem.split(':')[-1]}). Copy ids character for character from the contract's "
-                "data and arg values; do not reorder or rename their parts."
+                f"({problem.split(':')[-1]}). If it names a real entity, copy its id character for "
+                "character from the contract's data. If its value only comes into existence during "
+                "the run (an order id, a generated handle), it cannot be pinned: move that argument "
+                "to args_present and pin the arguments whose values the user's request determines."
             )
         elif ":unknown-tool:" in problem:
             lines.append(
