@@ -181,6 +181,18 @@ Rules:
 "count": <int>, "angles": ["<one line>", ...]}}]}}"""
 
 
+# Contributor stances: benchmark suites get their diversity from many independent contributors
+# with different priors. Each planning round adopts a different contributor, so successive rounds
+# over one node search the space from genuinely different angles.
+CONTRIBUTOR_STANCES = (
+    "the engineer who built this agent, testing what they know is fragile in their own code",
+    "an adversarial tester hunting the requests that sit right on the agent's rules and limits",
+    "a first-time user who does not know the agent's vocabulary and asks in their own words",
+    "an operations owner recreating the kinds of incidents real production traffic produces",
+    "a product manager testing the promises made about this agent, one promise at a time",
+)
+
+
 def derive_rows_prompt(
     brief: str,
     *,
@@ -192,6 +204,7 @@ def derive_rows_prompt(
     first_round: bool,
     guidance: str = "",
     node: dict | None = None,
+    stance: str = "",
 ) -> str:
     must = ""
     if first_round and signature_cases:
@@ -230,7 +243,13 @@ def derive_rows_prompt(
         )
     return f"""{brief}
 {node_block}
-Task: plan {want} distinct test scenarios for this agent.
+Task: plan {want} distinct test scenarios for this agent.{
+        f'''
+Adopt this contributor's viewpoint while planning: you are {stance}. Plan the scenarios THAT person
+would insist on, in their voice of concern; every other rule below still applies.'''
+        if stance
+        else ""
+    }
 
 How to author each scenario. Work through these steps in order, in your head, before writing its
 plan line:
@@ -278,7 +297,9 @@ For each scenario return one plan line, not the full test yet:
 - Include the core successful paths too, at real complexity (several items, specific requirements),
   not toy versions.
 - No scenarios about internal machinery (logging, config, retries): users never bring those.
-{dedupe}{feedback_block}{guidance_block(guidance)}Return JSON: {{"rows": [{{"id": "...", "use_case": "...", "situation": "...",
+{dedupe}{feedback_block}{
+        guidance_block(guidance)
+    }Return JSON: {{"rows": [{{"id": "...", "use_case": "...", "situation": "...",
 "target_failure": "...", "why_it_matters": "...", "unique_end_state": "...", "goal": "..."}}]}}"""
 
 

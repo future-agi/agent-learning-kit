@@ -167,11 +167,13 @@ def derive_rows(
         for r in existing
     }
     rounds = max(config.max_row_rounds, -(-want // 25) + 1)
+    consecutive_empty = 0
     for round_index in range(rounds):
         remaining = want - len(rows)
         if remaining <= 0:
             break
         added_before = len(rows)
+        # rounds differ by contributor stance, so one empty round does not prove dryness
         raw = llm.complete_json(
             prompts.SCENARIO_MODEL,
             prompts.derive_rows_prompt(
@@ -187,6 +189,9 @@ def derive_rows(
                 first_round=round_index == 0 and not existing,
                 guidance=config.guidance,
                 node=node,
+                stance=prompts.CONTRIBUTOR_STANCES[
+                    round_index % len(prompts.CONTRIBUTOR_STANCES)
+                ],
             ),
             temperature=0.4,
             max_tokens=20_000,
@@ -206,9 +211,12 @@ def derive_rows(
             row["id"] = _slugify(row.get("id") or row.get("situation", ""))
             rows.append(row)
         if len(rows) == added_before:
-            # A whole round survived neither exact nor near-dup filtering: this
-            # planning space is dry. Stop paying for rewordings of it.
-            break
+            consecutive_empty += 1
+            if consecutive_empty >= 2:
+                # Two stances in a row produced nothing new: the space is dry.
+                break
+        else:
+            consecutive_empty = 0
     return rows[:want]
 
 
