@@ -453,7 +453,8 @@ def test_two_subgoal_refusal_scenario_is_valid():
 
 
 def test_exactly_n_scenarios_never_more(agent_repo, tmp_path):
-    """Two viable plans, n=1: exactly one accepted, the surplus accounted, no extra spend."""
+    """Two viable candidates, n=1: planning renormalizes to the target, so exactly one
+    scenario is planned, materialized, and delivered — never more."""
     second_row = dict(
         ROWS["rows"][0], id="latte-large", situation="The caller wants one large latte"
     )
@@ -491,9 +492,6 @@ def test_exactly_n_scenarios_never_more(agent_repo, tmp_path):
     config.max_workers = 1
     result = generate(RepoFolderSource(path=agent_repo), llm, config)
     assert len(result.records) == 1
-    assert any(
-        str(r.get("_reject_reason", "")).startswith("surplus") for r in result.rejected
-    )
     assert (
         not llm.responses
     )  # every queued response consumed, none needed beyond the plan
