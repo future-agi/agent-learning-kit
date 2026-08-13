@@ -16,21 +16,19 @@ SCENARIO_MODEL = """You help test an AI agent by designing test scenarios. Defin
   values, data) is given to you as a CONTRACT. You may only ever reference what the contract lists,
   with exact spelling. Inventing a tool, argument, menu item, table, or id that is not in the
   contract makes the test worthless.
-- USE CASE: one real job a user hires this agent for, stated from the user's side. Example for a
-  food-ordering agent: "Order a combo meal". Example for a database agent: "Ask for a sales total".
+- USE CASE: one real job a user hires this agent for, named from the user's side in the user's own
+  words.
 - SCENARIO: one concrete test. It fixes ONE specific situation inside one use case: a specific state
   of the world plus a specific thing the user wants. Two scenarios are different only if the correct
   END RESULT differs, not just the wording. "The item is in stock" and "the item is out of stock"
   are two scenarios because the correct outcome differs. Never write two scenarios that are the same
   situation reworded.
-- SUB-GOAL: a milestone inside one scenario that must be true for the scenario to end correctly.
-  Example: "the drink was elicited", "the refund was recorded". 3 to 6 per scenario. A sub-goal is
-  something a product owner would recognise, not an internal implementation step like "the JSON
-  parsed" and not a micro-step like "the agent said hello".
-- CHECKPOINT: the machine-checkable rule that decides whether one sub-goal was met. Checkpoints must
-  test the RIGHT VALUES, not just that something happened: if the user asked for 11 PM and the agent
-  booked 10 PM, a checkpoint that only verifies "a booking call happened" wrongly passes; the
-  checkpoint must assert the booked time equals 11 PM.
+- SUB-GOAL: a milestone inside one scenario that must be true for the scenario to end correctly,
+  3 to 6 per scenario. A sub-goal is an outcome a product owner would recognise and care about;
+  internal implementation steps and conversational pleasantries are not sub-goals.
+- CHECKPOINT: the machine-checkable rule that decides whether one sub-goal was met. A checkpoint
+  witnesses the VALUES the user's request determined, because a check that only confirms an action
+  occurred cannot tell acting correctly apart from acting wrongly.
 - ENVIRONMENT: the mocked world the agent acts on during the test: seeded state (what records or
   stock exist) plus canned responses for the agent's tools. The agent's own reasoning is never
   mocked; only the world it acts on is.
@@ -49,17 +47,17 @@ Quality bar for every scenario you write:
 - A competent implementation of this agent could plausibly FAIL it. If any correct implementation
   passes it for free, it teaches nothing; do not write it.
 - A real user could plausibly bring this situation. No contrived or gimmicky setups.
-- Concrete values everywhere, taken from the contract's real data. No placeholders, no variables,
-  no "example_id".
+- Every concrete value is a real entry from the contract's data; a value that cannot be found in
+  the contract does not belong in a test.
 - User personality, accent, or language is NOT varied unless the scenario is specifically about it."""
 
 AGENT_INPUT_BY_MODALITY = {
     "voice": (
-        "a situation instruction for the simulated caller, written in second person as lived "
-        "circumstance ('You are calling... You want...'). State their goal and what they know. Facts "
-        "the agent should have to ask for are listed separately (see `facts`), so do not volunteer "
-        "them here. Never write stage directions like 'tell the agent that X'; never script the "
-        "agent's side; no accent or voice notes"
+        "a situation instruction for the simulated caller, written in second person as the caller's "
+        "own lived circumstance: who they are, what is happening, and what they want. It describes "
+        "their experience and goal, never instructions about what to say, and never the other "
+        "side's turns. Facts the agent is expected to ask for live in `facts`, not here. No accent "
+        "or voice notes"
     ),
     "chat": (
         "a situation instruction for the simulated user, second person, lived circumstance: their "
@@ -75,33 +73,34 @@ AGENT_INPUT_BY_MODALITY = {
     "_default": "exactly what the agent receives at the start, in natural form: never the answer",
 }
 
-CHECKPOINT_VOCABULARY = """CHECKPOINT kinds, strongest first. Use the strongest kind that applies; use
-`judge` only when nothing inspectable exists.
-- tool_call_args (deterministic): the agent must call a specific tool with specific argument values.
-  definition: {"tool": "<exact tool name from the contract>", "args_equal": {"<exact arg name>":
-  <expected value>, ...}, "args_present": ["<arg that must be present with any reasonable value>"]}.
-  Put every argument whose value the user's request determines into args_equal.
-- state (deterministic): the world must end in a specific state. definition: {"must":
-  {"<dotted.path.into.state>": <value>}, "forbidden": {"<dotted.path>": <value>}} evaluated against
-  the seeded environment state after the run.
-- conveyed (deterministic): the agent must have told the user a specific VALUE: a price, a total, a
-  time, a name from the data. definition: {"must_include_any": ["<the value>", "<acceptable spelled
-  variant>"]} matched against the agent's transcript turns. Only values work here; NEVER match
-  question phrasings or sentence wordings, because a correct agent can phrase anything a hundred
-  ways. To verify the agent gathered a piece of information from the user, do not check its
-  question: the proof is the gathered value appearing in the final tool call (tool_call_args), since
-  the user only reveals on_request facts when asked.
-- absent (deterministic): something must NOT happen. definition: {"no_tool_call": "<tool>"} or
-  {"no_tool_call_with": {"tool": "<tool>", "args_equal": {...}}}.
-- judge (not deterministic, last resort): definition: {"rubric": "<one precise yes/no question a
-  grader answers from the transcript>"}. Phrase the rubric so that YES means the sub-goal was MET:
-  for a sub-goal that something must not happen, ask "Did the agent refrain from ...?", never "Did
-  the agent do ...?".
+CHECKPOINT_VOCABULARY = """CHECKPOINT kinds, strongest first. Choose the strongest kind the sub-goal
+allows; `judge` exists only for sub-goals no state, call, or data value can witness.
+- tool_call_args (deterministic): passes when the agent called the named tool and every argument
+  listed carried the expected value. definition: {"tool": "<exact tool name>", "args_equal":
+  {"<exact arg name>": <expected value>, ...}, "args_present": ["<arg required with any reasonable
+  value>"]}. args_equal holds each argument whose correct value the user's request determines; an
+  argument left out of args_equal is a requirement the test does not protect.
+- state (deterministic): passes when the world's final state carries the expected values.
+  definition: {"must": {"<dotted.path>": <value>}, "forbidden": {"<dotted.path>": <value>}},
+  evaluated against the seeded environment state after the run.
+- conveyed (deterministic): passes when a specific value from the environment's data (a price, a
+  total, a time, a name) appears in the agent's transcript turns. definition: {"must_include_any":
+  ["<the value>", "<another accepted spelling of the same value>"]}. The agent's wording is its own;
+  only data values are matchable, because correct phrasing is unbounded.
+- absent (deterministic): passes when a named action never occurred. definition: {"no_tool_call":
+  "<tool>"} or {"no_tool_call_with": {"tool": "<tool>", "args_equal": {...}}}.
+- judge (not deterministic): definition: {"rubric": "<one question about the transcript whose
+  affirmative answer is exactly the sub-goal being met>"}.
 Each sub-goal is written as: {"name": "<snake_case>", "milestone": "<one line a product owner
 understands>", "checkpoint": {"kind": "<one of the five>", "detail": "<one precise sentence>",
 "deterministic": true|false, "definition": {...}}}.
-For conversational agents, checkpoints must be ORDER-INDEPENDENT: the agent may gather information
-in any order, so assert final tool calls, final state, and captured facts, never a question order."""
+Properties every scenario's checkpoints hold together:
+- Information the user reveals only when asked is witnessed by its value arriving in a tool call or
+  the final state; conversation wording cannot witness it.
+- A scenario whose goal changes the world closes with a checkpoint asserting the complete final
+  action and its argument values; one whose goal is that the world stays unchanged closes with the
+  checkpoint asserting that absence.
+- For conversational agents, every checkpoint holds under any order of conversation."""
 
 
 def guidance_block(guidance: str) -> str:
@@ -285,6 +284,13 @@ SCENARIO PLAN to expand into a full test: {json.dumps(row)}
 Write the complete test. Every value must be a real value from the contract's data. Keep the three
 parts separate: the input never reveals the environment seeding, the checkpoints, or the outcome.
 
+The test must be runnable against the real agent exactly as it ships:
+- The simulated user must be able to carry the whole conversation from agent_input plus facts alone:
+  every question the agent will predictably ask in this scenario has its answer among the facts.
+- The environment seed may only change what a test setup can actually control. When the agent ships
+  with fixed data, the scenario draws its conditions from that data as it is; a condition that would
+  require altering data the agent's repository fixes makes the test unrunnable.
+
 The plan names a target_failure: the wrong behavior this test exists to catch. Design the
 checkpoints so that if the agent committed exactly that failure, at least one deterministic
 checkpoint fails. Then cover the rest of "done":
@@ -336,6 +342,9 @@ engineer who owns the agent. Review in this order:
    must not be checked as medium); conversational checkpoints do not depend on question order.
 5. SEPARATION. The input reveals nothing the user would not know: no seeded availability, no
    internal ids, no expected outcome, no checkpoint contents.
+6. RUNNABLE. The simulated user can finish the conversation from agent_input plus facts alone, and
+   the environment requires nothing a test setup cannot control: a condition that depends on
+   altering data the agent's repository fixes makes the test unrunnable as shipped.
 
 Return JSON: {"verdict": "accept" | "revise" | "reject", "scores": {"worth": 1-5, "real": 1-5,
 "grounded": 1-5, "checkable": 1-5, "separation": 1-5}, "problems": ["<specific, fixable problem>"],
