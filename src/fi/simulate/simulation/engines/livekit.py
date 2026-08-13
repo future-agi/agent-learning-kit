@@ -83,11 +83,11 @@ from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
-# After the conversation ends, keep draining the target's transcription tasks
-# until it stays quiet for this gap (it may still be delivering a closing), then
-# snapshot. Bounded by the hard cap so a stuck stream can't hang teardown.
-_FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS = 3.0
-_FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS = 30.0
+# On conversation end, wait up to this long for the party still finishing its
+# own turn to commit it (a LiveKit turn lands in history only after its TTS
+# finishes playing), then delete the room so neither side keeps talking into a
+# call the other has already left.
+_FINAL_TURN_COMMIT_WAIT_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -1090,36 +1090,39 @@ class LiveKitEngine(BaseEngine):
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
                 provider_task=bridge_task,
             )
-            # The target often delivers a closing AFTER the end condition fired
-            # (it wraps up once the customer is done). Its transcription stream is
-            # read to completion by a background task, which only then records the
-            # turn. Drain those tasks — including ones that START after the end —
-            # until the target stays quiet for a short gap, so the closing is
-            # captured before we snapshot. Bounded by a hard cap.
+            # End the call cleanly. First let the party that just spoke commit its
+            # own final turn — a LiveKit turn only lands in history once its TTS
+            # finishes — bounded so we do not wait on the other side. We do NOT
+            # wait for the target's trailing speech: once the conversation has
+            # ended, the target talking on is monologuing into a call the other
+            # side left.
             conversation_ended.set()
             _loop = asyncio.get_running_loop()
-            _hard_deadline = _loop.time() + _FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS
-            _quiet_until = _loop.time() + _FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS
-            while _loop.time() < _hard_deadline:
-                _pending = [t for t in target_transcription_tasks if not t.done()]
-                # The simulator's own final turn (e.g. its closing right before it
-                # calls endCall) only commits to history once its TTS playback
-                # finishes. Wait for that too, otherwise the snapshot lands before
-                # the last turn is recorded.
+            _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
+            while _loop.time() < _commit_deadline:
                 try:
-                    _sim_speaking = session.current_speech is not None
+                    if session.current_speech is None:
+                        break
                 except Exception:  # noqa: BLE001
-                    _sim_speaking = False
-                if _pending or _sim_speaking:
-                    if _pending:
-                        await asyncio.wait(_pending, timeout=1.0)
-                    else:
-                        await asyncio.sleep(0.2)
-                    _quiet_until = _loop.time() + _FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS
-                elif _loop.time() >= _quiet_until:
                     break
-                else:
-                    await asyncio.sleep(0.2)
+                await asyncio.sleep(0.2)
+            # Delete the room so the target agent can't keep monologuing into a
+            # dead call (its audio would be recorded but is untranscribable once
+            # the simulator has left) — the recording then ends when the call
+            # actually ends, matching the transcript.
+            if api_client is not None and managed_room_owned:
+                try:
+                    await asyncio.wait_for(
+                        api_client.room.delete_room(
+                            api.DeleteRoomRequest(room=room_name)
+                        ),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "LiveKit room delete on conversation end failed",
+                        exc_info=redacted_exc_info(exc),
+                    )
             messages = _canonical_report_messages(session)
             messages = _merge_captured_target_turns(messages, captured_target_turns)
             outcome = _conversation_outcome(
