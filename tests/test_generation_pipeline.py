@@ -851,3 +851,37 @@ def test_report_names_the_environment_and_the_open_questions():
     assert "production_trace" in report
     # Voice cannot grade world state today, and the report has to say so rather than imply it can.
     assert "cannot grade yet" in report and "state" in report
+
+
+def test_plan_fields_survive_materialization_even_when_the_model_omits_them():
+    """The plan owns why_it_matters and target_failure; a record must never lose them.
+
+    These fields are the scenario's stated reason to exist, and the validators require them. When
+    materialization depended on the model echoing them back, an unrelated prompt change silently
+    turned every scenario into a rejection.
+    """
+    from fi.alk.generation.pipeline import GenerationConfig, materialize_row
+
+    contract = AgentContract.model_validate(CONTRACT)
+    plan = {
+        "id": "carried-plan",
+        "use_case": "Order a single item",
+        "situation": "A caller orders one item and states a size",
+        "target_failure": "The agent drops the stated size",
+        "why_it_matters": "The customer is handed the wrong drink",
+        "unique_end_state": "One large coffee ordered",
+        "goal": "Order one large coffee",
+        "provenance": {"kind": "production_trace", "trace_ref": "call_001.txt"},
+    }
+    stripped = json.loads(json.dumps(SCENARIO))
+    for field in ("why_it_matters", "target_failure", "provenance"):
+        stripped.pop(field, None)
+
+    llm = FakeLLMClient(responses=[stripped, VERDICT])
+    record, reason = materialize_row(
+        contract, plan, [], llm, GenerationConfig(critic_enabled=True)
+    )
+    assert record is not None, reason
+    assert record["why_it_matters"] == "The customer is handed the wrong drink"
+    assert record["target_failure"] == "The agent drops the stated size"
+    assert record["provenance"]["kind"] == "production_trace"

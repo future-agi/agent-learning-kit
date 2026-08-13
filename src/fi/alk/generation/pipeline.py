@@ -326,6 +326,7 @@ def materialize_row(
             "goal",
             "target_failure",
             "unique_end_state",
+            "why_it_matters",
             "provenance",
         ):
             record.setdefault(key, row.get(key))
