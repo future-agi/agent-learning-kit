@@ -1500,14 +1500,23 @@ async def _forward_target_transcription(
         transcript = (await reader.read_all()).strip()
         if not transcript:
             return
-        if conversation_ended is not None and conversation_ended.is_set():
-            # The call already ended, so this is the target's final utterance.
-            # Record it as a user turn (LiveKit reports the target as ``user``)
-            # so it lands in the transcript, but do NOT generate_reply — the
-            # simulator must not speak again after the conversation is over.
-            session.history.add_message(role="user", content=transcript)
-        else:
-            session.generate_reply(user_input=transcript)
+        # Always commit the target's turn straight onto the chat context. Doing
+        # it via ``generate_reply(user_input=...)`` only records the turn as a
+        # side effect of producing a simulator reply, and it drops the turn (or
+        # raises "AgentSession is closing") whenever the simulator won't/can't
+        # answer — e.g. the target's trailing closing after the customer is
+        # already done. ``add_message`` records it regardless of session state
+        # (LiveKit reports the target as ``user``).
+        session.history.add_message(role="user", content=transcript)
+        # Only elicit a simulator response while the conversation is live; once
+        # it has ended the target's turn is recorded but the simulator stays
+        # silent.
+        if conversation_ended is None or not conversation_ended.is_set():
+            try:
+                session.generate_reply()
+            except RuntimeError:
+                # Session is already closing; the turn is captured above.
+                pass
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Failed to consume target transcription stream",
