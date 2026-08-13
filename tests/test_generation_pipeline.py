@@ -450,3 +450,50 @@ def test_two_subgoal_refusal_scenario_is_valid():
         },
     ]
     assert validate_scenario(lean, contract) == []
+
+
+def test_exactly_n_scenarios_never_more(agent_repo, tmp_path):
+    """Two viable plans, n=1: exactly one accepted, the surplus accounted, no extra spend."""
+    second_row = dict(
+        ROWS["rows"][0], id="latte-large", situation="The caller wants one large latte"
+    )
+    two_rows = {"rows": [ROWS["rows"][0], second_row]}
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "submit_contract",
+                        "arguments": {"contract": CONTRACT},
+                    }
+                ]
+            },
+            CATALOG,
+            {
+                "nodes": [
+                    {
+                        "use_case": "Order a single item",
+                        "description": "d",
+                        "count": 1,
+                        "angles": ["single item"],
+                    }
+                ]
+            },
+            two_rows,
+            two_rows,  # plan review echoes both survivors
+            SCENARIO,
+            VERDICT,
+            {"gaps": [], "near_duplicates": []},
+        ]
+    )
+    config = GenerationConfig(n=1, out_dir=str(tmp_path / "out"))
+    config.max_workers = 1
+    result = generate(RepoFolderSource(path=agent_repo), llm, config)
+    assert len(result.records) == 1
+    assert any(
+        str(r.get("_reject_reason", "")).startswith("surplus") for r in result.rejected
+    )
+    assert (
+        not llm.responses
+    )  # every queued response consumed, none needed beyond the plan

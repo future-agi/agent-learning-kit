@@ -406,7 +406,11 @@ def generate(
     def _materialize_one(row: dict) -> None:
         with lock:
             if len(records) >= config.n:
-                return  # target reached; spend nothing further on this batch
+                # Target reached: spend nothing, but account for the skipped plan.
+                rejected.append(
+                    {**row, "_reject_reason": "surplus: target already reached"}
+                )
+                return
         record, reason = materialize_row(contract, row, catalog, llm, config)
         with lock:
             if record is not None and len(records) >= config.n:
