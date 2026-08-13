@@ -309,6 +309,12 @@ def generate(
                     records.append(record)
                 else:
                     rejected.append({**row, "_reject_reason": reason})
+                _flush()  # runs are long; keep every artifact inspectable while they go
+                print(
+                    f"[generation] accepted={len(records)} rejected={len(rejected)} "
+                    f"spent={llm.usage.as_dict().get('usd', 0)}",
+                    flush=True,
+                )
             if suite_round < config.max_suite_rounds and records:
                 gaps, duplicate_ids, feedback = suite_review(
                     contract, records, llm, guidance=config.guidance
