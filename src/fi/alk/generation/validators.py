@@ -61,6 +61,7 @@ def _validate_definition(
     tool_names: set[str],
     where: str,
     legit_vocabulary: set[str],
+    arg_values: dict[str, dict],
 ) -> list[str]:
     problems: list[str] = []
     unknown_ids = sorted(
@@ -78,6 +79,13 @@ def _validate_definition(
             problems.append(f"{where}:unknown-tool:{tool}")
         if not definition.get("args_equal") and not definition.get("args_present"):
             problems.append(f"{where}:tool_call_args-without-args")
+        for arg, value in (definition.get("args_equal") or {}).items():
+            allowed = arg_values.get(str(tool), {}).get(str(arg))
+            if not isinstance(allowed, list) or not allowed:
+                continue
+            candidates = {str(item).lower() for item in allowed} | {"null", "none"}
+            if value is not None and str(value).lower() not in candidates:
+                problems.append(f"{where}:arg-value-not-allowed:{arg}={value}")
     elif kind == "state":
         if not definition.get("must") and not definition.get("forbidden"):
             problems.append(f"{where}:state-without-must-or-forbidden")
@@ -110,6 +118,7 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     problems: list[str] = []
     tool_names = contract.tool_names()
     legit_vocabulary = _legit_vocabulary(contract)
+    arg_values = {tool.name: dict(tool.arg_values or {}) for tool in contract.tools}
 
     for field in (
         "id",
@@ -164,7 +173,7 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
                 problems.append(f"{where}:no-definition")
             else:
                 problems += _validate_definition(
-                    kind, definition, tool_names, where, legit_vocabulary
+                    kind, definition, tool_names, where, legit_vocabulary, arg_values
                 )
             deterministic = bool(checkpoint.get("deterministic"))
             if deterministic and kind == "judge":
@@ -240,6 +249,12 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
+            )
+        elif ":arg-value-not-allowed:" in problem:
+            lines.append(
+                f"- A checkpoint pins an argument to a value the contract does not list as valid "
+                f"({problem.split(':')[-1]}). Choose the value from that argument's listed valid "
+                "values in the contract."
             )
         elif ":duplicate-name:" in problem:
             lines.append(

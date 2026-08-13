@@ -382,3 +382,11 @@ def test_contract_normalizes_benign_shape_variance():
     assert contract.grading_notes == "line one\nline two"
     assert contract.hard_constraints == ["a single rule as a bare string"]
     assert "joined" in contract.one_liner
+
+
+def test_validator_rejects_disallowed_arg_value():
+    contract = AgentContract.model_validate(CONTRACT)
+    bad = json.loads(json.dumps(SCENARIO))
+    bad["sub_goals"][0]["checkpoint"]["definition"]["args_equal"]["size"] = "XL"
+    problems = validate_scenario(bad, contract)
+    assert any("arg-value-not-allowed:size=XL" in p for p in problems)
