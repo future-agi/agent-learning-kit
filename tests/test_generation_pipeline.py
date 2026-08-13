@@ -532,3 +532,37 @@ def test_trace_mining_produces_provenance_pinned_plans(tmp_path):
         "kind": "production_trace",
         "trace_ref": "call_001.txt",
     }
+
+
+def test_operator_request_scenarios_come_first_with_provenance(agent_repo, tmp_path):
+    requested_scenario = json.loads(json.dumps(SCENARIO))
+    requested_scenario["provenance"] = {"kind": "operator_request"}
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "submit_contract",
+                        "arguments": {"contract": CONTRACT},
+                    }
+                ]
+            },
+            CATALOG,
+            ROWS,  # the dedicated request-planning reply
+            ROWS,  # blueprint review echoes the survivor
+            requested_scenario,
+            VERDICT,
+            {"gaps": [], "near_duplicates": []},
+        ]
+    )
+    config = GenerationConfig(
+        n=1,
+        guidance="test single-item ordering accuracy",
+        out_dir=str(tmp_path / "out"),
+    )
+    config.max_workers = 1
+    result = generate(RepoFolderSource(path=agent_repo), llm, config)
+    assert len(result.records) == 1
+    assert result.records[0]["provenance"]["kind"] == "operator_request"
+    assert not llm.responses  # request filled N; coverage planning never ran

@@ -486,6 +486,37 @@ def generate(
                 )
                 _materialize_batch(mined[: config.n])
 
+        # Operator request next: scenarios answering what the requester explicitly asked to
+        # test claim their share of N before baseline coverage. Same schema, same gates,
+        # provenance-marked so the report separates "what you asked for" from "what a full
+        # suite must contain anyway".
+        if config.guidance and len(records) < config.n:
+            raw = llm.complete_json(
+                prompts.SCENARIO_MODEL,
+                prompts.request_plan_prompt(
+                    contract.brief(),
+                    request=config.guidance,
+                    want=config.n - len(records),
+                ),
+                temperature=0.3,
+                max_tokens=16_000,
+            )
+            requested = raw.get("rows", raw) if isinstance(raw, dict) else raw
+            requested = [
+                row
+                for row in (requested if isinstance(requested, list) else [])
+                if isinstance(row, dict)
+                and row.get("situation")
+                and row.get("target_failure")
+            ]
+            for row in requested:
+                row["id"] = _slugify(row.get("id") or row.get("situation", ""))
+                row["provenance"] = {"kind": "operator_request"}
+            if config.critic_enabled:
+                requested = review_plan(contract, requested, llm)
+            logger.info("request planning", extra={"plans": len(requested)})
+            _materialize_batch(requested[: config.n - len(records)])
+
         # Coverage-tree planning: partition n across use-case nodes, then plan each node
         # separately. Planning context is bounded by the node, never by the whole suite;
         # cross-node overlap is prevented structurally and by the deterministic dedup filter.

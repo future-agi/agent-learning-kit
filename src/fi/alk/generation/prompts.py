@@ -193,6 +193,23 @@ CONTRIBUTOR_STANCES = (
 )
 
 
+def request_plan_prompt(brief: str, *, request: str, want: int) -> str:
+    return f"""{brief}
+
+The person responsible for testing this agent has asked for scenarios in their own words:
+
+REQUEST: {str(request).strip()[:2000]}
+
+Task: plan the scenarios that test exactly what they asked for, up to {want} of them. Return only as
+many as the request genuinely supports with DIFFERENT correct outcomes; when the request is narrow,
+a few precise scenarios serve it better than padding. Every plan follows the standard rules: the
+situation is real, the correct end state is unique, every reference exists in the contract, and each
+plan names target_failure and why_it_matters (here: why it matters to what the requester is testing).
+
+Return JSON: {{"rows": [{{"id": "...", "use_case": "...", "situation": "...",
+"target_failure": "...", "why_it_matters": "...", "unique_end_state": "...", "goal": "..."}}]}}"""
+
+
 def derive_rows_prompt(
     brief: str,
     *,
