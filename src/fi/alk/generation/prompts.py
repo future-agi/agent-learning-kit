@@ -145,6 +145,40 @@ Return JSON: {{"catalog": [{{"name": "...", "description": "...", "default_kind"
 "definition_template": {{...}}, "justification_if_judge": "..."}}]}}"""
 
 
+COVERAGE_PLAN_SYSTEM = (
+    SCENARIO_MODEL
+    + """
+
+Role: before individual tests are written, you partition the whole testing effort. The partition is
+what keeps a large test suite diverse: each part is planned separately, so parts must not overlap,
+and together they must cover everything worth testing about this agent."""
+)
+
+
+def coverage_plan_prompt(brief: str, *, total: int, guidance: str = "") -> str:
+    return f"""{brief}
+
+Task: partition {total} test scenarios across this agent's use cases.
+
+Return the partition as nodes. Each node is one use case (one real job users hire this agent for)
+with a share of the {total} scenarios proportional to how much can genuinely go wrong in it: use
+cases with rules to enforce, information to gather, or state to modify earn larger shares; a use
+case where little can fail earns a small one. Every node also lists the distinct ANGLES worth
+testing inside it: an angle is a one-line direction (a condition of the world or the user) that
+would make scenarios within the node differ in their correct outcome.
+
+Rules:
+- Nodes are mutually exclusive and jointly cover the agent's real jobs. No node for internal
+  machinery.
+- Counts sum to {total}. A node's angle list should be at least as long as its count would need;
+  when a use case cannot support its share with genuinely distinct angles, give the surplus to one
+  that can.
+- Angles within a node must each produce a DIFFERENT correct outcome, not the same outcome under
+  different wording.
+{guidance_block(guidance)}Return JSON: {{"nodes": [{{"use_case": "...", "description": "<one line>",
+"count": <int>, "angles": ["<one line>", ...]}}]}}"""
+
+
 def derive_rows_prompt(
     brief: str,
     *,
@@ -155,6 +189,7 @@ def derive_rows_prompt(
     feedback: str,
     first_round: bool,
     guidance: str = "",
+    node: dict | None = None,
 ) -> str:
     must = ""
     if first_round and signature_cases:
@@ -182,8 +217,17 @@ def derive_rows_prompt(
         if feedback
         else ""
     )
+    node_block = ""
+    if node:
+        angles = "".join(f"\n  - {a}" for a in node.get("angles") or [])
+        node_block = (
+            f"\nThis planning call covers ONE use case only. Every scenario you return belongs to it, "
+            f"and its use_case field repeats this wording exactly.\nUSE CASE: {node.get('use_case')}"
+            f"\n{node.get('description', '')}\nAngles worth testing here (each produces a different "
+            f"correct outcome; draw on them and add better ones if you see them):{angles}\n"
+        )
     return f"""{brief}
-
+{node_block}
 Task: plan {want} distinct test scenarios for this agent.
 
 How to author each scenario. Work through these steps in order, in your head, before writing its

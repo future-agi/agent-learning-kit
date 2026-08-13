@@ -172,6 +172,16 @@ def test_full_pipeline_offline(agent_repo, tmp_path):
                 ]
             },
             CATALOG,
+            {
+                "nodes": [
+                    {
+                        "use_case": "Order a single item",
+                        "description": "One item ordered and confirmed",
+                        "count": 1,
+                        "angles": ["plain single-item success"],
+                    }
+                ]
+            },
             ROWS,
             SCENARIO,
             VERDICT,

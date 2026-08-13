@@ -1,6 +1,7 @@
 """Local-first scenario generation: point at an agent, get reviewed, checkable test scenarios."""
 
 from .checks import CheckResult, evaluate_checkpoint, evaluate_scenario
+from .dedup import near_duplicate, similarity
 from .contract import AgentContract, ToolSpec, extract_contract, validate_contract
 from .emit import smoke_manifest, to_alk_scenario, write_outputs
 from .llm import (
@@ -40,6 +41,8 @@ __all__ = [
     "ToolSpec",
     "Usage",
     "banned_tokens",
+    "near_duplicate",
+    "similarity",
     "extract_contract",
     "generate",
     "register_source",

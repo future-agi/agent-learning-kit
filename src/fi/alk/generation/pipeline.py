@@ -23,6 +23,7 @@ from typing import Any
 
 from . import prompts
 from .contract import AgentContract, extract_contract
+from .dedup import near_duplicate
 from .emit import write_outputs
 from .explorer import explore_contract
 from .llm import LLMClient
@@ -99,6 +100,39 @@ def derive_catalog(contract: AgentContract, llm: LLMClient) -> list[dict]:
     return entries
 
 
+def derive_coverage_plan(
+    contract: AgentContract, llm: LLMClient, config: GenerationConfig
+) -> list[dict]:
+    """Partition the target count across use-case nodes. The plan is O(use cases), never O(n),
+    so planning context stays bounded at any scenario count."""
+    raw = llm.complete_json(
+        prompts.COVERAGE_PLAN_SYSTEM,
+        prompts.coverage_plan_prompt(
+            contract.brief(), total=config.n, guidance=config.guidance
+        ),
+        temperature=0.3,
+        max_tokens=16_000,
+    )
+    nodes = raw.get("nodes", raw) if isinstance(raw, dict) else raw
+    plan: list[dict] = []
+    for node in nodes if isinstance(nodes, list) else []:
+        if not isinstance(node, dict) or not node.get("use_case"):
+            continue
+        count = node.get("count")
+        node["count"] = max(1, int(count)) if isinstance(count, (int, float)) else 1
+        plan.append(node)
+    total = sum(node["count"] for node in plan)
+    if plan and total != config.n:  # renormalise counts to the requested total
+        scaled = [max(1, round(node["count"] * config.n / total)) for node in plan]
+        while sum(scaled) > config.n:
+            scaled[scaled.index(max(scaled))] -= 1
+        while sum(scaled) < config.n:
+            scaled[scaled.index(min(scaled))] += 1
+        for node, count in zip(plan, scaled):
+            node["count"] = count
+    return plan
+
+
 def derive_rows(
     contract: AgentContract,
     llm: LLMClient,
@@ -107,6 +141,7 @@ def derive_rows(
     want: int,
     existing: list[dict],
     feedback: str = "",
+    node: dict | None = None,
 ) -> list[dict]:
     brief = contract.brief()
     rows: list[dict] = []
@@ -136,6 +171,7 @@ def derive_rows(
                 feedback=feedback,
                 first_round=round_index == 0 and not existing,
                 guidance=config.guidance,
+                node=node,
             ),
             temperature=0.4,
             max_tokens=20_000,
@@ -148,6 +184,8 @@ def derive_rows(
                 str(row.get("situation", "")).strip().lower(),
             )
             if key in seen:
+                continue
+            if near_duplicate(row, existing) or near_duplicate(row, rows):
                 continue
             seen.add(key)
             row["id"] = _slugify(row.get("id") or row.get("situation", ""))
@@ -296,8 +334,63 @@ def generate(
             usage=llm.usage.as_dict(),
         )
 
+    def _materialize_batch(rows: list[dict]) -> None:
+        for row in rows:
+            record, reason = materialize_row(contract, row, catalog, llm, config)
+            if record is not None:
+                records.append(record)
+            else:
+                rejected.append({**row, "_reject_reason": reason})
+            _flush()  # runs are long; keep every artifact inspectable while they go
+            print(
+                f"[generation] accepted={len(records)} rejected={len(rejected)} "
+                f"spent={llm.usage.as_dict().get('usd', 0)}",
+                flush=True,
+            )
+
+    def _node_rows(node: dict) -> list[dict]:
+        """Existing rows belonging to one coverage node (its local dedup context)."""
+        label = str(node.get("use_case", "")).strip().lower()
+        return [
+            r
+            for r in records + rejected
+            if str(r.get("use_case", "")).strip().lower() == label
+        ]
+
     try:
-        for suite_round in range(1 + config.max_suite_rounds):
+        # Coverage-tree planning: partition n across use-case nodes, then plan each node
+        # separately. Planning context is bounded by the node, never by the whole suite;
+        # cross-node overlap is prevented structurally and by the deterministic dedup filter.
+        plan = derive_coverage_plan(contract, llm, config)
+        logger.info("coverage plan", extra={"nodes": len(plan)})
+        for node in plan:
+            rows = derive_rows(
+                contract,
+                llm,
+                config,
+                want=int(node["count"]),
+                existing=_node_rows(node),
+                node=node,
+            )
+            _materialize_batch(rows)
+
+        # Replenishment: coverage review names gaps and near-duplicates, then plans the
+        # shortfall suite-wide until the target count or the round cap is reached.
+        for suite_round in range(config.max_suite_rounds):
+            want = config.n - len(records)
+            if want <= 0 and suite_round > 0:
+                break
+            gaps, duplicate_ids, feedback = suite_review(
+                contract, records, llm, guidance=config.guidance
+            )
+            if duplicate_ids:
+                dropped = [r for r in records if str(r.get("id")) in set(duplicate_ids)]
+                records[:] = [
+                    r for r in records if str(r.get("id")) not in set(duplicate_ids)
+                ]
+                for record in dropped:
+                    record["_reject_reason"] = "near-duplicate of an accepted scenario"
+                    rejected.append(record)
             want = config.n - len(records)
             if want <= 0:
                 break
@@ -311,36 +404,7 @@ def generate(
             )
             if not rows:
                 break
-            for row in rows:
-                record, reason = materialize_row(contract, row, catalog, llm, config)
-                if record is not None:
-                    records.append(record)
-                else:
-                    rejected.append({**row, "_reject_reason": reason})
-                _flush()  # runs are long; keep every artifact inspectable while they go
-                print(
-                    f"[generation] accepted={len(records)} rejected={len(rejected)} "
-                    f"spent={llm.usage.as_dict().get('usd', 0)}",
-                    flush=True,
-                )
-            if suite_round < config.max_suite_rounds and records:
-                gaps, duplicate_ids, feedback = suite_review(
-                    contract, records, llm, guidance=config.guidance
-                )
-                if duplicate_ids:
-                    dropped = [
-                        r for r in records if str(r.get("id")) in set(duplicate_ids)
-                    ]
-                    records = [
-                        r for r in records if str(r.get("id")) not in set(duplicate_ids)
-                    ]
-                    for record in dropped:
-                        record["_reject_reason"] = (
-                            "near-duplicate of an accepted scenario"
-                        )
-                        rejected.append(record)
-                if not gaps and len(records) >= config.n:
-                    break
+            _materialize_batch(rows)
     except Exception:
         _flush()
         raise
