@@ -572,6 +572,16 @@ class LiveKitEngine(BaseEngine):
         target_transcription_mode = False
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
+        # agent_first (target greets first): the target can publish its greeting
+        # transcription before the main handler is registered post-readiness, and
+        # the LiveKit client DROPS a text-stream header that arrives with no
+        # handler. So for managed external-room agent_first we register an early
+        # buffer handler right after connect, defer the target dispatch until the
+        # buffer is live, and drain the buffered streams through the (unchanged,
+        # unconditional) main handler once the target is selected.
+        pending_target_transcriptions: list[tuple["rtc.TextStreamReader", str]] = []
+        target_dispatch_deferred = False
+        _MAX_BUFFERED_TARGET_STREAMS = 16
         managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
         cleanup_errors: list[str] = []
@@ -597,6 +607,38 @@ class LiveKitEngine(BaseEngine):
         sip_answer_timeout = transport.answer_timeout_seconds or max(
             connect_timeout, 60.0
         )
+
+        def buffer_target_transcription(
+            reader: "rtc.TextStreamReader",
+            participant_identity: str,
+        ) -> None:
+            # Early (pre-readiness) handler for managed external-room agent_first.
+            # ``target.audio_track_sid`` isn't known yet, so attribute by the same
+            # exclusion ``_wait_for_target_audio`` uses — anything that is not the
+            # simulator or recorder is target-worthy. The main handler re-applies
+            # the strict track/identity filter when draining, so over-buffering is
+            # safe.
+            nonlocal target_transcription_mode
+            pid = str(participant_identity)
+            if pid in (simulator_identity, recorder_identity):
+                return
+            if len(pending_target_transcriptions) >= _MAX_BUFFERED_TARGET_STREAMS:
+                logger.warning(
+                    "target_transcription_buffer_full: dropping stream (buffered=%d)",
+                    len(pending_target_transcriptions),
+                )
+                return
+            pending_target_transcriptions.append((reader, pid))
+            # Kill the duplicate-response race at the source: the target is
+            # speaking, so disable the simulator's STT now — otherwise STT would
+            # also transcribe the greeting and emit a second, duplicate reply.
+            # Dispatch is deferred until after ``session.start()``, so a buffered
+            # stream implies a live session.
+            if not target_transcription_mode and session is not None:
+                session.input.set_audio_enabled(False)
+                session.clear_user_turn()
+                target_transcription_mode = True
+
         try:
             if managed_room_owned:
                 api_client = api.LiveKitAPI(
@@ -640,17 +682,24 @@ class LiveKitEngine(BaseEngine):
                             ),
                         )
                 if outcome is None and profile.uses_external_room:
-                    await asyncio.wait_for(
-                        api_client.agent_dispatch.create_dispatch(
-                            api.CreateAgentDispatchRequest(
-                                agent_name=agent_definition.agent_name
-                                or agent_definition.name,
-                                room=room_name,
-                                metadata=_dispatch_metadata_json(agent_definition),
-                            )
-                        ),
-                        timeout=connect_timeout,
-                    )
+                    # agent_first: defer the target dispatch until AFTER the early
+                    # buffer handler is registered (post room.connect), so the
+                    # target's greeting transcription is never dropped for lack of
+                    # a handler. simulator_first dispatches now, unchanged.
+                    if conversation_direction == "agent_first":
+                        target_dispatch_deferred = True
+                    else:
+                        await asyncio.wait_for(
+                            api_client.agent_dispatch.create_dispatch(
+                                api.CreateAgentDispatchRequest(
+                                    agent_name=agent_definition.agent_name
+                                    or agent_definition.name,
+                                    room=room_name,
+                                    metadata=_dispatch_metadata_json(agent_definition),
+                                )
+                            ),
+                            timeout=connect_timeout,
+                        )
                 elif outcome is None and profile.receives_inbound_call:
                     try:
                         (
@@ -704,6 +753,13 @@ class LiveKitEngine(BaseEngine):
                 timeout=connect_timeout,
             )
             room_connected = True
+            if conversation_direction == "agent_first" and profile.uses_external_room:
+                # Buffer any target greeting that arrives before readiness; the
+                # LiveKit client drops a text-stream header with no handler.
+                room.register_text_stream_handler(
+                    TOPIC_TRANSCRIPTION, buffer_target_transcription
+                )
+                target_transcription_handler_registered = True
             if record_audio:
                 recorder = RoomRecorder(
                     url=str(runtime.url),
@@ -764,6 +820,21 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+            if target_dispatch_deferred:
+                # Session + early buffer handler are live; now dispatch the target
+                # so its greeting stream is captured, not dropped.
+                assert api_client is not None
+                await asyncio.wait_for(
+                    api_client.agent_dispatch.create_dispatch(
+                        api.CreateAgentDispatchRequest(
+                            agent_name=agent_definition.agent_name
+                            or agent_definition.name,
+                            room=room_name,
+                            metadata=_dispatch_metadata_json(agent_definition),
+                        )
+                    ),
+                    timeout=connect_timeout,
+                )
             if profile.uses_web_audio_bridge:
                 try:
                     connector = profile.build_connector(
@@ -922,6 +993,14 @@ class LiveKitEngine(BaseEngine):
             if target_room_io is not None:
                 target_room_io.set_participant(target.identity)
 
+            # Swap the early buffer handler for the authoritative one. The
+            # unregister → def → register sequence has NO await between the
+            # unregister and register, so no header can land unhandled in the gap
+            # (LiveKit allows one handler per topic and raises on double-register).
+            if target_transcription_handler_registered:
+                room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+                target_transcription_handler_registered = False
+
             # The target's mic track stays open for the whole call, so STT never
             # finalizes a turn; the agent's authoritative turns arrive on its
             # lk.transcription stream instead. Consume that stream and feed each
@@ -954,6 +1033,15 @@ class LiveKitEngine(BaseEngine):
                 TOPIC_TRANSCRIPTION, on_target_transcription
             )
             target_transcription_handler_registered = True
+
+            # Drain greeting streams buffered before readiness through the
+            # authoritative handler (it re-applies the strict track/identity
+            # filter, so over-buffered non-target streams are dropped here).
+            buffered_streams = list(pending_target_transcriptions)
+            pending_target_transcriptions.clear()
+            for buffered_reader, buffered_identity in buffered_streams:
+                on_target_transcription(buffered_reader, buffered_identity)
+
             if conversation_direction == "simulator_first":
                 customer_agent.open_conversation()
             stop_reason = await _wait_for_conversation_end(
@@ -1019,6 +1107,7 @@ class LiveKitEngine(BaseEngine):
         finally:
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+            pending_target_transcriptions.clear()
             pending_transcriptions = list(target_transcription_tasks)
             for pending in pending_transcriptions:
                 pending.cancel()
