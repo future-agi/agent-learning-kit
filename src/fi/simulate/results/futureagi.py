@@ -209,6 +209,7 @@ class FutureAGIResultSink:
             )
             if stereo_url:
                 payload["stereo_recording_url"] = stereo_url
+            _attach_channel_recordings(self._stream_client, call_id, case, payload)
             resp = self._stream_client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -444,6 +445,7 @@ def _submit_via_http(
             stereo_url = _maybe_upload_stereo_recording(client, call_id, case)
             if stereo_url:
                 payload["stereo_recording_url"] = stereo_url
+            _attach_channel_recordings(client, call_id, case, payload)
             resp = client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -846,6 +848,73 @@ def _maybe_upload_stereo_recording(
         return None
     body = _unwrap(resp.json())
     return body.get("recording_url")
+
+
+def _upload_audio_file(
+    client: httpx.Client, call_execution_id: str, path: Path
+) -> str | None:
+    """POST a single on-disk WAV to the recording endpoint; return its URL."""
+    filename = path.name
+    content_type = _CONTENT_TYPE_BY_EXT.get(
+        path.suffix.lower(), "application/octet-stream"
+    )
+    with path.open("rb") as fh:
+        files = {"file": (filename, fh, content_type)}
+        data = {"filename": filename}
+        resp = client.post(
+            f"/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/",
+            files=files,
+            data=data,
+            timeout=_RECORDING_UPLOAD_TIMEOUT_SECONDS,
+        )
+    if resp.is_error:
+        return None
+    return _unwrap(resp.json()).get("recording_url")
+
+
+def _upload_channel_recording(
+    client: httpx.Client, call_execution_id: str, case, attr: str
+) -> str | None:
+    """Upload one per-speaker mono WAV named by ``attr`` on the case result."""
+    if case.result is None:
+        return None
+    value = getattr(case.result, attr, None)
+    if not value:
+        return None
+    path = Path(str(value)).expanduser()
+    if not (path.exists() and path.is_file() and path.stat().st_size > 0):
+        return None
+    return _upload_audio_file(client, call_execution_id, path)
+
+
+def _attach_channel_recordings(
+    client: httpx.Client, call_execution_id: str, case, payload: dict[str, Any]
+) -> None:
+    """Upload the per-speaker assistant/customer mono tracks and fold their URLs
+    into ``provider_call_data.livekit.recording`` so evals mapped to
+    ``call.assistant_recording`` / ``call.customer_recording`` resolve. LiveKit
+    runs otherwise only produce combined + stereo, leaving the per-channel
+    variables empty. ``audio_output_path`` is the target/assistant track,
+    ``audio_input_path`` is the simulator/customer track (matching the stereo
+    channel order ch0 customer, ch1 assistant)."""
+    assistant_url = _upload_channel_recording(
+        client, call_execution_id, case, "audio_output_path"
+    )
+    customer_url = _upload_channel_recording(
+        client, call_execution_id, case, "audio_input_path"
+    )
+    recording: dict[str, str] = {}
+    if assistant_url:
+        recording["assistant"] = assistant_url
+    if customer_url:
+        recording["customer"] = customer_url
+    if not recording:
+        return
+    provider_call_data = payload.setdefault("provider_call_data", {})
+    livekit = provider_call_data.setdefault("livekit", {})
+    if not isinstance(livekit, dict):
+        return
+    livekit["recording"] = {**(livekit.get("recording") or {}), **recording}
 
 
 def _select_audio_path(result) -> Path | None:

@@ -669,7 +669,9 @@ def test_simulator_subscribes_to_sip_participant_audio(monkeypatch) -> None:
         in captured["room_options"].participant_kinds
     )
     assert captured["room_options"].close_on_disconnect is False
-    assert captured["room_options"].text_output is False
+    # text_output enabled so RoomIO builds the TranscriptSynchronizer that
+    # truncates an interrupted turn to what was actually spoken.
+    assert captured["room_options"].text_output is True
     assert captured["room_options"].audio_input.pre_connect_audio is False
     assert "turn_handling" in captured["session_options"]
     assert "allow_interruptions" not in captured["session_options"]

@@ -83,6 +83,9 @@ from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
+# Grace window to let the target's final in-flight transcription land in the
+# transcript after the conversation ends, before the snapshot + teardown.
+_FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -249,7 +252,15 @@ class _TestRunnerAgent(Agent):
                 pre_connect_audio=False,
                 pre_connect_audio_timeout=3.0,
             ),
-            "text_output": False,
+            # Enabled to build RoomIO's TranscriptSynchronizer, which aligns the
+            # spoken transcript to audio playback. On an interruption the
+            # recorded turn is then truncated to what was actually said instead
+            # of the full LLM text (playback-timing estimate — works with any
+            # TTS, unlike use_tts_aligned_transcript which needs word timing our
+            # Deepgram/Gemini voices don't emit and would drop the turn). The
+            # simulator's transcription is published to the room as a harmless
+            # side effect (our target-transcription handler filters by identity).
+            "text_output": True,
             "close_on_disconnect": False,
             "delete_room_on_close": False,
             "participant_kinds": participant_kinds or default_kinds,
@@ -578,6 +589,11 @@ class LiveKitEngine(BaseEngine):
         target_transcription_mode = False
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
+        # Set the moment the conversation ends. A target transcription stream
+        # still in flight at that point is the target's final utterance; it must
+        # be recorded into the transcript, but WITHOUT triggering another
+        # simulator reply (the call is over).
+        conversation_ended = asyncio.Event()
         # agent_first (target greets first): the target can publish its greeting
         # transcription before the main handler is registered post-readiness, and
         # the LiveKit client DROPS a text-stream header that arrives with no
@@ -1030,7 +1046,9 @@ class LiveKitEngine(BaseEngine):
                     session.clear_user_turn()
                     target_transcription_mode = True
                 task = asyncio.create_task(
-                    _forward_target_transcription(reader, session)
+                    _forward_target_transcription(
+                        reader, session, conversation_ended=conversation_ended
+                    )
                 )
                 target_transcription_tasks.add(task)
                 task.add_done_callback(target_transcription_tasks.discard)
@@ -1060,6 +1078,17 @@ class LiveKitEngine(BaseEngine):
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
                 provider_task=bridge_task,
             )
+            # The target's final utterance transcription may still be in flight
+            # when the conversation ends. Signal record-only mode, then let those
+            # tasks finish (bounded) so the last target turn is committed to
+            # history before we snapshot — otherwise it is lost when the `finally`
+            # cancels them.
+            conversation_ended.set()
+            pending_final = [t for t in target_transcription_tasks if not t.done()]
+            if pending_final:
+                await asyncio.wait(
+                    pending_final, timeout=_FINAL_TARGET_TRANSCRIPT_DRAIN_SECONDS
+                )
             messages = _canonical_report_messages(session)
             outcome = _conversation_outcome(
                 stop_reason,
@@ -1464,10 +1493,20 @@ async def _wait_for_target_audio(
 async def _forward_target_transcription(
     reader: "rtc.TextStreamReader",
     session: "AgentSession",
+    *,
+    conversation_ended: "asyncio.Event | None" = None,
 ) -> None:
     try:
         transcript = (await reader.read_all()).strip()
-        if transcript:
+        if not transcript:
+            return
+        if conversation_ended is not None and conversation_ended.is_set():
+            # The call already ended, so this is the target's final utterance.
+            # Record it as a user turn (LiveKit reports the target as ``user``)
+            # so it lands in the transcript, but do NOT generate_reply — the
+            # simulator must not speak again after the conversation is over.
+            session.history.add_message(role="user", content=transcript)
+        else:
             session.generate_reply(user_input=transcript)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
