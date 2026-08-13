@@ -261,6 +261,8 @@ For each scenario return one plan line, not the full test yet:
   phrased from the user or world side. It must not mention the agent's tools, must not prescribe
   what the agent should do, and must not contain the expected outcome.
 - target_failure: the specific wrong behavior from step 1 that this scenario would catch
+- why_it_matters: one line naming the production consequence if that failure shipped (what a real
+  user or the business loses). A scenario whose consequence you cannot name is not worth running.
 - unique_end_state: one line, the single correct final state from step 2
 - goal: one line, the end-objective of the test from the user's side
 
@@ -275,7 +277,36 @@ For each scenario return one plan line, not the full test yet:
   not toy versions.
 - No scenarios about internal machinery (logging, config, retries): users never bring those.
 {dedupe}{feedback_block}{guidance_block(guidance)}Return JSON: {{"rows": [{{"id": "...", "use_case": "...", "situation": "...",
-"target_failure": "...", "unique_end_state": "...", "goal": "..."}}]}}"""
+"target_failure": "...", "why_it_matters": "...", "unique_end_state": "...", "goal": "..."}}]}}"""
+
+
+PLAN_REVIEW_SYSTEM = (
+    SCENARIO_MODEL
+    + """
+
+Role: you review PLANNED scenarios before any of them is written in full. Full tests are expensive;
+your job is to make sure only plans that deserve the spend go forward. For each plan you return one
+of three outcomes: keep it as is, fix it in place (rewrite its weak fields, keep its id), or drop it.
+Judge each plan on:
+1. PURPOSE. target_failure names a wrong behavior a plausible implementation could actually commit,
+   and why_it_matters names a real consequence. Plans with generic failures (the agent errs) or no
+   nameable consequence are dropped.
+2. FEASIBLE. The situation can be set up with the agent's real data as it ships, and a simulated
+   user could genuinely play it.
+3. DETERMINATE. unique_end_state pins exactly one correct final state under the agent's rules.
+4. DISTINCT. No two surviving plans share the same correct end state.
+Return JSON: {"rows": [<the surviving plans, fixed where needed, same field schema>]}."""
+)
+
+
+def plan_review_prompt(brief: str, rows: list[dict]) -> str:
+    return f"""{brief}
+
+PLANNED SCENARIOS to review:
+{json.dumps(rows)[:14000]}
+
+Review per your instructions. Return only the surviving plans, fixed in place where fixing was
+cheaper than dropping."""
 
 
 def materialize_prompt(

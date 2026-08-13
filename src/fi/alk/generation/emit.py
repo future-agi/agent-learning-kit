@@ -264,6 +264,12 @@ def render_report(
             f"| {index} | {record.get('use_case', '')} | {record.get('situation', '')} "
             f"| {len(sub_goals)} | {det}/{len(sub_goals)} |"
         )
+    lines += ["", "## Purpose per scenario (the definitive-yes register)", ""]
+    for record in records:
+        lines.append(
+            f"- **{record.get('id')}**: catches `{record.get('target_failure', '')}`. "
+            f"Matters because: {record.get('why_it_matters', '')}"
+        )
     if reuse:
         lines += ["", "## Sub-goal roll-up (appearances across scenarios)", ""]
         for name, count in sorted(reuse.items(), key=lambda item: -item[1]):

@@ -25,6 +25,7 @@ from . import prompts
 from .contract import AgentContract, extract_contract
 from .dedup import near_duplicate
 from .emit import write_outputs
+from .oracle import oracle_hint, oracle_problems
 from .explorer import explore_contract
 from .llm import LLMClient
 from .sources import AgentSource
@@ -193,6 +194,40 @@ def derive_rows(
     return rows[:want]
 
 
+def review_plan(
+    contract: AgentContract, rows: list[dict], llm: LLMClient
+) -> list[dict]:
+    """Blueprint gate: cheap review of plans before the expensive materialize+review spend.
+
+    Fail-open: a malformed reviewer reply keeps the original rows, because this stage exists to
+    save cost and lift quality, never to lose work.
+    """
+    if not rows:
+        return rows
+    try:
+        raw = llm.complete_json(
+            prompts.PLAN_REVIEW_SYSTEM,
+            prompts.plan_review_prompt(contract.brief(), rows),
+            temperature=0.2,
+            max_tokens=16_000,
+        )
+    except Exception as exc:  # noqa: BLE001 - reviewer trouble must not lose plans
+        logger.warning("plan review failed open: %s", exc)
+        return rows
+    reviewed = raw.get("rows", raw) if isinstance(raw, dict) else raw
+    survivors = [
+        row
+        for row in (reviewed if isinstance(reviewed, list) else [])
+        if isinstance(row, dict) and row.get("situation") and row.get("target_failure")
+    ]
+    if not survivors or len(survivors) > len(rows):
+        return rows
+    for row in survivors:
+        row["id"] = _slugify(row.get("id") or row.get("situation", ""))
+    logger.info("plan review", extra={"in": len(rows), "kept": len(survivors)})
+    return survivors
+
+
 def materialize_row(
     contract: AgentContract,
     row: dict,
@@ -242,6 +277,11 @@ def materialize_row(
             best, reason = record, f"validator: {problems[:6]}"
             hint = repair_hint(problems)
             continue
+        inconsistencies = oracle_problems(record)
+        if inconsistencies:
+            best, reason = record, f"oracle: {inconsistencies[:4]}"
+            hint = oracle_hint(inconsistencies)
+            continue
         if not config.critic_enabled:
             return record, ""
         verdict = llm.complete_json(
@@ -272,7 +312,11 @@ def materialize_row(
         )
         hint = str(verdict.get("fix_hints") or "") or repair_hint([])
     # Out of repair attempts: keep the best structurally-valid draft, flagged, rather than lose it.
-    if best is not None and not validate_scenario(best, contract):
+    if (
+        best is not None
+        and not validate_scenario(best, contract)
+        and not oracle_problems(best)
+    ):
         best["_review_flag"] = reason
         return best, ""
     return None, reason
@@ -372,6 +416,8 @@ def generate(
                 existing=_node_rows(node),
                 node=node,
             )
+            if config.critic_enabled:
+                rows = review_plan(contract, rows, llm)
             _materialize_batch(rows)
 
         # Replenishment: coverage review names gaps and near-duplicates, then plans the
@@ -404,6 +450,8 @@ def generate(
             )
             if not rows:
                 break
+            if config.critic_enabled:
+                rows = review_plan(contract, rows, llm)
             _materialize_batch(rows)
     except Exception:
         _flush()

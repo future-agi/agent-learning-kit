@@ -120,6 +120,7 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
         "agent_input",
         "expected_outcome",
         "target_failure",
+        "why_it_matters",
     ):
         if scenario.get(field) in (None, "", [], {}):
             problems.append(f"empty:{field}")

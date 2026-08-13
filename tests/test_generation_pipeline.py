@@ -72,7 +72,8 @@ ROWS = {
             "id": "latte-medium",
             "use_case": "Order a single item",
             "situation": "The caller wants one medium latte and confirms",
-            "why_distinct": "Plain single-item success path",
+            "target_failure": "The agent adds the wrong item or size",
+            "why_it_matters": "A wrong order reaches a paying customer",
             "goal": "A medium latte is ordered and confirmed",
         }
     ]
@@ -83,6 +84,7 @@ SCENARIO = {
     "use_case": "Order a single item",
     "situation": "The caller wants one medium latte and confirms",
     "target_failure": "The agent adds the wrong item or size, or never confirms the order",
+    "why_it_matters": "A wrong order reaches a paying customer",
     "goal": "A medium latte is ordered and confirmed",
     "description": "A caller orders one medium latte, nothing else. The menu has lattes and mochas; "
     "the order starts empty and the agent must add the right item at the right size.",
@@ -183,6 +185,7 @@ def test_full_pipeline_offline(agent_repo, tmp_path):
                 ]
             },
             ROWS,
+            ROWS,  # plan review returns the same surviving plans
             SCENARIO,
             VERDICT,
             {"gaps": [], "near_duplicates": []},
@@ -337,3 +340,34 @@ def test_validator_survives_malformed_definition_shapes():
     )
     problems = validate_scenario(bad, contract)
     assert any("absent-tool-not-a-single-name" in p for p in problems)
+
+
+def test_oracle_rejects_internally_contradictory_scenario():
+    from fi.alk.generation.oracle import oracle_problems
+
+    assert oracle_problems(SCENARIO) == []  # the fixture predicts a run it passes
+
+    broken = json.loads(json.dumps(SCENARIO))
+    # State checkpoint asserts a state the seed plus declared updates never produce.
+    broken["environment"]["mock_responses"]["add_item"]["state_updates"] = {
+        "order": {"items": ["latte_M"], "confirmed": False}
+    }
+    problems = oracle_problems(broken)
+    assert any("order_confirmed" in p for p in problems)
+
+    contradiction = json.loads(json.dumps(SCENARIO))
+    # An absent checkpoint forbids the very call another checkpoint requires.
+    contradiction["sub_goals"].append(
+        {
+            "name": "no_add_item_call",
+            "milestone": "contradicts the required call",
+            "checkpoint": {
+                "kind": "absent",
+                "detail": "add_item never fires",
+                "deterministic": True,
+                "definition": {"no_tool_call": "add_item"},
+            },
+        }
+    )
+    problems = oracle_problems(contradiction)
+    assert any("no_add_item_call" in p for p in problems)
