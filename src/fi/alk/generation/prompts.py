@@ -84,13 +84,19 @@ CHECKPOINT_VOCABULARY = """CHECKPOINT kinds, strongest first. Use the strongest 
 - state (deterministic): the world must end in a specific state. definition: {"must":
   {"<dotted.path.into.state>": <value>}, "forbidden": {"<dotted.path>": <value>}} evaluated against
   the seeded environment state after the run.
-- conveyed (deterministic): the agent must have told the user a specific grounded fact. definition:
-  {"must_include_any": ["<exact substring>", "<acceptable variant>"]} matched against the agent's
-  side of the transcript. Use real values from the contract data (a price, a total, an id).
+- conveyed (deterministic): the agent must have told the user a specific VALUE: a price, a total, a
+  time, a name from the data. definition: {"must_include_any": ["<the value>", "<acceptable spelled
+  variant>"]} matched against the agent's transcript turns. Only values work here; NEVER match
+  question phrasings or sentence wordings, because a correct agent can phrase anything a hundred
+  ways. To verify the agent gathered a piece of information from the user, do not check its
+  question: the proof is the gathered value appearing in the final tool call (tool_call_args), since
+  the user only reveals on_request facts when asked.
 - absent (deterministic): something must NOT happen. definition: {"no_tool_call": "<tool>"} or
   {"no_tool_call_with": {"tool": "<tool>", "args_equal": {...}}}.
 - judge (not deterministic, last resort): definition: {"rubric": "<one precise yes/no question a
-  grader answers from the transcript>"}.
+  grader answers from the transcript>"}. Phrase the rubric so that YES means the sub-goal was MET:
+  for a sub-goal that something must not happen, ask "Did the agent refrain from ...?", never "Did
+  the agent do ...?".
 Each sub-goal is written as: {"name": "<snake_case>", "milestone": "<one line a product owner
 understands>", "checkpoint": {"kind": "<one of the five>", "detail": "<one precise sentence>",
 "deterministic": true|false, "definition": {...}}}.
