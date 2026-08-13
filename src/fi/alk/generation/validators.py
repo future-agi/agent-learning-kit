@@ -40,10 +40,38 @@ def banned_tokens(contract: AgentContract) -> set[str]:
     return banned
 
 
+def _identifier_values(payload) -> set[str]:
+    """Underscore-shaped string values anywhere in a definition (the id-like ones)."""
+    values: set[str] = set()
+    if isinstance(payload, str):
+        if re.fullmatch(r"[a-z][a-z0-9]*(_[a-z0-9]+)+", payload):
+            values.add(payload)
+    elif isinstance(payload, dict):
+        for value in payload.values():
+            values |= _identifier_values(value)
+    elif isinstance(payload, list):
+        for value in payload:
+            values |= _identifier_values(value)
+    return values
+
+
 def _validate_definition(
-    kind: str, definition: dict, tool_names: set[str], where: str
+    kind: str,
+    definition: dict,
+    tool_names: set[str],
+    where: str,
+    legit_vocabulary: set[str],
 ) -> list[str]:
     problems: list[str] = []
+    unknown_ids = sorted(
+        value
+        for value in _identifier_values(
+            {k: v for k, v in definition.items() if k != "tool"}
+        )
+        if value.lower() not in legit_vocabulary
+    )
+    if unknown_ids:
+        problems.append(f"{where}:unknown-id:{','.join(unknown_ids)[:100]}")
     if kind == "tool_call_args":
         tool = definition.get("tool")
         if tool not in tool_names:
@@ -78,6 +106,7 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     """Return problems; empty means structurally complete and grounded enough for the critic."""
     problems: list[str] = []
     tool_names = contract.tool_names()
+    legit_vocabulary = _legit_vocabulary(contract)
 
     for field in (
         "id",
@@ -129,7 +158,9 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
             if not isinstance(definition, dict) or not definition:
                 problems.append(f"{where}:no-definition")
             else:
-                problems += _validate_definition(kind, definition, tool_names, where)
+                problems += _validate_definition(
+                    kind, definition, tool_names, where, legit_vocabulary
+                )
             deterministic = bool(checkpoint.get("deterministic"))
             if deterministic and kind == "judge":
                 problems.append(f"{where}:judge-marked-deterministic")
@@ -177,6 +208,12 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 "- Provide at least 3 branch-specific sub_goals, each with a concrete checkpoint, "
                 "ending with a final verification of the resulting state."
+            )
+        elif ":unknown-id:" in problem:
+            lines.append(
+                f"- A checkpoint uses an identifier that does not exist in the contract "
+                f"({problem.split(':')[-1]}). Copy ids character for character from the contract's "
+                "data and arg values; do not reorder or rename their parts."
             )
         elif ":unknown-tool:" in problem:
             lines.append(

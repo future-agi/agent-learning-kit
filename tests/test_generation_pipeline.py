@@ -296,3 +296,13 @@ def test_record_drives_runtime_mock_and_python_checks_directly():
         final_state=world.state,
     )
     assert {v.name: v for v in wrong}["item_added"].passed is False
+
+
+def test_validator_rejects_transposed_identifier():
+    contract = AgentContract.model_validate(CONTRACT)
+    bad = json.loads(json.dumps(SCENARIO))
+    bad["sub_goals"][0]["checkpoint"]["definition"]["args_equal"]["item_id"] = (
+        "item_latte_big"
+    )
+    problems = validate_scenario(bad, contract)
+    assert any("unknown-id" in p for p in problems)
