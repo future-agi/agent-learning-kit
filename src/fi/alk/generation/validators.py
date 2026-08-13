@@ -238,6 +238,11 @@ def repair_hint(problems: list[str]) -> str:
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
             )
+        elif ":duplicate-name:" in problem:
+            lines.append(
+                f"- Two sub_goals share the name {problem.split(':')[-1]!r}; every sub-goal needs "
+                "its own distinct snake_case name."
+            )
         elif ":absent-tool-not-a-single-name" in problem:
             lines.append(
                 "- An absent checkpoint names several tools at once; write one absent checkpoint "

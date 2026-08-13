@@ -79,7 +79,9 @@ allows; `judge` exists only for sub-goals no state, call, or data value can witn
   listed carried the expected value. definition: {"tool": "<exact tool name>", "args_equal":
   {"<exact arg name>": <expected value>, ...}, "args_present": ["<arg required with any reasonable
   value>"]}. args_equal holds each argument whose correct value the user's request determines; an
-  argument left out of args_equal is a requirement the test does not protect.
+  argument left out of args_equal is a requirement the test does not protect. A value that only
+  comes into existence during the run (a generated id, a session handle) cannot be known in advance
+  and belongs in args_present, never in args_equal.
 - state (deterministic): passes when the world's final state carries the expected values.
   definition: {"must": {"<dotted.path>": <value>}, "forbidden": {"<dotted.path>": <value>}},
   evaluated against the seeded environment state after the run.

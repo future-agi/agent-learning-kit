@@ -40,7 +40,7 @@ _ACCEPT_FLOOR = (
 class GenerationConfig:
     n: int = 20
     max_row_rounds: int = 4
-    max_repairs: int = 2
+    max_repairs: int = 3
     max_suite_rounds: int = 2
     max_explore_turns: int = 20
     critic_enabled: bool = True
