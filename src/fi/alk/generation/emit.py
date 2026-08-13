@@ -194,6 +194,10 @@ def write_outputs(
     alk_dir = os.path.join(out_dir, "alk")
     os.makedirs(scenarios_dir, exist_ok=True)
     os.makedirs(alk_dir, exist_ok=True)
+    current = {f"{record.get('id', 'scenario')}.json" for record in records}
+    for directory in (scenarios_dir, alk_dir):
+        for stale in set(os.listdir(directory)) - current:
+            os.remove(os.path.join(directory, stale))
 
     def _dump(path: str, payload: Any) -> None:
         with open(path, "w", encoding="utf-8") as fh:
