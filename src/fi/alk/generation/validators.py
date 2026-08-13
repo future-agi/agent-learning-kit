@@ -158,8 +158,8 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
             problems.append(f"fact[{index}]:bad-disclosure")
 
     sub_goals = scenario.get("sub_goals")
-    if not isinstance(sub_goals, list) or len(sub_goals) < 3:
-        problems.append("sub_goals<3")
+    if not isinstance(sub_goals, list) or len(sub_goals) < 2:
+        problems.append("sub_goals<2")
     else:
         seen_names: set[str] = set()
         deterministic_count = 0
@@ -229,10 +229,10 @@ def repair_hint(problems: list[str]) -> str:
             )
         elif problem == "description-too-short":
             lines.append("- Write a proper 2-3 sentence description, not a stub.")
-        elif problem == "sub_goals<3":
+        elif problem == "sub_goals<2":
             lines.append(
-                "- Provide at least 3 branch-specific sub_goals, each with a concrete checkpoint, "
-                "ending with a final verification of the resulting state."
+                "- Provide at least 2 sub_goals: the decisive check on the correct end result, plus "
+                "the behavior that leads there. Do not pad with filler; do not stop at one."
             )
         elif ":unknown-id:" in problem:
             lines.append(
@@ -260,6 +260,19 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
+            )
+        elif ":no-definition" in problem:
+            lines.append(
+                "- A checkpoint has prose but no definition object. Every checkpoint carries the "
+                "machine-readable definition for its kind exactly as the vocabulary specifies; the "
+                "detail sentence never replaces it."
+            )
+        elif ":tool_call_args-without-args" in problem:
+            lines.append(
+                "- A tool_call_args checkpoint lists no arguments. Pin every argument the user's "
+                "request determines in args_equal; when every argument of the tool only exists at "
+                "run time, list those argument names in args_present instead, and never leave both "
+                "empty."
             )
         elif ":pinned-value-not-in-contract:" in problem:
             lines.append(

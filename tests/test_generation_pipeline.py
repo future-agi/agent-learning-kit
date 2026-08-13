@@ -420,3 +420,33 @@ def test_tool_call_args_min_count_requires_multiple_calls():
     legacy = {"tool": "add_item", "args_equal": {"item_id": "latte"}, "call_nth": 2}
     passed, _ = evaluate_checkpoint("tool_call_args", legacy, tool_calls=one)
     assert passed is False
+
+
+def test_two_subgoal_refusal_scenario_is_valid():
+    contract = AgentContract.model_validate(CONTRACT)
+    lean = json.loads(json.dumps(SCENARIO))
+    lean["sub_goals"] = [
+        {
+            "name": "no_item_ordered",
+            "milestone": "nothing is added",
+            "checkpoint": {
+                "kind": "absent",
+                "detail": "no add_item call",
+                "deterministic": True,
+                "definition": {"no_tool_call": "add_item"},
+            },
+        },
+        {
+            "name": "unavailability_declared",
+            "milestone": "the caller is told",
+            "checkpoint": {
+                "kind": "judge",
+                "detail": "agent states the item is unavailable",
+                "deterministic": False,
+                "definition": {
+                    "rubric": "Did the agent state the requested item is unavailable?"
+                },
+            },
+        },
+    ]
+    assert validate_scenario(lean, contract) == []

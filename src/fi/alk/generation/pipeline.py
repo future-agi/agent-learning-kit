@@ -228,15 +228,25 @@ def review_plan(
         logger.warning("plan review failed open: %s", exc)
         return rows
     reviewed = raw.get("rows", raw) if isinstance(raw, dict) else raw
-    survivors = [
-        row
-        for row in (reviewed if isinstance(reviewed, list) else [])
-        if isinstance(row, dict) and row.get("situation") and row.get("target_failure")
-    ]
+    originals = {str(row.get("id")): row for row in rows}
+    survivors: list[dict] = []
+    for row in reviewed if isinstance(reviewed, list) else []:
+        if (
+            not isinstance(row, dict)
+            or not row.get("situation")
+            or not row.get("target_failure")
+        ):
+            continue
+        slug = _slugify(row.get("id") or row.get("situation", ""))
+        # The reviewer may override fields but never erase them: merge over the original plan.
+        merged = {
+            **originals.get(slug, {}),
+            **{k: v for k, v in row.items() if v not in (None, "")},
+        }
+        merged["id"] = slug
+        survivors.append(merged)
     if not survivors or len(survivors) > len(rows):
         return rows
-    for row in survivors:
-        row["id"] = _slugify(row.get("id") or row.get("situation", ""))
     logger.info("plan review", extra={"in": len(rows), "kept": len(survivors)})
     return survivors
 

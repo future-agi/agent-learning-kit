@@ -24,7 +24,7 @@ SCENARIO_MODEL = """You help test an AI agent by designing test scenarios. Defin
   are two scenarios because the correct outcome differs. Never write two scenarios that are the same
   situation reworded.
 - SUB-GOAL: a milestone inside one scenario that must be true for the scenario to end correctly,
-  3 to 6 per scenario. A sub-goal is an outcome a product owner would recognise and care about;
+  2 to 6 per scenario, as many as the scenario genuinely needs and no more. A sub-goal is an outcome a product owner would recognise and care about;
   internal implementation steps and conversational pleasantries are not sub-goals.
 - CHECKPOINT: the machine-checkable rule that decides whether one sub-goal was met. A checkpoint
   witnesses the VALUES the user's request determined, because a check that only confirms an action
@@ -352,8 +352,9 @@ BASE ENVIRONMENT (exists before every test; each test declares only its changes)
 {json.dumps(base_environment)[:1600]}
 
 SHARED SUB-GOAL CATALOG (when a milestone in your scenario matches an entry, use the entry's exact
-name and fill its definition_template with this scenario's concrete values; invent a new sub-goal
-name only when no entry fits):
+name and fill its definition_template with this scenario's concrete values; a template is filled
+only when every generality in it has been replaced by this scenario's specifics, so a judge rubric
+names the one thing this scenario checks; invent a new sub-goal name only when no entry fits):
 {catalog_block}
 
 SCENARIO PLAN to expand into a full test: {json.dumps(row)}
@@ -419,6 +420,8 @@ engineer who owns the agent. Review in this order:
 4. CHECKABLE. Every deterministic checkpoint is computable from the seeded environment plus the
    expected calls; expected values match what the input implies (an input asking for a large drink
    must not be checked as medium); conversational checkpoints do not depend on question order.
+   When more than half the checkpoints are judges, demand deterministic replacements for every one
+   the vocabulary can express deterministically before accepting.
 5. SEPARATION. The input reveals nothing the user would not know: no seeded availability, no
    internal ids, no expected outcome, no checkpoint contents.
 6. RUNNABLE. The simulated user can finish the conversation from agent_input plus facts alone, and
