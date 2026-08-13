@@ -74,7 +74,7 @@ class LLMClient(Protocol):
         *,
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
-        max_tokens: int = 8000,
+        max_tokens: int = 16_000,
     ) -> dict[str, Any]:
         """One chat turn. Returns ``{"content": str | None, "tool_calls": [{"id", "name",
         "arguments": dict}, ...]}`` so a harness can run a bounded tool loop."""
@@ -85,9 +85,15 @@ class LLMClient(Protocol):
 
 
 def _extract_json(text: str) -> Any:
-    """Parse the first JSON object or array in ``text``, tolerating code fences."""
+    """Parse the first JSON object or array in ``text``.
+
+    Tolerates code fences (including an unterminated fence when the output was cut off) and repairs
+    truncation by dropping the incomplete tail and closing the open brackets. Truncated model output
+    is a routine failure mode, not an exception, so parsing must degrade gracefully before the
+    caller decides to retry.
+    """
     text = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    fenced = re.search(r"```(?:json)?\s*(.+?)(?:```|$)", text, re.S)
     if fenced:
         text = fenced.group(1).strip()
     try:
@@ -109,9 +115,77 @@ def _extract_json(text: str) -> Any:
                         return json.loads(text[start : i + 1])
                     except json.JSONDecodeError:
                         break
+    repaired = _repair_truncated(text)
+    if repaired is not None:
+        return repaired
     raise ValueError(
         f"model returned no parseable JSON (first 200 chars: {text[:200]!r})"
     )
+
+
+def _repair_truncated(text: str) -> Any | None:
+    """Best-effort parse of JSON that was cut off mid-stream.
+
+    Walks the text tracking string and bracket state, discards the incomplete trailing element at
+    each failure, and closes whatever remains open. Returns None when nothing parseable survives.
+    """
+    start = min((i for i in (text.find("{"), text.find("[")) if i >= 0), default=-1)
+    if start < 0:
+        return None
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    last_complete = start
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if stack:
+                stack.pop()
+            last_complete = index
+        elif char == ",":
+            last_complete = index
+    # Retry from progressively earlier cut points: full text, then the last complete element.
+    for cut in (len(text), last_complete):
+        candidate = text[start:cut].rstrip().rstrip(",")
+        # Recompute the open stack for this candidate.
+        open_stack: list[str] = []
+        in_str = False
+        esc = False
+        for char in candidate:
+            if in_str:
+                if esc:
+                    esc = False
+                elif char == "\\":
+                    esc = True
+                elif char == '"':
+                    in_str = False
+                continue
+            if char == '"':
+                in_str = True
+            elif char in "{[":
+                open_stack.append("}" if char == "{" else "]")
+            elif char in "}]" and open_stack:
+                open_stack.pop()
+        if in_str:
+            candidate += '"'
+        candidate += "".join(reversed(open_stack))
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 @dataclass
@@ -137,11 +211,32 @@ class LiteLLMClient:
         user: str,
         *,
         temperature: float = 0.3,
-        max_tokens: int = 8000,
+        max_tokens: int = 20_000,
     ) -> Any:
+        """Chat completion parsed as JSON, retrying once on a cut-off or malformed reply.
+
+        Gemini-family models spend part of ``max_tokens`` on internal reasoning, so a reply can
+        arrive truncated even when the visible JSON would have fit. The retry names the problem to
+        the model and raises the output budget.
+        """
         self._check_budget()
         text = self._chat(system, user, temperature=temperature, max_tokens=max_tokens)
-        return _extract_json(text)
+        try:
+            return _extract_json(text)
+        except ValueError:
+            self._check_budget()
+            retry_user = (
+                user
+                + "\n\nYour previous reply was cut off or was not valid JSON. Return ONLY the "
+                "complete JSON, with no code fences and no prose."
+            )
+            text = self._chat(
+                system,
+                retry_user,
+                temperature=temperature,
+                max_tokens=min(max_tokens * 2, 50_000),
+            )
+            return _extract_json(text)
 
     def complete_turn(
         self,
@@ -149,7 +244,7 @@ class LiteLLMClient:
         *,
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
-        max_tokens: int = 8000,
+        max_tokens: int = 16_000,
     ) -> dict[str, Any]:
         self._check_budget()
         try:
@@ -301,7 +396,7 @@ class FakeLLMClient:
         *,
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
-        max_tokens: int = 8000,
+        max_tokens: int = 16_000,
     ) -> dict[str, Any]:
         if not self.responses:
             raise AssertionError("FakeLLMClient exhausted; queue more responses")

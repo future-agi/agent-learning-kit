@@ -121,7 +121,7 @@ def extract_contract(evidence_text: str, llm: LLMClient) -> AgentContract:
         _EXTRACT_SYSTEM,
         _EXTRACT_USER.format(evidence=evidence_text),
         temperature=0.15,
-        max_tokens=10_000,
+        max_tokens=24_000,
     )
     if isinstance(raw, list):
         raw = next((item for item in raw if isinstance(item, dict)), {})

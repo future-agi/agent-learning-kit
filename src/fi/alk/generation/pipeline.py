@@ -83,7 +83,7 @@ def derive_catalog(contract: AgentContract, llm: LLMClient) -> list[dict]:
         prompts.SCENARIO_MODEL,
         prompts.subgoal_catalog_prompt(contract.brief()),
         temperature=0.3,
-        max_tokens=6000,
+        max_tokens=16_000,
     )
     catalog = raw.get("catalog", raw) if isinstance(raw, dict) else raw
     entries: list[dict] = []
@@ -137,7 +137,7 @@ def derive_rows(
                 guidance=config.guidance,
             ),
             temperature=0.4,
-            max_tokens=6000,
+            max_tokens=20_000,
         )
         for row in raw.get("rows", raw if isinstance(raw, list) else []):
             if not isinstance(row, dict) or not row.get("situation"):
@@ -180,7 +180,7 @@ def materialize_row(
                 guidance=config.guidance,
             ),
             temperature=0.35,
-            max_tokens=9000,
+            max_tokens=20_000,
         )
         record = (
             raw
@@ -202,7 +202,7 @@ def materialize_row(
             prompts.CRITIC_SYSTEM,
             prompts.critic_prompt(brief, record),
             temperature=0.2,
-            max_tokens=2500,
+            max_tokens=12_000,
         )
         if not isinstance(verdict, dict):
             verdict = {}
@@ -240,7 +240,7 @@ def suite_review(
         prompts.SUITE_REVIEW_SYSTEM,
         prompts.suite_review_prompt(contract.brief(), records, guidance=guidance),
         temperature=0.2,
-        max_tokens=2500,
+        max_tokens=12_000,
     )
     if not isinstance(raw, dict):
         return [], [], ""

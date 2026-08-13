@@ -247,7 +247,9 @@ def explore_contract(
                     "verified contract.",
                 }
             )
-        reply = llm.complete_turn(messages, tools=_TOOLS, temperature=0.15)
+        reply = llm.complete_turn(
+            messages, tools=_TOOLS, temperature=0.15, max_tokens=16_000
+        )
         calls = reply.get("tool_calls") or []
         if not calls:
             messages.append(
