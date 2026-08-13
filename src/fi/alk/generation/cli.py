@@ -39,6 +39,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="operator instructions steering what to test (or @path/to/file to read them)",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="parallel scenario workers (1 = sequential)",
+    )
+    parser.add_argument(
+        "--contract",
+        default="",
+        help="reuse a previously extracted contract.json (skips exploration)",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -62,7 +73,12 @@ def main(argv: list[str] | None = None) -> int:
     source = resolve_source(args.source, **source_kwargs)
     llm = LiteLLMClient(model=args.model, budget_usd=args.budget_usd)
     config = GenerationConfig(
-        n=args.n, critic_enabled=not args.no_critic, guidance=guidance, out_dir=args.out
+        n=args.n,
+        critic_enabled=not args.no_critic,
+        guidance=guidance,
+        max_workers=args.workers,
+        contract_path=args.contract,
+        out_dir=args.out,
     )
 
     result = generate(source, llm, config)

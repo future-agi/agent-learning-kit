@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +49,8 @@ class GenerationConfig:
     max_explore_turns: int = 20
     critic_enabled: bool = True
     guidance: str = ""
+    max_workers: int = 8
+    contract_path: str = ""
     out_dir: str = "artifacts/generated-scenarios"
 
 
@@ -67,7 +71,16 @@ def _slugify(value: str) -> str:
 def build_contract(
     source: AgentSource, llm: LLMClient, config: GenerationConfig
 ) -> AgentContract:
-    """Prefer the exploration loop when the source exposes a filesystem root."""
+    """Prefer a cached contract, then the exploration loop, then blob extraction.
+
+    Contract extraction is once-per-agent work; caching it turns every regeneration run into
+    planning plus materialization only, which is where the wanted scenarios actually come from.
+    """
+    if config.contract_path:
+        import json as _json
+
+        with open(config.contract_path, encoding="utf-8") as fh:
+            return AgentContract.model_validate(_json.load(fh))
     evidence = source.describe()
     root = (evidence.metadata or {}).get("root")
     if root:
@@ -378,9 +391,11 @@ def generate(
             usage=llm.usage.as_dict(),
         )
 
-    def _materialize_batch(rows: list[dict]) -> None:
-        for row in rows:
-            record, reason = materialize_row(contract, row, catalog, llm, config)
+    lock = threading.Lock()
+
+    def _materialize_one(row: dict) -> None:
+        record, reason = materialize_row(contract, row, catalog, llm, config)
+        with lock:
             if record is not None:
                 records.append(record)
             else:
@@ -391,6 +406,16 @@ def generate(
                 f"spent={llm.usage.as_dict().get('usd', 0)}",
                 flush=True,
             )
+
+    def _materialize_batch(rows: list[dict]) -> None:
+        if not rows:
+            return
+        if config.max_workers <= 1 or len(rows) == 1:
+            for row in rows:
+                _materialize_one(row)
+            return
+        with ThreadPoolExecutor(max_workers=min(config.max_workers, len(rows))) as pool:
+            list(pool.map(_materialize_one, rows))
 
     def _node_rows(node: dict) -> list[dict]:
         """Existing rows belonging to one coverage node (its local dedup context)."""
@@ -407,7 +432,8 @@ def generate(
         # cross-node overlap is prevented structurally and by the deterministic dedup filter.
         plan = derive_coverage_plan(contract, llm, config)
         logger.info("coverage plan", extra={"nodes": len(plan)})
-        for node in plan:
+
+        def _plan_node(node: dict) -> list[dict]:
             rows = derive_rows(
                 contract,
                 llm,
@@ -418,7 +444,22 @@ def generate(
             )
             if config.critic_enabled:
                 rows = review_plan(contract, rows, llm)
-            _materialize_batch(rows)
+            return rows
+
+        if config.max_workers > 1 and len(plan) > 1:
+            with ThreadPoolExecutor(
+                max_workers=min(config.max_workers, len(plan))
+            ) as pool:
+                node_rows = list(pool.map(_plan_node, plan))
+        else:
+            node_rows = [_plan_node(node) for node in plan]
+        # Cross-node near-dup guard after parallel planning (nodes could not see each other).
+        vetted: list[dict] = []
+        for rows in node_rows:
+            for row in rows:
+                if not near_duplicate(row, vetted):
+                    vetted.append(row)
+        _materialize_batch(vetted)
 
         # Replenishment: coverage review names gaps and near-duplicates, then plans the
         # shortfall suite-wide until the target count or the round cap is reached.

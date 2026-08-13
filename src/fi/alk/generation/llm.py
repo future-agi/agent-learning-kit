@@ -13,6 +13,7 @@ import json
 import os
 import re
 import time
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -200,6 +201,7 @@ class LiteLLMClient:
     output_cost_per_token: float = DEFAULT_OUTPUT_COST_PER_TOKEN
     max_attempts: int = 4
     _usage: Usage = field(default_factory=Usage)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
     def usage(self) -> Usage:
