@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="parallel scenario workers (1 = sequential)",
     )
     parser.add_argument(
+        "--traces",
+        default="",
+        help="file or folder of production transcripts; scenarios recreating them are generated first",
+    )
+    parser.add_argument(
         "--contract",
         default="",
         help="reuse a previously extracted contract.json (skips exploration)",
@@ -78,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         guidance=guidance,
         max_workers=args.workers,
         contract_path=args.contract,
+        traces_path=args.traces,
         out_dir=args.out,
     )
 

@@ -31,6 +31,7 @@ from .oracle import oracle_hint, oracle_problems
 from .explorer import explore_contract
 from .llm import LLMClient
 from .sources import AgentSource
+from .traces import load_traces, mine_traces
 from .validators import repair_hint, validate_scenario
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class GenerationConfig:
     guidance: str = ""
     max_workers: int = 8
     contract_path: str = ""
+    traces_path: str = ""
     out_dir: str = "artifacts/generated-scenarios"
 
 
@@ -115,14 +117,19 @@ def derive_catalog(contract: AgentContract, llm: LLMClient) -> list[dict]:
 
 
 def derive_coverage_plan(
-    contract: AgentContract, llm: LLMClient, config: GenerationConfig
+    contract: AgentContract,
+    llm: LLMClient,
+    config: GenerationConfig,
+    *,
+    total: int | None = None,
 ) -> list[dict]:
     """Partition the target count across use-case nodes. The plan is O(use cases), never O(n),
     so planning context stays bounded at any scenario count."""
+    target = config.n if total is None else total
     raw = llm.complete_json(
         prompts.COVERAGE_PLAN_SYSTEM,
         prompts.coverage_plan_prompt(
-            contract.brief(), total=config.n, guidance=config.guidance
+            contract.brief(), total=target, guidance=config.guidance
         ),
         temperature=0.3,
         max_tokens=16_000,
@@ -135,12 +142,12 @@ def derive_coverage_plan(
         count = node.get("count")
         node["count"] = max(1, int(count)) if isinstance(count, (int, float)) else 1
         plan.append(node)
-    total = sum(node["count"] for node in plan)
-    if plan and total != config.n:  # renormalise counts to the requested total
-        scaled = [max(1, round(node["count"] * config.n / total)) for node in plan]
-        while sum(scaled) > config.n:
+    planned = sum(node["count"] for node in plan)
+    if plan and planned != target:  # renormalise counts to the requested total
+        scaled = [max(1, round(node["count"] * target / planned)) for node in plan]
+        while sum(scaled) > target and max(scaled) > 1:
             scaled[scaled.index(max(scaled))] -= 1
-        while sum(scaled) < config.n:
+        while sum(scaled) < target:
             scaled[scaled.index(min(scaled))] += 1
         for node, count in zip(plan, scaled):
             node["count"] = count
@@ -462,10 +469,32 @@ def generate(
         ]
 
     try:
+        # Production traces first: a scenario that recreates a real interaction outranks an
+        # invented one, so mined plans take their share of N before coverage planning fills
+        # the remainder. Mined plans pass the same gates as everything else.
+        if config.traces_path:
+            raw_traces = load_traces(config.traces_path)
+            if raw_traces:
+                mined = mine_traces(contract, raw_traces, llm, guidance=config.guidance)
+                for row in mined:
+                    row["id"] = _slugify(row.get("id") or row.get("situation", ""))
+                if config.critic_enabled:
+                    mined = review_plan(contract, mined, llm)
+                logger.info(
+                    "trace mining",
+                    extra={"traces": len(raw_traces), "plans": len(mined)},
+                )
+                _materialize_batch(mined[: config.n])
+
         # Coverage-tree planning: partition n across use-case nodes, then plan each node
         # separately. Planning context is bounded by the node, never by the whole suite;
         # cross-node overlap is prevented structurally and by the deterministic dedup filter.
-        plan = derive_coverage_plan(contract, llm, config)
+        remaining_target = config.n - len(records)
+        plan = (
+            derive_coverage_plan(contract, llm, config, total=remaining_target)
+            if remaining_target > 0
+            else []
+        )
         logger.info("coverage plan", extra={"nodes": len(plan)})
 
         def _plan_node(node: dict) -> list[dict]:

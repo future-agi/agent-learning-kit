@@ -495,3 +495,40 @@ def test_exactly_n_scenarios_never_more(agent_repo, tmp_path):
     assert (
         not llm.responses
     )  # every queued response consumed, none needed beyond the plan
+
+
+def test_trace_mining_produces_provenance_pinned_plans(tmp_path):
+    from fi.alk.generation.traces import load_traces, mine_traces
+
+    trace = tmp_path / "call_001.txt"
+    trace.write_text(
+        "USER: one medium latte please\nAGENT: sure, that is 4.5\nUSER: perfect"
+    )
+    traces = load_traces(str(tmp_path))
+    assert traces and traces[0]["ref"] == "call_001.txt"
+
+    contract = AgentContract.model_validate(CONTRACT)
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "rows": [
+                    {
+                        "id": "recreate-call-001",
+                        "trace_ref": "call_001.txt",
+                        "use_case": "Order a single item",
+                        "situation": "A caller orders one medium latte and confirms the price",
+                        "target_failure": "The agent misprices or mis-sizes the real order",
+                        "why_it_matters": "This exact interaction happened with a real customer",
+                        "unique_end_state": "One medium latte ordered at 4.5",
+                        "goal": "Recreate the real call correctly",
+                    }
+                ]
+            }
+        ]
+    )
+    plans = mine_traces(contract, traces, llm)
+    assert len(plans) == 1
+    assert plans[0]["provenance"] == {
+        "kind": "production_trace",
+        "trace_ref": "call_001.txt",
+    }
