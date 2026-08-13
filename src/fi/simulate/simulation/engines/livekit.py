@@ -1102,8 +1102,19 @@ class LiveKitEngine(BaseEngine):
             _quiet_until = _loop.time() + _FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS
             while _loop.time() < _hard_deadline:
                 _pending = [t for t in target_transcription_tasks if not t.done()]
-                if _pending:
-                    await asyncio.wait(_pending, timeout=1.0)
+                # The simulator's own final turn (e.g. its closing right before it
+                # calls endCall) only commits to history once its TTS playback
+                # finishes. Wait for that too, otherwise the snapshot lands before
+                # the last turn is recorded.
+                try:
+                    _sim_speaking = session.current_speech is not None
+                except Exception:  # noqa: BLE001
+                    _sim_speaking = False
+                if _pending or _sim_speaking:
+                    if _pending:
+                        await asyncio.wait(_pending, timeout=1.0)
+                    else:
+                        await asyncio.sleep(0.2)
                     _quiet_until = _loop.time() + _FINAL_TARGET_TRANSCRIPT_QUIET_SECONDS
                 elif _loop.time() >= _quiet_until:
                     break
