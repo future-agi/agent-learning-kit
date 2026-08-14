@@ -1150,3 +1150,21 @@ def test_a_plan_citing_an_unsupplied_recording_is_dropped():
     plans = mine_traces(contract, traces, llm)
     assert [p["id"] for p in plans] == ["real-one"]
     assert plans[0]["provenance"]["trace_ref"] == "archive/real_call.log"
+
+
+def test_every_scenario_states_where_it_came_from():
+    """Provenance is asserted by the pipeline, never inferred from a missing field.
+
+    Three of one run's twenty scenarios carried no provenance at all and were reported as
+    ordinary coverage purely because the field was absent. Correct by accident is not correct:
+    any future plan source that forgot to set it would inherit the same silent label.
+    """
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(CONTRACT)
+    record = json.loads(json.dumps(SCENARIO))
+    record.pop("provenance", None)
+    assert "provenance-missing" in validate_scenario(record, contract)
+
+    record["provenance"] = {"kind": "baseline_coverage"}
+    assert "provenance-missing" not in validate_scenario(record, contract)

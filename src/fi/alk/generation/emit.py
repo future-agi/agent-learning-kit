@@ -289,7 +289,7 @@ def render_report(
         )
     origins: dict[str, int] = {}
     for record in records:
-        kind = str((record.get("provenance") or {}).get("kind") or "baseline_coverage")
+        kind = str((record.get("provenance") or {}).get("kind") or "unlabelled")
         origins[kind] = origins.get(kind, 0) + 1
     # Worth printing whenever anything came from somewhere other than plain coverage planning,
     # including a suite built entirely from production traces.

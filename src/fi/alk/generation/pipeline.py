@@ -616,6 +616,8 @@ def generate(
             )
             if config.critic_enabled:
                 rows = review_plan(contract, rows, llm)
+            for row in rows:
+                row.setdefault("provenance", {"kind": "baseline_coverage"})
             return _claim(rows)
 
         # Each node flows plan -> review -> materialize on its own, with no barrier between the
@@ -686,6 +688,8 @@ def generate(
                 break
             if config.critic_enabled:
                 rows = review_plan(contract, rows, llm)
+            for row in rows:
+                row.setdefault("provenance", {"kind": "coverage_gap_fill"})
             _materialize_batch(rows)
             if len(records) == accepted_before:
                 logger.warning(

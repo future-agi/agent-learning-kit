@@ -171,6 +171,12 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     if isinstance(description, str) and 0 < len(description) < 60:
         problems.append("description-too-short")
 
+    # Every scenario states where it came from. Inferring it from an absent field meant any new
+    # plan source that forgot to set it would be silently reported as ordinary coverage.
+    provenance = scenario.get("provenance")
+    if not isinstance(provenance, dict) or not str(provenance.get("kind", "")).strip():
+        problems.append("provenance-missing")
+
     facts = scenario.get("facts")
     if contract.conversational and not isinstance(facts, list):
         problems.append("facts-not-a-list")
