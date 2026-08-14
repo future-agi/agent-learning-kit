@@ -990,3 +990,94 @@ def test_a_repeated_identical_failure_stops_the_repair_loop():
     assert record is None
     assert "same problem twice" in reason
     assert llm.usage.calls == 2, f"stopped after {llm.usage.calls} calls, expected 2"
+
+
+def test_a_quantity_checkpoint_passes_the_run_it_predicts():
+    """min_count asserts several identical calls, so the predicted run must contain several.
+
+    Predicting one call made every quantity scenario contradict itself: three of one run's
+    fourteen rejections were correct scenarios failing an oracle that under-predicted.
+    """
+    from fi.alk.generation.oracle import oracle_problems, predicted_evidence
+
+    record = json.loads(json.dumps(SCENARIO))
+    record["sub_goals"] = [
+        {
+            "name": "two_combos_added",
+            "milestone": "Two identical combos are ordered",
+            "checkpoint": {
+                "kind": "tool_call_args",
+                "deterministic": True,
+                "detail": "order_combo_meal called twice",
+                "definition": {
+                    "tool": "order_combo_meal",
+                    "args_equal": {"meal_id": "combo_big_mac"},
+                    "min_count": 2,
+                },
+            },
+        }
+    ]
+    assert len(predicted_evidence(record)["tool_calls"]) == 2
+    assert not oracle_problems(record)
+
+
+def test_a_handle_the_scenario_mocks_into_existence_is_groundable():
+    """An order handle cannot be in the contract, but the mock that creates it makes it checkable."""
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(CONTRACT)
+    tool = contract.tools[0].name
+    record = json.loads(json.dumps(SCENARIO))
+    record["environment"] = {
+        "seed": {},
+        "mock_responses": {
+            tool: {
+                "content": "added",
+                "state_updates": {"order": [{"order_id": "combo_handle_1"}]},
+            }
+        },
+    }
+    record["sub_goals"] = record["sub_goals"][:1] + [
+        {
+            "name": "handle_used",
+            "milestone": "The agent acts on the item it already added",
+            "checkpoint": {
+                "kind": "tool_call_args",
+                "deterministic": True,
+                "detail": "acts on the handle its own earlier call created",
+                "definition": {
+                    "tool": tool,
+                    "args_equal": {"order_id": "combo_handle_1"},
+                },
+            },
+        }
+    ]
+    problems = validate_scenario(record, contract)
+    assert not [p for p in problems if "combo_handle_1" in p], problems
+
+
+def test_a_handle_no_mock_creates_is_still_refused():
+    """The relaxation is earned by declaring the source, not by naming something plausible."""
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(CONTRACT)
+    tool = contract.tools[0].name
+    record = json.loads(json.dumps(SCENARIO))
+    record["environment"] = {"seed": {}, "mock_responses": {}}
+    record["sub_goals"] = record["sub_goals"][:1] + [
+        {
+            "name": "handle_used",
+            "milestone": "The agent acts on an item",
+            "checkpoint": {
+                "kind": "tool_call_args",
+                "deterministic": True,
+                "detail": "acts on an undeclared handle",
+                "definition": {
+                    "tool": tool,
+                    "args_equal": {"order_id": "invented_handle_9"},
+                },
+            },
+        }
+    ]
+    problems = validate_scenario(record, contract)
+    assert any("invented_handle_9" in p for p in problems), problems

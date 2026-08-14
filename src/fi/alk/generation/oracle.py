@@ -34,7 +34,17 @@ def predicted_evidence(record: Mapping[str, Any]) -> dict[str, Any]:
             arguments = dict(definition.get("args_equal") or {})
             for arg in definition.get("args_present") or []:
                 arguments.setdefault(str(arg), "<runtime>")
-            tool_calls.append({"name": definition.get("tool"), "arguments": arguments})
+            # A checkpoint asserting several identical calls predicts several identical calls.
+            # Emitting one would make every quantity scenario fail the run it itself predicts.
+            raw_count = definition.get("min_count", definition.get("call_nth", 1))
+            try:
+                repeats = max(1, int(raw_count))
+            except (TypeError, ValueError):
+                repeats = 1
+            for _ in range(repeats):
+                tool_calls.append(
+                    {"name": definition.get("tool"), "arguments": dict(arguments)}
+                )
 
     # The transcript is predicted ONLY from what the scenario says the agent must communicate.
     # Seeding it from the conveyed definitions themselves would make those checks self-satisfying;

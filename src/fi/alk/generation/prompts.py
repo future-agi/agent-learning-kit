@@ -68,11 +68,13 @@ allows; `judge` exists only for sub-goals no state, call, or data value can witn
   requirement it was never given. An open argument is a reason to move that one argument into
   args_present; it is never a reason to give up the tool_call_args checkpoint or to replace it with
   a judge, because the call itself and every argument the user did determine remain exactly
-  checkable. A value
-  that only comes into existence during the run (a generated id, a session handle) cannot be known
-  in advance and belongs in args_present, never in args_equal. When the same call must happen several times
-  (a quantity of identical items), one checkpoint with "min_count": <how many> asserts it; separate
-  identical checkpoints do not.
+  checkable. Some arguments carry a handle the run itself creates, such as the reference for an item
+  already added to an order. A handle can still be pinned, but only when this scenario says where it
+  comes from: the mock that creates it declares that exact value in its state_updates, which is what
+  makes the value knowable before the run. Where no mock in this scenario produces the handle, the
+  argument goes in args_present. When the same call must happen several times (a quantity of
+  identical items), one checkpoint with "min_count": <how many> asserts it; separate identical
+  checkpoints do not.
 - state (deterministic): passes when the world's final state carries the expected values.
   definition: {"must": {"<dotted.path>": <value>}, "forbidden": {"<dotted.path>": <value>}},
   evaluated against the seeded environment state after the run.
@@ -80,7 +82,7 @@ allows; `judge` exists only for sub-goals no state, call, or data value can witn
   total, a time, a name) appears in the agent's transcript turns. definition: {"must_include_any":
   ["<the value>", "<another accepted spelling of the same value>"]}. The agent's wording is its own;
   only data values are matchable, because correct phrasing is unbounded.
-- absent (deterministic): passes when a named action never occurred. definition: {"no_tool_call":
+- absent (deterministic, and it means NEVER, at any point in the interaction, not "not yet"): passes when a named action never occurred. definition: {"no_tool_call":
   "<tool>"} or {"no_tool_call_with": {"tool": "<tool>", "args_equal": {...}}}.
 - judge (not deterministic): definition: {"rubric": "<one question about the transcript whose
   affirmative answer is exactly the sub-goal being met>"}.

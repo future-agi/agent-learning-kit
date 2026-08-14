@@ -143,7 +143,14 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     """Return problems; empty means structurally complete and grounded enough for the critic."""
     problems: list[str] = []
     tool_names = contract.tool_names()
-    legit_vocabulary = _legit_vocabulary(contract)
+    # A scenario may introduce an identifier the contract cannot contain (an order handle, a
+    # booking reference) PROVIDED it declares where that value comes from: its own environment
+    # seed or a mock's state_updates. Those are what generate the value during the run, so a
+    # checkpoint pinning it is checkable, not invented.
+    legit_vocabulary = _legit_vocabulary(contract) | {
+        match.lower()
+        for match in _TOKEN.findall(json.dumps(scenario.get("environment") or {}))
+    }
     arg_values = {tool.name: dict(tool.arg_values or {}) for tool in contract.tools}
     argless_tools = frozenset(tool.name for tool in contract.tools if not tool.args)
 
@@ -300,7 +307,10 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 f"- A checkpoint pins an argument to a value found nowhere in the contract "
                 f"({problem.split(':')[-1]}). If the value is real, copy it from the contract's "
-                "data; if it only exists at run time, move the argument to args_present."
+                "data. If it is a handle the run creates, such as the reference for an item "
+                "already added, then declare where it comes from: give the mock that creates it a "
+                "state_updates entry carrying that exact value, which makes it checkable. Move the "
+                "argument to args_present only when no mock in this scenario produces it."
             )
         elif ":arg-value-not-allowed:" in problem:
             lines.append(
