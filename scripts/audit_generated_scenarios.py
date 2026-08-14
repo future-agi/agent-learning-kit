@@ -54,11 +54,17 @@ def audit(run_dir: str, agent_repo: str) -> int:
     subgoal_uses: Counter = Counter()
     deterministic = total = 0
     failures: list[str] = []
+    run_declared_handles: list[str] = []
 
     for name in files:
         record = _load(os.path.join(scenarios_dir, name))
         slug = record.get("id", name)
         fact_values = {str(f.get("value", "")).lower() for f in record.get("facts") or []}
+        # A scenario may introduce a handle the agent's source cannot contain (an order
+        # reference) provided its own mock declares that value, which is what creates it during
+        # the run. Those are grounded; anything else invented is not.
+        declared = json.dumps(record.get("environment") or {})
+        pass
         for sub_goal in record.get("sub_goals") or []:
             checkpoint = (sub_goal or {}).get("checkpoint") or {}
             definition = checkpoint.get("definition") or {}
@@ -76,6 +82,11 @@ def audit(run_dir: str, agent_repo: str) -> int:
             for arg, value in (definition.get("args_equal") or {}).items():
                 text = str(value)
                 if _IDENTIFIER.match(text) and text not in source:
+                    # Match the bare token: a handle may be declared in state_updates or
+                    # inside the mock's response text, where JSON escaping hides the quotes.
+                    if re.search(rf"\b{re.escape(text)}\b", declared):
+                        run_declared_handles.append(f"{slug}: {arg}={text}")
+                        continue
                     failures.append(f"{slug}: args_equal {arg}={text} not found in agent source")
         agent_input = str(record.get("agent_input", "")).lower()
         for token in re.findall(r"[a-z][a-z0-9_]{4,}", agent_input):
@@ -87,6 +98,11 @@ def audit(run_dir: str, agent_repo: str) -> int:
     print(f"checkpoints: {total}, deterministic: {deterministic} ({100 * deterministic // max(total, 1)}%)")
     print(f"kind mix: {dict(kind_mix)}")
     print(f"sub-goal names reused in >=2 scenarios: {reused} of {len(subgoal_uses)}")
+    if run_declared_handles:
+        print(
+            f"run-created handles declared by the scenario's own mocks: "
+            f"{len(run_declared_handles)} (grounded, not failures)"
+        )
     print(f"grounding failures: {len(failures)}")
     for failure in failures[:30]:
         print(f"  - {failure}")
