@@ -72,6 +72,11 @@ class GenerationResult:
     usage: dict[str, Any] = field(default_factory=dict)
 
 
+def _signature(problems: list[str]) -> str:
+    """Identity of a failure, so a repeat can be told from progress."""
+    return "|".join(sorted(str(p) for p in problems))[:400]
+
+
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
     return slug[:60] or "scenario"
@@ -299,6 +304,7 @@ def materialize_row(
     hint = ""
     best: dict | None = None
     reason = ""
+    last_signature = ""
     for _attempt in range(1 + config.max_repairs):
         raw = llm.complete_json(
             prompts.SCENARIO_MODEL,
@@ -335,11 +341,22 @@ def materialize_row(
         problems = validate_scenario(record, contract)
         if problems:
             best, reason = record, f"validator: {problems[:6]}"
+            # A rewrite that returns the identical complaint has not understood the instruction,
+            # and further attempts almost never recover it. Stopping here is most of the cost of
+            # a rejection: the repair chain is serial, so it is wall-clock as well as spend.
+            if _signature(problems) == last_signature:
+                reason = f"unrecoverable, same problem twice: {problems[:6]}"
+                break
+            last_signature = _signature(problems)
             hint = repair_hint(problems)
             continue
         inconsistencies = oracle_problems(record)
         if inconsistencies:
             best, reason = record, f"oracle: {inconsistencies[:4]}"
+            if _signature(inconsistencies) == last_signature:
+                reason = f"unrecoverable, same problem twice: {inconsistencies[:4]}"
+                break
+            last_signature = _signature(inconsistencies)
             hint = oracle_hint(inconsistencies)
             continue
         if not config.critic_enabled:

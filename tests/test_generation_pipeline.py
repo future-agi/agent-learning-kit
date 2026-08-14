@@ -965,3 +965,28 @@ def test_identifier_shaped_values_are_still_grounded():
             break
     problems = validate_scenario(record, contract)
     assert any("combo_not_a_real_id" in p for p in problems), problems
+
+
+def test_a_repeated_identical_failure_stops_the_repair_loop():
+    """Rewrites that return the same complaint never recover, and the chain is serial.
+
+    Four attempts on a scenario that fails identically each time is the single largest cost in a
+    run: eight model calls spent to reject one scenario, in a chain that cannot be parallelised.
+    """
+    from fi.alk.generation.pipeline import GenerationConfig, materialize_row
+
+    contract = AgentContract.model_validate(CONTRACT)
+    broken = json.loads(json.dumps(SCENARIO))
+    broken["sub_goals"][0]["checkpoint"]["definition"] = {
+        "tool": "order_combo_meal",
+        "args_equal": {"meal_id": "combo_not_a_real_id"},
+    }
+    # Enough responses queued for the full four attempts; the loop must not consume them all.
+    llm = FakeLLMClient(responses=[json.loads(json.dumps(broken)) for _ in range(4)])
+    plan = {"id": "p", "target_failure": "x", "why_it_matters": "y"}
+    record, reason = materialize_row(
+        contract, plan, [], llm, GenerationConfig(critic_enabled=True)
+    )
+    assert record is None
+    assert "same problem twice" in reason
+    assert llm.usage.calls == 2, f"stopped after {llm.usage.calls} calls, expected 2"
