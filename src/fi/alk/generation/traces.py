@@ -33,6 +33,7 @@ _MAX_TRACES_PER_CALL = 4
 _MAX_TRACES_MINED = 40
 _MAX_EXPLORE_TURNS = 14
 _MAX_RESULT_CHARS = 14_000
+_MAX_TRACE_FILES = 400  # the flat fallback reads a bounded slice of a large tree
 
 
 def _window(text: str) -> str:
@@ -44,14 +45,26 @@ def _window(text: str) -> str:
 
 
 def load_traces(path: str) -> list[dict[str, str]]:
-    """Load raw traces from a file or a flat folder, without asking a model anything."""
+    """Load raw traces from a file or a folder tree, without asking a model anything.
+
+    Walks recursively. A flat listing silently returned almost nothing for the common case of
+    recordings filed under dated subdirectories, and because this is the fallback when
+    exploration does not submit, the grounding disappeared without any error.
+    """
+    root = os.path.abspath(path)
     paths: list[str] = []
-    if os.path.isfile(path):
-        paths = [path]
-    elif os.path.isdir(path):
-        for name in sorted(os.listdir(path)):
-            if name.endswith(_TRACE_EXTENSIONS) and not name.startswith("."):
-                paths.append(os.path.join(path, name))
+    if os.path.isfile(root):
+        paths = [root]
+    elif os.path.isdir(root):
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for name in sorted(filenames):
+                if name.endswith(_TRACE_EXTENSIONS) and not name.startswith("."):
+                    paths.append(os.path.join(dirpath, name))
+                    if len(paths) >= _MAX_TRACE_FILES:
+                        break
+            if len(paths) >= _MAX_TRACE_FILES:
+                break
     traces: list[dict[str, str]] = []
     for file_path in paths:
         try:
@@ -61,7 +74,12 @@ def load_traces(path: str) -> list[dict[str, str]]:
             continue
         if not text.strip():
             continue
-        traces.append({"ref": os.path.basename(file_path), "text": _window(text)})
+        ref = (
+            os.path.relpath(file_path, root)
+            if os.path.isdir(root)
+            else os.path.basename(file_path)
+        )
+        traces.append({"ref": ref, "text": _window(text)})
     return traces
 
 
@@ -379,6 +397,7 @@ def mine_traces(
         unique = unique[:_MAX_TRACES_MINED]
     traces = unique
     outcome_by_ref = {t["ref"]: t.get("outcome", "") for t in traces}
+    known_refs = set(outcome_by_ref)
     plans: list[dict[str, Any]] = []
     for start in range(0, len(traces), _MAX_TRACES_PER_CALL):
         batch = traces[start : start + _MAX_TRACES_PER_CALL]
@@ -396,6 +415,14 @@ def mine_traces(
                 and row.get("target_failure")
             ):
                 ref = str(row.get("trace_ref", ""))
+                # Provenance has to be verifiable. A plan claiming to recreate a recording
+                # that was never supplied was invented, and it is worse than a missing plan
+                # because the report presents it as grounded in production.
+                if ref not in known_refs:
+                    logger.warning(
+                        "dropping mined plan citing an unknown trace_ref: %r", ref[:80]
+                    )
+                    continue
                 row["provenance"] = {"kind": "production_trace", "trace_ref": ref}
                 # A recreation of an interaction that went wrong earns a neighbourhood around it.
                 row["amplify"] = outcome_by_ref.get(ref, "") == "failed"

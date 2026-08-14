@@ -1081,3 +1081,72 @@ def test_a_handle_no_mock_creates_is_still_refused():
     ]
     problems = validate_scenario(record, contract)
     assert any("invented_handle_9" in p for p in problems), problems
+
+
+def test_traces_are_loaded_from_nested_folders(tmp_path):
+    """Recordings are usually filed under dated subdirectories, not at the top level.
+
+    A flat listing returned almost nothing, and because this is the fallback when exploration
+    does not submit, an entire run silently lost its grounding without erroring.
+    """
+    from fi.alk.generation.traces import load_traces
+
+    nested = tmp_path / "sessions" / "2026-08-17" / "sess_0097"
+    nested.mkdir(parents=True)
+    (nested / "transcript.json").write_text(
+        '{"turns": [{"role": "user", "text": "hi"}]}'
+    )
+    (tmp_path / "README.txt").write_text("call exports")
+
+    traces = load_traces(str(tmp_path))
+    refs = {t["ref"] for t in traces}
+    assert "sessions/2026-08-17/sess_0097/transcript.json" in refs, refs
+
+
+def test_a_plan_citing_an_unsupplied_recording_is_dropped():
+    """Provenance must be verifiable, or 'grounded in production' means nothing.
+
+    A run whose trace explorer failed produced three scenarios citing invented recordings named
+    'hypothetical_trace_1'. They were reported as recreating real calls.
+    """
+    from fi.alk.generation.traces import mine_traces
+
+    contract = AgentContract.model_validate(CONTRACT)
+    traces = [
+        {
+            "ref": "archive/real_call.log",
+            "text": "USER: one coffee",
+            "outcome": "failed",
+        }
+    ]
+    llm = FakeLLMClient(
+        responses=[
+            {
+                "rows": [
+                    {
+                        "id": "real-one",
+                        "trace_ref": "archive/real_call.log",
+                        "use_case": "Order a single item",
+                        "situation": "A caller orders one coffee",
+                        "target_failure": "The agent misprices the order",
+                        "why_it_matters": "It happened to a real customer",
+                        "unique_end_state": "One coffee ordered",
+                        "goal": "Order one coffee",
+                    },
+                    {
+                        "id": "invented-one",
+                        "trace_ref": "hypothetical_trace_2_change_of_mind",
+                        "use_case": "Order a single item",
+                        "situation": "A caller changes their mind",
+                        "target_failure": "The agent keeps the original item",
+                        "why_it_matters": "Invented provenance",
+                        "unique_end_state": "The new item is ordered",
+                        "goal": "Swap the item",
+                    },
+                ]
+            }
+        ]
+    )
+    plans = mine_traces(contract, traces, llm)
+    assert [p["id"] for p in plans] == ["real-one"]
+    assert plans[0]["provenance"]["trace_ref"] == "archive/real_call.log"
