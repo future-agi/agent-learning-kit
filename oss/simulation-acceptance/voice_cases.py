@@ -206,19 +206,35 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
         room_mode="managed",
         room_name_verbatim=bool(room_override),
     )
-    scenario = simulate.Scenario(
-        name=f"acceptance-{case_id}",
-        dataset=[
-            simulate.Persona(
-                persona={"name": "Morgan", "role": "customer"},
-                situation=(
-                    "A delivery is late. Ask for its current status, expected arrival, "
-                    "and the next action."
-                ),
-                outcome="Complete a natural multi-turn conversation and close politely.",
-            )
-        ],
-    )
+    # A generated scenario, when one is supplied, replaces the built-in persona. The scenario
+    # carries the caller's situation, objective and disclosure rules, which is what turns a
+    # generic conversation into a specific test.
+    generated_path = os.environ.get("ALK_SCENARIO", "").strip()
+    if generated_path:
+        import json as _json
+
+        from fi.alk.generation.simulate_bridge import persona_from_record
+
+        with open(generated_path, encoding="utf-8") as fh:
+            record = _json.load(fh)
+        scenario = simulate.Scenario(
+            name=str(record.get("id") or f"acceptance-{case_id}"),
+            dataset=[persona_from_record(record)],
+        )
+    else:
+        scenario = simulate.Scenario(
+            name=f"acceptance-{case_id}",
+            dataset=[
+                simulate.Persona(
+                    persona={"name": "Morgan", "role": "customer"},
+                    situation=(
+                        "A delivery is late. Ask for its current status, expected arrival, "
+                        "and the next action."
+                    ),
+                    outcome="Complete a natural multi-turn conversation and close politely.",
+                )
+            ],
+        )
     llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google")
     stt_provider = os.environ.get("SIMULATOR_STT_PROVIDER", "deepgram")
     tts_provider = os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram")
