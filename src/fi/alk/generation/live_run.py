@@ -105,12 +105,16 @@ def _patch_assistant_tools(assistant_id: str, contract: Any, public_url: str) ->
 
 @contextlib.contextmanager
 def tool_session(
-    record: Mapping[str, Any], *, agent: str = "drive_thru"
+    record: Mapping[str, Any], *, agent: str = ""
 ) -> Iterator[ToolSession]:
     """Serve this scenario's mock tools for the length of one run."""
     from .contract import AgentContract
 
-    registry = load_registry().get(agent) or {}
+    all_agents = load_registry()
+    # With one registered agent there is nothing to choose between, so naming it is optional.
+    if not agent and len(all_agents) == 1:
+        agent = next(iter(all_agents))
+    registry = all_agents.get(agent) or {}
     assistant_id = str(
         registry.get("assistant_id") or os.environ.get("VAPI_ASSISTANT_ID", "")
     )

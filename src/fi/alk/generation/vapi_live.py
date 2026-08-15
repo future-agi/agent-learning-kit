@@ -185,7 +185,11 @@ def _tool_calls(payload: Mapping[str, Any]) -> list[tuple[str, str, dict[str, An
 
 
 def assistant_payload(
-    contract: AgentContract, *, tool_base_url: str, name: str
+    contract: AgentContract,
+    *,
+    tool_base_url: str,
+    name: str,
+    first_message: str = "",
 ) -> dict[str, Any]:
     """A Vapi assistant that behaves like the agent the contract describes.
 
@@ -226,7 +230,10 @@ def assistant_payload(
         )
     return {
         "name": name,
-        "firstMessage": "Welcome to the drive thru, what can I get for you?",
+        # The agent needs an opening line for outbound calls, where it speaks first. Taken from
+        # the contract so this stays agent-agnostic; override it when the agent has its own.
+        "firstMessage": first_message
+        or f"Hello, this is {contract.agent}. How can I help?",
         "model": {
             "provider": "openai",
             "model": "gpt-4o",

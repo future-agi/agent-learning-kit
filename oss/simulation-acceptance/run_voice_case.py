@@ -30,7 +30,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--agent",
-        default=os.environ.get("ALK_AGENT", "drive_thru"),
+        default=os.environ.get("ALK_AGENT", ""),
         help="registered agent whose assistant serves the scenario's tools",
     )
     parser.add_argument(
