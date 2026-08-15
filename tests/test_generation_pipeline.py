@@ -1357,3 +1357,58 @@ def test_assistant_is_built_from_the_contract():
     )
     system = payload["model"]["messages"][0]["content"]
     assert contract.hard_constraints[0] in system
+
+
+def test_conveyed_ignores_typography_a_voice_agent_cannot_speak():
+    """A menu writes "Big Mac(R) Combo"; an agent says "big mac combo". Only the value is asserted.
+
+    A live run failed this check purely on a registered-trademark glyph, which no speech pipeline
+    will ever produce.
+    """
+    from fi.alk.generation.checks import evaluate_checkpoint
+
+    passed, _ = evaluate_checkpoint(
+        "conveyed",
+        {"must_include_any": ["Quarter Pounder® with Cheese Combo"]},
+        transcript_turns=[
+            "Got your large quarter pounder with cheese combo, and a large Coke."
+        ],
+    )
+    assert passed is True
+
+    # a genuinely absent value still fails
+    passed, _ = evaluate_checkpoint(
+        "conveyed",
+        {"must_include_any": ["Hamburger Happy Meal"]},
+        transcript_turns=["Got your quarter pounder combo."],
+    )
+    assert passed is False
+
+
+def test_conveyed_fails_when_a_forbidden_value_is_named():
+    """Removal scenarios assert what must NOT be said as well as what must."""
+    from fi.alk.generation.checks import evaluate_checkpoint
+
+    passed, reason = evaluate_checkpoint(
+        "conveyed",
+        {
+            "must_include_any": ["Quarter Pounder with Cheese Combo"],
+            "forbidden": ["Hamburger Happy Meal"],
+        },
+        transcript_turns=["You have a hamburger happy meal on the order."],
+    )
+    assert passed is False
+    assert "forbids" in reason
+
+
+def test_the_caller_is_told_to_play_the_situation_in_order():
+    """A caller that decides against an item in advance skips the step under test."""
+    from fi.alk.generation.simulate_bridge import disclosure_instructions
+
+    record = json.loads(json.dumps(SCENARIO))
+    record["facts"] = [{"key": "drink", "value": "Coke", "disclosure": "on_request"}]
+    text = disclosure_instructions(record)
+    assert "one step at a time" in text
+    assert text.index("in the order it describes") < text.index(
+        "You know the following"
+    )

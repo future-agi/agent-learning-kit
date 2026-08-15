@@ -72,7 +72,13 @@ class ScenarioMockServer:
         self.log = ToolCallLog()
         self._scenario: dict[str, Any] = {}
         self._state: dict[str, Any] = {}
-        server = HTTPServer((host, port), _make_handler(self))
+        try:
+            server = HTTPServer((host, port), _make_handler(self))
+        except OSError:
+            # A leftover server from an earlier run must not block this one; any free port
+            # works because the public URL is discovered after binding.
+            logger.warning("port %s busy, binding an ephemeral port instead", port)
+            server = HTTPServer((host, 0), _make_handler(self))
         self._server = server
         self.port = server.server_address[1]
         self._thread = threading.Thread(target=server.serve_forever, daemon=True)

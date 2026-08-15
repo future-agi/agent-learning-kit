@@ -65,8 +65,15 @@ def disclosure_instructions(record: Mapping[str, Any]) -> str:
     if not facts:
         return ""
     lines = [
+        "Your objective describes where you end up, not a shortcut for getting there. Play your "
+        "situation one step at a time, in the order it describes. Where it says you ask for "
+        "something and then change your mind, you must first ask for that thing and see it "
+        "confirmed as part of your order, answering any questions needed to complete it, before "
+        "you mention changing anything. Deciding against it while it is still being set up is the "
+        "one thing that ruins this call, because the part being tested never happens.",
+        "",
         "You know the following things. When you may say each one is part of who you are in this "
-        "call, and getting it wrong changes what is being tested."
+        "call, and getting it wrong changes what is being tested.",
     ]
     for disclosure, rule in _DISCLOSURE_RULES.items():
         group = [

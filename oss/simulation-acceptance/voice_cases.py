@@ -10,11 +10,11 @@ _COMMON_ENV = ("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
 _GOOGLE_PROVIDERS = {"gemini", "google", "vertex"}
 _MODEL_DEFAULTS = {
     "llm": {
-        "gemini": "gemini-2.5-flash-lite",
-        "google": "gemini-2.5-flash-lite",
+        "gemini": "gemini-2.5-flash",
+        "google": "gemini-2.5-flash",
         "openai": "gpt-4o",
         "openai_compatible": "gpt-4o",
-        "vertex": "gemini-2.5-flash-lite",
+        "vertex": "gemini-2.5-flash",
     },
     "stt": {
         "cartesia": "ink-2",

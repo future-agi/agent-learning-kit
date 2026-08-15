@@ -14,6 +14,7 @@ Expected inputs:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -92,14 +93,28 @@ def _eval_state(
     return True, "state matched"
 
 
+def _spoken(text: str) -> str:
+    """What a value sounds like, so typography does not decide a test.
+
+    A voice agent says "quarter pounder with cheese combo"; the menu writes it
+    "Quarter Pounder(R) with Cheese Combo". Only the data value is being asserted, so casing,
+    symbols and spacing are normalised away before comparing.
+    """
+    return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
+
+
 def _eval_conveyed(
     definition: Mapping[str, Any], transcript_turns: Sequence[str]
 ) -> tuple[bool, str]:
     variants = [str(v) for v in definition.get("must_include_any") or []]
-    joined = "\n".join(str(turn) for turn in transcript_turns)
+    joined = _spoken("\n".join(str(turn) for turn in transcript_turns))
     for variant in variants:
-        if variant and variant.lower() in joined.lower():
+        if variant and _spoken(variant) in joined:
             return True, f"value {variant!r} conveyed"
+    forbidden = [str(v) for v in definition.get("forbidden") or []]
+    for value in forbidden:
+        if value and _spoken(value) in joined:
+            return False, f"the agent named {value!r}, which this scenario forbids"
     return False, f"none of {variants!r} appeared in the agent's turns"
 
 
