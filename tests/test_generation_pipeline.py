@@ -1260,3 +1260,100 @@ def test_generated_scenario_becomes_a_simulator_prompt():
     assert record["agent_input"] in prompt
     assert "ADDITIONAL SIMULATOR INSTRUCTIONS" in prompt
     assert "CONVERSATION EXECUTION RULES" in prompt  # the voice rules still apply
+
+
+def test_mock_server_answers_from_the_scenario_and_records_the_call():
+    """The mock server is both the world the agent acts on and the record used to grade it."""
+    import urllib.request
+
+    from fi.alk.generation.vapi_live import ScenarioMockServer
+
+    server = ScenarioMockServer().start()
+    try:
+        record = json.loads(json.dumps(SCENARIO))
+        tool = AgentContract.model_validate(CONTRACT).tools[0].name
+        record["environment"] = {
+            "seed": {"order": {"items": []}},
+            "mock_responses": {
+                tool: {
+                    "content": "added to your order",
+                    "state_updates": {"order": {"items": ["combo_big_mac"]}},
+                }
+            },
+        }
+        server.bind(record)
+
+        body = json.dumps(
+            {
+                "message": {
+                    "toolCalls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": tool,
+                                "arguments": '{"meal_id": "combo_big_mac"}',
+                            },
+                        }
+                    ]
+                }
+            }
+        ).encode()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/tool",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read())
+
+        assert payload["results"][0]["toolCallId"] == "call_1"
+        assert payload["results"][0]["result"] == "added to your order"
+        # recorded for grading, with the arguments the agent actually passed
+        assert server.log.snapshot() == [
+            {"name": tool, "arguments": {"meal_id": "combo_big_mac"}}
+        ]
+        # and the world moved, so state checkpoints have something to assert
+        assert server.final_state["order"]["items"] == ["combo_big_mac"]
+    finally:
+        server.stop()
+
+
+def test_an_unmocked_tool_still_answers_so_the_call_does_not_stall():
+    import urllib.request
+
+    from fi.alk.generation.vapi_live import ScenarioMockServer
+
+    server = ScenarioMockServer().start()
+    try:
+        server.bind({"environment": {"seed": {}, "mock_responses": {}}})
+        body = json.dumps(
+            {"message": {"toolCalls": [{"id": "c", "function": {"name": "whatever"}}]}}
+        ).encode()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/tool",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read())
+        assert payload["results"][0]["result"] == "whatever completed."
+        assert server.log.snapshot()[0]["name"] == "whatever"
+    finally:
+        server.stop()
+
+
+def test_assistant_is_built_from_the_contract():
+    from fi.alk.generation.vapi_live import assistant_payload
+
+    contract = AgentContract.model_validate(CONTRACT)
+    payload = assistant_payload(
+        contract, tool_base_url="https://example.test", name="alk-test"
+    )
+    names = {t["function"]["name"] for t in payload["model"]["tools"]}
+    assert names == set(contract.tool_names())
+    assert all(
+        t["server"]["url"] == "https://example.test/tool"
+        for t in payload["model"]["tools"]
+    )
+    system = payload["model"]["messages"][0]["content"]
+    assert contract.hard_constraints[0] in system
