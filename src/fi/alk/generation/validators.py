@@ -16,6 +16,11 @@ from .contract import AgentContract
 _CHECK_KINDS = ("tool_call_args", "state", "conveyed", "absent", "judge")
 _DISCLOSURES = ("volunteer", "on_request", "withhold")
 _TOKEN = re.compile(r"/[a-z][a-z0-9_]{2,}|[A-Za-z_][A-Za-z0-9_]{2,}")
+# What the simulation runtime reads off a mocked tool response. Anything else is ignored by it,
+# so a scenario using another key has written a response the agent will never receive.
+_MOCK_KEYS = frozenset(
+    {"content", "result", "success", "error", "state_updates", "artifacts", "events"}
+)
 
 
 def _interface_shaped(token: str) -> bool:
@@ -171,6 +176,36 @@ def validate_scenario(scenario: dict, contract: AgentContract) -> list[str]:
     if isinstance(description, str) and 0 < len(description) < 60:
         problems.append("description-too-short")
 
+    # The mock layer is what the runtime actually executes, so it gets checked like everything
+    # else. An unmocked tool returns nothing to the agent, and a mock the runtime cannot read
+    # silently drops its response, in both cases producing a scenario that passes every other
+    # gate and cannot run.
+    environment = scenario.get("environment")
+    environment = environment if isinstance(environment, dict) else {}
+    mocks = environment.get("mock_responses")
+    mocks = mocks if isinstance(mocks, dict) else {}
+    expected_calls = {
+        str(((sg or {}).get("checkpoint") or {}).get("definition", {}).get("tool", ""))
+        for sg in scenario.get("sub_goals") or []
+        if isinstance(sg, dict)
+        and ((sg.get("checkpoint") or {}).get("kind")) == "tool_call_args"
+    }
+    for tool in sorted(t for t in expected_calls if t and t in tool_names):
+        if tool not in mocks:
+            problems.append(f"tool-expected-but-not-mocked:{tool}")
+    for tool, body in mocks.items():
+        where = f"mock[{tool}]"
+        if str(tool) not in tool_names:
+            problems.append(f"{where}:unknown-tool")
+        if not isinstance(body, dict):
+            problems.append(f"{where}:not-an-object")
+            continue
+        unknown = sorted(set(body) - _MOCK_KEYS)
+        if unknown:
+            problems.append(f"{where}:unreadable-keys:{','.join(unknown)[:60]}")
+        if "content" not in body and "result" not in body:
+            problems.append(f"{where}:no-content")
+
     # Every scenario states where it came from. Inferring it from an absent field meant any new
     # plan source that forgot to set it would be silently reported as ordinary coverage.
     provenance = scenario.get("provenance")
@@ -295,6 +330,30 @@ def repair_hint(problems: list[str]) -> str:
             lines.append(
                 "- Every checkpoint is a judge; make the tool-argument and end-state checks "
                 "deterministic per the vocabulary."
+            )
+        elif problem.startswith("tool-expected-but-not-mocked:"):
+            lines.append(
+                f"- A checkpoint expects a call to {problem.split(':', 1)[1]} but the environment "
+                "does not mock it, so during the run that call returns nothing to the agent. Add "
+                "it to mock_responses with the content it should return."
+            )
+        elif ":not-an-object" in problem:
+            lines.append(
+                "- A mocked tool response is not an object. Write it as "
+                '{"content": "<what the tool returns>", "state_updates": {<what it changes>}}; '
+                "any other form cannot carry state_updates, so state checkpoints will not fire."
+            )
+        elif ":unreadable-keys:" in problem:
+            lines.append(
+                f"- A mocked tool response uses keys the runtime does not read "
+                f"({problem.split(':')[-1]}). Only content, result, success, error, "
+                "state_updates, artifacts and events are read; put the returned text in content "
+                "and the world changes in state_updates."
+            )
+        elif ":no-content" in problem:
+            lines.append(
+                "- A mocked tool response has no content, so the agent receives nothing back "
+                "from the call. Give it the content the real tool would return."
             )
         elif ":no-definition" in problem:
             lines.append(

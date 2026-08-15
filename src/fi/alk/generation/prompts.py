@@ -429,8 +429,12 @@ Return JSON with ALL of these keys, none empty:
   specifically about a user attribute
 - environment: {{"seed": {{<state this test needs beyond the base, as nested keys>}},
   "mock_responses": {{"<tool name>": {{"content": "<what the tool returns, grounded in the data>",
-  "state_updates": {{<state changes the call causes>}}}}}}}}. Mock only tools this scenario expects
-  the agent to call.
+  "state_updates": {{<state changes the call causes>}}}}}}}}. Every tool a checkpoint expects the
+  agent to call is mocked here, because a tool left unmocked returns nothing to the agent and the
+  call cannot succeed. Each mocked response is an object, never a list, and uses only these keys:
+  content, result, success, error, state_updates, artifacts, events. A response written with any
+  other key is discarded before the agent sees it, and one that is not an object cannot carry
+  state_updates, so no state checkpoint depending on it can pass.
 - sub_goals: 3 to 6, per the checkpoint vocabulary above, every definition fully concrete
 - expected_outcome: {{"world_state": "<one line: the correct end state>", "must_convey": ["<fact the
   agent must tell the user, with the real value>"], "forbidden": ["<action the agent must not

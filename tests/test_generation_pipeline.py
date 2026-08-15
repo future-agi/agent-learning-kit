@@ -1168,3 +1168,47 @@ def test_every_scenario_states_where_it_came_from():
 
     record["provenance"] = {"kind": "baseline_coverage"}
     assert "provenance-missing" not in validate_scenario(record, contract)
+
+
+def test_a_tool_a_checkpoint_expects_must_be_mocked():
+    """An unmocked tool returns None to the agent, so the call it asserts cannot succeed."""
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(CONTRACT)
+    tool = contract.tools[0].name
+    record = json.loads(json.dumps(SCENARIO))
+    record["environment"] = {"seed": {}, "mock_responses": {}}
+    problems = validate_scenario(record, contract)
+    assert f"tool-expected-but-not-mocked:{tool}" in problems, problems
+
+    record["environment"]["mock_responses"] = {
+        tool: {"content": "added", "state_updates": {}}
+    }
+    assert not [p for p in validate_scenario(record, contract) if "not-mocked" in p]
+
+
+def test_a_mock_the_runtime_cannot_read_is_refused():
+    """Only the runtime's own keys carry a response; anything else is silently dropped.
+
+    One run produced mocks keyed json_response, return_value, call_match and args, plus three
+    that were lists rather than objects. Every one passed all four gates and would have handed
+    the agent nothing at run time.
+    """
+    from fi.alk.generation.validators import validate_scenario
+
+    contract = AgentContract.model_validate(CONTRACT)
+    tool = contract.tools[0].name
+    record = json.loads(json.dumps(SCENARIO))
+
+    record["environment"] = {"mock_responses": {tool: {"json_response": {"ok": True}}}}
+    problems = validate_scenario(record, contract)
+    assert f"mock[{tool}]:unreadable-keys:json_response" in problems, problems
+    assert f"mock[{tool}]:no-content" in problems, problems
+
+    record["environment"] = {"mock_responses": {tool: [{"content": "added"}]}}
+    assert f"mock[{tool}]:not-an-object" in validate_scenario(record, contract)
+
+    record["environment"] = {
+        "mock_responses": {tool: {"content": "added", "state_updates": {"order": []}}}
+    }
+    assert not [p for p in validate_scenario(record, contract) if p.startswith("mock[")]
