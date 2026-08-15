@@ -66,6 +66,7 @@ class EnvironmentPlugin(Protocol):
         stop_when: Optional[Callable[[list[dict[str, Any]], Persona], bool]] = None,
         agent_wrapper_kwargs: Optional[dict[str, Any]] = None,
         on_case_complete: Optional[Callable[[int, Any], Awaitable[None]]] = None,
+        on_case_start: Optional[Callable[[int], Awaitable[None]]] = None,
     ) -> TestReport: ...
 
 

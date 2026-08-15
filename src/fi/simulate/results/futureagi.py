@@ -231,6 +231,32 @@ class FutureAGIResultSink:
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
+    def case_started(self, index: int) -> None:
+        """PATCH a pre-allocated CallExecution row to ONGOING the moment its case
+        starts, so the platform shows progress instead of PENDING → terminal.
+
+        Purely cosmetic and best-effort. Unlike ``submit_case`` this must NOT
+        record into ``_stream_failures`` / ``_streamed_indices`` — those drive
+        ``finalize_stream`` result reconciliation, and a missed status ping is not
+        a missed result. The backend gates the update on PENDING, so a lost, late,
+        or duplicate ping can never overwrite a terminal result; failures are
+        swallowed.
+        """
+        if not self._streaming or self._stream_client is None:
+            return
+        if index >= len(self._stream_call_ids):
+            return
+        call_id = self._stream_call_ids[index]
+        try:
+            self._stream_client.patch(
+                f"/simulate/api/alk-simulate/call-executions/{call_id}/status/",
+                json={"status": "ongoing"},
+            )
+        except Exception:
+            # Non-authoritative: never let a status ping disturb the run or the
+            # reconciliation bookkeeping.
+            pass
+
     def finalize_stream(self, report: SimulationReport) -> dict[str, Any]:
         """Reconcile any case the stream missed, then close the session.
 

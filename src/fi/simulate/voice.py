@@ -42,6 +42,7 @@ async def run_voice_simulation(
     agent_first_silence_timeout_seconds: float = 30.0,
     max_concurrency: int = 1,
     on_case_complete: Callable[[int, Any], Awaitable[None]] | None = None,
+    on_case_start: Callable[[int], Awaitable[None]] | None = None,
 ) -> TestReport:
     """Run a LiveKit voice simulation directly from typed SDK objects."""
 
@@ -71,6 +72,7 @@ async def run_voice_simulation(
         agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
         max_concurrency=max_concurrency,
         on_case_complete=on_case_complete,
+        on_case_start=on_case_start,
     )
 
 

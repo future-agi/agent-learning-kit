@@ -221,6 +221,9 @@ def _mock_streaming_client(monkeypatch, seen, *, result_status: int = 200):
                     }
                 },
             )
+        if path.endswith("/status/"):
+            seen.setdefault("status", []).append(path)
+            return httpx.Response(200, json={"result": {"updated": True}})
         if path.endswith("/result/"):
             seen["result"].append(path)
             if result_status >= 400:
@@ -337,16 +340,23 @@ def test_runner_streaming_callback_patches_by_index(tmp_path, monkeypatch):
     monkeypatch.setenv("FI_API_KEY", "k")
     monkeypatch.setenv("FI_SECRET_KEY", "s")
 
-    # The runner's real closure: begin_stream + legacy->canonical + to_thread PATCH.
-    callback = SimulationRunner()._begin_streaming(sink, spec, None)
-    assert callback is not None
+    # The runner's real closures: (on_case_start, on_case_complete). The complete
+    # closure does begin_stream + legacy->canonical + to_thread PATCH; the start
+    # closure PATCHes the row ONGOING when its case begins.
+    on_case_start, on_case_complete = SimulationRunner()._begin_streaming(
+        sink, spec, None
+    )
+    assert on_case_complete is not None
+    assert on_case_start is not None  # sink exposes case_started
 
     persona = Persona(persona={"name": "C0"}, situation="s", outcome="o")
     legacy = TestCaseResult(
         persona=persona, transcript="hi", messages=[], metadata={"status": "completed"}
     )
-    asyncio.run(callback(0, legacy))
+    asyncio.run(on_case_start(0))
+    asyncio.run(on_case_complete(0, legacy))
 
+    assert any(path.endswith("/status/") for path in seen.get("status", []))
     assert any(path.endswith("/result/") for path in seen["result"])
     assert 0 in sink._streamed_indices
 

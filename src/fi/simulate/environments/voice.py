@@ -55,6 +55,7 @@ class VoiceEnvironmentPlugin:
         stop_when=None,
         agent_wrapper_kwargs=None,
         on_case_complete=None,
+        on_case_start=None,
     ) -> TestReport:
         from fi.simulate import voice as voice_api
         from fi.simulate.agent.definition import (
@@ -96,6 +97,7 @@ class VoiceEnvironmentPlugin:
             simulator=simulator,
             simulation_run_id=spec.run_id,
             on_case_complete=streamed_callback,
+            on_case_start=on_case_start,
             **params,
         )
         self._attach_goal_machine(spec.scenario, report)

@@ -668,10 +668,12 @@ class ChatEnvironmentPlugin:
         stop_when=None,
         agent_wrapper_kwargs=None,
         on_case_complete=None,
+        on_case_start=None,
     ) -> TestReport:
-        # ``on_case_complete`` is the hosted per-case streaming hook. Chat submits
-        # its whole report at end (the sink reconciles all rows in finalize), so
-        # the hook is accepted for signature parity and intentionally unused.
+        # ``on_case_complete`` / ``on_case_start`` are the hosted per-case
+        # streaming hooks. Chat submits its whole report at end (the sink
+        # reconciles all rows in finalize), so both are accepted for signature
+        # parity and intentionally unused.
         config = spec.environment.config
         # Tool mocking is a world capability, not a separate environment. Any chat
         # run can declare mocked tools in `config["mock_tools"]` (name -> canned

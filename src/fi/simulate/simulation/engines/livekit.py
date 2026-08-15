@@ -323,6 +323,7 @@ class LiveKitEngine(BaseEngine):
         max_concurrency: int = 1,
         on_case_complete: Callable[[int, TestCaseResult], Awaitable[None]]
         | None = None,
+        on_case_start: Callable[[int], Awaitable[None]] | None = None,
         **kwargs,
     ) -> TestReport:
         if agent_definition is None:
@@ -404,6 +405,22 @@ class LiveKitEngine(BaseEngine):
 
         async def _run_case(index: int, persona: Persona) -> TestCaseResult:
             async with case_semaphore:
+                # Mark this case's row ONGOING the moment it claims a concurrency
+                # slot — cases still queued behind the semaphore stay PENDING.
+                # Best-effort and engine-agnostic; a failed ping never fails the
+                # case (the backend gates the update on PENDING).
+                if on_case_start is not None:
+                    try:
+                        await on_case_start(index)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(
+                            "voice case start callback failed",
+                            exc_info=redacted_exc_info(exc),
+                            extra={
+                                "run_id": current_run_id,
+                                "case_index": index,
+                            },
+                        )
                 persona_ref = persona.version or persona.content_hash()
                 test_case_id = derive_test_case_id(
                     current_run_id,

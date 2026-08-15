@@ -51,7 +51,9 @@ class SimulationRunner:
             # (allocate CallExecution rows up front, PATCH by index). The sink
             # decides eligibility; a non-streaming sink (local/chat, or missing
             # config) returns False and we fall back to the batch-at-end path.
-            on_case_complete = self._begin_streaming(result_sink, spec, plan)
+            on_case_start, on_case_complete = self._begin_streaming(
+                result_sink, spec, plan
+            )
             self._write_event(
                 result_sink,
                 CanonicalEvent.create(
@@ -73,6 +75,7 @@ class SimulationRunner:
                     auto_execute_tools=auto_execute_tools,
                     stop_when=stop_when,
                     agent_wrapper_kwargs=agent_wrapper_kwargs,
+                    on_case_start=on_case_start,
                     on_case_complete=on_case_complete,
                 ),
                 timeout=spec.execution.timeout.run_seconds,
@@ -163,21 +166,25 @@ class SimulationRunner:
         result_sink: ResultSink | None,
         spec: SimulationSpec,
         plan: SimulationPlan | None,
-    ) -> Callable[[int, Any], Any] | None:
-        """Open the sink's streaming session; return a per-case callback or None.
+    ) -> tuple[Callable[[int], Any] | None, Callable[[int, Any], Any] | None]:
+        """Open the sink's streaming session; return ``(on_case_start,
+        on_case_complete)`` — either may be ``None``.
 
-        The callback converts a legacy ``TestCaseResult`` to its canonical form
-        (identical to the finalized report) and submits it off the event loop so a
-        slow result PATCH never blocks case concurrency. A streaming error is
-        swallowed here — the case is left un-streamed and ``finalize`` reconciles
-        it; a broken upload must never fail a simulation case.
+        ``on_case_complete`` converts a legacy ``TestCaseResult`` to its canonical
+        form (identical to the finalized report) and submits it off the event loop
+        so a slow result PATCH never blocks case concurrency. ``on_case_start``
+        fires a best-effort ONGOING status ping the moment a case begins, and is
+        present only when the sink exposes a ``case_started`` method. Both are
+        engine-agnostic — any engine that invokes the hooks gets the behaviour.
+        A streaming error is swallowed here — the case is left un-streamed and
+        ``finalize`` reconciles it; a broken upload must never fail a case.
         """
         if result_sink is None:
-            return None
+            return None, None
         begin = getattr(result_sink, "begin_stream", None)
         submit_case = getattr(result_sink, "submit_case", None)
         if begin is None or submit_case is None:
-            return None
+            return None, None
         try:
             streaming = bool(begin(spec, plan))
         except Exception as exc:
@@ -186,9 +193,9 @@ class SimulationRunner:
                 exc_info=redacted_exc_info(exc),
                 extra={"run_id": spec.run_id},
             )
-            return None
+            return None, None
         if not streaming:
-            return None
+            return None, None
 
         evidence = [
             EvidenceSourceSummary(
@@ -214,7 +221,25 @@ class SimulationRunner:
                     extra={"run_id": run_id, "case_index": index},
                 )
 
-        return _on_case_complete
+        # Optional per-case start hook — present only if the sink supports it.
+        # Marks the row ONGOING when its case begins; never fails the case.
+        case_started = getattr(result_sink, "case_started", None)
+        on_case_start: Callable[[int], Any] | None = None
+        if case_started is not None:
+
+            async def _on_case_start(index: int) -> None:
+                try:
+                    await asyncio.to_thread(case_started, index)
+                except Exception as exc:
+                    logger.error(
+                        "Simulation stream case start ping failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={"run_id": run_id, "case_index": index},
+                    )
+
+            on_case_start = _on_case_start
+
+        return on_case_start, _on_case_complete
 
     def _failure_report(
         self,
