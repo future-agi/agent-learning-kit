@@ -123,9 +123,10 @@ python oss/simulation-acceptance/run_voice_case.py 2.1.2 --scenario <scenario>.j
 python oss/simulation-acceptance/run_voice_case.py 2.1.2 --scenario <scenario>.json
 ```
 
-`2.1.2` is inbound, where the caller speaks first; `2.2.2` is outbound, where the agent does. Both
-work with a generated scenario. Without `--scenario` the command behaves exactly as before;
-`--no-mock-tools`, `--no-grade` and `--no-trace` turn off each added part.
+`2.1.2` is inbound, where the caller speaks first; `2.2.2` is outbound, where the agent does.
+Inbound is the path that has been exercised; outbound has had a single successful run. Without
+`--scenario` the command behaves exactly as before; `--no-mock-tools`, `--no-grade` and
+`--no-trace` turn off each added part.
 
 Alongside the usual `manifest.json`, `report.json` and `recordings/`, the run writes `checks.json`
 (each checkpoint and its verdict) and `trace.json` / `trace.md` (the turns, the tool calls with
