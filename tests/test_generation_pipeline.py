@@ -1212,3 +1212,51 @@ def test_a_mock_the_runtime_cannot_read_is_refused():
         "mock_responses": {tool: {"content": "added", "state_updates": {"order": []}}}
     }
     assert not [p for p in validate_scenario(record, contract) if p.startswith("mock[")]
+
+
+def test_generated_scenario_becomes_a_simulator_prompt():
+    """The generated instruction drives the existing voice persona template.
+
+    Nothing about the template is re-implemented here: the scenario supplies the situation, the
+    objective and, crucially, the disclosure rules, which are what make an elicitation test mean
+    anything. A caller who volunteers the drink is not testing whether the agent asks for it.
+    """
+    from fi.alk.generation.simulate_bridge import (
+        disclosure_instructions,
+        persona_from_record,
+        simulator_prompt,
+    )
+
+    record = json.loads(json.dumps(SCENARIO))
+    record["facts"] = [
+        {"key": "drink_choice", "value": "Coca-Cola", "disclosure": "on_request"},
+        {"key": "meal_choice", "value": "Big Mac Combo", "disclosure": "volunteer"},
+        {"key": "loyalty_number", "value": "99887", "disclosure": "withhold"},
+    ]
+    record["max_reasonable_turns"] = 6
+
+    persona = persona_from_record(record)
+    assert persona.situation == record["agent_input"]
+    assert {f.key for f in persona.knowledge} == {
+        "drink_choice",
+        "meal_choice",
+        "loyalty_number",
+    }
+
+    instructions = disclosure_instructions(record)
+    # Each fact sits under the rule that governs it, not in one undifferentiated list.
+    assert instructions.index("Say this early") < instructions.index("meal choice")
+    assert instructions.index("until the agent asks") < instructions.index(
+        "drink choice"
+    )
+    assert instructions.index("Never reveal this") < instructions.index(
+        "loyalty number"
+    )
+    assert "about 6 of your turns" in instructions
+
+    prompt = simulator_prompt(
+        record, call_type="inbound", agent_name="drive-thru assistant"
+    )
+    assert record["agent_input"] in prompt
+    assert "ADDITIONAL SIMULATOR INSTRUCTIONS" in prompt
+    assert "CONVERSATION EXECUTION RULES" in prompt  # the voice rules still apply
