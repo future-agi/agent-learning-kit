@@ -115,16 +115,24 @@ Three moving parts:
 3. **`persona_from_record`** turns the scenario into the simulated caller, including the disclosure
    rules that make an elicitation test mean anything.
 
-Set `ALK_SCENARIO` to a generated scenario file and the acceptance runner uses it instead of its
-built-in persona:
+One command runs the whole thing: it serves the scenario's mocks, points the assistant at them,
+places the call, grades the checkpoints and writes the trace.
 
 ```bash
-export ALK_SCENARIO=artifacts/scenarios/scenarios/<id>.json
-python oss/simulation-acceptance/run_voice_case.py 2.1.2 --dry-run   # expect dry_run_passed
-python oss/simulation-acceptance/run_voice_case.py 2.1.2
+python oss/simulation-acceptance/run_voice_case.py 2.1.2 --scenario <scenario>.json --dry-run
+python oss/simulation-acceptance/run_voice_case.py 2.1.2 --scenario <scenario>.json
 ```
 
-Afterwards, grade it:
+`2.1.2` is inbound, where the caller speaks first; `2.2.2` is outbound, where the agent does. Both
+work with a generated scenario. Without `--scenario` the command behaves exactly as before;
+`--no-mock-tools`, `--no-grade` and `--no-trace` turn off each added part.
+
+Alongside the usual `manifest.json`, `report.json` and `recordings/`, the run writes `checks.json`
+(each checkpoint and its verdict) and `trace.json` / `trace.md` (the turns, the tool calls with
+their arguments, the resulting state, and the verdict). The exit code is non-zero when the
+scenario's own checks fail, even if the conversation completed, so it can gate CI directly.
+
+To grade a run yourself:
 
 ```python
 from fi.alk.generation.checks import evaluate_scenario
