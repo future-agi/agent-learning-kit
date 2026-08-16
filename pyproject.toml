@@ -33,6 +33,7 @@ classifiers = [
   "Topic :: Software Development :: Testing",
 ]
 dependencies = [
+  "claude-agent-sdk>=0.2.139",
   "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
   "httpx>=0.24.0",
