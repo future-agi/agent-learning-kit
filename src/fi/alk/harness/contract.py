@@ -165,6 +165,13 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+    # A tool genuinely taking no arguments is ordinary; every tool taking none is not. It means
+    # the arguments were read and then not recorded, and since the world, the probes and the
+    # checkpoints are all built from these names, nothing downstream can detect their absence.
+    if contract.tools and not any(tool.args for tool in contract.tools):
+        problems.append(
+            "no-arguments-on-any-tool: list each tool's exact parameter names in args"
+        )
     if not contract.real_use_cases:
         problems.append("no-use-cases")
     # Iterate the tools, not tool_names(): that returns a set, so duplicates collapse before

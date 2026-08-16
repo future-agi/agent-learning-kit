@@ -62,6 +62,20 @@ class Db:
         return cursor.rowcount
 
 
+def _is_refusal(raised: BaseException) -> bool:
+    """Whether an exception is the world saying no, rather than the world falling over.
+
+    Matched by name as well as by identity. A generated handler often declares its own
+    ``ToolError`` rather than using the one already in scope, which is defensive and sensible
+    from where it sits, and would otherwise turn every deliberate refusal into a reported crash.
+    Relying on an invisible convention being followed is not a way to decide something this
+    load-bearing.
+    """
+    if isinstance(raised, ToolError):
+        return True
+    return any(base.__name__ == "ToolError" for base in type(raised).__mro__)
+
+
 @dataclass
 class Call:
     """One tool call and what the world did with it."""
@@ -159,17 +173,17 @@ class GeneratedWorld(EnvironmentAdapter):
             if not callable(handle):
                 raise RuntimeError("handler defines no handle(args, db)")
             value = handle(args, Db(self.connection))
-        except ToolError as refusal:
-            return self._record(
-                Call(
-                    name=name,
-                    arguments=args,
-                    ok=False,
-                    refused=True,
-                    error=str(refusal),
+        except Exception as raised:
+            if _is_refusal(raised):
+                return self._record(
+                    Call(
+                        name=name,
+                        arguments=args,
+                        ok=False,
+                        refused=True,
+                        error=str(raised),
+                    )
                 )
-            )
-        except Exception as crash:
             # Our bug, not the agent's. Labelled differently so a run is never scored
             # against a world that fell over.
             return self._record(
@@ -177,7 +191,7 @@ class GeneratedWorld(EnvironmentAdapter):
                     name=name,
                     arguments=args,
                     ok=False,
-                    error=f"{type(crash).__name__}: {crash}",
+                    error=f"{type(raised).__name__}: {raised}",
                 )
             )
         return self._record(Call(name=name, arguments=args, result=value))
