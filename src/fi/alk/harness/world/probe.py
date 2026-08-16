@@ -24,6 +24,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 from ..contract import AgentContract, ToolSpec
+from .expectations import check_state
+from .kinds import WorldKind, for_contract
+from .kinds import resolve as _resolve_kind
 from .runtime import GeneratedWorld
 
 HAPPY = "happy"
@@ -93,17 +96,6 @@ def _valid_arguments(tool: ToolSpec) -> dict[str, Any]:
     return arguments
 
 
-def _seeded_values(world: GeneratedWorld) -> set[str]:
-    """Every value present anywhere in the world, for checking the catalogue is complete."""
-    present: set[str] = set()
-    for rows in world.state().values():
-        for row in rows:
-            for value in row.values():
-                if isinstance(value, str) and value:
-                    present.add(value)
-    return present
-
-
 def _is_a_real_identifier(value: Any) -> bool:
     """Whether a permitted value names a record, rather than being an enum like 'M' or 'null'."""
     if not isinstance(value, str) or value in ("", "null", "none", "None"):
@@ -111,7 +103,9 @@ def _is_a_real_identifier(value: Any) -> bool:
     return len(value) > 2 and not value.isdigit()
 
 
-def _missing_catalogue(world: GeneratedWorld, contract: AgentContract) -> list[str]:
+def _missing_catalogue(
+    world: GeneratedWorld, contract: AgentContract, kind: WorldKind
+) -> list[str]:
     """Identifiers the contract says a tool accepts that are nowhere in the seeded world.
 
     The gap this closes is a whole category left unseeded. Every call naming a sauce then fails,
@@ -119,7 +113,7 @@ def _missing_catalogue(world: GeneratedWorld, contract: AgentContract) -> list[s
     nothing can be ordered scores perfectly. Whether the catalogue is complete cannot be settled
     by behaviour, so it is checked against the data.
     """
-    present = _seeded_values(world)
+    present = kind.values_present(world)
     missing: list[str] = []
     for tool in contract.tools:
         for arg, values in (tool.arg_values or {}).items():
@@ -156,11 +150,21 @@ def _reads_argument(source: str, name: str) -> bool:
     return re.search(pattern, source) is not None
 
 
-def _looks_like_an_identifier(name: str, declared: str) -> bool:
-    """Whether an argument names something that has to exist for the call to make sense."""
-    if name.endswith(("_id", "_ids", "id", "_key", "_ref")):
-        return True
-    return declared in ("str", "list[str]", "List[str]")
+def _looks_like_an_identifier(name: str, _declared: str = "") -> bool:
+    """Whether an argument names a record that has to exist for the call to make sense.
+
+    Decided by the name alone. Treating every ``str`` argument as a catalogue was a trap: a
+    ``size`` accepting "Medium" and "Large" then demanded rows called Medium and Large in the
+    world, which can never be seeded sensibly. The only ways out were to invent nonsense rows or
+    to edit the contract, so a check meant to catch a missing menu instead pushed towards
+    corrupting the record of what the agent is.
+
+    A missed catalogue is a check that does not fire. A false one is a stage with no legal move,
+    which is much worse, so this stays narrow.
+    """
+    return (
+        name.endswith(("_id", "_ids", "_key", "_ref", "_code", "_sku")) or name == "id"
+    )
 
 
 def _identifier_arguments(tool: ToolSpec) -> dict[str, Any] | None:
@@ -188,6 +192,7 @@ def probe(
     contract: AgentContract,
     *,
     sequences: Iterable[Mapping[str, Any]] = (),
+    kind: WorldKind | None = None,
 ) -> ProbeReport:
     """Exercise the world and report what it can and cannot do.
 
@@ -196,6 +201,7 @@ def probe(
     from a schema.
     """
     report = ProbeReport()
+    kind = kind or for_contract(contract)
 
     # Every probe runs from the same starting world. Probes mutate, so without reverting
     # between them each one inherits the debris of the last and a check expecting three rows
@@ -215,7 +221,7 @@ def probe(
                 )
             )
 
-    for gap in _missing_catalogue(world, contract):
+    for gap in _missing_catalogue(world, contract, kind):
         report.results.append(
             ProbeResult(
                 gap.split(":")[0],
@@ -224,7 +230,7 @@ def probe(
                 f"the contract accepts values the world does not have: {gap}",
             )
         )
-    if not _missing_catalogue(world, contract):
+    if not _missing_catalogue(world, contract, kind):
         report.results.append(
             ProbeResult("catalogue", DATA, True, "every permitted identifier exists")
         )
@@ -320,8 +326,10 @@ def probe(
     return report
 
 
-def dirty_tables(
-    world: GeneratedWorld, sequences: Iterable[Mapping[str, Any]]
+def dirty_state(
+    world: GeneratedWorld,
+    sequences: Iterable[Mapping[str, Any]],
+    kind: WorldKind | None = None,
 ) -> list[str]:
     """Tables a scenario writes to that already hold rows before anything has happened.
 
@@ -331,14 +339,15 @@ def dirty_tables(
     seven. Which tables are transactional is not guessable from a schema, so it is worked out
     by running the declared sequences and seeing what moves.
     """
+    kind = kind or _resolve_kind("sqlite")
     baseline = world.checkpoint()
-    before = {name: len(rows) for name, rows in world.state().items()}
+    before = kind.mutable_state(world)
     touched: set[str] = set()
     for index, sequence in enumerate(sequences):
         world.revert(baseline)
         _run_sequence(world, sequence, index)
-        for name, rows in world.state().items():
-            if len(rows) != before.get(name, 0):
+        for name, size in kind.mutable_state(world).items():
+            if size != before.get(name, 0):
                 touched.add(name)
     world.revert(baseline)
     return sorted(name for name in touched if before.get(name, 0) > 0)
@@ -365,20 +374,7 @@ def _run_sequence(
         if not call.ok:
             return ProbeResult(name, SEQUENCE, False, f"{call.name}: {call.error}")
 
-    state = world.state()
-    for path, expected in (sequence.get("expect_state") or {}).items():
-        table, _, column = path.partition(".")
-        rows = state.get(table, [])
-        if column == "count":
-            if len(rows) != expected:
-                return ProbeResult(
-                    name,
-                    SEQUENCE,
-                    False,
-                    f"{table} holds {len(rows)} rows, expected {expected}",
-                )
-        elif not any(str(row.get(column)) == str(expected) for row in rows):
-            return ProbeResult(
-                name, SEQUENCE, False, f"no row in {table} has {column}={expected!r}"
-            )
+    failures = check_state(world.state(), sequence.get("expect_state") or {})
+    if failures:
+        return ProbeResult(name, SEQUENCE, False, failures[0])
     return ProbeResult(name, SEQUENCE, True)

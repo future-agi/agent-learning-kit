@@ -197,6 +197,29 @@ def missing_env(case: VoiceCase) -> list[str]:
     return [name for name in case.required_env if not os.environ.get(name, "").strip()]
 
 
+def _harness_scenario() -> "simulate.Scenario | None":
+    """The caller the harness prepared, if this run is driving one of its scenarios.
+
+    ``HARNESS_INSTRUCTION`` is the simulator prompt the environment step wrote with this
+    scenario's values already filled in, so nothing about how a caller behaves is decided here.
+    Without it the built-in acceptance persona is used and this file behaves exactly as before.
+    """
+    instruction = os.environ.get("HARNESS_INSTRUCTION", "").strip()
+    if not instruction:
+        return None
+    return simulate.Scenario(
+        name=os.environ.get("HARNESS_SCENARIO", "harness"),
+        dataset=[
+            simulate.Persona(
+                persona={"name": "customer"},
+                situation=instruction,
+                outcome=os.environ.get("HARNESS_OUTCOME", "")
+                or "Do what you came to do, or accept that you cannot.",
+            )
+        ],
+    )
+
+
 def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
     case = CASES[case_id]
     room_override = os.environ.get("ACCEPTANCE_ROOM_NAME_OVERRIDE", "").strip()
@@ -206,7 +229,7 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
         room_mode="managed",
         room_name_verbatim=bool(room_override),
     )
-    scenario = simulate.Scenario(
+    scenario = _harness_scenario() or simulate.Scenario(
         name=f"acceptance-{case_id}",
         dataset=[
             simulate.Persona(

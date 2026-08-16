@@ -35,7 +35,13 @@ DONE = "done"
 
 @dataclass
 class Event:
-    """One observable thing the stage did."""
+    """One observable thing the stage did.
+
+    ``detail`` carries the data behind what is being shown, not just a label for it: which stage
+    emitted this, and for a tool call the arguments it was made with. A terminal renders a line
+    and ignores the rest; anything richer needs the data, and re-parsing a rendered line to get
+    it back is how a second front end becomes a rewrite.
+    """
 
     kind: str
     text: str = ""
@@ -60,7 +66,18 @@ class Event:
         if self.kind == DONE:
             cost = self.detail.get("cost_usd")
             spent = f" ${cost:.4f}" if isinstance(cost, float) else ""
-            return f"  [{self.detail.get('outcome', '')} turns={self.detail.get('turns', 0)}{spent}]"
+            failure = self.detail.get("error")
+            wrong = self.detail.get("unexpected_model") or []
+            return (
+                f"  [{self.detail.get('outcome', '')} "
+                f"turns={self.detail.get('turns', 0)}{spent}]"
+                + (f"\n  !! {failure}" if failure else "")
+                + (
+                    f"\n  !! billed to {', '.join(wrong)}, which is not what was asked for"
+                    if wrong
+                    else ""
+                )
+            )
         return self.text
 
 
@@ -75,9 +92,42 @@ class Turn:
     outcome: str = ""
     turns: int = 0
     cost_usd: float | None = None
+    error: str = ""
 
 
-_TARGET_KEYS = ("file_path", "path", "pattern", "agent", "tool", "table")
+_TARGET_KEYS = (
+    "file_path",
+    "path",
+    "pattern",
+    "agent",
+    "tool",
+    "tool_name",
+    "table",
+    "name",
+)
+
+
+def _why_it_failed(received: Any) -> str:
+    """What actually went wrong, said in terms somebody can act on."""
+    status = getattr(received, "api_error_status", None)
+    errors = getattr(received, "errors", None) or []
+    said = "; ".join(str(error) for error in errors)[:400]
+    if "invalid_rapt" in said or "invalid_grant" in said:
+        return (
+            "the provider rejected the credentials. GOOGLE_APPLICATION_CREDENTIALS is probably "
+            "not set in this shell, so it fell back to your gcloud login. Load the env file "
+            "first: set -a; . ./.env.acceptance; set +a"
+        )
+    return f"the model call failed{f' ({status})' if status else ''}: {said or 'no detail given'}"
+
+
+def readable(tool_name: str) -> str:
+    """A tool's name as somebody reading along would say it.
+
+    ``mcp__scenarios__try_calls`` is how the model addresses it and is noise to anybody else.
+    """
+    bare = tool_name.rsplit("__", 1)[-1]
+    return bare.replace("_", " ")
 
 
 def _target(payload: Any) -> str:
@@ -125,6 +175,10 @@ class Stage:
         self.name = name
         self.session_id: str | None = None
         self.history: list[Turn] = []
+        # What actually got billed, read back rather than assumed. Asking for a model is not the
+        # same as getting one: the CLI has its own default, and a request that quietly does not
+        # take shows up only on the invoice, weeks later, as a number nobody can explain.
+        self.models_used: set[str] = set()
 
     async def __aenter__(self) -> "Stage":
         self._client = ClaudeSDKClient(options=self._options)
@@ -148,6 +202,9 @@ class Stage:
         turn = Turn()
         async for received in self.client.receive_response():
             for event in self._events(received, turn):
+                # Which stage this came from, stamped once here rather than by every caller,
+                # so a front end showing several stages can tell them apart.
+                event.detail.setdefault("stage", self.name)
                 turn.events.append(event)
                 yield event
         self.history.append(turn)
@@ -169,22 +226,40 @@ class Stage:
                         Event(
                             TOOL,
                             tool=block.name,
-                            detail={"target": _target(block.input)},
+                            detail={
+                                "target": _target(block.input),
+                                "arguments": block.input,
+                                "label": readable(block.name),
+                            },
                         )
                     )
             return events
         if isinstance(received, ResultMessage):
-            turn.outcome = received.subtype
+            # subtype alone is not the outcome. A call that failed upstream still arrives with
+            # subtype "success", so reporting it verbatim tells somebody their stage worked when
+            # nothing happened at all, and they go looking for the fault in their own request.
+            failed = bool(
+                getattr(received, "is_error", False)
+                or getattr(received, "api_error_status", None)
+            )
+            turn.outcome = "failed" if failed else received.subtype
             turn.turns = received.num_turns
             turn.cost_usd = received.total_cost_usd
+            turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
+            billed = set(getattr(received, "model_usage", None) or {})
+            self.models_used |= billed
+            unexpected = self.unexpected_models()
             return [
                 Event(
                     DONE,
                     detail={
-                        "outcome": received.subtype,
+                        "outcome": turn.outcome,
                         "turns": received.num_turns,
                         "cost_usd": received.total_cost_usd,
+                        "error": turn.error,
+                        "models": sorted(billed),
+                        "unexpected_model": sorted(unexpected),
                     },
                 )
             ]
@@ -218,6 +293,13 @@ class Stage:
             if on_event:
                 on_event(event)
         return self.history[-1]
+
+    def unexpected_models(self) -> set[str]:
+        """Models that were billed but not the one asked for."""
+        asked = getattr(self._options, "model", None)
+        if not asked:
+            return set()
+        return {used for used in self.models_used if asked.split("-2")[0] not in used}
 
     @property
     def spent_usd(self) -> float:

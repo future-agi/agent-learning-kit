@@ -108,6 +108,34 @@ def contract_tools(destination: Path) -> Any:
     )
 
 
+_JSON_TYPES = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def schema(properties: dict[str, type], required: list[str]) -> dict[str, Any]:
+    """A tool's inputs, saying which of them are actually required.
+
+    Handing the decorator a plain ``{name: type}`` mapping marks every parameter mandatory, so a
+    tool with an optional field refuses any call that leaves it out — "Input validation error:
+    'seed' is a required property" — for a field the tool itself treats as optional. The model
+    then has to guess that it must pass an empty value, and burns turns finding out.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            name: {"type": _JSON_TYPES.get(kind, "string")}
+            for name, kind in properties.items()
+        },
+        "required": list(required),
+    }
+
+
 def qualified(server: str, tool_name: str) -> str:
     """The name an in-process MCP tool is granted under."""
     return f"mcp__{server}__{tool_name}"
