@@ -57,6 +57,8 @@ class Conversation:
     workspace: Path | None = None
     stage_name: str = ""
     stage: Stage | None = None
+    # Set by the flow tool when the open stage hands a request to the stage that owns it.
+    _handoff: dict = field(default_factory=dict)
     spent_usd: float = 0.0
     history: list[str] = field(default_factory=list)
     _found: dict[str, Any] = field(default_factory=dict)
@@ -113,6 +115,7 @@ class Conversation:
             self.stage, self._found = reception_stage.open_stage(
                 cwd=self.workspace, ask=self.ask
             )
+            self._grant_flow()
             await self.stage.__aenter__()
             return reception_stage.opening()
 
@@ -121,21 +124,23 @@ class Conversation:
         # Only re-reading the agent needs to know where it lives.
         if self.source is None and self.contract is None:
             raise RuntimeError("nobody has said which agent this is about yet")
+        if stage_name == UNDERSTAND and self.source is None:
+            # This guard has to come before the stage opens: with a contract on disk but no
+            # source, reopening understand would otherwise die on source.briefing() instead of
+            # saying what is actually missing.
+            raise RuntimeError("cannot re-read the agent without knowing where it lives")
         if stage_name == UNDERSTAND:
             self.stage, _ = understand_stage.open_stage(
                 self.source, out=self.out, ask=self.ask
             )
             opening = understand_stage.opening(self.source)
+            self._grant_flow()
             await self.stage.__aenter__()
             return opening
 
         contract = self.contract
         if contract is None:
             raise RuntimeError("cannot go further before there is a contract")
-        if self.source is None and stage_name == UNDERSTAND:
-            raise RuntimeError(
-                "cannot re-read the agent without knowing where it lives"
-            )
         if stage_name == BUILD:
             self.stage, _ = build_stage.open_stage(contract, out=self.out, ask=self.ask)
             opening = build_stage.opening(contract)
@@ -153,6 +158,7 @@ class Conversation:
                 contract, out=self.out, wanted=wanted, ask=self.ask
             )
             opening = scenario_stage.opening(contract, wanted, written)
+        self._grant_flow()
         await self.stage.__aenter__()
         return opening
 
@@ -162,6 +168,54 @@ class Conversation:
             return None
         following = _NEXT.get(self.stage_name)
         return None if following in (None, DONE) else following
+
+    def _flow_server(self):
+        """One tool every stage gets: handing a request to the stage that owns it.
+
+        "Create the world", said while the understand stage is open, used to land in a session
+        with no build tools, which could only apologise. The stage is the one that knows the
+        request is not its job, so the handoff is a tool it calls; whether moving on is allowed
+        is still decided by code, from whether this stage's artifact exists.
+        """
+        from claude_agent_sdk import create_sdk_mcp_server, tool
+
+        from .tools import schema
+
+        wanted = self._handoff
+
+        @tool(
+            "hand_to_next_stage",
+            "The person asked for something that belongs to the NEXT stage of this harness — "
+            "building the environment when the contract is done, writing scenarios when the "
+            "environment is built, running them when they are written. Call this with their "
+            "request, word for word; the conversation moves forward and their request is "
+            "handled there. Never call it to escape work that is this stage's own.",
+            schema({"request": str}, []),
+        )
+        async def hand_to_next_stage(args: dict[str, Any]) -> dict[str, Any]:
+            if not self._artifact_for(self.stage_name):
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "This stage has not produced its artifact yet, so there is "
+                        "nothing to move on from. Finish this stage's work first.",
+                    }],
+                    "is_error": True,
+                }
+            if self.next_stage() is None:
+                return {
+                    "content": [{"type": "text", "text": "there is no stage after this one"}],
+                    "is_error": True,
+                }
+            wanted["request"] = str(args.get("request") or "").strip() or "continue"
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Handed over. Say one short line that you are moving on, and stop.",
+                }]
+            }
+
+        return create_sdk_mcp_server(name="flow", version="0.1.0", tools=[hand_to_next_stage])
 
     # -- talking ---------------------------------------------------------------------
 
@@ -191,6 +245,10 @@ class Conversation:
             return SCENARIOS
         return RUN
 
+    def _grant_flow(self) -> None:
+        if self.stage is not None:
+            self.stage.grant("flow", self._flow_server(), ["hand_to_next_stage"], ask=self.ask)
+
     async def say(
         self, message: str, on_event: Callable[..., Any] | None = None
     ) -> None:
@@ -199,6 +257,17 @@ class Conversation:
         if self.stage is None:
             await self.open_quietly()
         await self.stage.say(message, on_event=on_event)  # type: ignore[union-attr]
+        # A handoff moves the request, not just the conversation: the next stage opens and is
+        # given the person's own words. Bounded, because each hop is a model turn.
+        for _hop in range(3):
+            request = self._handoff.pop("request", None)
+            if not request:
+                break
+            following = self.next_stage()
+            if following is None:
+                break
+            await self._open(following)
+            await self.stage.say(request, on_event=on_event)  # type: ignore[union-attr]
         await self._settle(on_event=on_event)
 
     async def _settle(self, on_event: Callable[..., Any] | None = None) -> None:
