@@ -188,6 +188,23 @@ class GeneratedWorld(EnvironmentAdapter):
 
     # -- state -----------------------------------------------------------------------
 
+    def checkpoint(self) -> sqlite3.Connection:
+        """A copy of the current data, to come back to.
+
+        Probes mutate: ordering an item inserts a row. Without a way back, each probe runs
+        against the debris of the ones before it, and a check expecting three rows finds seven.
+        The same restore-a-fresh-copy discipline scenarios use, applied to the gate itself.
+        """
+        copy = sqlite3.connect(":memory:")
+        with copy:
+            self.connection.backup(copy)
+        return copy
+
+    def revert(self, checkpoint: sqlite3.Connection) -> None:
+        """Put the data back as it was when the checkpoint was taken."""
+        with self.connection:
+            checkpoint.backup(self.connection)
+
     def state(self) -> dict[str, Any]:
         """Every table and its rows: what the checks compare against after a run."""
         tables = Db(self.connection).query(

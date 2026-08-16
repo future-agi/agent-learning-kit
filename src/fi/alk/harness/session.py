@@ -28,6 +28,7 @@ from claude_agent_sdk import (
 
 TEXT = "text"
 TOOL = "tool"
+RESULT = "result"
 ARTIFACT = "artifact"
 DONE = "done"
 
@@ -48,6 +49,12 @@ class Event:
         if self.kind == TOOL:
             target = self.detail.get("target") or ""
             return f"  [{self.tool}{' ' + target if target else ''}]"
+        if self.kind == RESULT:
+            marker = "!" if self.detail.get("is_error") else ">"
+            body = "\n".join(
+                f"  {marker} {row}" for row in self.text.splitlines() if row
+            )
+            return body or f"  {marker} (no output)"
         if self.kind == ARTIFACT:
             return f"  [saved {self.detail.get('path', '')}]"
         if self.kind == DONE:
@@ -82,6 +89,16 @@ def _target(payload: Any) -> str:
         if isinstance(value, str) and value:
             return value if len(value) <= 80 else value[:77] + "..."
     return ""
+
+
+def _result_text(block: ToolResultBlock, limit: int = 600) -> str:
+    content = block.content
+    if isinstance(content, list):
+        content = "\n".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    text = content if isinstance(content, str) else str(content)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _saved_path(block: ToolResultBlock) -> str:
@@ -175,11 +192,21 @@ class Stage:
         if isinstance(blocks, list):
             events = []
             for block in blocks:
-                if isinstance(block, ToolResultBlock):
-                    path = _saved_path(block)
-                    if path:
-                        turn.artifacts.append(path)
-                        events.append(Event(ARTIFACT, detail={"path": path}))
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                # What a tool said back is the only view a caller has of whether the work is
+                # going well. Dropping it leaves a run that can only be diagnosed by guessing.
+                events.append(
+                    Event(
+                        RESULT,
+                        text=_result_text(block),
+                        detail={"is_error": bool(getattr(block, "is_error", False))},
+                    )
+                )
+                path = _saved_path(block)
+                if path:
+                    turn.artifacts.append(path)
+                    events.append(Event(ARTIFACT, detail={"path": path}))
             return events
         return []
 

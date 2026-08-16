@@ -35,7 +35,9 @@ def open_stage(
     destination = out or artifact_dir(contract.agent)
     server, _world = world_tools(contract, destination)
     options = ClaudeAgentOptions(
-        system_prompt=f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief()}",
+        system_prompt=(
+            f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
+        ),
         # No file tools and no shell. Everything this stage can do goes through a tool that
         # executes it and reports back, which is what makes the guardrails meaningful.
         allowed_tools=[
