@@ -89,8 +89,13 @@ class AgentContract(BaseModel):
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
 
-    def brief(self, *, full_schema: bool = True) -> str:
-        """The grounding block handed to the model on every downstream call."""
+    def brief(self, *, full_schema: bool = True, with_data: bool = False) -> str:
+        """The grounding block handed to the model on every downstream call.
+
+        ``with_data`` includes the agent's real starting records rather than only their shape.
+        A stage that writes scenarios needs to know a menu exists; a stage that builds the world
+        has to reproduce it row for row, and a shape without records is not enough to do that.
+        """
         lines: list[str] = []
         for tool in self.tools:
             signature = ", ".join(
@@ -118,8 +123,16 @@ class AgentContract(BaseModel):
             )
         if self.data_schema and full_schema:
             parts.append(
-                "REAL DATA / SCHEMA (ground every value and id in this; never invent):\n"
-                + json.dumps(self.data_schema)[:2400]
+                "DATA SHAPE (the fields each record has):\n"
+                + json.dumps(self.data_schema)[: 24000 if with_data else 2400]
+            )
+        if self.base_environment and with_data:
+            parts.append(
+                "THE AGENT'S REAL STARTING DATA. Reproduce this exactly, including anything\n"
+                "that looks like a mistake: a misspelled id, an item marked unavailable, an odd\n"
+                "price. The world is a replica of what the agent has, not a corrected version,\n"
+                "and a test written against a corrected world will not catch the real bug.\n"
+                + json.dumps(self.base_environment, ensure_ascii=False)
             )
         if self.grading_notes:
             parts.append(f"GRADING NOTES for this agent:\n{self.grading_notes[:900]}")

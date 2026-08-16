@@ -194,6 +194,120 @@ def test_load_returns_none_when_the_stage_produced_nothing(tmp_path):
     assert load(tmp_path) is None
 
 
+# --- the world gate ------------------------------------------------------------------
+
+
+def _cart_world():
+    from fi.alk.harness.world import GeneratedWorld
+
+    class W(GeneratedWorld):
+        name = "cart"
+        tools = [{"name": "add"}, {"name": "lst"}]
+        handlers = {
+            "add": (
+                "def handle(args, db):\n"
+                "    if 'item_id' not in args: raise ToolError('item_id is required')\n"
+                "    m = db.one('SELECT * FROM menu WHERE id=?', [args['item_id']])\n"
+                "    if not m: raise ToolError('no item %r' % args['item_id'])\n"
+                "    db.execute('INSERT INTO cart (item_id) VALUES (?)', [args['item_id']])\n"
+                "    return {'ok': 1}\n"
+            ),
+            "lst": "def handle(args, db):\n    return db.query('SELECT * FROM cart')\n",
+        }
+
+    world = W(":memory:")
+    world.connection.executescript(
+        "CREATE TABLE menu(id TEXT PRIMARY KEY); CREATE TABLE cart(item_id TEXT);"
+    )
+    world.connection.execute("INSERT INTO menu VALUES ('big_mac')")
+    world.connection.commit()
+    contract = AgentContract(
+        agent="cart",
+        real_use_cases=["add an item"],
+        tools=[
+            ToolSpec(name="add", args=["item_id"], arg_values={"item_id": ["big_mac"]}),
+            ToolSpec(name="lst"),
+        ],
+    )
+    return world, contract
+
+
+_SEQUENCE = [
+    {
+        "name": "add-then-list",
+        "calls": [
+            {"tool": "add", "arguments": {"item_id": "big_mac"}},
+            {"tool": "lst", "arguments": {}},
+        ],
+        "expect_state": {"cart.count": 1},
+    }
+]
+
+
+def test_a_sound_world_passes_every_probe():
+    from fi.alk.harness.world import probe
+
+    world, contract = _cart_world()
+    report = probe(world, contract, sequences=_SEQUENCE)
+    assert report.score == 1.0, report.summary()
+
+
+def test_probing_leaves_the_world_exactly_as_it_found_it():
+    """Probes mutate. Without reverting between them, each inherits the last one's debris and
+    a sequence expecting one row finds several, which reads as a bug in the world."""
+    from fi.alk.harness.world import probe
+
+    world, contract = _cart_world()
+    probe(world, contract, sequences=_SEQUENCE)
+    assert world.state()["cart"] == []
+
+
+def test_probing_is_repeatable():
+    from fi.alk.harness.world import probe
+
+    world, contract = _cart_world()
+    first = probe(world, contract, sequences=_SEQUENCE).score
+    second = probe(world, contract, sequences=_SEQUENCE).score
+    assert first == second == 1.0
+
+
+def test_a_tool_that_succeeds_on_a_nonexistent_id_fails_the_gate():
+    """The defect the whole thing exists to catch: a call that should have been refused."""
+    from fi.alk.harness.world import probe
+
+    world, contract = _cart_world()
+    world.handlers["add"] = (
+        "def handle(args, db):\n"
+        "    db.execute('INSERT INTO cart (item_id) VALUES (?)', [args.get('item_id')])\n"
+        "    return {'ok': 1}\n"
+    )
+    report = probe(world, contract, sequences=_SEQUENCE)
+    assert any("does not exist" in failure.detail for failure in report.failures), (
+        report.summary()
+    )
+    assert report.score < 0.85
+
+
+def test_a_crash_is_distinguished_from_a_refusal():
+    from fi.alk.harness.world import probe
+
+    world, contract = _cart_world()
+    world.handlers["add"] = (
+        "def handle(args, db):\n    return {'id': args['item_id']}\n"
+    )
+    report = probe(world, contract, sequences=_SEQUENCE)
+    assert any("crashed instead of refusing" in f.detail for f in report.failures)
+
+
+def test_a_world_reverts_to_a_checkpoint():
+    world, _ = _cart_world()
+    mark = world.checkpoint()
+    world.call("add", {"item_id": "big_mac"})
+    assert len(world.state()["cart"]) == 1
+    world.revert(mark)
+    assert world.state()["cart"] == []
+
+
 # --- wiring --------------------------------------------------------------------------
 
 

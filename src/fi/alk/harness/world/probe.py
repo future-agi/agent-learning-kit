@@ -118,6 +118,11 @@ def probe(
     """
     report = ProbeReport()
 
+    # Every probe runs from the same starting world. Probes mutate, so without reverting
+    # between them each one inherits the debris of the last and a check expecting three rows
+    # finds seven. That is a fault in the harness, not in the world being checked.
+    baseline = world.checkpoint()
+
     for tool in contract.tools:
         if tool.name not in world.handlers:
             report.results.append(
@@ -135,6 +140,7 @@ def probe(
         if tool.name not in world.handlers:
             continue
 
+        world.revert(baseline)
         call = world.call(tool.name, _valid_arguments(tool))
         # A refusal here is acceptable: the contract's first listed value may genuinely be
         # invalid in the seeded world. A crash never is.
@@ -149,6 +155,7 @@ def probe(
 
         bogus = _identifier_arguments(tool)
         if bogus is not None:
+            world.revert(baseline)
             call = world.call(tool.name, bogus)
             report.results.append(
                 ProbeResult(
@@ -166,6 +173,7 @@ def probe(
             )
 
         if tool.args:
+            world.revert(baseline)
             missing = _valid_arguments(tool)
             missing.pop(tool.args[0], None)
             call = world.call(tool.name, missing)
@@ -184,6 +192,7 @@ def probe(
                 )
             )
 
+    world.revert(baseline)
     unknown = world.call(ABSENT, {})
     report.results.append(
         ProbeResult(
@@ -195,8 +204,11 @@ def probe(
     )
 
     for index, sequence in enumerate(sequences):
+        world.revert(baseline)
         report.results.append(_run_sequence(world, sequence, index))
 
+    # Leave the world as the builder left it, not as the last probe left it.
+    world.revert(baseline)
     return report
 
 

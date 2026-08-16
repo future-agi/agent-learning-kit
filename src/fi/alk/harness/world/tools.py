@@ -135,18 +135,69 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
     @tool(
         "declare_sequence",
         "Declare a series of calls whose end state should hold, so consistency across calls is "
-        "checked. expect_state keys are 'table.column' or 'table.count'.",
+        "checked. Each call is {tool, arguments}. expect_state keys are 'table.column' or "
+        "'table.count'. Declaring the same name again replaces it, so a mistake is fixed by "
+        "redeclaring rather than accumulating.",
         {"name": str, "calls": list, "expect_state": dict},
     )
     async def declare_sequence(args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args.get("name") or f"sequence-{len(sequences)}")
+        calls = args.get("calls") or []
+
+        # Checked here rather than at save time. A malformed sequence that only fails three
+        # tools later reads as a mystery, and there is nothing to learn from it in between.
+        problems: list[str] = []
+        if not calls:
+            problems.append("no calls: a sequence with no calls checks nothing")
+        for index, step in enumerate(calls):
+            if not isinstance(step, dict):
+                problems.append(
+                    f"call {index} is not an object with a tool and arguments"
+                )
+                continue
+            called = str(step.get("tool") or "")
+            if not called:
+                problems.append(f"call {index} has no tool name")
+            elif called not in world.handlers:
+                problems.append(
+                    f"call {index} names {called!r}, which has no handler yet. Defined: "
+                    f"{', '.join(sorted(world.handlers)) or 'none'}"
+                )
+        if problems:
+            return _err(f"{name} not declared:\n  - " + "\n  - ".join(problems))
+
+        replaced = any(existing["name"] == name for existing in sequences)
+        sequences[:] = [existing for existing in sequences if existing["name"] != name]
         sequences.append(
             {
-                "name": str(args.get("name") or f"sequence-{len(sequences)}"),
-                "calls": args.get("calls") or [],
+                "name": name,
+                "calls": calls,
                 "expect_state": args.get("expect_state") or {},
             }
         )
-        return _ok(f"{len(sequences)} sequences declared")
+        verb = "replaced" if replaced else "declared"
+        return _ok(
+            f"{name} {verb}. {len(sequences)} sequences: {', '.join(s['name'] for s in sequences)}"
+        )
+
+    @tool(
+        "drop_sequence",
+        "Remove a declared sequence by name, or all of them with name '*'.",
+        {"name": str},
+    )
+    async def drop_sequence(args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args.get("name") or "")
+        if name == "*":
+            sequences.clear()
+            return _ok("all sequences dropped")
+        before = len(sequences)
+        sequences[:] = [existing for existing in sequences if existing["name"] != name]
+        if len(sequences) == before:
+            return _err(
+                f"no sequence called {name!r}. Declared: "
+                f"{', '.join(s['name'] for s in sequences) or 'none'}"
+            )
+        return _ok(f"{name} dropped. {len(sequences)} left")
 
     @tool(
         "check_world",
@@ -193,6 +244,7 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             define_handler,
             run_tool,
             declare_sequence,
+            drop_sequence,
             check_world,
             save_world,
         ],
@@ -206,6 +258,7 @@ TOOL_NAMES = (
     "define_handler",
     "run_tool",
     "declare_sequence",
+    "drop_sequence",
     "check_world",
     "save_world",
 )
