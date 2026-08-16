@@ -1330,3 +1330,64 @@ def test_writing_new_results_keeps_the_ones_not_rerun(tmp_path):
     kept = {r["scenario"]: r for r in load_results(tmp_path)}
     assert kept["a"]["passed"] is True
     assert kept["b"]["passed"] is True and kept["b"]["transcript"] == "hello"
+
+
+def test_submit_contract_requires_only_what_the_gate_demands(tmp_path):
+    """Every field marked required is rejected by the schema layer one at a time, a full model
+    turn each, before accept_contract can explain anything. Only the fields validate_contract
+    refuses to live without may be required; the rest are optional and gated with real messages."""
+    import asyncio
+
+    from mcp.types import ListToolsRequest
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def schema_of():
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "ListToolsRequest":
+                result = await handler(ListToolsRequest(method="tools/list"))
+                return result.root.tools[0].inputSchema
+        return {}
+
+    schema = asyncio.run(schema_of())
+    assert sorted(schema.get("required", [])) == ["agent", "real_use_cases", "tools"]
+
+
+def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
+    """No rules and no prompt excerpt on a conversational agent almost always means the prompt
+    was not found, so the first submission bounces with directions. The second goes through,
+    because a gate with no way past would permanently block an agent that genuinely has none."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "CallToolRequest":
+                request = CallToolRequest(
+                    method="tools/call",
+                    params=CallToolRequestParams(name="submit_contract", arguments=payload),
+                )
+                answer = await handler(request)
+                return answer.root.content[0].text
+
+    payload = {
+        "agent": "quiet",
+        "tools": [{"name": "act", "args": ["x"]}],
+        "real_use_cases": ["do the thing"],
+    }
+    first = asyncio.run(call(dict(payload)))
+    assert "system_prompt_excerpt" in first and "submit again" in first
+    assert not (tmp_path / "contract.json").exists()
+
+    second = asyncio.run(call(dict(payload)))
+    assert "Accepted" in second
+    assert (tmp_path / "contract.json").exists()

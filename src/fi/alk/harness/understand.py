@@ -47,8 +47,13 @@ def open_stage(
 
 
 def opening(source: AgentSource) -> str:
+    # The name is only a label for the artifact folder, and saying so matters: told to "read
+    # the agent named verify_fix", a model went hunting the whole workspace for something
+    # called verify_fix instead of reading the path it was given.
     return (
-        f"Read the agent named {source.name!r} and produce its contract.\n\n"
+        "Read this agent and produce its contract. Where it lives is in your briefing; "
+        f"{source.name!r} is only the label its artifacts are filed under, not something to "
+        "search for.\n\n"
         "Work through the tools, their exact argument names and types, the constrained argument "
         "values, the rules it enforces, and its data. Ask me if the source genuinely does not "
         "settle something that changes what gets built. Call submit_contract when you are done."

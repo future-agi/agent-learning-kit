@@ -82,7 +82,16 @@ async def _understand(args: argparse.Namespace) -> int:
     print(f"model: {chosen_model()}")
     print(f"out:   {destination}\n")
 
-    await _converse(stage, opening(source), interactive=args.interactive)
+    await _converse(
+        stage,
+        opening(source),
+        interactive=args.interactive,
+        until=lambda: load(destination) is not None,
+        nudge=(
+            "Nothing was saved: you finished without calling submit_contract. Call it now "
+            "with the contract you worked out."
+        ),
+    )
 
     contract = load(destination)
     if contract is None:
@@ -98,15 +107,29 @@ async def _understand(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _converse(stage, opening_message: str, *, interactive: bool) -> None:
+async def _converse(
+    stage,
+    opening_message: str,
+    *,
+    interactive: bool,
+    until=None,
+    nudge: str = "",
+) -> None:
     """Say the opening, then keep the stage open for corrections.
 
     The same shape for every stage. A world is usually right on the second look, and the point
     of holding the session open is that correcting it is the next thing said rather than a
     rebuild from nothing.
+
+    ``until``/``nudge`` guard the unattended case. The commonest way an unattended stage fails
+    is finishing all the work and never calling the tool that saves it — the whole contract
+    written out as prose, submitted to nobody. One mechanical reminder costs a turn; rerunning
+    the stage costs everything it just did.
     """
     async with stage:
         await stage.say(opening_message, on_event=_render)
+        if not interactive and until is not None and nudge and not until():
+            await stage.say(nudge, on_event=_render)
         while interactive:
             try:
                 said = await _prompt("\nkarthik  ")
@@ -133,7 +156,16 @@ async def _build(args: argparse.Namespace) -> int:
         out=destination,
         ask=permission_gate(_ask_operator) if args.interactive else None,
     )
-    await _converse(stage, build_opening(contract), interactive=args.interactive)
+    await _converse(
+        stage,
+        build_opening(contract),
+        interactive=args.interactive,
+        until=lambda: (destination / "world.sqlite").exists(),
+        nudge=(
+            "Nothing was saved: you finished without calling save_world. Call check_world, "
+            "fix what it names, then save_world."
+        ),
+    )
 
     if not (destination / "world.sqlite").exists():
         print("\nNo world was saved.", file=sys.stderr)
@@ -175,6 +207,11 @@ async def _scenarios(args: argparse.Namespace) -> int:
         stage,
         scenario_opening(contract, wanted, existing),
         interactive=args.interactive,
+        until=lambda: bool(load_written(destination)),
+        nudge=(
+            "Nothing was saved: you finished without calling save_scenarios. Submit anything "
+            "still unsubmitted, then call save_scenarios."
+        ),
     )
 
     written = load_written(destination)
