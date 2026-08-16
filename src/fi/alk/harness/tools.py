@@ -67,6 +67,11 @@ def accept_contract(payload: dict[str, Any], destination: Path) -> dict[str, Any
 
 def contract_tools(destination: Path) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance."""
+    # One nudge, not a wall. A conversational agent with no rules and no prompt excerpt almost
+    # always means the prompt was not found — it often lives away from the main agent file — so
+    # the first such submission is sent back with directions. The second is accepted, because a
+    # gate with no way through would permanently block the rare agent that genuinely has none.
+    nudged = {"done": False}
 
     @tool(
         "submit_contract",
@@ -83,24 +88,44 @@ def contract_tools(destination: Path) -> Any:
         "`arg_values` carries the real permitted values wherever the argument is constrained to "
         "a set, an enum or a lookup. Everything downstream is built from these, so a tool "
         "submitted without its arguments cannot be tested.",
-        {
-            "agent": str,
-            "one_liner": str,
-            "modality": str,
-            "conversational": bool,
-            "system_prompt_excerpt": str,
-            "hard_constraints": list,
-            "tools": list,
-            "data_schema": dict,
-            "base_environment": dict,
-            "real_use_cases": list,
-            "signature_cases": list,
-            "grading_notes": str,
-            "anti_hallucination": list,
-            "open_questions": list,
-        },
+        # Only what validate_contract refuses to live without is required here. A plain
+        # {name: type} map marks every field mandatory, and the schema layer then rejects the
+        # submission one missing field at a time — a full model turn per field — before the
+        # gate that knows how to explain a problem is ever reached.
+        schema(
+            {
+                "agent": str,
+                "one_liner": str,
+                "modality": str,
+                "conversational": bool,
+                "system_prompt_excerpt": str,
+                "hard_constraints": list,
+                "tools": list,
+                "data_schema": dict,
+                "base_environment": dict,
+                "real_use_cases": list,
+                "notes": str,
+                "open_questions": list,
+            },
+            ["agent", "tools", "real_use_cases"],
+        ),
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
+        bare = (
+            args.get("conversational", True)
+            and not args.get("hard_constraints")
+            and not str(args.get("system_prompt_excerpt") or "").strip()
+        )
+        if bare and not nudged["done"]:
+            nudged["done"] = True
+            return _problems(
+                [
+                    "no hard_constraints and no system_prompt_excerpt, for a conversational "
+                    "agent. Its prompt usually exists and often lives away from the main agent "
+                    "file — search the whole source for a long instructions string before "
+                    "deciding there is none. If there genuinely is none, submit again as is."
+                ]
+            )
         return accept_contract(args, destination)
 
     return create_sdk_mcp_server(

@@ -21,13 +21,11 @@ _STRING_FIELDS = (
     "one_liner",
     "modality",
     "system_prompt_excerpt",
-    "grading_notes",
+    "notes",
 )
 _LIST_FIELDS = (
     "hard_constraints",
     "real_use_cases",
-    "signature_cases",
-    "anti_hallucination",
     "amendments",
 )
 _DICT_FIELDS = ("data_schema", "base_environment")
@@ -82,9 +80,11 @@ class AgentContract(BaseModel):
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     real_use_cases: list[str] = Field(default_factory=list)
-    signature_cases: list[str] = Field(default_factory=list)
-    grading_notes: str = ""
-    anti_hallucination: list[str] = Field(default_factory=list)
+    # Free-form. The fields above are the fixed core because code consumes them; this is where
+    # the reader records whatever else about *this* agent is worth carrying forward — quirks,
+    # traps, names that look real but are not — in whatever form fits. It is shown verbatim to
+    # every later stage.
+    notes: str = ""
     open_questions: list[str] = Field(default_factory=list)
     # Anything in here was not read from the agent's source. The contract is meant to be what
     # the agent verifiably is, so when the harness widens it the difference is recorded rather
@@ -139,13 +139,13 @@ class AgentContract(BaseModel):
                 "and a test written against a corrected world will not catch the real bug.\n"
                 + json.dumps(self.base_environment, ensure_ascii=False)
             )
-        if self.grading_notes:
-            parts.append(f"GRADING NOTES for this agent:\n{self.grading_notes[:900]}")
-        if self.anti_hallucination:
+        if self.real_use_cases:
             parts.append(
-                "NEVER USE THESE (they do not exist / are wrong): "
-                + json.dumps(self.anti_hallucination)[:700]
+                "REAL USE CASES (what this agent is actually for):\n  - "
+                + "\n  - ".join(self.real_use_cases[:12])
             )
+        if self.notes:
+            parts.append(f"NOTES from reading the agent:\n{self.notes[:1500]}")
         return "\n\n".join(parts)
 
 

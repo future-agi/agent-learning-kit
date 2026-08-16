@@ -43,10 +43,16 @@ Find, in roughly this order:
 3. **Argument values.** Where an argument is constrained to a set, an enum, a literal union, or a
    lookup into fixed data, record the real values.
 4. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
-   wording from the system prompt or the validation code.
-5. **The data.** Where it lives, its shape, and its real contents. In-memory dicts, fixture
+   wording from the system prompt or the validation code. These matter: the agent under test is
+   told them and graded against them, and its system prompt is where most of them live — read
+   it in full before deciding there are none.
+5. **The modality.** How a person reaches this agent, read from its runtime, not guessed: a
+   voice session (LiveKit, telephony, TTS/STT) is `voice`; a text interface is `chat`; a
+   browser-driving agent is `browser`. This decides how it is run later — a voice agent is
+   called live; anything else runs locally — so getting it wrong reroutes every test.
+6. **The data.** Where it lives, its shape, and its real contents. In-memory dicts, fixture
    files, a seeded database. Record enough for a working replica to be built.
-6. **Real use cases.** What this agent is actually for, as concrete situations, drawn from the
+7. **Real use cases.** What this agent is actually for, as concrete situations, drawn from the
    tools and data rather than invented.
 
 ## When you are not sure
@@ -60,12 +66,12 @@ Do not use it for anything the code answers. Reading one more file is cheaper th
 
 Anything you could not resolve, and did not ask about, goes in `open_questions`.
 
-## Anti-hallucination
+## Notes
 
-Record in `anti_hallucination` the names and values that a reasonable person would expect this
-agent to have but which do **not** exist: a plausible tool name that is not registered, an id
-that follows the naming convention but is absent from the data, an argument the API does not
-take. Later stages use this list to catch themselves.
+`notes` is free-form and yours. Record whatever else about this agent is worth carrying forward,
+in whatever form fits it: quirks in how it behaves, a plausible-looking name that does not
+actually exist, an id that looks like a typo but is real. Every later stage is shown it
+verbatim. Leave it empty rather than padding it.
 
 ## Finishing
 

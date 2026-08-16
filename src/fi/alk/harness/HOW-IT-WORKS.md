@@ -63,8 +63,8 @@ calls `submit_contract`.
 | `tools[]` — name, `args`, `arg_types`, `arg_values`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
 | `hard_constraints[]` | Rules the agent must follow. Told to the agent under test, and graded by the judge |
 | `base_environment` | Its real starting data, reproduced row for row |
-| `real_use_cases[]`, `signature_cases[]` | What it is actually for |
-| `anti_hallucination[]` | Things that do not exist and must never be used |
+| `real_use_cases[]` | What it is actually for |
+| `notes` | Free-form: whatever else the reader judged worth carrying forward |
 | `amendments[]` | Anything **not** read from source — see below |
 
 **How it is written:** `accept_contract` in `tools.py` validates before anything reaches disk. It
