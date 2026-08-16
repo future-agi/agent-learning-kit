@@ -42,7 +42,7 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live run-the-scenarios stage, and where it will write its results."""
     destination = out or artifact_dir(contract.agent)
-    server = run_tools(destination, destination)
+    server = run_tools(destination, destination, contract=contract)
     allowed = [
         "AskUserQuestion",
         *(qualified(RUN_SERVER, name) for name in TOOL_NAMES),
@@ -74,7 +74,7 @@ def opening(contract: AgentContract, destination: Path) -> str:
     """
     written = load_scenarios(destination)
     already = load_results(destination)
-    blocked = missing_prerequisites()
+    blocked = missing_prerequisites() if contract.modality == "voice" else []
     if blocked:
         return (
             f"There are {len(written)} scenarios for {contract.agent!r}, but a live call cannot "

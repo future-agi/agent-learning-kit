@@ -144,12 +144,26 @@ def report(run: LiveRun) -> str:
     return "\n".join(lines)
 
 
-def run_tools(world_root: Path, destination: Path, *, case: str = "") -> Any:
-    """A server for running one agent's scenarios against the real thing."""
+def run_tools(
+    world_root: Path,
+    destination: Path,
+    *,
+    contract: Any = None,
+    case: str = "",
+) -> Any:
+    """A server for running one agent's scenarios against the real thing.
+
+    How a scenario runs is decided by what the agent is, not by this stage. A hosted voice agent
+    gets the live path — its own tools repointed at the world over a webhook, the call placed
+    through ALK. Anything else runs here: the agent stood up from its contract, conversing over
+    the same world, graded by the same checks. The scenarios, the world and the grading are
+    identical either way; only the transport changes.
+    """
     written = load_scenarios(destination)
     catalogue = load_catalogue(destination)
     results = load_results(destination)
     voice_case = case or os.environ.get("HARNESS_VOICE_CASE", "2.1.2")
+    live = bool(contract is not None and getattr(contract, "modality", "") == "voice")
 
     @tool(
         "list_scenarios",
@@ -169,7 +183,7 @@ def run_tools(world_root: Path, destination: Path, *, case: str = "") -> Any:
             ]
             judged = [name for name in one.sub_goals if name not in settled]
             ran = next((r for r in results if r["scenario"] == one.name), None)
-            mark = "" if ran is None else ("  [last run: PASS]" if ran["passed"] else "  [last run: FAIL]")
+            mark = "" if ran is None else ("  [last run: PASS]" if ran.get("passed") else "  [last run: FAIL]")
             lines.append(
                 f"{one.name}{mark}\n  tests: {one.tests or one.use_case or '—'}\n"
                 f"  settled by code: {', '.join(settled) or 'none'}\n"
@@ -179,11 +193,17 @@ def run_tools(world_root: Path, destination: Path, *, case: str = "") -> Any:
 
     @tool(
         "preflight",
-        "Check everything a live call needs before spending one: the assistant's credentials "
-        "and a way to expose the webhook publicly. Run this before the first call.",
+        "Check everything a run needs before spending one. For a hosted voice agent that is the "
+        "assistant's credentials and a way to expose the webhook publicly; for anything else "
+        "the run happens here and needs nothing external. Run this before the first run.",
         schema({}, []),
     )
     async def preflight(_args: dict[str, Any]) -> dict[str, Any]:
+        if not live:
+            return _ok(
+                "Ready. This agent runs here, against the world, from its contract — nothing "
+                f"external is needed. {len(written)} scenarios are available."
+            )
         problems = missing_prerequisites()
         if problems:
             return _err("Not ready:\n  - " + "\n  - ".join(problems))
@@ -192,14 +212,31 @@ def run_tools(world_root: Path, destination: Path, *, case: str = "") -> Any:
             f"{len(written)} scenarios are available."
         )
 
+    async def _run_here(scenario: Any) -> dict[str, Any]:
+        """The scenario against the agent stood up from its contract, over the same world."""
+        from . import run_suite
+
+        if contract is None:
+            return _err("no contract is loaded, so there is no agent to stand up")
+        graded = await run_suite([scenario], contract, world_root, out=destination)
+        results[:] = load_results(destination)
+        result = graded[0]
+        lines = [result.line()] + [check.line() for check in result.checkpoints]
+        if result.transcript:
+            lines += ["", "the conversation:", result.transcript]
+        answer = "\n".join(lines)
+        return _ok(answer) if result.passed else _err(answer)
+
     @tool(
         "run_scenario",
-        "Run one scenario against the real agent and grade it.\n\n"
-        "This restores the world, applies the scenario's setup, stands up the webhook, points "
-        "the assistant's OWN tools at it, places the call, and runs the sub-goals' checks "
-        "against what the world holds afterwards plus the calls that were made.\n\n"
-        "It takes several minutes and blocks until the call is over. Run one at a time and read "
-        "what comes back before running the next.",
+        "Run one scenario against the agent and grade it.\n\n"
+        "The world is restored and the scenario's setup applied first. A hosted voice agent is "
+        "reached live — its OWN tools are pointed at the world over a webhook and the call is "
+        "placed; any other agent is stood up here from its contract and conversed with. Either "
+        "way the sub-goals' checks run against what the world holds afterwards plus the calls "
+        "that were made.\n\n"
+        "It can take minutes and blocks until the run is over. Run one at a time and read what "
+        "comes back before running the next.",
         # Both spellings accepted: every model that has driven this stage has guessed
         # `scenario` at least once, and a retry on an argument name is a wasted turn.
         schema({"name": str, "scenario": str}, []),
@@ -212,6 +249,8 @@ def run_tools(world_root: Path, destination: Path, *, case: str = "") -> Any:
                 f"no scenario called {name!r}. There is: "
                 + ", ".join(one.name for one in written)
             )
+        if not live:
+            return await _run_here(scenario)
         problems = missing_prerequisites()
         if problems:
             return _err(
@@ -275,17 +314,22 @@ def run_tools(world_root: Path, destination: Path, *, case: str = "") -> Any:
             return _ok("nothing has been run yet")
         lines = []
         for record in results:
-            mark = "PASS" if record["passed"] else "FAIL"
+            mark = "PASS" if record.get("passed") else "FAIL"
+            # Two record shapes share this file: live runs carry settled/judged, local runs
+            # carry checkpoints. Both say what failed, and both deserve to be read.
             failed = [
-                f"{one['name']}: {one['said']}"
-                for one in record["settled"]
-                if not one["held"]
+                f"{one.get('name')}: {one.get('said') or one.get('detail') or ''}"
+                for one in (record.get("settled") or record.get("checkpoints") or [])
+                if not (one.get("held") if "held" in one else one.get("passed"))
             ]
+            met = record.get("met", record.get("checkpoints_met", "?"))
+            of = record.get("of")
+            scored = f"{met}/{of}" if of is not None else str(met)
             lines.append(
-                f"{mark}  {record['scenario']}  {record['met']}/{record['of']}"
+                f"{mark}  {record.get('scenario')}  {scored}"
                 + ("\n  - " + "\n  - ".join(failed) if failed else "")
             )
-        passed = sum(1 for record in results if record["passed"])
+        passed = sum(1 for record in results if record.get("passed"))
         return _ok("\n".join(lines) + f"\n\n{passed} of {len(results)} passed")
 
     server = create_sdk_mcp_server(
