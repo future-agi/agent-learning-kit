@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_MODEL
+from .build import build
+from .config import DEFAULT_MODEL, artifact_dir
 from .session import TEXT, Event
 from .sources import resolve, supported
 from .understand import load, open_stage, opening
@@ -102,6 +103,23 @@ async def _understand(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _build(args: argparse.Namespace) -> int:
+    destination = Path(args.out) if args.out else artifact_dir(args.name)
+    contract = load(destination)
+    if contract is None:
+        print(f"No contract at {destination}. Run `understand` first.", file=sys.stderr)
+        return 1
+
+    print(f"agent: {contract.agent}  ({len(contract.tools)} tools)")
+    print(f"out:   {destination}\n")
+    written = await build(contract, out=destination, on_event=_render)
+    if written is None:
+        print("\nNo world was saved.", file=sys.stderr)
+        return 1
+    print(f"\nworld: {written}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fi.alk.harness", description=__doc__)
     sub = parser.add_subparsers(dest="stage", required=True)
@@ -123,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     understand.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
     understand.set_defaults(run=_understand, interactive=True)
+
+    world = sub.add_parser("build", help="build the world from an agent's contract")
+    world.add_argument("--name", required=True, help="which agent")
+    world.add_argument("--out", default=None, help="artifact directory")
+    world.set_defaults(run=_build)
     return parser
 
 
