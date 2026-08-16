@@ -20,11 +20,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from fi.simulate.environment import (
-    EnvironmentAdapter,
-    EnvironmentSnapshot,
-    ToolExecutionResult,
-)
+try:
+    from fi.simulate.environment import (
+        EnvironmentAdapter,
+        EnvironmentSnapshot,
+        ToolExecutionResult,
+    )
+except (
+    ImportError
+) as missing:  # pragma: no cover - depends on how the repo was installed
+    # Importing anything under fi.simulate runs that package's __init__, which pulls in its
+    # LiveKit scenario generator. So a harness that never makes a voice call still needs the
+    # voice extra installed, and without it the failure surfaces three imports away from the
+    # cause as a bare "No module named 'livekit'".
+    raise ImportError(
+        "The harness needs the environment interface from fi.simulate, and importing it pulls "
+        "in that package's optional LiveKit dependency. Install it with:\n"
+        "    uv sync --extra livekit --group dev"
+    ) from missing
 
 
 class ToolError(Exception):
@@ -202,6 +215,19 @@ class GeneratedWorld(EnvironmentAdapter):
 
     # -- state -----------------------------------------------------------------------
 
+    def _settle(self) -> None:
+        """Close any transaction left open on the connection.
+
+        A handler that only reads still leaves an implicit read transaction behind, and SQLite
+        refuses to back up into a connection that has one open: "destination database is in
+        use". Left unsettled, the first read-only handler poisons every probe after it, and the
+        world can never be checked or saved.
+        """
+        try:
+            self.connection.commit()
+        except sqlite3.Error:
+            self.connection.rollback()
+
     def checkpoint(self) -> sqlite3.Connection:
         """A copy of the current data, to come back to.
 
@@ -209,15 +235,15 @@ class GeneratedWorld(EnvironmentAdapter):
         against the debris of the ones before it, and a check expecting three rows finds seven.
         The same restore-a-fresh-copy discipline scenarios use, applied to the gate itself.
         """
+        self._settle()
         copy = sqlite3.connect(":memory:")
-        with copy:
-            self.connection.backup(copy)
+        self.connection.backup(copy)
         return copy
 
     def revert(self, checkpoint: sqlite3.Connection) -> None:
         """Put the data back as it was when the checkpoint was taken."""
-        with self.connection:
-            checkpoint.backup(self.connection)
+        self._settle()
+        checkpoint.backup(self.connection)
 
     def state(self) -> dict[str, Any]:
         """Every table and its rows: what the checks compare against after a run."""

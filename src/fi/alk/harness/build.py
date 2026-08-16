@@ -15,7 +15,14 @@ from typing import Any, Callable
 
 from claude_agent_sdk import ClaudeAgentOptions
 
-from .config import artifact_dir, load_skill, provider_env
+from .config import (
+    artifact_dir,
+    gate_hooks,
+    chosen_model,
+    load_skill,
+    permission_gate,
+    provider_env,
+)
 from .contract import AgentContract
 from .session import Stage
 from .tools import qualified
@@ -34,25 +41,30 @@ def open_stage(
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
     server, _world = world_tools(contract, destination)
+    allowed = [
+        "AskUserQuestion",
+        *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),
+    ]
     options = ClaudeAgentOptions(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
         ),
         # No file tools and no shell. Everything this stage can do goes through a tool that
         # executes it and reports back, which is what makes the guardrails meaningful.
-        allowed_tools=[
-            "AskUserQuestion",
-            *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),
-        ],
+        allowed_tools=allowed,
         mcp_servers={WORLD_SERVER: server},
-        permission_mode="acceptEdits",
+        # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
+        # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
+        # whole job is to validate that change.
+        permission_mode="default",
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         setting_sources=[],
         max_turns=max_turns,
+        model=chosen_model(),
         env=provider_env(),
     )
-    if ask is not None:
-        options.can_use_tool = ask
+    options.hooks = gate_hooks(allowed)
+    options.can_use_tool = permission_gate(ask, allowed)
     return Stage(options, name=SKILL), destination
 
 

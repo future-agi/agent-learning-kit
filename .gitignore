@@ -18,3 +18,4 @@ artifacts/
 !src/fi/simulate/artifacts/
 !src/fi/simulate/artifacts/*.py
 examples/artifacts/
+harness-ui/

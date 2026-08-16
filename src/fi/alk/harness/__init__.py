@@ -20,7 +20,9 @@ from .config import (
     provider_env,
     read_only_session,
 )
+from .chat import Conversation, open_conversation
 from .contract import AgentContract, ToolSpec, validate_contract
+from .scenario import Scenario, validate_scenario
 from .session import Stage, Turn
 from .sources import (
     AgentSource,
@@ -35,14 +37,17 @@ from .understand import open_stage, understand
 __all__ = [
     "AgentContract",
     "AgentSource",
+    "Conversation",
     "DEFAULT_MODEL",
     "RepoSource",
+    "Scenario",
     "SpecSource",
     "Stage",
     "ToolSpec",
     "Turn",
     "artifact_dir",
     "load_skill",
+    "open_conversation",
     "open_stage",
     "provider_env",
     "read_only_session",
@@ -51,4 +56,5 @@ __all__ = [
     "supported",
     "understand",
     "validate_contract",
+    "validate_scenario",
 ]

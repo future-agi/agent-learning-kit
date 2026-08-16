@@ -23,6 +23,33 @@ SKILLS_ROOT = Path(__file__).parent / "skills"
 _READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 
 
+def credentials_hint() -> str:
+    """A line saying which credentials a run will use, or a warning that it is guessing.
+
+    Claude Code falls back to the active gcloud login when no service-account file is named,
+    which is a legitimate setup and an easy accident. The accident produces a provider auth
+    error several layers down, so it is worth saying out loud which one is in play.
+    """
+    named = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if named:
+        return f"credentials: {Path(named).name}"
+    return (
+        "credentials: none named, falling back to your gcloud login. If calls fail to "
+        "authenticate, load the env file first:\n"
+        "           set -a; . ./.env.acceptance; set +a"
+    )
+
+
+def chosen_model(model: str | None = None) -> str:
+    """The model a session will actually run on.
+
+    Passed to the session explicitly as well as through the environment. The environment alone
+    does not win: the CLI has its own default and will quietly use it, so a run meant for Haiku
+    goes out on whatever the CLI felt like and the bill says so afterwards.
+    """
+    return model or os.environ.get("ALK_HARNESS_MODEL", DEFAULT_MODEL)
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -32,7 +59,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     env = {
         "CLAUDE_CODE_USE_VERTEX": "1",
         "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
-        "ANTHROPIC_MODEL": model or os.environ.get("ALK_HARNESS_MODEL", DEFAULT_MODEL),
+        "ANTHROPIC_MODEL": chosen_model(model),
     }
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",
@@ -61,16 +88,88 @@ def read_only_session(
     session can produce anything is by calling one of ours.
     """
     allowed = [*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_tools]
-    return ClaudeAgentOptions(
+    options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         allowed_tools=allowed,
         mcp_servers=dict(mcp_servers or {}),
-        permission_mode="acceptEdits",
+        # Not acceptEdits: that auto-approves Edit and Write before the permission callback
+        # is consulted, which silently defeats the gate below.
+        permission_mode="default",
         cwd=str(cwd),
         setting_sources=[],
         max_turns=max_turns,
+        model=chosen_model(model),
         env=provider_env(model),
     )
+    options.hooks = gate_hooks(allowed)
+    options.can_use_tool = permission_gate(granted=allowed)
+    return options
+
+
+def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
+    """Deny anything a stage was not given, at the point the SDK actually asks.
+
+    ``can_use_tool`` alone does not do this. An ``allowed_tools`` entry approves those tools
+    before the callback is consulted, and the SDK then warns that the callback is shadowed — so
+    the gate never runs for the tools we granted, and in practice does not stop the ones we did
+    not either. A host ``ToolSearch`` reached every stage, returned nothing, and cost a turn each
+    time.
+
+    A PreToolUse hook is consulted for every call, which is what the deny-by-default rule needed
+    in order to be true rather than intended.
+    """
+    from claude_agent_sdk.types import HookMatcher
+
+    permitted = {*granted, "AskUserQuestion"}
+
+    async def refuse(payload: dict[str, Any], _tool_use_id: Any, _context: Any) -> dict[str, Any]:
+        name = str(payload.get("tool_name") or "")
+        if not name or name in permitted:
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"{name} is not part of this stage. You have "
+                    f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
+                    "produce goes through those, because those are what check it."
+                ),
+            }
+        }
+
+    return {"PreToolUse": [HookMatcher(hooks=[refuse])]}
+
+
+def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
+    """Decide what a stage may do: nothing it was not given.
+
+    Deny by default, not deny-a-list. A session is offered whatever tools its host happens to
+    expose, and anything not named here is by definition not part of how this stage works. An
+    allow-by-default gate let a host search tool through, which returned nothing useful and cost
+    a stage its entire turn budget looping on it; the same hole would let a file write through.
+
+    Tools granted through ``allowed_tools`` are approved before this is consulted, so this only
+    ever sees the ones that were not.
+    """
+    permitted = set(granted)
+
+    async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
+        from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
+        if tool_name == "AskUserQuestion" and ask is not None:
+            return await ask(tool_name, payload, context)
+        if tool_name in permitted:
+            return PermissionResultAllow(updated_input=payload)
+        return PermissionResultDeny(
+            message=(
+                f"{tool_name} is not part of this stage. You have "
+                f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
+                "produce goes through those, because those are what check it."
+            )
+        )
+
+    return gate
 
 
 def artifact_dir(agent: str, root: str | Path | None = None) -> Path:

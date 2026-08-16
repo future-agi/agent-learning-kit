@@ -53,7 +53,13 @@ def load(database=None):
 '''
 
 
-def save(world: GeneratedWorld, path: str | Path, *, notes: str = "") -> Path:
+def save(
+    world: GeneratedWorld,
+    path: str | Path,
+    *,
+    notes: str = "",
+    sequences: list[dict[str, Any]] | None = None,
+) -> Path:
     """Write the world out: the snapshot, the handlers, the module, and a manifest."""
     root = Path(path)
     (root / HANDLERS).mkdir(parents=True, exist_ok=True)
@@ -82,7 +88,13 @@ def save(world: GeneratedWorld, path: str | Path, *, notes: str = "") -> Path:
             {
                 "agent": world.name,
                 "tools": sorted(world.handlers),
+                # Written because restore reads it. Without it a restored world publishes no
+                # tool descriptions at all, and every later stage has to reconstruct them.
+                "tool_specs": list(world.tools),
                 "tables": {name: len(rows) for name, rows in state.items()},
+                # Kept because they are judgement about this agent, not something a schema
+                # implies. A world picked up again can be re-verified without redeclaring them.
+                "sequences": list(sequences or []),
                 "notes": notes,
             },
             indent=2,

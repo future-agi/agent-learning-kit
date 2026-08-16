@@ -28,6 +28,7 @@ _LIST_FIELDS = (
     "real_use_cases",
     "signature_cases",
     "anti_hallucination",
+    "amendments",
 )
 _DICT_FIELDS = ("data_schema", "base_environment")
 
@@ -85,6 +86,10 @@ class AgentContract(BaseModel):
     grading_notes: str = ""
     anti_hallucination: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+    # Anything in here was not read from the agent's source. The contract is meant to be what
+    # the agent verifiably is, so when the harness widens it the difference is recorded rather
+    # than blended in, and whoever reads it later can tell the two apart.
+    amendments: list[str] = Field(default_factory=list)
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
