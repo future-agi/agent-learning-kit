@@ -71,7 +71,18 @@ def contract_tools(destination: Path) -> Any:
     @tool(
         "submit_contract",
         "Submit the agent's testing contract. Validated on submission; problems are returned "
-        "to you so you can correct them and submit again.",
+        "to you so you can correct them and submit again.\n\n"
+        "Each entry in `tools` is an object:\n"
+        '  {"name": "remove_order_item",\n'
+        '   "args": ["order_id"],\n'
+        '   "arg_types": {"order_id": "list[str]"},\n'
+        '   "arg_values": {"order_id": []},\n'
+        '   "description": "..."}\n'
+        "`args` must list the exact parameter names the model emits when calling the tool, in "
+        "order. `arg_types` carries the declared type wherever the source states one. "
+        "`arg_values` carries the real permitted values wherever the argument is constrained to "
+        "a set, an enum or a lookup. Everything downstream is built from these, so a tool "
+        "submitted without its arguments cannot be tested.",
         {
             "agent": str,
             "one_liner": str,

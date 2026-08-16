@@ -23,7 +23,7 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from ..contract import AgentContract
-from .probe import probe
+from .probe import dirty_tables, probe
 from .runtime import GeneratedWorld
 from .snapshot import save
 
@@ -225,6 +225,16 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
+            )
+        dirty = dirty_tables(world, sequences)
+        if dirty:
+            counts = world.state()
+            listed = ", ".join(f"{name} ({len(counts[name])} rows)" for name in dirty)
+            return _err(
+                f"Not saved. These hold rows left over from building: {listed}.\n"
+                "This is the state every scenario starts from, so those rows would appear in "
+                "every test as somebody else's order already in the cart. Clear them with "
+                "create_schema or a delete, keep the catalogue, and save again."
             )
         path = save(world, destination, notes=str(args.get("notes") or ""))
         tables = world.state()

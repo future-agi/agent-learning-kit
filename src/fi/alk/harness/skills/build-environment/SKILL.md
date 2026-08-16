@@ -42,6 +42,13 @@ for it:
 When one of those holds, `raise ToolError("...")` with a message that says what was wrong. A
 refusal is the world working. It is not an error you should be avoiding.
 
+`ToolError` is already available inside a handler. Do not define your own, and do not import
+anything: a handler has `args`, `db`, `ToolError` and `json`, and nothing else.
+
+Use the argument names exactly as the contract gives them. A handler reading `order_ids` when
+the tool takes `order_id` finds nothing, quietly does nothing, and reports success, which is
+the precise failure this world exists to prevent.
+
 Never let a handler crash on bad input. `KeyError` and `TypeError` are your bugs; `ToolError` is
 the world's answer. They must not be confused, and one of the checks tells them apart.
 

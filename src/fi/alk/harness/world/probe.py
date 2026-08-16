@@ -19,6 +19,7 @@ outcomes here.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -29,6 +30,7 @@ HAPPY = "happy"
 EDGE = "edge"
 SEQUENCE = "sequence"
 COVERAGE = "coverage"
+DATA = "data"
 
 # A value no generated world should ever have seeded, used to prove a lookup refuses.
 ABSENT = "__does_not_exist__"
@@ -91,15 +93,92 @@ def _valid_arguments(tool: ToolSpec) -> dict[str, Any]:
     return arguments
 
 
+def _seeded_values(world: GeneratedWorld) -> set[str]:
+    """Every value present anywhere in the world, for checking the catalogue is complete."""
+    present: set[str] = set()
+    for rows in world.state().values():
+        for row in rows:
+            for value in row.values():
+                if isinstance(value, str) and value:
+                    present.add(value)
+    return present
+
+
+def _is_a_real_identifier(value: Any) -> bool:
+    """Whether a permitted value names a record, rather than being an enum like 'M' or 'null'."""
+    if not isinstance(value, str) or value in ("", "null", "none", "None"):
+        return False
+    return len(value) > 2 and not value.isdigit()
+
+
+def _missing_catalogue(world: GeneratedWorld, contract: AgentContract) -> list[str]:
+    """Identifiers the contract says a tool accepts that are nowhere in the seeded world.
+
+    The gap this closes is a whole category left unseeded. Every call naming a sauce then fails,
+    which looks from the outside exactly like a world being correctly strict, and a suite where
+    nothing can be ordered scores perfectly. Whether the catalogue is complete cannot be settled
+    by behaviour, so it is checked against the data.
+    """
+    present = _seeded_values(world)
+    missing: list[str] = []
+    for tool in contract.tools:
+        for arg, values in (tool.arg_values or {}).items():
+            if not isinstance(values, (list, tuple)):
+                continue
+            if not _looks_like_an_identifier(arg, tool.arg_types.get(arg, "")):
+                continue
+            absent = [
+                value
+                for value in values
+                if _is_a_real_identifier(value) and value not in present
+            ]
+            if absent:
+                shown = ", ".join(absent[:4]) + (
+                    f" and {len(absent) - 4} more" if len(absent) > 4 else ""
+                )
+                missing.append(f"{tool.name}.{arg}: {shown}")
+    return missing
+
+
+def _reads_argument(source: str, name: str) -> bool:
+    """Whether a handler actually takes this argument out of ``args``.
+
+    Looking for the bare name is not enough. A handler that reads ``args['order_ids']`` and then
+    loops ``for order_id in order_ids`` mentions ``order_id`` all over itself while never reading
+    the argument the tool is given, so it silently ignores its input and reports success or
+    refuses everything. Both look fine from the outside, which is why this is checked at the
+    point of access rather than by behaviour.
+    """
+    pattern = (
+        rf"args\s*(?:\[\s*|\.get\s*\(\s*|\.pop\s*\(\s*)"
+        rf"['\"]{re.escape(name)}['\"]"
+    )
+    return re.search(pattern, source) is not None
+
+
+def _looks_like_an_identifier(name: str, declared: str) -> bool:
+    """Whether an argument names something that has to exist for the call to make sense."""
+    if name.endswith(("_id", "_ids", "id", "_key", "_ref")):
+        return True
+    return declared in ("str", "list[str]", "List[str]")
+
+
 def _identifier_arguments(tool: ToolSpec) -> dict[str, Any] | None:
-    """The same call with every identifier replaced by one that cannot exist."""
+    """The same call with every identifier replaced by one that cannot exist.
+
+    Deliberately not gated on the contract listing that argument's values. A contract that
+    failed to record them is exactly the case where nobody has checked what this tool does with
+    a bad id, so skipping the probe there drops it precisely where it is most needed.
+    """
     arguments = _valid_arguments(tool)
     swapped = False
     for arg in tool.args:
-        if not tool.arg_values.get(arg):
-            continue
         declared = tool.arg_types.get(arg, "")
-        arguments[arg] = [ABSENT] if "list" in declared else ABSENT
+        if not tool.arg_values.get(arg) and not _looks_like_an_identifier(
+            arg, declared
+        ):
+            continue
+        arguments[arg] = [ABSENT] if "list" in declared.lower() else ABSENT
         swapped = True
     return arguments if swapped else None
 
@@ -136,9 +215,38 @@ def probe(
                 )
             )
 
+    for gap in _missing_catalogue(world, contract):
+        report.results.append(
+            ProbeResult(
+                gap.split(":")[0],
+                DATA,
+                False,
+                f"the contract accepts values the world does not have: {gap}",
+            )
+        )
+    if not _missing_catalogue(world, contract):
+        report.results.append(
+            ProbeResult("catalogue", DATA, True, "every permitted identifier exists")
+        )
+
     for tool in contract.tools:
         if tool.name not in world.handlers:
             continue
+        source = world.handlers[tool.name]
+        unread = [arg for arg in tool.args if not _reads_argument(source, arg)]
+        report.results.append(
+            ProbeResult(
+                tool.name,
+                COVERAGE,
+                not unread,
+                # A handler reading order_ids when the tool takes order_id refuses everything,
+                # which looks exactly like a handler correctly refusing a bad id. Behaviour
+                # alone cannot tell those apart, so the argument names are checked directly.
+                ""
+                if not unread
+                else f"never reads {', '.join(unread)}, which the contract says it takes",
+            )
+        )
 
         world.revert(baseline)
         call = world.call(tool.name, _valid_arguments(tool))
@@ -210,6 +318,30 @@ def probe(
     # Leave the world as the builder left it, not as the last probe left it.
     world.revert(baseline)
     return report
+
+
+def dirty_tables(
+    world: GeneratedWorld, sequences: Iterable[Mapping[str, Any]]
+) -> list[str]:
+    """Tables a scenario writes to that already hold rows before anything has happened.
+
+    A world is the state every scenario starts from, so an order table with rows in it means
+    the builder's own testing was frozen into the base state. Every scenario then begins with
+    somebody else's order already in the cart, and a count check that should read one reads
+    seven. Which tables are transactional is not guessable from a schema, so it is worked out
+    by running the declared sequences and seeing what moves.
+    """
+    baseline = world.checkpoint()
+    before = {name: len(rows) for name, rows in world.state().items()}
+    touched: set[str] = set()
+    for index, sequence in enumerate(sequences):
+        world.revert(baseline)
+        _run_sequence(world, sequence, index)
+        for name, rows in world.state().items():
+            if len(rows) != before.get(name, 0):
+                touched.add(name)
+    world.revert(baseline)
+    return sorted(name for name in touched if before.get(name, 0) > 0)
 
 
 def _run_sequence(

@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .build import build
+from .build import open_stage as build_stage
+from .build import opening as build_opening
 from .config import DEFAULT_MODEL, artifact_dir
 from .session import TEXT, Event
 from .sources import resolve, supported
@@ -78,16 +79,7 @@ async def _understand(args: argparse.Namespace) -> int:
     print(f"agent: {source.name}  ({source.kind})")
     print(f"out:   {destination}\n")
 
-    async with stage:
-        await stage.say(opening(source), on_event=_render)
-        while args.interactive:
-            try:
-                said = await _prompt("\nkarthik  ")
-            except (EOFError, KeyboardInterrupt):
-                break
-            if not said or said in {"q", "quit", "exit"}:
-                break
-            await stage.say(said, on_event=_render)
+    await _converse(stage, opening(source), interactive=args.interactive)
 
     contract = load(destination)
     if contract is None:
@@ -103,6 +95,25 @@ async def _understand(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _converse(stage, opening_message: str, *, interactive: bool) -> None:
+    """Say the opening, then keep the stage open for corrections.
+
+    The same shape for every stage. A world is usually right on the second look, and the point
+    of holding the session open is that correcting it is the next thing said rather than a
+    rebuild from nothing.
+    """
+    async with stage:
+        await stage.say(opening_message, on_event=_render)
+        while interactive:
+            try:
+                said = await _prompt("\nkarthik  ")
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not said or said in {"q", "quit", "exit"}:
+                break
+            await stage.say(said, on_event=_render)
+
+
 async def _build(args: argparse.Namespace) -> int:
     destination = Path(args.out) if args.out else artifact_dir(args.name)
     contract = load(destination)
@@ -112,11 +123,19 @@ async def _build(args: argparse.Namespace) -> int:
 
     print(f"agent: {contract.agent}  ({len(contract.tools)} tools)")
     print(f"out:   {destination}\n")
-    written = await build(contract, out=destination, on_event=_render)
-    if written is None:
+
+    stage, _ = build_stage(
+        contract,
+        out=destination,
+        ask=_answer_questions if args.interactive else None,
+    )
+    await _converse(stage, build_opening(contract), interactive=args.interactive)
+
+    if not (destination / "world.sqlite").exists():
         print("\nNo world was saved.", file=sys.stderr)
         return 1
-    print(f"\nworld: {written}")
+    print(f"\nworld: {destination}")
+    print(f"spent: ${stage.spent_usd:.4f}")
     return 0
 
 
@@ -145,7 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
     world = sub.add_parser("build", help="build the world from an agent's contract")
     world.add_argument("--name", required=True, help="which agent")
     world.add_argument("--out", default=None, help="artifact directory")
-    world.set_defaults(run=_build)
+    world.add_argument(
+        "--once",
+        dest="interactive",
+        action="store_false",
+        help="run unattended instead of staying open for corrections",
+    )
+    world.set_defaults(run=_build, interactive=True)
     return parser
 
 
