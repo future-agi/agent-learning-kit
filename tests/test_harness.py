@@ -1391,3 +1391,65 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     second = asyncio.run(call(dict(payload)))
     assert "Accepted" in second
     assert (tmp_path / "contract.json").exists()
+
+
+def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
+    """The hook closes over the granted set when the stage is built, so appending to
+    allowed_tools alone leaves the new tool denied. grant() must rebuild all three."""
+    import asyncio
+
+    from claude_agent_sdk import ClaudeAgentOptions
+
+    from fi.alk.harness.config import gate_hooks
+    from fi.alk.harness.session import Stage
+
+    allowed = ["Read"]
+    options = ClaudeAgentOptions(
+        system_prompt="x", allowed_tools=allowed, permission_mode="default",
+        setting_sources=[], max_turns=1,
+    )
+    options.hooks = gate_hooks(allowed)
+    stage = Stage(options, name="t")
+    stage.grant("flow", object(), ["hand_to_next_stage"])
+
+    assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
+    refuse = options.hooks["PreToolUse"][0].hooks[0]
+    granted = asyncio.run(refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None))
+    assert granted == {}
+
+
+def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
+    """Moving on is decided by code, from the artifacts, never by the model wanting to."""
+    import asyncio
+
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    from fi.alk.harness.chat import Conversation
+
+    conversation = Conversation(source=None, out=tmp_path, workspace=tmp_path)
+    conversation.stage_name = "understand"
+    server = conversation._flow_server()
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call():
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "CallToolRequest":
+                request = CallToolRequest(
+                    method="tools/call",
+                    params=CallToolRequestParams(
+                        name="hand_to_next_stage", arguments={"request": "create the world"}
+                    ),
+                )
+                answer = await handler(request)
+                return answer.root.content[0].text
+
+    said = asyncio.run(call())
+    assert "not produced its artifact" in said
+    assert not conversation._handoff
+
+    (tmp_path / "contract.json").write_text(
+        '{"agent": "a", "tools": [{"name": "t"}], "real_use_cases": ["u"]}'
+    )
+    said = asyncio.run(call())
+    assert "Handed over" in said
+    assert conversation._handoff["request"] == "create the world"
