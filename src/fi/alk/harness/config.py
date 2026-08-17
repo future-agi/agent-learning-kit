@@ -181,8 +181,12 @@ def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
 
 
 def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
-    """Where a given agent's generated environment lives."""
-    base = Path(root) if root else Path("artifacts/environments")
+    """The folder holding one conversation: its contract, world, scenarios and runs.
+
+    One conversation, one directory. Everything about testing one agent lives together, which is
+    what makes a session something you can close, reopen, hand over or delete as one thing.
+    """
+    base = Path(root) if root else Path("artifacts/sessions")
     return base / agent
 
 

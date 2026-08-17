@@ -284,6 +284,49 @@ class Conversation:
         self.out = self.out or artifact_dir(settled.name)
         await self.advance(on_event=on_event)
 
+    def reachable(self) -> dict[str, str]:
+        """Every stage, and why it can or cannot be opened right now.
+
+        Stages are not a wizard. Coming back to correct a contract after the world is built is
+        the ordinary case, not an exception, so any stage whose input exists can be opened at
+        any time. What cannot be skipped is the input itself: there is nothing to build a world
+        from without a contract, and nothing to write scenarios against without a world.
+        """
+        contract = self.contract is not None
+        # Every stage after the first works from the contract, so that is the first thing each
+        # of them needs; its own input is the second.
+        needs_contract = "needs a contract first"
+        why = {
+            RECEPTION: "",
+            UNDERSTAND: ""
+            if self.source is not None
+            else "cannot re-read the agent without knowing where its source lives",
+            BUILD: "" if contract else needs_contract,
+            SCENARIOS: ""
+            if contract and self.world_built
+            else (needs_contract if not contract else "needs a built environment first"),
+            RUN: ""
+            if contract and self.scenarios_written
+            else (needs_contract if not contract else "needs scenarios first"),
+        }
+        return why
+
+    async def go_to(
+        self, stage_name: str, on_event: Callable[..., Any] | None = None
+    ) -> str:
+        """Open one stage by name, whether or not it is the next one.
+
+        The stage is opened but not set going: its opening message is an instruction to do that
+        stage's work, and somebody choosing to look at a stage has not thereby asked for it to
+        start spending.
+        """
+        if stage_name not in _NEXT and stage_name != DONE:
+            raise RuntimeError(f"no stage called {stage_name!r}")
+        blocked = self.reachable().get(stage_name, "")
+        if blocked:
+            raise RuntimeError(f"cannot open the {stage_name} stage: {blocked}")
+        return await self._open(stage_name)
+
     async def advance(self, on_event: Callable[..., Any] | None = None) -> str | None:
         """Move to the next stage and start it. Returns the stage entered, or None."""
         following = self.next_stage()
