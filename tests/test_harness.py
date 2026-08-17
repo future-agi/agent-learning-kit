@@ -2000,6 +2000,66 @@ def test_reception_can_hand_over_in_the_turn_that_finds_the_agent(tmp_path):
     assert conversation.next_stage() == "understand"
 
 
+def test_the_turn_that_finds_the_agent_also_opens_the_next_stage(tmp_path, monkeypatch):
+    """Allowing that handoff is not enough: the stage it opens is built from the source, so the
+    source has to be on the conversation before the hop, not after it. Otherwise the hop raises,
+    the turn is lost, and the source is never taken up at all — every later message arrives back
+    at reception, which has no tools to do anything with it."""
+    import asyncio
+
+    from fi.alk.harness import chat as chat_module
+    from fi.alk.harness.chat import Conversation
+    from fi.alk.harness.sources import RepoSource
+
+    said: list[str] = []
+
+    class Stage:
+        spent_usd = 0.0
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def say(self, message, on_event=None):
+            said.append(f"{self.name}: {message}")
+
+        def grant(self, *_, **__):
+            pass
+
+    found: dict = {}
+    monkeypatch.setattr(
+        chat_module.reception_stage, "open_stage", lambda **_: (Stage("reception"), found)
+    )
+    monkeypatch.setattr(chat_module.reception_stage, "opening", lambda: "which agent")
+    monkeypatch.setattr(
+        chat_module.understand_stage,
+        "open_stage",
+        lambda *_, **__: (Stage("understand"), {}),
+    )
+    monkeypatch.setattr(chat_module.understand_stage, "opening", lambda _: "read the agent")
+
+    conversation = Conversation(out=tmp_path, workspace=tmp_path)
+
+    async def turn():
+        await conversation.open_quietly()
+        # what reception's turn does when one message both names the agent and asks for the next
+        # thing: it points, then hands the request on.
+        found["source"] = RepoSource(name="x", root=tmp_path)
+        conversation._handoff["request"] = "read it and tell me what it can do"
+        await conversation.say("test the voice agent at /x, and tell me what it can do")
+
+    asyncio.run(turn())
+
+    assert conversation.source is not None, "the turn that pointed never landed"
+    assert conversation.stage_name == "understand"
+    assert any("read it and tell me what it can do" in one for one in said), said
+
+
 def test_the_build_skill_documents_every_method_a_handler_can_call():
     """A handler gets `db` and nothing else, so if the skill does not say what `db` offers the
     model guesses — and the guess is sqlite's cursor API, which fails on the smoke call."""
