@@ -56,8 +56,31 @@ Find, in roughly this order:
 
 6. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
-   what it provides, and which tools cannot work without it. The environment stage builds these,
-   so a dependency you do not record is a tool that will have nothing to answer it.
+   what it provides, and which tools cannot work without it. The environment stage stands these
+   up, so a dependency you do not record is a tool that will have nothing to answer it.
+
+   For anything the agent connects to, two more things decide whether it can be stood up at all.
+
+   **Which engine, and which version.** Postgres, ClickHouse, MySQL, Redis — read it off the
+   driver it imports, the URL scheme it builds, the image its compose file pulls. Never pick one
+   for it: engines disagree about dialect, types and what a transaction means, so an agent tested
+   against a different one is graded on queries it never runs. An engine nobody has stood up
+   before is fine to record; working it out is the environment stage's job.
+
+   **How it is reached.** This is what lets the harness be there instead of the real thing, and
+   **the agent's code is never edited** to make it so. Record whichever of these the agent uses:
+   the environment variable holding its connection string (`DATABASE_URL`, `PG_DSN`), or the key
+   in a config file it reads (`database.url`). Then record what it *expects to find* — host,
+   port, database name, user — whether those come from configuration or are written into the
+   source.
+
+   Hardcoded values are worth recording, not a dead end: the environment is built to match them,
+   down to the host name, so the agent connects to us expecting exactly what it always expected.
+   Never record a password. Record where the password comes from and stop there — this file is
+   written to disk and read by people.
+
+   If an agent turns out to have no seam at all, say so plainly in the open questions. That is a
+   finding worth reporting, and much more useful than a guess.
 
 7. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
    every field of every kind of record, and any values a field is constrained to. Record the

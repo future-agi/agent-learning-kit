@@ -98,13 +98,55 @@ class ToolSpec(BaseModel):
     description: str = ""
 
 
+class Reached(BaseModel):
+    """How the agent gets to a dependency, so the harness can be there instead of it.
+
+    Nothing recorded here is a change to the agent. It is what the agent **already expects**,
+    written down so the environment can be built to match: the same host name, the same port,
+    the same database, the same user. Where the agent reads a value from configuration we set
+    that configuration; where it hardcodes one we shape our own store to it, which is why the
+    hardcoded values are worth recording rather than treated as a dead end.
+
+    That inversion is the whole point. The alternative -- editing the agent so it points at us
+    -- means testing something other than what ships.
+    """
+
+    # The single easiest seam, and the one most agents have: one variable or config key holding
+    # the whole connection string. Set it at launch and nothing else matters.
+    dsn_env: str = ""
+    # Where a config file holds it instead, as a dotted path: "database.url". The file is
+    # mounted by us at the path the agent already reads.
+    config_key: str = ""
+
+    # What the agent expects to find, whether it reads these from config or has them written
+    # into its source. A hardcoded host is not an obstacle: a network alias makes that name
+    # resolve to our container, and the agent connects to us believing nothing changed.
+    host: str = ""
+    port: int | None = None
+    database: str = ""
+    user: str = ""
+    # Deliberately never the password itself. A contract is written to disk and read by people,
+    # so a secret in it outlives the run that needed it. What is recorded is where the value
+    # comes from; if it is genuinely needed it is read at provision time and not persisted.
+    password_from: str = ""
+
+    def has_seam(self) -> bool:
+        """Whether there is any way to point this agent at our store.
+
+        An agent with no seam at all is a finding, not a thing to work around: it cannot be
+        tested without one, and saying so is more useful than editing it until it can.
+        """
+        return bool(
+            self.dsn_env or self.config_key or self.host or self.port or self.database
+        )
+
+
 class Dependency(BaseModel):
     """Something the agent reaches for that has to exist before it can work.
 
-    This is what tells the environment stage there is a service to stand up, rather than leaving
-    it to notice halfway through that a tool has nothing to answer it. The world is a sandbox:
-    whatever is named here gets built inside it, so the agent's call goes to something real that
-    happens to be ours.
+    This is what tells the environment stage what to stand up, rather than leaving it to notice
+    halfway through that a tool has nothing to answer it. The world is a sandbox: whatever is
+    named here gets built inside it, and the agent's own call goes to it unchanged.
     """
 
     name: str
@@ -114,6 +156,58 @@ class Dependency(BaseModel):
     what: str = ""
     # The tools that cannot work without it. An unreferenced dependency is usually a mistake.
     used_by: list[str] = Field(default_factory=list)
+
+    # What to stand up. Read off the agent, never chosen for it: Postgres and ClickHouse
+    # disagree about dialect, types and what a transaction even means, so an agent tested
+    # against the wrong one is graded on queries it never runs. Left as free text because the
+    # next agent will be on an engine nobody has written down yet.
+    engine: str = ""
+    version: str = ""
+    reached: Reached = Field(default_factory=Reached)
+
+    def provisionable(self) -> bool:
+        """Whether the environment stage has enough here to stand something up."""
+        return bool(self.engine) and self.reached.has_seam()
+
+
+def _reached(one: "Dependency") -> str:
+    """What the environment stage needs in order to be where this dependency was.
+
+    Said in the same breath as the dependency itself, because "Postgres 16" and "reached by
+    DATABASE_URL" are useless apart: the first says what to run, the second says how to be the
+    thing it connects to. A dependency carrying neither is called out rather than left to fail
+    quietly later, when the reason is much harder to see.
+    """
+    if not one.engine and not one.reached.has_seam():
+        return ""
+    said: list[str] = []
+    if one.engine:
+        said.append(f"stand up {one.engine}{' ' + one.version if one.version else ''}")
+    where = one.reached
+    if where.dsn_env:
+        said.append(f"point it there with ${where.dsn_env}")
+    elif where.config_key:
+        said.append(f"point it there with {where.config_key} in its config")
+    expects = [
+        f"{label} {value}"
+        for label, value in (
+            ("host", where.host),
+            ("port", where.port),
+            ("database", where.database),
+            ("user", where.user),
+        )
+        if value
+    ]
+    if expects:
+        # Matched rather than changed: the store is built to these, so the agent connects to
+        # us expecting exactly what it always expected.
+        said.append("build it to match " + ", ".join(expects))
+    if one.engine and not where.has_seam():
+        said.append(
+            "NO CONFIGURATION SEAM RECORDED — without one this agent cannot be pointed at "
+            "anything, and that is a finding to report rather than something to edit around"
+        )
+    return "\n      " + "; ".join(said) if said else ""
 
 
 class AgentContract(BaseModel):
@@ -234,10 +328,12 @@ class AgentContract(BaseModel):
             )
         if self.dependencies:
             parts.append(
-                "WHAT THIS AGENT DEPENDS ON (the environment has to provide each of these):\n  - "
+                "WHAT THIS AGENT DEPENDS ON (the environment stands up each of these, and the\n"
+                "agent's own call goes to it unchanged — its code is never edited):\n  - "
                 + "\n  - ".join(
                     f"{one.name} ({one.kind or 'unspecified'}): {one.what}"
                     + (f" — used by {', '.join(one.used_by)}" if one.used_by else "")
+                    + _reached(one)
                     for one in self.dependencies
                 )
             )
