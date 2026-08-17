@@ -44,7 +44,7 @@ your bugs; `ToolError` is the world's answer, and the checks tell them apart.
 
 Inside a handler you have `args`, `db`, `ToolError` and `json`, and nothing else. Do not import
 anything and do not define your own `ToolError`. Use the argument names exactly as the contract
-gives them: a handler reading `order_ids` when the tool takes `order_id` finds nothing, quietly
+gives them. A handler that reads a plural where the tool takes a singular finds nothing, quietly
 does nothing, and reports success.
 
 Seed the agent's **real** data. Where the contract records something unavailable, a misspelled id,
