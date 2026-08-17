@@ -16,6 +16,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+# How a person reaches an agent. This decides how it is later run — voice goes out as a live
+# call, everything else runs locally — so it is defined once and referenced, never retyped.
+MODALITIES = ("voice", "chat", "browser")
+
 _STRING_FIELDS = (
     "agent",
     "one_liner",
@@ -32,6 +36,48 @@ _DICT_FIELDS = ("data_schema", "base_environment")
 
 
 class ToolSpec(BaseModel):
+    """One tool the agent really has.
+
+    ``args`` is the load-bearing field: the world's handlers, the probes and every scenario are
+    built from these exact names. It is also the one most often written under another name —
+    ``parameters``, ``arguments``, ``params`` — or left out while ``arg_types`` names every
+    argument anyway. All of those are the same information, so they are accepted and normalised
+    rather than rejected, because a contract bounced for a synonym costs a full turn and teaches
+    nothing about the agent.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_args(cls, payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            return payload
+        if not payload.get("args"):
+            for alias in ("parameters", "arguments", "params", "arg_names"):
+                value = payload.get(alias)
+                if isinstance(value, list) and value:
+                    payload["args"] = value
+                    break
+                # Some writers give {name: type} where a list was asked for. The keys are the
+                # argument names, which is exactly what was wanted.
+                if isinstance(value, dict) and value:
+                    payload["args"] = list(value)
+                    payload.setdefault(
+                        "arg_types", {k: str(v) for k, v in value.items()}
+                    )
+                    break
+        if not payload.get("args"):
+            # Nothing named the arguments directly, but a per-argument map still names them.
+            for source in ("arg_types", "arg_values"):
+                mapping = payload.get(source)
+                if isinstance(mapping, dict) and mapping:
+                    payload["args"] = list(mapping)
+                    break
+        if isinstance(payload.get("args"), str):
+            payload["args"] = [payload["args"]]
+        if isinstance(payload.get("args"), list):
+            payload["args"] = [str(one) for one in payload["args"]]
+        return payload
+
     name: str
     args: list[str] = Field(default_factory=list)
     arg_types: dict[str, str] = Field(default_factory=dict)
@@ -70,7 +116,9 @@ class AgentContract(BaseModel):
                 payload[key] = {"value": value}
         return payload
 
-    agent: str
+    # Defaulted rather than mandatory so a submission that forgets it reaches validate_contract,
+    # which says what to do about it, instead of dying in the schema layer with a type error.
+    agent: str = ""
     one_liner: str = ""
     modality: str = "chat"
     conversational: bool = True

@@ -1332,7 +1332,7 @@ def test_writing_new_results_keeps_the_ones_not_rerun(tmp_path):
     assert kept["b"]["passed"] is True and kept["b"]["transcript"] == "hello"
 
 
-def test_submit_contract_requires_only_what_the_gate_demands(tmp_path):
+def test_submit_contract_schema_teaches_and_leaves_gating_to_the_gate(tmp_path):
     """Every field marked required is rejected by the schema layer one at a time, a full model
     turn each, before accept_contract can explain anything. Only the fields validate_contract
     refuses to live without may be required; the rest are optional and gated with real messages."""
@@ -1340,6 +1340,7 @@ def test_submit_contract_requires_only_what_the_gate_demands(tmp_path):
 
     from mcp.types import ListToolsRequest
 
+    from fi.alk.harness.contract import MODALITIES
     from fi.alk.harness.tools import contract_tools
 
     server = contract_tools(tmp_path)
@@ -1353,7 +1354,19 @@ def test_submit_contract_requires_only_what_the_gate_demands(tmp_path):
         return {}
 
     schema = asyncio.run(schema_of())
-    assert sorted(schema.get("required", [])) == ["agent", "real_use_cases", "tools"]
+    # Nothing required at the schema layer: accept_contract is the only gate, and it reports
+    # every problem at once with what to do, which a JSON-schema rejection cannot.
+    # Nothing required: this layer runs before the tool body, so whatever it rejects never
+    # reaches the code that could have understood it. accept_contract is the single gate.
+    assert schema.get("required") == []
+    assert "required" not in schema["properties"]["tools"]["items"]
+    # And the schema has to teach, not just validate — it is shown before the first call.
+    described = [
+        name for name, spec in schema["properties"].items() if spec.get("description")
+    ]
+    assert len(described) >= 10, "properties must describe themselves"
+    assert schema["properties"]["modality"]["enum"] == list(MODALITIES)
+    assert schema["properties"]["tools"]["items"]["properties"]["arg_values"]
 
 
 def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
@@ -1453,3 +1466,138 @@ def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
     said = asyncio.run(call())
     assert "Handed over" in said
     assert conversation._handoff["request"] == "create the world"
+
+
+def test_every_problem_is_reported_at_once_with_what_to_do(tmp_path):
+    """Revealing the next problem only after the last is fixed costs a turn per problem and
+    reads as though the rules are being invented as it goes."""
+    from fi.alk.harness.tools import accept_contract
+
+    result = accept_contract({"agent": "", "tools": [], "real_use_cases": []}, tmp_path)
+    said = result["content"][0]["text"]
+    assert result["is_error"]
+    # all three, in one answer
+    assert "empty:agent" in said and "no-tools" in said and "no-use-cases" in said
+    # and each carries what to do about it, not only its code
+    assert "artifact folder" in said and "real tools" in said
+    assert not (tmp_path / "contract.json").exists()
+
+
+def test_a_contract_sent_inside_a_wrapper_is_unwrapped(tmp_path):
+    """A contract is a nested thing being described, so it arrives as {"contract": {...}} often
+    enough to matter. Every field is right; only the envelope is wrong, and rejecting that
+    teaches nothing while costing a turn."""
+    from fi.alk.harness.tools import accept_contract, unwrapped
+
+    inner = {
+        "agent": "wrapped",
+        "tools": [{"name": "act", "args": ["x"]}],
+        "real_use_cases": ["do the thing"],
+        "hard_constraints": ["a rule"],
+        "system_prompt_excerpt": "you are a bot",
+    }
+    assert unwrapped({"contract": inner}) == inner
+    assert unwrapped(inner) == inner
+    # a real field that merely holds a dict must not be mistaken for an envelope
+    plain = {"agent": "x", "tools": [], "data_schema": {"agent": 1}}
+    assert unwrapped(plain) == plain
+
+    result = accept_contract({"contract": inner}, tmp_path)
+    assert not result.get("is_error"), result["content"][0]["text"]
+    assert (tmp_path / "contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        {"name": "order", "parameters": ["item_id", "size"]},
+        {"name": "order", "arguments": ["item_id", "size"]},
+        {"name": "order", "params": ["item_id", "size"]},
+        {"name": "order", "arg_types": {"item_id": "str", "size": "str"}},
+        {"name": "order", "parameters": {"item_id": "str", "size": "str"}},
+    ],
+)
+def test_a_tool_written_with_a_synonym_still_records_its_arguments(written):
+    """args drives the handlers, the probes and every scenario. It is also the field most often
+    written under another name, and a contract bounced for a synonym costs a turn and teaches
+    nothing about the agent."""
+    spec = ToolSpec.model_validate(written)
+    assert spec.args == ["item_id", "size"]
+
+
+def test_a_tool_that_really_takes_nothing_stays_empty():
+    """A tool genuinely taking no arguments is ordinary and must not be invented into one."""
+    assert ToolSpec.model_validate({"name": "list_order_items"}).args == []
+
+
+def test_a_stringified_contract_is_parsed_rather_than_refused(tmp_path):
+    from fi.alk.harness.tools import accept_contract, unwrapped
+
+    inner = {
+        "agent": "stringy",
+        "tools": [{"name": "act", "args": ["x"]}],
+        "real_use_cases": ["do it"],
+        "hard_constraints": ["a rule"],
+    }
+    assert unwrapped({"contract": json.dumps(inner)}) == inner
+    assert unwrapped({"payload": json.dumps({"contract": inner})}) == inner
+    assert not accept_contract({"contract": json.dumps(inner)}, tmp_path).get("is_error")
+
+
+def test_an_unrecognised_payload_is_told_what_arrived(tmp_path):
+    """Otherwise the answer is 'agent is empty, there are no tools' about a submission that
+    contained both, and the only way out is guessing at the packaging."""
+    from fi.alk.harness.tools import accept_contract
+
+    said = accept_contract({"stuff": 1, "other": 2}, tmp_path)["content"][0]["text"]
+    assert "What arrived was: other, stuff" in said
+    assert "top-level arguments" in said
+
+
+def test_a_skill_only_names_tools_its_stage_actually_has():
+    """A SKILL.md is the method; the tools are the surface it is written against. They live in
+    different files, so a renamed tool leaves the skill telling the model to call something that
+    does not exist — and the model then hunts for it and works around the gate. Nothing else
+    catches that, because both halves are individually valid."""
+    import re
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.run import tools as run_tools
+    from fi.alk.harness.tools import CONTRACT_SERVER  # noqa: F401
+    from fi.alk.harness.world import tools as world_tools
+
+    surface = {
+        "understand-agent": {"submit_contract"},
+        "build-environment": set(world_tools.TOOL_NAMES),
+        "write-scenarios": set(scenario_tools.TOOL_NAMES),
+        "run-scenarios": set(run_tools.TOOL_NAMES),
+    }
+    # A skill also backticks the names of fields it is telling the model to fill in. Those are
+    # not tools, and the list of them is derived rather than hand-kept so it cannot go stale.
+    from fi.alk.harness.contract import AgentContract, ToolSpec
+    from fi.alk.harness.environment import SubGoal
+    from fi.alk.harness.scenario import Scenario
+
+    fields = set()
+    for model in (AgentContract, ToolSpec, Scenario, SubGoal):
+        fields |= set(model.model_fields)
+    # Names from the check-writing examples the skills contain.
+    from fi.alk.harness.contract import MODALITIES
+
+    ignore = (
+        fields
+        | set(MODALITIES)
+        | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
+    )
+
+    for stage, tools in surface.items():
+        text = (SKILLS_ROOT / stage / "SKILL.md").read_text(encoding="utf-8")
+        # `name` or `name(` — the way a skill refers to a tool it wants called.
+        mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
+        unknown = {
+            name
+            for name in mentioned - tools - ignore
+            if name not in {"hand_to_next_stage", "AskUserQuestion"}
+        }
+        assert not unknown, f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
