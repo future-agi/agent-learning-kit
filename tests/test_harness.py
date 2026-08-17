@@ -1982,3 +1982,19 @@ def test_any_stage_whose_input_exists_can_be_opened(tmp_path):
     assert open_now["build"] == "", open_now
     assert open_now["scenarios"] == "", open_now
     assert "needs scenarios" in open_now["run"]
+
+
+def test_reception_can_hand_over_in_the_turn_that_finds_the_agent(tmp_path):
+    """The source is read off the reception stage after its turn ends, so within that turn the
+    conversation does not know it yet. Without allowing for that, the stage that has just
+    succeeded is told it has produced nothing and the handoff is refused."""
+    from fi.alk.harness.chat import Conversation
+    from fi.alk.harness.sources import RepoSource
+
+    conversation = Conversation(out=tmp_path)
+    conversation.stage_name = "reception"
+    assert conversation.next_stage() is None, "nothing pointed at yet"
+
+    # what point_at_agent does, mid-turn
+    conversation._found["source"] = RepoSource(name="x", root=tmp_path)
+    assert conversation.next_stage() == "understand"
