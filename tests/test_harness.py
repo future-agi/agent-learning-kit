@@ -332,7 +332,7 @@ def test_the_skill_exists_and_forbids_guessing():
 
 
 def test_artifacts_land_under_the_agent_name():
-    assert artifact_dir("drive_thru").as_posix().endswith("environments/drive_thru")
+    assert artifact_dir("drive_thru").as_posix().endswith("sessions/drive_thru")
 
 
 def test_cli_defaults_to_staying_open_for_corrections():
@@ -477,7 +477,7 @@ def test_pointing_at_an_agent_settles_where_its_artifacts_go(tmp_path):
         conversation.out = conversation.out or artifact_dir(settled.name)
 
     asyncio.run(_settle())
-    assert conversation.out.as_posix().endswith("environments/mine")
+    assert conversation.out.as_posix().endswith("sessions/mine")
     assert conversation._resume_at() == UNDERSTAND
 
 
@@ -1884,3 +1884,101 @@ def test_every_stage_is_told_what_the_harness_is_for():
         # the ideas a stage must not be able to miss
         assert "Code decides what is true" in text, stage
         assert "refusal" in text and "crash" in text, stage
+
+
+# --- sessions: one conversation, one folder -------------------------------------------
+
+
+def test_a_session_is_a_folder_that_knows_what_it_holds(tmp_path):
+    """Nothing is held in memory that is not also on disk, so closing the page, restarting the
+    server or coming back tomorrow all resume by reading the folder."""
+    from fi.alk.harness import sessions
+
+    one = sessions.create(agent="drive_thru", source="/somewhere/agent", base=tmp_path)
+    assert one.id.startswith("drive-thru-")
+    assert (one.path / "session.json").exists()
+
+    has = one.has()
+    assert has == {
+        "contract": False, "world": False, "simulator_prompt": False,
+        "sub_goals": 0, "scenarios": 0, "validated": None,
+        "runs": 0, "runs_passed": 0, "messages": 0,
+    }
+
+    again = sessions.load(one.id, tmp_path)
+    assert again is not None
+    assert again.agent == "drive_thru" and again.source == "/somewhere/agent"
+
+
+def test_two_goes_at_the_same_agent_are_two_sessions(tmp_path):
+    from fi.alk.harness import sessions
+
+    first = sessions.create(agent="same", base=tmp_path)
+    second = sessions.create(agent="same", base=tmp_path)
+    assert first.id != second.id
+    assert {one.id for one in sessions.every(tmp_path)} == {first.id, second.id}
+
+
+def test_the_conversation_is_kept_in_the_session_folder(tmp_path):
+    """A refresh must not lose what was said."""
+    from fi.alk.harness import sessions
+
+    one = sessions.create(agent="talky", base=tmp_path)
+    sessions.remember(one.path, sessions.Message(role="you", text="hello", stage="reception"))
+    sessions.remember(
+        one.path,
+        sessions.Message(
+            role="harness", text="hi", stage="reception",
+            tools=[{"label": "point at agent", "said": ["Pointed at talky"]}],
+        ),
+    )
+    said = sessions.history(one.path)
+    assert [m["role"] for m in said] == ["you", "harness"]
+    assert said[1]["tools"][0]["label"] == "point at agent"
+    assert one.has()["messages"] == 2
+
+    # A half-written final line is what a killed process leaves; it must not take the rest.
+    with (one.path / "chat.jsonl").open("a", encoding="utf-8") as file:
+        file.write('{"role": "you", "text": "cut off')
+    assert len(sessions.history(one.path)) == 2
+
+
+def test_deleting_a_session_will_not_reach_outside_the_sessions_root(tmp_path):
+    """A mistyped id must never take anything else with it."""
+    from fi.alk.harness import sessions
+
+    one = sessions.create(agent="doomed", base=tmp_path)
+    outsider = tmp_path.parent / "not-a-session"
+    outsider.mkdir(exist_ok=True)
+
+    assert sessions.remove("../not-a-session", tmp_path) is False
+    assert outsider.exists()
+    assert sessions.remove("no-such-session", tmp_path) is False
+
+    assert sessions.remove(one.id, tmp_path) is True
+    assert not one.path.exists()
+
+
+def test_any_stage_whose_input_exists_can_be_opened(tmp_path):
+    """Stages are not a wizard. Coming back to correct a contract after the world is built is
+    the ordinary case, so what cannot be skipped is the input, not the order."""
+    from fi.alk.harness.chat import Conversation
+    from fi.alk.harness.tools import accept_contract
+
+    empty = Conversation(out=tmp_path)
+    blocked = empty.reachable()
+    assert blocked["reception"] == ""
+    assert "where its source lives" in blocked["understand"]
+    assert "needs a contract" in blocked["build"]
+    # Without a contract, every later stage says so — not "needs a world", which would send
+    # somebody to build one against nothing.
+    assert "needs a contract" in blocked["scenarios"]
+    assert "needs a contract" in blocked["run"]
+
+    root, contract, _catalogue = _built_environment(tmp_path / "built")
+    accept_contract(contract.model_dump(), root)
+    ready = Conversation(out=root)
+    open_now = ready.reachable()
+    assert open_now["build"] == "", open_now
+    assert open_now["scenarios"] == "", open_now
+    assert "needs scenarios" in open_now["run"]
