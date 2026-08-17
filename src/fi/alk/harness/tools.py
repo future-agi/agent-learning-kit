@@ -256,11 +256,42 @@ def contract_tools(destination: Path) -> Any:
                     "anything that looks like a mistake. The world is a replica, not a "
                     "corrected version.",
                 },
+                "dependencies": {
+                    "type": "array",
+                    "description": "Everything this agent reaches for that has to exist before "
+                    "it can work, so the next stage knows what to build. A datastore, a service "
+                    "it calls over HTTP, a file it reads, a queue it publishes to. The world is "
+                    "a sandbox and nothing reaches outside it, so each of these is built inside "
+                    "it — the agent's call goes to something real that happens to be ours.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "description": "datastore, service, file, queue, or whatever "
+                                "this actually is.",
+                            },
+                            "what": {
+                                "type": "string",
+                                "description": "What it holds or answers, and what the agent "
+                                "needs from it.",
+                            },
+                            "used_by": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The tools that cannot work without it.",
+                            },
+                        },
+                    },
+                },
                 "real_use_cases": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Concrete situations this agent exists to handle, drawn from "
-                    "its tools and data rather than invented.",
+                    "description": "What this agent is for, one plain sentence each. These are "
+                    "capabilities, not test cases: 'cancel an order that has not shipped', not "
+                    "a narrated situation with a customer, a name and an outcome. Scenarios are "
+                    "written later, from these.",
                 },
                 "notes": {
                     "type": "string",

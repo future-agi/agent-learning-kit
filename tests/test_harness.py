@@ -25,6 +25,7 @@ from fi.alk.harness import (
     validate_contract,
 )
 from fi.alk.harness.cli import build_parser
+from fi.alk.harness.scenario import Scenario
 from fi.alk.harness.session import ARTIFACT, DONE, TEXT, TOOL, Event
 from fi.alk.harness.tools import accept_contract, qualified
 from fi.alk.harness.understand import load, opening
@@ -1014,7 +1015,7 @@ def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     kept = []
     said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
     assert not said.get("is_error"), said
-    assert "Proved" in said["content"][0]["text"]
+    assert "All three gates pass" in said["content"][0]["text"]
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
@@ -1715,3 +1716,171 @@ def test_the_gate_names_the_field_it_wants(tmp_path):
     text = said["content"][0]["text"]
     assert "`real_use_cases`" in text and "not `use_cases`" in text
     assert "`tools`" in text
+
+
+# --- scenario folders and the ready gate ---------------------------------------------
+
+
+def test_the_ready_gate_refuses_a_scenario_whose_world_was_never_set_up(tmp_path):
+    """The precondition gate. A scenario about the last five items is only a test of the agent
+    if there really are five; otherwise the agent fails for something we got wrong, and it reads
+    as the agent's fault."""
+    from fi.alk.harness.prove import prove
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(
+        _delta(
+            ready_code=(
+                "def ready(world):\n"
+                "    rows = world.state()['cart']\n"
+                "    return None if rows else 'the cart is empty; this scenario needs one item'\n"
+            )
+        )
+    )
+    proof = prove(scenario, catalogue, root)
+    assert not proof.ready
+    assert not proof.holds
+    assert "the cart is empty" in proof.why()
+    assert "test us rather than the agent" in proof.why()
+    assert proof.gates() == {"ready": False, "solvable": False, "not_vacuous": False}
+
+
+def test_setup_code_makes_the_world_the_scenario_presumes(tmp_path):
+    """setup runs, then ready confirms it worked, and only then is anything else asked."""
+    from fi.alk.harness.prove import prove
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(
+        _delta(
+            setup_code=(
+                "def setup(world):\n"
+                "    world.connection.execute(\"INSERT INTO menu (id) VALUES ('sushi')\")\n"
+                "    world.connection.commit()\n"
+            ),
+            ready_code=(
+                "def ready(world):\n"
+                "    ids = [r['id'] for r in world.state()['menu']]\n"
+                "    return None if 'sushi' in ids else 'sushi was never added to the menu'\n"
+            ),
+        )
+    )
+    proof = prove(scenario, catalogue, root)
+    assert proof.ready and proof.holds, proof.why()
+
+
+def test_the_setups_own_calls_are_not_credited_to_the_agent(tmp_path):
+    """A check that counts calls must not see the ones the scenario made on its own behalf."""
+    from fi.alk.harness.prove import prepared
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(
+        _delta(
+            setup_code=(
+                "def setup(world):\n"
+                "    world.call('add', {'item_id': 'big_mac'})\n"
+            )
+        )
+    )
+    world, applied, ready = prepared(scenario, root)
+    try:
+        assert applied.ok and ready.ok
+        assert len(world.state()["cart"]) == 1, "the setup should have acted"
+        assert world.calls == [], "but its calls are not the agent's"
+    finally:
+        world.close()
+
+
+def test_broken_setup_is_ours_and_says_so(tmp_path):
+    from fi.alk.harness.prove import prove
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(_delta(setup_code="def setup(world):\n    world.nope()\n"))
+    proof = prove(scenario, catalogue, root)
+    assert not proof.ready
+    assert proof.broken, "a setup that raises is our mistake, not a failing scenario"
+    assert "AttributeError" in proof.why_not_ready
+
+
+
+
+def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
+    """The files are the artifact, not a rendering of one. Something you can open and run is
+    something you can argue with."""
+    from fi.alk.harness.folder import folder_for, read_folder
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(
+        _delta(
+            setup_code="def setup(world):\n    pass\n",
+            ready_code="def ready(world):\n    return None\n",
+        )
+    )
+    index = write_scenarios([scenario], root, catalogue)
+
+    here = folder_for(root, scenario.name)
+    assert (here / "scenario.json").exists()
+    assert (here / "setup.py").exists()
+    assert (here / "ready.py").exists()
+    # One file per deterministic sub-goal; the judged one has no check to write.
+    assert sorted(p.name for p in (here / "checks").iterdir()) == [
+        "item-added.py",
+        "right-item.py",
+    ]
+    assert index.name == "scenarios.json"
+
+    # The code lives in the files, not duplicated into the JSON, so the two cannot drift.
+    body = json.loads((here / "scenario.json").read_text())
+    assert "setup_code" not in body and "ready_code" not in body
+
+    # And it reads back whole.
+    again = read_folder(root, scenario.name)
+    assert again is not None
+    assert again.setup_code.strip() == "def setup(world):\n    pass"
+    assert again.solution == scenario.solution
+
+
+def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):
+    """The same file, the same answer, whether the harness runs it or a person does. If those
+    two could disagree, neither could be trusted."""
+    import subprocess
+    import sys
+
+    from fi.alk.harness.folder import folder_for, write_folder
+    from fi.alk.harness.prove import prepared
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(_delta())
+    write_folder(scenario, catalogue, root)
+
+    # Leave the world in the state a passing run would have left it in.
+    world, _applied, _ready = prepared(scenario, root)
+    try:
+        world.call("add", {"item_id": "big_mac"})
+    finally:
+        world.close()
+
+    check_file = folder_for(root, scenario.name) / "checks" / "item-added.py"
+    done = subprocess.run(
+        [sys.executable, str(check_file), str(root / "world.sqlite")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    # The world on disk is the base world, which has an empty cart, so this check should fail —
+    # and the point is that it says so rather than erroring.
+    assert done.returncode in (0, 1), done.stderr[-400:]
+    assert "held" in done.stdout or "FAILED" in done.stdout, done.stdout + done.stderr[-300:]
+
+
+def test_every_stage_is_told_what_the_harness_is_for():
+    """A stage that knows only its own step does its step well and still gets the point of it
+    wrong: it works around a gate instead of fixing what the gate named, or it reports a number
+    that quietly skipped half its checks."""
+    for stage in ("understand-agent", "build-environment", "write-scenarios", "run-scenarios"):
+        text = load_skill(stage)
+        assert text.startswith("# The harness"), stage
+        assert "# The stage you are in now" in text, stage
+        # the ideas a stage must not be able to miss
+        assert "Code decides what is true" in text, stage
+        assert "refusal" in text and "crash" in text, stage

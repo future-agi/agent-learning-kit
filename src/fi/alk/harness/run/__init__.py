@@ -1,7 +1,7 @@
 """Stage four: run the scenarios against the world and say what happened.
 
 Every scenario gets its own world. It is restored from the frozen snapshot, the scenario's own
-rows are laid on top, and it is thrown away afterwards. Nothing a scenario does can reach the
+setup is run against it, and it is thrown away afterwards. Nothing a scenario does can reach the
 next one, which is what makes a result mean something on its own and makes the whole suite
 repeatable a week later.
 
@@ -19,7 +19,8 @@ from typing import Any, Callable, Sequence
 from ..contract import AgentContract
 from ..environment import load_catalogue, load_simulator_prompt
 from ..scenario import Scenario
-from ..world.snapshot import apply_overlay, restore
+from ..folder import apply_setup, check_ready
+from ..world.snapshot import restore
 from .conversation import FINISHED, Exchange, Transcript, converse
 from .grade import (
     Checkpoint,
@@ -85,11 +86,21 @@ async def run_scenario(
     catalogue = load_catalogue(world_root)
     world = restore(world_root)
     try:
-        apply_overlay(world, scenario.setup)
-        # reset() is how an environment is started in ALK: it clears the call log and publishes
-        # the tools and the starting state. Going through it keeps a generated world drivable by
-        # anything that already drives an environment.
+        # reset() is how an environment is started in ALK: it clears the call log and
+        # publishes the tools and the starting state. Going through it keeps a generated world
+        # drivable by anything that already drives an environment.
         world.reset()
+        applied = apply_setup(scenario, world)
+        if not applied.ok:
+            raise RuntimeError(f"the scenario's setup did not run: {applied.said}")
+        ready = check_ready(scenario, world)
+        if not ready.ok:
+            raise RuntimeError(
+                f"the world is not ready for this scenario: {ready.said}. Running it would "
+                "test us rather than the agent."
+            )
+        # The setup's calls are not the agent's.
+        world.calls = []
         if through_alk:
             # ALK owns the simulation and drives the world through EnvironmentAdapter; the
             # harness only grades what it is left with. Nothing here is modality-specific,

@@ -1,19 +1,27 @@
 """Proving a scenario is worth keeping, before anything is ever run against the agent.
 
-Two gates, both pure code. No model is asked whether a scenario is good; the environment decides.
+Three gates, all pure code. No model is asked whether a scenario is good; the environment
+decides. Terminal-bench keeps its tasks honest this way, and it is the cheapest useful thing in
+the whole harness: no tokens, no network, a few milliseconds.
 
-**Solvable.** Reset the world, apply the scenario's own setup, run its reference solution, run
-its checks. They must pass. If they do not, either the scenario cannot be passed at all or its
-checks are wrong, and both have happened here: one scenario asserted a value the agent was never
-permitted to send; another demanded confirmation of an item that could not be ordered. Neither
-was noticed until a live run failed and read as a finding about the agent.
+**Ready.** Reset the world, run the scenario's own ``setup.py``, then its ``ready.py``. The world
+has to hold what the scenario presumes. A scenario about the last five chocolates is only a test
+of the agent if there really are five; otherwise the agent fails for something we got wrong and
+it reads as the agent's fault. This gate is why a missing precondition can never be mistaken for
+a finding.
 
-**Not vacuous.** Reset, apply the setup, run *nothing*, run the checks. They must fail. A check
-that passes with no actions taken grades nothing while reporting a result, which is how a suite
-goes quietly green.
+**Solvable.** Then run the reference solution and the checks. They must pass. If they do not,
+either the scenario cannot be passed at all or its checks are wrong, and both have happened
+here: one scenario asserted a value the agent was never permitted to send; another demanded
+confirmation of an item that could not be ordered. Neither was noticed until a live run failed
+and read as a finding about the agent.
 
-Terminal-bench keeps its tasks honest this way, and it is the cheapest useful thing in the whole
-harness: no tokens, no network, a few milliseconds.
+**Not vacuous.** Then reset, set up again, run *nothing*, and run the checks. They must fail. A
+check that passes with no actions taken grades nothing while reporting a result, which is how a
+suite goes quietly green. This one earns its keep: on a third-party benchmark it caught three
+sub-goals that passed trivially because the seeded world already contained a cancelled order.
+
+Only a scenario that clears all three is kept. That is the green light.
 """
 
 from __future__ import annotations
@@ -23,17 +31,20 @@ from pathlib import Path
 
 from .checks import Outcome, run_check
 from .environment import Catalogue
+from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import apply_overlay, restore
+from .world.snapshot import restore
 
 
 @dataclass
 class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
 
+    ready: bool = False
     solvable: bool = False
     vacuous: bool = True
+    why_not_ready: str = ""
     with_solution: list[Outcome] = field(default_factory=list)
     with_nothing: list[Outcome] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
@@ -41,10 +52,25 @@ class Proof:
 
     @property
     def holds(self) -> bool:
-        return self.solvable and not self.vacuous and not self.broken
+        return self.ready and self.solvable and not self.vacuous and not self.broken
+
+    def gates(self) -> dict[str, bool]:
+        """The three answers, for anything that wants to show them."""
+        return {
+            "ready": self.ready,
+            "solvable": self.solvable,
+            "not_vacuous": not self.vacuous,
+        }
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
+        if not self.ready:
+            return (
+                "the world is not ready for this scenario, so running it would test us rather "
+                f"than the agent:\n  - {self.why_not_ready}\n\n"
+                "Either setup.py does not make the change this scenario needs, or ready.py is "
+                "checking for something the setup never creates."
+            )
         if self.broken:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(
                 self.broken
@@ -60,9 +86,7 @@ class Proof:
             )
             return (
                 "the reference solution does not pass this scenario's own checks, so either the "
-                "scenario cannot be passed or the checks are wrong:\n  - "
-                + said
-                + refusals
+                "scenario cannot be passed or the checks are wrong:\n  - " + said + refusals
             )
         if self.vacuous:
             passed = [one.name for one in self.with_nothing if one.held]
@@ -92,13 +116,25 @@ def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str
     return chosen
 
 
+def prepared(
+    scenario: Scenario, world_root: Path
+) -> tuple[GeneratedWorld, Outcome, Outcome]:
+    """A fresh world with this scenario's setup applied, and how that went."""
+    world = restore(world_root)
+    world.reset()
+    applied = apply_setup(scenario, world)
+    ready = check_ready(scenario, world) if applied.ok else Outcome(False, applied.said)
+    # The setup's own calls are not the agent's. Clearing them keeps a check that counts calls
+    # from crediting the agent with work the scenario did on its behalf.
+    world.calls = []
+    return world, applied, ready
+
+
 def _run(
     scenario: Scenario, world_root: Path, *, with_solution: bool
 ) -> tuple[GeneratedWorld, list[Call], list[str]]:
-    """A fresh world with the scenario's setup, optionally with the solution played through it."""
-    world = restore(world_root)
-    apply_overlay(world, scenario.setup)
-    world.reset()
+    """A world set up for this scenario, optionally with the solution played through it."""
+    world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     if with_solution:
         for step in scenario.solution:
@@ -109,7 +145,7 @@ def _run(
 
 
 def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
-    """Run both gates and say whether this scenario is worth keeping."""
+    """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
     if not checks:
@@ -119,6 +155,22 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
         ]
         return proof
 
+    # Gate 1: is the world ready for this scenario at all?
+    world, applied, ready = prepared(scenario, world_root)
+    world.close()
+    if not applied.ok:
+        proof.why_not_ready = applied.said
+        if applied.broken:
+            proof.broken = [applied.said]
+        return proof
+    if not ready.ok:
+        proof.why_not_ready = ready.said
+        if ready.broken:
+            proof.broken = [ready.said]
+        return proof
+    proof.ready = True
+
+    # Gate 2: does the reference solution pass this scenario's own checks?
     world, calls, refused = _run(scenario, world_root, with_solution=True)
     try:
         proof.with_solution = [
@@ -130,6 +182,7 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
 
+    # Gate 3: do those same checks fail when nothing is done?
     untouched, nothing, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [

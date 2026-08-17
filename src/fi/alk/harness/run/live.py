@@ -26,7 +26,8 @@ from ..checks import Outcome, run_check
 from ..environment import fill, load_catalogue, load_simulator_prompt
 from ..scenario import Scenario
 from ..world.runtime import GeneratedWorld
-from ..world.snapshot import apply_overlay, restore
+from ..folder import apply_setup, check_ready
+from ..world.snapshot import restore
 from .voice import WorldWebhook, repoint_assistant
 
 
@@ -91,8 +92,18 @@ def prepare(scenario: Scenario, world_root: Path) -> tuple[GeneratedWorld, str]:
     step wrote. Nothing about how a caller behaves is decided here; that belongs to the prompt.
     """
     world = restore(world_root)
-    apply_overlay(world, scenario.setup)
     world.reset()
+    applied = apply_setup(scenario, world)
+    if not applied.ok:
+        raise RuntimeError(f"the scenario's setup did not run: {applied.said}")
+    ready = check_ready(scenario, world)
+    if not ready.ok:
+        raise RuntimeError(
+            f"the world is not ready for this scenario: {ready.said}. Running it would test us "
+            "rather than the agent."
+        )
+    # The setup's own calls are not the agent's.
+    world.calls = []
 
     written = load_simulator_prompt(world_root)
     if not written:

@@ -98,6 +98,24 @@ class ToolSpec(BaseModel):
     description: str = ""
 
 
+class Dependency(BaseModel):
+    """Something the agent reaches for that has to exist before it can work.
+
+    This is what tells the environment stage there is a service to stand up, rather than leaving
+    it to notice halfway through that a tool has nothing to answer it. The world is a sandbox:
+    whatever is named here gets built inside it, so the agent's call goes to something real that
+    happens to be ours.
+    """
+
+    name: str
+    # datastore, service, file, queue — whatever kind of thing this is. Left open rather than
+    # enumerated, because the next agent will need a kind nobody has thought of yet.
+    kind: str = ""
+    what: str = ""
+    # The tools that cannot work without it. An unreferenced dependency is usually a mistake.
+    used_by: list[str] = Field(default_factory=list)
+
+
 class AgentContract(BaseModel):
     """What the agent verifiably is. Nothing downstream may contradict this."""
 
@@ -152,6 +170,8 @@ class AgentContract(BaseModel):
     tools: list[ToolSpec] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
+    # What the environment stage has to build before any tool can be answered.
+    dependencies: list[Dependency] = Field(default_factory=list)
     real_use_cases: list[str] = Field(default_factory=list)
     # Free-form. The fields above are the fixed core because code consumes them; this is where
     # the reader records whatever else about *this* agent is worth carrying forward — quirks,
@@ -211,6 +231,15 @@ class AgentContract(BaseModel):
                 "price. The world is a replica of what the agent has, not a corrected version,\n"
                 "and a test written against a corrected world will not catch the real bug.\n"
                 + json.dumps(self.base_environment, ensure_ascii=False)
+            )
+        if self.dependencies:
+            parts.append(
+                "WHAT THIS AGENT DEPENDS ON (the environment has to provide each of these):\n  - "
+                + "\n  - ".join(
+                    f"{one.name} ({one.kind or 'unspecified'}): {one.what}"
+                    + (f" — used by {', '.join(one.used_by)}" if one.used_by else "")
+                    for one in self.dependencies
+                )
             )
         if self.real_use_cases:
             parts.append(

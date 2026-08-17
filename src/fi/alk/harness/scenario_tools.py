@@ -1,11 +1,12 @@
 """The tools that write scenarios, and the gates that decide one may be kept.
 
-A scenario is accepted by being *proved*, not by looking right. ``submit_scenario`` restores a
-fresh world, applies the scenario's own setup, plays its reference solution through it, and runs
-the checks of every sub-goal it names. They must pass. Then it does the same with no solution at
-all, and they must fail. Only then is it kept.
+A scenario is accepted by being *proved*, not by looking right. ``submit_scenario`` puts it
+through three gates, in order: the world must end up holding what the scenario presumes, the
+reference solution must pass the scenario's own checks, and those same checks must fail when
+nothing is done at all.
 
-Both gates are code. No model is asked whether a scenario is good; the environment decides.
+Every gate is code. No model is asked whether a scenario is good; the environment decides. A
+scenario that clears all three is written out as its own folder of runnable files.
 """
 
 from __future__ import annotations
@@ -26,13 +27,13 @@ from .environment import (
     save_catalogue,
     validate_sub_goal,
 )
-from .prove import prove
+from .folder import apply_setup, read_all, write_folder, write_index
+from .prove import prepared, prove
 from .scenario import Scenario, validate_scenario
 from .tools import schema
-from .world.snapshot import apply_overlay, restore
+from .world.snapshot import restore
 
 SCENARIO_SERVER = "scenarios"
-SCENARIOS = "scenarios.json"
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -43,29 +44,23 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-def write_scenarios(scenarios: list[Scenario], destination: Path) -> Path:
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    path = destination / SCENARIOS
-    path.write_text(
-        json.dumps([one.model_dump() for one in scenarios], indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return path
+def write_scenarios(
+    scenarios: list[Scenario], destination: Path, catalogue: Catalogue | None = None
+) -> Path:
+    """Write every scenario out as its own folder, and regenerate the index over them."""
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
+    for one in scenarios:
+        write_folder(one, catalogue, destination)
+    return write_index(scenarios, destination)
 
 
 def load_scenarios(destination: Path) -> list[Scenario]:
-    path = Path(destination) / SCENARIOS
-    if not path.exists():
-        return []
-    try:
-        return [
-            Scenario.model_validate(entry)
-            for entry in json.loads(path.read_text(encoding="utf-8"))
-        ]
-    except Exception:
-        # Written in an older shape. Better to start clean than to half-read them.
-        return []
+    """Every scenario on disk, read from its folder.
+
+    The folders are the truth. The index beside them is regenerated from these, so it can
+    describe them but never contradict them.
+    """
+    return read_all(destination)
 
 
 def accept_scenario(
@@ -82,15 +77,10 @@ def accept_scenario(
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
 
-    trial = restore(world_root)
+    # Read against the world this scenario actually runs in, so a setup that creates the table
+    # a check reads is not reported as referring to something that does not exist.
+    trial, _applied, _ready = prepared(scenario, world_root)
     try:
-        try:
-            apply_overlay(trial, scenario.setup)
-        except Exception as failed:
-            return _err(
-                f"Not kept. The setup rows would not go into the world: {failed}\n"
-                "setup is {table: [{column: value}]}, and every column has to be one the table has."
-            )
         problems = validate_scenario(scenario, catalogue, trial.state(), simulator_prompt)
     finally:
         trial.close()
@@ -106,9 +96,9 @@ def accept_scenario(
     kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
     return _ok(
-        f"{scenario.name} {'replaced' if replaced else 'kept'}. Proved: the solution passes its "
-        f"checks, and they fail without it.\n{len(kept)} so far: "
-        + ", ".join(one.name for one in kept)
+        f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
+        "is ready for it, the reference solution passes its checks, and those checks fail when "
+        f"nothing is done.\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 
@@ -186,16 +176,21 @@ def scenario_tools(
     @tool(
         "try_calls",
         "Run calls against a throwaway copy of the world and see the state they leave. Use it to "
-        "work out a scenario's solution and what its checks should assert. Nothing is saved.",
-        schema({"calls": list, "setup": dict}, ["calls"]),
+        "work out a scenario's solution and what its checks should assert.\n\n"
+        "`setup_code` is optional: pass the same code you intend to give the scenario and the "
+        "calls run against a world it has already changed, so you can see what the agent would "
+        "actually face. Nothing is saved.",
+        schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
         world = restore(world_root)
         try:
-            try:
-                apply_overlay(world, args.get("setup") or {})
-            except Exception as failed:
-                return _err(f"the setup rows would not go in: {failed}")
+            world.reset()
+            trial = Scenario(name="trial", setup_code=str(args.get("setup_code") or ""))
+            applied = apply_setup(trial, world)
+            if not applied.ok:
+                return _err(f"the setup did not run: {applied.said}")
+            world.calls = []
             lines: list[str] = []
             for step in args.get("calls") or []:
                 if not isinstance(step, dict):
@@ -254,26 +249,74 @@ def scenario_tools(
 
     @tool(
         "submit_scenario",
-        "Keep one scenario. It is proved before it is kept: its solution is played through a "
-        "fresh world and its sub-goals' checks must pass, then the same checks run with nothing "
-        "done and must fail.\n\n"
-        "  name / use_case / tests\n"
-        "  setup: {table: [{column: value}]} — what this scenario changes after reset\n"
-        "  instruction: the task. For a conversational agent it fills the simulator prompt\n"
-        "  variables: any other slot that prompt asks for\n"
-        "  solution: [{tool, arguments}] — what a correct agent would do\n"
-        "  sub_goals: names from the catalogue that must hold",
+        "Keep one scenario. It is put through three gates before it is kept, and told which one "
+        "failed if any does:\n"
+        "  1. ready     — the world is restored, setup_code runs, then ready_code. The world "
+        "must end up holding what this scenario presumes.\n"
+        "  2. solvable  — the reference solution is played through that world and the checks of "
+        "every sub-goal named must pass.\n"
+        "  3. not vacuous — the same checks run again with nothing done at all, and must fail.\n\n"
+        "A scenario that clears all three is written out as its own folder of runnable files.",
         schema(
             {
-                "name": str,
-                "use_case": str,
-                "tests": str,
-                "setup": dict,
-                "instruction": str,
-                "variables": dict,
-                "solution": list,
-                "sub_goals": list,
-                "max_turns": int,
+                "name": {
+                    "type": "string",
+                    "description": "Short identifier, lower case with hyphens or underscores. "
+                    "It becomes this scenario's folder name.",
+                },
+                "use_case": {
+                    "type": "string",
+                    "description": "Which of the agent's use cases this belongs to.",
+                },
+                "tests": {
+                    "type": "string",
+                    "description": "One line: what this scenario is trying to find out.",
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "The task, written to the person the agent is serving. For a "
+                    "conversational agent this fills the simulator prompt's slot.",
+                },
+                "variables": {
+                    "type": "object",
+                    "description": "Any other slot the simulator prompt asks for, by name.",
+                },
+                "setup_code": {
+                    "type": "string",
+                    "description": "Python defining setup(world): the changes this scenario "
+                    "makes to the environment before the run. Leave empty to run on the base "
+                    "world unchanged. Use world.call(tool, args) to act through the agent's own "
+                    "tools, or world.connection for direct SQL. This is code and not a list of "
+                    "rows because a scenario may need more than a table changed.",
+                },
+                "ready_code": {
+                    "type": "string",
+                    "description": "Python defining ready(world): return None when the world "
+                    "holds what this scenario presumes, or a sentence naming what is missing. "
+                    "This is the precondition. If the scenario is about the last five items, "
+                    "check there are five. A scenario whose world was never right tests us, not "
+                    "the agent.",
+                },
+                "solution": {
+                    "type": "array",
+                    "description": "What a correct agent would do: the reference trajectory. "
+                    "Never run against the agent under test; it exists to prove the scenario "
+                    "can be passed at all.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "arguments": {"type": "object"},
+                        },
+                    },
+                },
+                "sub_goals": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Names from the shared catalogue that must hold. Use the "
+                    "existing names wherever one fits, so results add up across the suite.",
+                },
+                "max_turns": {"type": "integer"},
             },
             ["name", "instruction", "solution", "sub_goals"],
         ),
@@ -393,7 +436,7 @@ def scenario_tools(
         problems = not_ready(kept, target["count"], catalogue)
         if problems:
             return _err("Not saved. " + "\n  - ".join(problems))
-        path = write_scenarios(kept, destination)
+        path = write_scenarios(kept, destination, catalogue)
         judged = sum(
             1
             for one in kept
@@ -401,8 +444,11 @@ def scenario_tools(
             if (found := catalogue.named(name)) and not found.deterministic()
         )
         return _ok(
-            f"Saved {len(kept)} scenarios to {path}.\n"
-            "Every one is proved: its solution passes its checks, and they fail without it.\n"
+            f"Saved {len(kept)} scenarios. Each has its own folder under "
+            f"{destination / 'scenarios'} holding scenario.json, setup.py, ready.py and one "
+            f"runnable file per check; {path.name} indexes them.\n"
+            "Every one cleared all three gates: the world is ready for it, the reference "
+            "solution passes its checks, and those checks fail when nothing is done.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
 

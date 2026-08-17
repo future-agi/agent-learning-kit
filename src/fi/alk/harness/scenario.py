@@ -37,9 +37,21 @@ class Scenario(BaseModel):
     use_case: str = ""
     tests: str = ""
 
-    # What this scenario changes about the world after it is reset. The base world stays the
-    # shared starting point; this is the only sanctioned way a scenario differs from it.
-    setup: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # What this scenario changes about the world after it is reset, as code: a file defining
+    # ``setup(world)``. Rows in a table were enough while every world was a database, and they
+    # are not enough now — a scenario may need a service to start returning errors, a file to be
+    # missing, a queue to be backed up. Code can express all of that; a table of rows cannot.
+    setup_code: str = ""
+
+    # Whether the world is actually ready for this scenario, as code: a file defining
+    # ``ready(world)`` that answers with nothing when the world holds what this scenario
+    # presumes, or a sentence saying what is missing.
+    #
+    # This is the precondition, and it is the difference between a real finding and a wasted
+    # run: a scenario about the last five chocolates is only a test of the agent if there really
+    # are five. Otherwise the agent fails for something we got wrong, and it looks like the
+    # agent's fault.
+    ready_code: str = ""
 
     # The task. For a conversational agent it fills the simulator prompt's instruction slot; for
     # a browser or coding agent it goes to the agent directly.
@@ -90,21 +102,12 @@ def validate_scenario(
             f"them to the catalogue first. It has: {', '.join(sorted(catalogue.names())) or 'none'}"
         )
 
-    for table, rows in scenario.setup.items():
-        if table not in world_state:
-            problems.append(
-                f"setup changes {table!r}, which this world does not have. It has: "
-                f"{', '.join(sorted(world_state)) or 'nothing'}"
-            )
-            continue
-        columns = set(world_state[table][0]) if world_state[table] else set()
-        for row in rows or []:
-            unknown_columns = sorted(set(row) - columns) if columns else []
-            if unknown_columns:
-                problems.append(
-                    f"setup into {table} sets columns it does not have: "
-                    f"{', '.join(unknown_columns)}"
-                )
+    # setup_code and ready_code are not read here. Whether they work is not a question reading
+    # them can answer, and running them is exactly what the first gate does.
+    if scenario.setup_code.strip() and "def setup(" not in scenario.setup_code:
+        problems.append("setup_code must define setup(world)")
+    if scenario.ready_code.strip() and "def ready(" not in scenario.ready_code:
+        problems.append("ready_code must define ready(world)")
 
     if simulator_prompt:
         unfilled = sorted(variables_in(simulator_prompt) - set(scenario.slots()))
