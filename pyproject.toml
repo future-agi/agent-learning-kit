@@ -95,6 +95,12 @@ harness-ui = [
   "fastapi>=0.115,<1",
   "uvicorn>=0.30,<1",
 ]
+# Stores the harness can provision for an agent under test. Each engine the
+# harness can stand up needs a driver to seed it, read its state and put it
+# back; the container itself is pulled at build time, not declared here.
+harness-stores = [
+  "psycopg[binary]>=3.2",
+]
 feedback = ["chromadb>=0.4.0"]
 notebook = [
   "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb
