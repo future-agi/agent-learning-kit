@@ -45,6 +45,11 @@ class Proof:
     solvable: bool = False
     vacuous: bool = True
     why_not_ready: str = ""
+    # Checks that held with nothing done. The scenario is only vacuous when *every* check does
+    # that, but a single one still grades nothing, and since sub-goals are shared it will report
+    # itself as held for an agent that did nothing at all. Named rather than refused: on a
+    # scenario about a refusal, "no order was placed" holding on an untouched world is correct.
+    weak: list[str] = field(default_factory=list)
     with_solution: list[Outcome] = field(default_factory=list)
     with_nothing: list[Outcome] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
@@ -193,7 +198,8 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     # Vacuous only if *every* check still passes with nothing done. One check that survives an
     # empty run is often legitimate — "no order was placed" is a real thing to assert about a
     # refusal scenario — but a whole set of them means nothing is being graded.
-    proof.vacuous = bool(proof.with_nothing) and all(
-        one.held for one in proof.with_nothing
+    proof.weak = [one.name for one in proof.with_nothing if one.held]
+    proof.vacuous = bool(proof.with_nothing) and len(proof.weak) == len(
+        proof.with_nothing
     )
     return proof
