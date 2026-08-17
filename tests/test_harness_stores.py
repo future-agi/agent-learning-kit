@@ -90,7 +90,7 @@ def store():
     running = PostgresStore(version="16")
     running.start()
     try:
-        running.apply_sql(SCHEMA)
+        running.apply(SCHEMA)
         yield running
     finally:
         running.stop()
@@ -100,7 +100,7 @@ def store():
 def seeded(store):
     """A store holding the seed, put back after whatever the test does to it."""
     store.restore(Snapshot())
-    store.apply_sql(SEED)
+    store.apply(SEED)
     return store
 
 
@@ -128,9 +128,9 @@ def test_rows_come_back_in_a_stable_order(seeded) -> None:
 @pg
 def test_restore_puts_the_rows_back_exactly(seeded) -> None:
     baseline = seeded.freeze()
-    seeded.apply_sql("INSERT INTO orders (customer_id, item, quantity) VALUES (2, 'ham', 5)")
-    seeded.apply_sql("DELETE FROM orders WHERE customer_id = 2")
-    seeded.apply_sql("DELETE FROM customers WHERE name = 'bo'")
+    seeded.apply("INSERT INTO orders (customer_id, item, quantity) VALUES (2, 'ham', 5)")
+    seeded.apply("DELETE FROM orders WHERE customer_id = 2")
+    seeded.apply("DELETE FROM customers WHERE name = 'bo'")
     assert seeded.state() != baseline.rows
 
     seeded.restore(baseline)
@@ -142,10 +142,10 @@ def test_restore_puts_the_counters_back_too(seeded) -> None:
     """Without this the next scenario's first insert gets an id continuing from the last one,
     and a check naming a specific id fails for a reason that is not the agent's doing."""
     baseline = seeded.freeze()
-    seeded.apply_sql("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'ham', 1)")
+    seeded.apply("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'ham', 1)")
     seeded.restore(baseline)
 
-    seeded.apply_sql("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'swiss', 1)")
+    seeded.apply("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'swiss', 1)")
     fresh = [row for row in seeded.state()["orders"] if row["item"] == "swiss"]
     assert [row["id"] for row in fresh] == [2]
 
@@ -158,8 +158,8 @@ def test_restore_survives_foreign_keys_without_ordering_the_tables(seeded) -> No
     problem the snapshot means we do not have.
     """
     baseline = seeded.freeze()
-    seeded.apply_sql("DELETE FROM orders")
-    seeded.apply_sql("DELETE FROM customers")
+    seeded.apply("DELETE FROM orders")
+    seeded.apply("DELETE FROM customers")
     assert seeded.state()["customers"] == []
 
     seeded.restore(baseline)
@@ -176,7 +176,7 @@ def test_the_engine_produces_its_own_refusals(seeded) -> None:
     import psycopg
 
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
-        seeded.apply_sql(
+        seeded.apply(
             "INSERT INTO orders (customer_id, item, quantity) VALUES (999, 'x', 1)"
         )
 
@@ -186,7 +186,7 @@ def test_a_check_constraint_refuses_too(seeded) -> None:
     import psycopg
 
     with pytest.raises(psycopg.errors.CheckViolation):
-        seeded.apply_sql(
+        seeded.apply(
             "INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'turkey', 0)"
         )
 
