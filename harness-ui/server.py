@@ -356,7 +356,10 @@ async def say(said: Said):
             current.path,
             sessions.Message(
                 role="harness",
-                text="".join(spoken).strip(),
+                # Blank-line joined: one turn can speak several times, once per stage it passes
+                # through, and running those together reads as one garbled paragraph when the
+                # conversation is restored.
+                text="\n\n".join(one.strip() for one in spoken if one.strip()),
                 stage=conversation.stage_name,
                 tools=tools,
             ),
