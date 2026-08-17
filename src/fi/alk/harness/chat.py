@@ -91,7 +91,13 @@ class Conversation:
         return {
             # A contract already on disk settles which agent this is just as well as being told,
             # so coming back to an agent does not mean pointing at its repository again.
-            RECEPTION: self.source is not None or self.contract is not None,
+            #
+            # ``_found`` is checked too, because within the turn that points at an agent the
+            # source is not on the conversation yet — it is read off afterwards. Without it, the
+            # stage that has just succeeded is told it has produced nothing.
+            RECEPTION: self.source is not None
+            or self.contract is not None
+            or self._found.get("source") is not None,
             UNDERSTAND: self.contract is not None,
             BUILD: self.world_built,
             SCENARIOS: self.scenarios_written,
