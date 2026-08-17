@@ -22,6 +22,7 @@ from .runtime import GeneratedWorld
 DATABASE = "world.sqlite"
 HANDLERS = "handlers"
 MANIFEST = "manifest.json"
+STATE = "state.json"
 WORLD_MODULE = "world.py"
 
 _MODULE = '''"""Generated world for {agent}. Do not edit by hand; regenerate instead.
@@ -59,15 +60,15 @@ def save(
     *,
     notes: str = "",
     sequences: list[dict[str, Any]] | None = None,
+    world_checks: Mapping[str, str] | None = None,
 ) -> Path:
     """Write the world out: the snapshot, the handlers, the module, and a manifest."""
     root = Path(path)
     (root / HANDLERS).mkdir(parents=True, exist_ok=True)
 
-    frozen = sqlite3.connect(root / DATABASE)
-    with frozen:
-        world.connection.backup(frozen)
-    frozen.close()
+    # Through the store, so a world whose records live somewhere other than a SQLite file, or
+    # nowhere at all, freezes by its own means rather than by one assumed here.
+    world.store.save_to(root)
 
     for name, source in world.handlers.items():
         (root / HANDLERS / f"{name}.py").write_text(source, encoding="utf-8")
@@ -82,11 +83,30 @@ def save(
         encoding="utf-8",
     )
 
+    # The agent's own in-memory state, where its tools keep what they act on there rather
+    # than in the database. Frozen as JSON so restoring is the exact reverse, and so a
+    # person can read what the world starts from.
+    if world.state_object is not None:
+        # Round-tripped rather than only written. Every scenario restores from this file, so state
+        # that does not survive the trip would come back subtly different and every check after
+        # it would be grading something else. Better to fail here than to be wrong quietly.
+        frozen = json.dumps(world.state_object, indent=2, default=str)
+        if json.loads(frozen) != world.state_object:
+            raise ValueError(
+                "the agent's state does not survive being frozen as JSON, so restoring it would "
+                "not give back what was saved. Every scenario starts from that restore, so this "
+                "world cannot be trusted. What is in the state that is not plain JSON?"
+            )
+        (root / STATE).write_text(frozen, encoding="utf-8")
+
     state = world.state()
     (root / MANIFEST).write_text(
         json.dumps(
             {
                 "agent": world.name,
+                # Which store this world used, so restoring it opens the same one rather
+                # than assuming a database that may never have existed.
+                "store": getattr(world.store, "key", "sqlite"),
                 "tools": sorted(world.handlers),
                 # Written because restore reads it. Without it a restored world publishes no
                 # tool descriptions at all, and every later stage has to reconstruct them.
@@ -95,6 +115,18 @@ def save(
                 # Kept because they are judgement about this agent, not something a schema
                 # implies. A world picked up again can be re-verified without redeclaring them.
                 "sequences": list(sequences or []),
+                # The world's own checks are judgement about this agent, so a world picked
+                # up again keeps them rather than having them rewritten from scratch.
+                "world_checks": dict(world_checks or {}),
+                # Where the agent's own code lives. Kept because a restored world has to
+                # be able to import the tools it was bound to, and a scenario run happens
+                # long after the build stage that found the path.
+                "source_root": world.source_root,
+                # How this agent says no in a returned value. Without it a restored world
+                # cannot tell a refusal from a success, so every run records "Error: no such
+                # order" as if the call worked, and a check asking whether the agent was
+                # refused is answered wrongly rather than reported as unanswerable.
+                "refusal_signature": world.refusal_signature,
                 "notes": notes,
             },
             indent=2,
@@ -113,7 +145,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     """
     root = Path(path)
     source = root / DATABASE
-    if not source.exists():
+    if not (root / MANIFEST).exists():
         raise FileNotFoundError(f"no world snapshot at {root}")
 
     manifest = read_manifest(root)
@@ -123,21 +155,34 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
         if (root / HANDLERS / f"{name}.py").exists()
     }
 
+    named = str(manifest.get("store") or "sqlite")
     if into is None:
-        world = GeneratedWorld(":memory:")
-        origin = sqlite3.connect(source)
-        with world.connection:
-            origin.backup(world.connection)
-        origin.close()
+        world = GeneratedWorld(":memory:", kind=named)
+        # Only where there is one. A world whose records the agent's own code keeps has no
+        # database file, and demanding one would make it unrestorable.
+        if source.exists() and getattr(world.store, "connection", None) is not None:
+            origin = sqlite3.connect(source)
+            with world.connection:
+                origin.backup(world.connection)
+            origin.close()
     else:
         target = Path(into)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-        world = GeneratedWorld(target)
+        world = GeneratedWorld(target, kind=named)
 
     world.name = manifest.get("agent", "generated")
     world.handlers = handlers
     world.tools = manifest.get("tool_specs", [])
+    world.refusal_signature = str(manifest.get("refusal_signature") or "")
+    # A world whose handlers bind to the agent's own code cannot run them unless that code
+    # is importable again, and the frozen state is what those tools act on.
+    reached = str(manifest.get("source_root") or "")
+    if reached:
+        world.reach(reached)
+    frozen_state = root / STATE
+    if frozen_state.exists():
+        world.state_object = json.loads(frozen_state.read_text(encoding="utf-8"))
     return world
 
 

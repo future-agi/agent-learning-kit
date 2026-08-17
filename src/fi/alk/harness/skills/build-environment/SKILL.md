@@ -32,6 +32,37 @@ written as code.
 
 None of these is a form to fill in. You decide what this agent needs.
 
+## Run the agent's own tools. Do not rewrite them
+
+If the agent ships code for a tool, **that code is the tool**. Bind to it with `adopt_tool` and it
+runs unchanged. Writing your own version of a tool that already exists changes what is being
+tested from the agent's behaviour to your reading of it, and nothing downstream can see the
+difference.
+
+The contract says which tools have code and where it is. For each of those:
+
+1. `adopt_state` first, if its tools take the agent's own state as an argument. Call the agent's
+   own loader, so the world holds the data the agent really has rather than a sample of it.
+2. `adopt_tool` per tool. It binds and runs immediately. **Give it arguments that a real record
+   in this world satisfies**, taken from what the state actually holds. A smoke call against an
+   identifier that does not exist returns a refusal, which proves the tool can say no and proves
+   nothing about whether it works.
+3. `run_tool` to try the refusals deliberately, exactly as you would with a handler you wrote.
+
+`define_handler` is for tools with a definition and no implementation. It refuses a tool the
+contract says has code, and that refusal is not something to work around.
+
+**When a tool cannot be reached, say so and ask.** Some tools are not importable at all: a
+framework may define them as closures inside a class, so there is nothing to bind to. Report which
+tools those are and what you would need, and let the person decide. Writing a stand-in because
+binding was awkward is the one failure with no visible symptom: everything goes green and the
+result is about code nobody deployed.
+
+**Their code refuses in its own way.** Code written for production often returns an error value
+rather than raising, so a string beginning with an error marker is a refusal rather than a result.
+The contract records whatever this agent's convention is, and the world uses it, so what the agent
+receives is exactly what their tool returned.
+
 ## The world is a sandbox
 
 Nothing reaches outside it. If the agent depends on anything external, that thing is built here
@@ -98,21 +129,98 @@ Ask the person for values wherever the contract carries none.
 Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what they
 need.
 
+## Standing up what the agent's code needs to run
+
+Some agents keep everything in their own process, and then there is nothing to stand up: their
+tools are bound, their state is loaded, and the world is done. Say so rather than building
+something unnecessary.
+
+Where the agent's tools do talk to a store or a service, that has to exist before they can answer,
+and it must not be installed on the machine this is running on. Build it, in containers, with
+`write_env_file` and `run_env_command`.
+
+You decide what that means for this agent. Nothing here is prescribed, because prescribing it
+would mean guessing for an agent nobody has read yet. What you have is somewhere to write files
+and a way to run container commands from there:
+
+- `write_env_file` puts a file into the environment directory: a Dockerfile, a compose file, a
+  schema, an entrypoint. Anything the environment is built from.
+- `run_env_command` runs one docker or docker compose command from that directory and gives you
+  the exit code and the output. Only container commands run, so whatever the environment needs
+  belongs in a file it builds from rather than in a command.
+
+Some things worth knowing before you start:
+
+**Use the agent's own Dockerfile if it has one.** The contract records whether it does. Theirs is
+what its authors tested; yours is a guess at it.
+
+**Use its own install command**, from its lockfile or requirements, exactly as written. Do not
+substitute a different package manager or add dependencies it did not ask for.
+
+**A store is its own image.** Use the official one for whatever kind the contract names, and do
+not write a Dockerfile for a database.
+
+**Its data comes with its code where it ships that way.** Copying the repository in brings the
+data with it, and its own loader finds it at its own relative path. Do not mount or move data that
+is already there.
+
+**The connection is the only thing you substitute.** The contract records how the agent chooses
+it. Set that, and nothing else about the agent changes.
+
+**Build before you believe it.** A Dockerfile that has not been built is a guess. Run the build,
+read the failure if there is one, and fix the file rather than working around it. If the build
+cannot be made to work, say so and ask: an environment that does not build is a fact worth
+reporting, not something to replace with a substitute.
+
+## Prove the world, in your own checks
+
+The world does not become usable because it looks right. Write the checks that decide it, with
+`add_world_check`: what has to be true for this environment to be worth testing an agent against.
+Each is Python defining `check(world)`, returning nothing when it holds or a sentence saying what
+is wrong. `world.state()` gives every collection and its contents.
+
+What is worth checking is a judgement about this agent, which is why it is yours to make rather
+than a fixed list. Things that have mattered: that a category the tools accept is not empty, that
+nothing is left over from your own testing, that the values an argument permits all exist, that
+the starting state is the natural one rather than mid-flight.
+
+**Each check is then put through a world broken on purpose.** The world is emptied of all data,
+and separately every tool is silenced so calls do nothing. A check that stays green through both
+of those is not inspecting anything, and `save_world` names it and refuses.
+
+So a check has to read the part of the world it claims to be about. `return None` after looking at
+nothing passes forever and proves nothing, which is the one failure this whole mechanism exists to
+catch.
+
 ## The simulator prompt
 
 Only for a conversational agent. Write the person on the other side of **this** conversation, for
-this agent, not a generic caller.
+this agent, not a generic caller. One variable, `{{ instruction }}`, which each scenario fills
+with that person's circumstance.
 
-Cover how someone in this conversation actually behaves: that they are living the situation
-rather than describing it, that they speak one short turn at a time, that they never narrate or
-explain they are testing anything, what they know and when they may say it, and when the
-conversation is finished.
+A thin prompt is the commonest reason a run tells you nothing: the simulated person answers every
+question instantly and correctly, so the agent is never tested on eliciting anything. What makes
+it worth reading is the behaviour it pins down. Cover all of these, for **this** agent:
 
-Leave a slot for what changes per scenario, written `{{ instruction }}`.
+- **They are living it, not describing it.** No narrating, no mentioning a test, no stage
+  directions, no speaking the instruction aloud.
+- **One short turn at a time**, the way people actually talk in this channel. Someone speaking
+  aloud under time pressure says less per turn than someone typing.
+- **What they volunteer and what they hold back.** They do not recite everything they know. If
+  their circumstance says a detail is only given when asked, they wait to be asked, even if the
+  conversation stalls.
+- **What they do when the agent asks something their circumstance does not cover.** Making
+  something up corrupts the run. Say what to do instead: give a plausible ordinary answer and
+  stay consistent with it for the rest of the conversation.
+- **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
+  circumstance. Never keep pushing forever, and never invent a new goal.
+- **When it is over.** What ends this conversation, so a run does not idle to its turn limit.
+- **What they never do**: read out ids that were not given to them, name tools, or help the agent
+  by suggesting how to do its job.
 
-There is no persona. Do not invent characters, moods or backstories. What varies between
-scenarios is real conditions: what is in stock, whether the record already exists, what the
-person knows.
+There is no persona. Do not invent characters, moods or backstories, and never write accents or
+emotional styling. What varies between scenarios is real conditions: what is in stock, whether the
+record already exists, what this person knows.
 
 ## The sub-goals
 
@@ -150,7 +258,7 @@ of your sub-goals are judged, you have not looked hard enough at what the world 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong
 argument name, a permitted value missing, a rule that is not really a rule. Correct it with
 `amend_contract`, `add_rule`, `drop_rule` or `fix_tool`, and say why. Every amendment is recorded
-on the contract, so what came from the agent stays separable from what came from us.
+on the contract, so what came from the agent stays separable from what was added later.
 
 Never work around a contract you believe is wrong. Everything after you inherits it.
 
@@ -167,8 +275,11 @@ Never work around a contract you believe is wrong. Everything after you inherits
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
 8. `add_sub_goal` for each thing worth checking, with its check in code.
-9. `check_world`, fix what it names, repeat.
-10. `save_world`.
+9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
+   stood up. Nothing to do when it keeps its state in its own process.
+10. `add_world_check` for what has to be true of the environment itself.
+11. `check_world`, fix what it names, repeat.
+12. `save_world`.
 
 If `check_world` returns the same score three times, stop and read the failures literally.
 Whatever you are changing is not what is failing.

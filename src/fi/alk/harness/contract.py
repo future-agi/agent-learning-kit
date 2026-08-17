@@ -98,6 +98,100 @@ class ToolSpec(BaseModel):
     description: str = ""
 
 
+class ToolEntry(BaseModel):
+    """How to reach the agent's own implementation of one tool.
+
+    Recorded rather than assumed, because there is no shape every agent shares. A benchmark
+    writes static methods on a class; a framework agent writes closures inside ``__init__`` that
+    cannot be imported at all. What the environment does about a tool is decided from ``mode``,
+    so a tool nobody can reach is visible here rather than quietly reimplemented.
+    """
+
+    tool: str
+    # import: a module-level callable. construct: a method needing an instance built first.
+    # service: reachable over HTTP. generate: no implementation exists, so the harness writes one.
+    mode: str = "generate"
+    module: str = ""
+    callable: str = ""
+    # An expression that builds the object a `construct` tool hangs off.
+    factory: str = ""
+    # What the agent's own state is passed as, where a tool takes it as an argument.
+    first_arg: str = ""
+    notes: str = ""
+
+
+class DataStore(BaseModel):
+    """What the agent's tools read and write, and how to be there instead of it.
+
+    Nothing recorded here is a change to the agent. It is what the agent **already expects**,
+    written down so the environment can be built to match: the same host, the same port, the same
+    database, the same user. Where it reads a value from configuration we set that configuration;
+    where it hardcodes one we shape our own store to it, which is why a hardcoded value is worth
+    recording rather than treated as a dead end.
+
+    That inversion is the point. The alternative, editing the agent until it points at us, means
+    testing something other than what ships.
+    """
+
+    # Read off the agent, never chosen for it. Postgres and ClickHouse disagree about dialect,
+    # types and what a transaction even means, so an agent tested against the wrong one is graded
+    # on queries it never runs. Free text because the next agent will be on an engine nobody has
+    # written down yet.
+    kind: str = ""
+    version: str = ""
+
+    # The easiest seam, and the one most agents have: one variable or config key holding the whole
+    # connection string. Set it at launch and nothing else matters.
+    configured_by: str = ""
+    config_key: str = ""
+
+    # What the agent expects to find, whether it reads these from config or has them written into
+    # its source. A hardcoded host is not an obstacle: a network alias makes that name resolve to
+    # our container, and the agent connects to us believing nothing changed.
+    host: str = ""
+    port: int | None = None
+    database: str = ""
+    user: str = ""
+    # Deliberately never the password itself. A contract is written to disk and read by people, so
+    # a secret in it outlives the run that needed it. What is recorded is where the value comes
+    # from; if it is genuinely needed it is read at build time and not persisted.
+    password_from: str = ""
+
+    # An agent that holds its data in memory is reached by calling the function that loads it, not
+    # by connecting to anything. Recorded so the environment can call the agent's own loader
+    # rather than reading its files and rebuilding the structure itself, which would be a second
+    # implementation of the one thing this path exists to stop reimplementing.
+    schema_from: str = ""
+    loaded_by: str = ""
+    loader_module: str = ""
+
+    def has_seam(self) -> bool:
+        """Whether there is any way to point this agent at our store.
+
+        An agent with no seam at all is a finding, not a thing to work around: it cannot be tested
+        without one, and saying so is more useful than editing it until it can.
+        """
+        return bool(
+            self.configured_by
+            or self.config_key
+            or self.host
+            or self.port
+            or self.database
+            or self.loader_module
+            or self.loaded_by
+        )
+
+
+class Runtime(BaseModel):
+    """What it takes to run the agent's code."""
+
+    language: str = "python"
+    version: str = ""
+    install: str = ""
+    workdir: str = ""
+    dockerfile: str = ""
+
+
 class Dependency(BaseModel):
     """Something the agent reaches for that has to exist before it can work.
 
@@ -172,6 +266,16 @@ class AgentContract(BaseModel):
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
     dependencies: list[Dependency] = Field(default_factory=list)
+    # Whether the agent ships code for its tools: present, absent, or partial. This decides
+    # whether the environment runs the agent's own tools or writes replacements, and writing a
+    # replacement where an implementation exists is a defect rather than a choice.
+    implementation: str = ""
+    tool_entrypoints: list[ToolEntry] = Field(default_factory=list)
+    # How this agent's tools say no in a value they return, rather than by raising. Without it a
+    # refusal cannot be told from a success once the agent's own code is answering the call.
+    refusal_signature: str = ""
+    data_store: DataStore | None = None
+    runtime: Runtime | None = None
     real_use_cases: list[str] = Field(default_factory=list)
     # Free-form. The fields above are the fixed core because code consumes them; this is where
     # the reader records whatever else about *this* agent is worth carrying forward — quirks,
@@ -246,9 +350,57 @@ class AgentContract(BaseModel):
                 "REAL USE CASES (what this agent is actually for):\n  - "
                 + "\n  - ".join(self.real_use_cases[:12])
             )
+        if self.tool_entrypoints:
+            parts.append(
+                "THE AGENT'S OWN TOOL CODE. Run these rather than writing replacements:\n  - "
+                + "\n  - ".join(
+                    f"{one.tool}: {one.mode}"
+                    + (f" {one.module}.{one.callable}" if one.module else "")
+                    + (f", state passed as {one.first_arg}" if one.first_arg else "")
+                    + (f", build with {one.factory}" if one.factory else "")
+                    for one in self.tool_entrypoints
+                )
+            )
+        if self.refusal_signature:
+            parts.append(
+                "HOW THIS AGENT REFUSES, in a value rather than by raising:\n  "
+                f"{self.refusal_signature}"
+            )
+        if self.data_store:
+            store = self.data_store
+            parts.append(
+                "ITS DATA STORE:\n"
+                f"  kind: {store.kind or 'unspecified'}\n"
+                f"  connection comes from: {store.configured_by or 'unknown'}\n"
+                f"  schema from: {store.schema_from or 'unknown'}\n"
+                f"  its own loader: {store.loaded_by or 'none'}"
+            )
+        if self.runtime:
+            run = self.runtime
+            parts.append(
+                "RUNNING ITS CODE:\n"
+                f"  {run.language} {run.version}, install with {run.install or 'unknown'}"
+                + (f", imports resolve from {run.workdir}" if run.workdir else "")
+                + (f", its own Dockerfile at {run.dockerfile}" if run.dockerfile else "")
+            )
         if self.notes:
             parts.append(f"NOTES from reading the agent:\n{self.notes[:1500]}")
         return "\n\n".join(parts)
+
+    def entry_for(self, tool: str) -> ToolEntry | None:
+        for one in self.tool_entrypoints:
+            # Coerced rather than assumed. Assigning this field directly bypasses validation, so
+            # an entry can arrive as a plain mapping, and reading it as an object would raise
+            # somewhere far from the assignment.
+            found = one if isinstance(one, ToolEntry) else ToolEntry(**dict(one))
+            if found.tool == tool:
+                return found
+        return None
+
+    def adoptable(self, tool: str) -> bool:
+        """Whether this tool has code of its own that should be run instead of replaced."""
+        found = self.entry_for(tool)
+        return bool(found and found.mode in ("import", "construct", "service"))
 
 
 def validate_contract(contract: AgentContract) -> list[str]:

@@ -1092,6 +1092,322 @@ def test_a_check_that_cannot_fail_without_calls_is_named_even_though_it_is_kept(
     assert proof.holds and proof.weak == ["quantity-respected"]
 
 
+def test_a_store_that_is_not_sqlite_needs_nothing_above_it_to_change(tmp_path):
+    """The harness writes the schema, the seed and the changes in whatever its agent's store
+    speaks. What it cannot do from a prompt is execute them, freeze the result and put it back, so
+    those are the only things a store owes the world.
+
+    This registers a store that is not a database at all and drives the world through it: calls,
+    state, the scenario mutation vocabulary, freezing and restoring. Nothing above the store is
+    told which kind it is, which is the property that lets Postgres or ClickHouse drop in.
+    """
+    import json
+
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.stores import open_store, register_store
+
+    class Ledger:
+        """Records in a plain mapping, with its own statement language. Not SQL, deliberately."""
+
+        engine = "ledger"
+        key = "ledger"
+
+        def __init__(self, database: str = "", **_extra):
+            self.held: dict[str, list[dict]] = {}
+
+        def execute(self, statement: str, params=()) -> int:
+            verb, _, rest = statement.partition(" ")
+            if verb == "make":
+                self.held.setdefault(rest.strip(), [])
+                return 0
+            if verb == "add":
+                name, _, body = rest.partition(" ")
+                self.held.setdefault(name, []).append(json.loads(body))
+                return 1
+            if verb == "clear":
+                name = rest.strip()
+                count = len(self.held.get(name) or [])
+                self.held[name] = []
+                return count
+            raise ValueError(f"this store does not understand {verb!r}")
+
+        def query(self, statement: str, params=()) -> list[dict]:
+            return list(self.held.get(statement.strip(), []))
+
+        def collections(self) -> list[str]:
+            return sorted(self.held)
+
+        def records(self, collection: str) -> list[dict]:
+            return list(self.held.get(collection, []))
+
+        def holds(self, collection: str) -> bool:
+            return collection in self.held
+
+        def add(self, collection: str, record) -> int:
+            self.held.setdefault(collection, []).append(dict(record))
+            return 1
+
+        def amend(self, collection: str, key: str, changes, *, by: str = "") -> int:
+            changed = 0
+            for row in self.held.get(collection, []):
+                if row.get(by or "order_id") == key:
+                    row.update(dict(changes))
+                    changed += 1
+            return changed
+
+        def remove(self, collection: str, key: str = "", *, by: str = "") -> int:
+            rows = self.held.get(collection, [])
+            if not key:
+                self.held[collection] = []
+                return len(rows)
+            kept = [r for r in rows if r.get(by or "order_id") != key]
+            self.held[collection] = kept
+            return len(rows) - len(kept)
+
+        def freeze(self):
+            from fi.alk.harness.world.stores import Snapshot
+
+            return Snapshot(rows=json.loads(json.dumps(self.held)))
+
+        def restore(self, snapshot) -> None:
+            self.held = {name: list(rows) for name, rows in snapshot.rows.items()}
+
+        def save_to(self, path) -> None:
+            from pathlib import Path
+
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "ledger.json").write_text(json.dumps(self.held), encoding="utf-8")
+
+        def load_from(self, path) -> None:
+            from pathlib import Path
+
+            self.held = json.loads((Path(path) / "ledger.json").read_text(encoding="utf-8"))
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def dsn(self) -> str:
+            return "ledger://"
+
+        def apply(self, script: str) -> None:
+            for line in script.splitlines():
+                if line.strip():
+                    self.execute(line.strip())
+
+        def close(self) -> None:
+            return None
+
+    register_store(Ledger.engine, Ledger)
+    world = GeneratedWorld(store=open_store("ledger"))
+
+    # What the harness writes, in this store's own language rather than SQL.
+    world.store.execute("make orders")
+    world.store.execute('add orders {"order_id": "o1", "status": "pending"}')
+    assert world.state()["orders"] == [{"order_id": "o1", "status": "pending"}]
+
+    # A tool runs against it through the same handler contract.
+    world.handlers["ship"] = (
+        "def handle(args, db):\n"
+        "    rows = db.query('orders')\n"
+        "    if not rows:\n"
+        "        raise ToolError('nothing to ship')\n"
+        "    return rows[0]['order_id']\n"
+    )
+    assert world.call("ship", {}).result == "o1"
+
+    # Saving and loading, which is what every scenario depends on.
+    world.store.save_to(tmp_path)
+    world.store.execute("clear orders")
+    assert world.state()["orders"] == []
+    world.store.load_from(tmp_path)
+    assert len(world.state()["orders"]) == 1
+
+    # And the same store going back in memory, which is what the gates use between probes.
+    kept = world.store.freeze()
+    world.store.execute("clear orders")
+    world.store.restore(kept)
+    assert len(world.state()["orders"]) == 1
+
+    # And the world's own vocabulary, which is what a scenario's setup uses.
+    world.put("orders", {"order_id": "o2", "status": "pending"})
+    assert len(world.state()["orders"]) == 2
+    assert world.drop("orders") == 2
+
+    # A refusal is still a refusal, with no store-specific handling anywhere.
+    refused = world.call("ship", {})
+    assert refused.refused and not refused.ok
+
+
+def test_a_world_check_that_cannot_fail_is_named(tmp_path):
+    """The environment's checks are written by whoever built it, so nothing independent confirms
+    they work. Breaking the world on purpose is that confirmation: a check that stays green
+    through a world with no data and no working tools is not verifying anything."""
+    from fi.alk.harness.checks import run_world_check
+    from fi.alk.harness.world.mutate import blind, unnoticed
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.snapshot import restore, save
+
+    world = GeneratedWorld(":memory:")
+    world.connection.executescript(
+        "CREATE TABLE items (id TEXT); INSERT INTO items VALUES ('a');"
+    )
+    world.connection.commit()
+    world.handlers["add"] = (
+        "def handle(args, db):\n"
+        "    db.execute('INSERT INTO items (id) VALUES (?)', [args['id']])\n"
+        "    return 'added'\n"
+    )
+
+    real = "def check(world):\n    return None if world.state()['items'] else 'no items'\n"
+    hollow = "def check(world):\n    return None\n"
+
+    save(world, tmp_path, sequences=[{"name": "x", "calls": []}])
+    survived = unnoticed(
+        tmp_path,
+        [("real", real), ("hollow", hollow)],
+        run=lambda source, broken: run_world_check(source, broken, name="c"),
+        restore=restore,
+    )
+
+    # Emptying the world is what the real check is about, so it has to notice.
+    assert "real" not in survived["emptied"]
+    # And the one that inspects nothing survives every kind of damage, which is how it is caught.
+    assert blind(survived) == ["hollow"]
+
+
+def test_the_world_keeps_the_checks_that_prove_it(tmp_path):
+    """A world reopened without them would have to have them rewritten before it could be saved
+    again, and they are judgement about this agent rather than anything a schema implies."""
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.snapshot import read_manifest, restore, save
+
+    world = GeneratedWorld(":memory:")
+    world.connection.executescript("CREATE TABLE t (id TEXT); INSERT INTO t VALUES ('a');")
+    world.connection.commit()
+    written = {"holds": "def check(world):\n    return None if world.state()['t'] else 'empty'\n"}
+
+    save(world, tmp_path, sequences=[{"name": "s", "calls": []}], world_checks=written)
+    assert list(read_manifest(tmp_path).get("world_checks") or {}) == ["holds"]
+    # And a restored world can still be verified without rewriting them.
+    again = restore(tmp_path)
+    assert again.state()["t"]
+
+
+def test_a_restored_world_still_knows_how_this_agent_says_no(tmp_path):
+    """Set at build time, read at run time, and those are different processes.
+
+    Without it every refusal returned as a value is recorded as a success. A live call showed
+    what that costs: the agent's own lookup answered "Error: user not found" twice, the record
+    said both were fine, and the failure was then attributed to the agent re-calling a lookup
+    that had in fact never worked once.
+    """
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.snapshot import restore, save
+
+    world = GeneratedWorld(":memory:")
+    world.refusal_signature = 'strings starting with "Error: "'
+    world.handlers = {"look": "def handle(args, db):\n    return 'Error: user not found'\n"}
+    assert world.call("look").refused
+
+    save(world, tmp_path, sequences=[])
+    assert restore(tmp_path).call("look").refused
+
+
+def _models_within(annotation):
+    """The pydantic models reachable from one field's type, through lists and optionals."""
+    from pydantic import BaseModel
+
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return [annotation]
+    found = []
+    for inner in getattr(annotation, "__args__", ()):
+        found.extend(_models_within(inner))
+    return found
+
+
+def test_every_contract_field_is_advertised_to_the_model(tmp_path):
+    """A field the model cannot see is a field that never gets filled.
+
+    The adoption fields are the case that matters: with `tool_entrypoints` empty the build stage
+    cannot tell that the agent ships its own tools, so it writes replacements and nothing
+    downstream shows the difference. The failure is silent, which is why this is checked by
+    reflection over the model rather than by remembering to keep a list in step.
+    """
+    from pathlib import Path
+
+    from fi.alk.harness.contract import AgentContract
+
+    from pydantic import BaseModel
+
+    advertised = Path("src/fi/alk/harness/tools.py").read_text(encoding="utf-8")
+    # Set by the amendment tools during later stages, never by whoever submits the contract.
+    ours = {"amendments"}
+
+    def named(model: type[BaseModel]) -> list[str]:
+        """Every field the model would have to fill, nested ones included.
+
+        Nested, because that is where this went wrong the second time: the top-level field was
+        advertised and the shape underneath it was not, so the model filled in a store's kind and
+        never its host, port or seam. A field nobody can see is a field nobody fills.
+        """
+        found: list[str] = []
+        for name, field in model.model_fields.items():
+            found.append(name)
+            for inner in _models_within(field.annotation):
+                found.extend(named(inner))
+        return found
+
+    missing = sorted(
+        {
+            name
+            for name in named(AgentContract)
+            if name not in ours and f'"{name}"' not in advertised
+        }
+    )
+    assert not missing, f"submit_contract never mentions: {missing}"
+
+
+def test_the_adoption_fields_survive_the_write_path(tmp_path):
+    """Advertising them is half of it. They also have to reach the stage that acts on them."""
+    from fi.alk.harness.tools import accept_contract
+    from fi.alk.harness.understand import load
+
+    said = accept_contract(
+        {
+            "agent": "x",
+            "tools": [{"name": "t", "args": ["a"]}],
+            "real_use_cases": ["a plain sentence"],
+            "implementation": "present",
+            "tool_entrypoints": [
+                {
+                    "tool": "t",
+                    "mode": "import",
+                    "module": "pkg.mod",
+                    "callable": "K.invoke",
+                    "first_arg": "data",
+                }
+            ],
+            "refusal_signature": "a string beginning with Error:",
+            "data_store": {"kind": "in_process", "loaded_by": "pkg.data.load"},
+            "runtime": {"language": "python", "install": "uv sync"},
+        },
+        tmp_path,
+    )
+    assert not said.get("is_error"), said
+
+    written = load(tmp_path)
+    assert written is not None
+    # The question the build stage actually asks before writing anything.
+    assert written.adoptable("t"), "the build stage would write a replacement instead"
+    assert written.refusal_signature
+    assert written.data_store and written.data_store.loaded_by == "pkg.data.load"
+    # And it has to be visible in the grounding block, or the stage never reads it.
+    assert "pkg.mod.K.invoke" in written.brief()
+
+
 def test_a_scenario_naming_a_sub_goal_nobody_defined_is_refused(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
@@ -2150,3 +2466,115 @@ def test_a_crashed_handler_is_told_what_a_handler_actually_has(tmp_path):
     assert "crashed on its smoke call" in said
     assert "db.query(" in said and "db.one(" in said and "db.execute(" in said
     assert "fetchone" in said
+
+
+# --- the store layer: engines, resets, and what a scenario lands on ----------------------
+
+
+def test_a_reset_that_forgets_its_counters_is_caught_without_naming_one(tmp_path):
+    """Rows going back is the easy half, and most wrong resets manage it.
+
+    What they miss is the counter behind the rows, so the next scenario's first insert gets an id
+    continuing from the last one, and a check naming a specific id then fails for a reason that
+    has nothing to do with the agent. Rather than ask what a counter is called on this engine,
+    the same change is run twice from the same starting point and the results compared.
+    """
+    from fi.alk.harness.world.stores import resolve
+    from fi.alk.harness.world.stores.prove import prove_store
+
+    def stood_up():
+        store = resolve("sqlite")
+        store.apply(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT);"
+            "INSERT INTO orders (who) VALUES ('ana'), ('bo');"
+        )
+        return store
+
+    insert = "INSERT INTO orders (who) VALUES ('new')"
+    assert not [one for one in prove_store(stood_up(), insert).results if not one.passed]
+
+    # And with the counter deliberately left where it was, which is the bug itself.
+    forgetful = stood_up()
+    forgetful._reinstate = lambda counters: None
+    failed = [one for one in prove_store(forgetful, insert).results if not one.passed]
+    assert [one.name for one in failed] == ["ids do not drift"]
+    assert "'id': 3" in failed[0].detail and "'id': 4" in failed[0].detail
+
+
+def test_an_engine_nobody_taught_the_harness_is_refused_by_name():
+    """Handing a ClickHouse agent a Postgres would produce a green suite about SQL it never runs."""
+    from fi.alk.harness.world.stores import StoreError, resolve, supported
+
+    with pytest.raises(StoreError) as refused:
+        resolve("clickhouse")
+    assert "clickhouse" in str(refused.value)
+    for engine in supported():
+        assert engine in str(refused.value)
+
+
+def test_a_written_store_has_to_say_how_a_scenario_changes_it():
+    """Reading an engine is not enough. Without add, amend and remove a suite has one world.
+
+    A store that can be stood up and read but not changed lets every scenario run against the
+    same base, and the per-scenario setup silently does nothing rather than failing.
+    """
+    from fi.alk.harness.world.stores import StoreError
+    from fi.alk.harness.world.stores.written import register_written
+
+    readable = (
+        "def connect(dsn): return None\n"
+        "def apply(db, script): pass\n"
+        "def state(db): return {}\n"
+        "def freeze(db): return {}, {}\n"
+        "def restore(db, rows, counters): pass\n"
+    )
+    with pytest.raises(StoreError) as refused:
+        register_written(engine="ledgerdb", image="x:1", container_port=1, code=readable)
+    said = str(refused.value)
+    assert "add" in said and "amend" in said and "remove" in said
+
+
+def test_an_agent_that_holds_its_own_data_is_reached_by_its_own_loader():
+    """Not by reading its files and rebuilding the structure, which would be a second
+    implementation of the one thing this path exists to stop reimplementing."""
+    from fi.alk.harness.world.stores import resolve
+
+    called = []
+
+    def load_data():
+        called.append(True)
+        return {"orders": {"o1": {"status": "pending"}}, "notes": ["first"]}
+
+    store = resolve("in_process", loader=load_data)
+    store.start()
+    assert called, "the agent's own loader is what fills the store"
+
+    # A keyed group reads back as records carrying the key, because that is the id a check names.
+    assert store.records("orders") == [{"_id": "o1", "status": "pending"}]
+    assert store.records("notes") == [{"value": "first"}]
+
+    # What a scenario's setup lands on, in both shapes.
+    kept = store.freeze()
+    store.amend("orders", "o1", {"status": "cancelled"})
+    store.add("orders", {"_id": "o2", "status": "pending"})
+    assert store.state()["orders"] == [
+        {"_id": "o1", "status": "cancelled"},
+        {"_id": "o2", "status": "pending"},
+    ]
+
+    # And going back has to reproduce the agent's own structure, not merely the records.
+    store.restore(kept)
+    assert store.data == {"orders": {"o1": {"status": "pending"}}, "notes": ["first"]}
+
+
+def test_emptying_a_store_is_something_restore_can_reproduce():
+    """The check gate empties the world and insists every check notices, so a restore that cannot
+    represent an empty store would make that gate impossible to run."""
+    from fi.alk.harness.world.stores import Snapshot, resolve
+
+    store = resolve("in_process", loader=lambda: {"orders": {"o1": {"status": "pending"}}})
+    store.start()
+    store.restore(Snapshot())
+    assert store.state() == {"orders": []}
+    # The group itself survives, because the agent's own code indexes into it.
+    assert store.data == {"orders": {}}

@@ -304,6 +304,162 @@ def contract_tools(destination: Path) -> Any:
                     "items": {"type": "string"},
                     "description": "What the source did not settle and you could not ask about.",
                 },
+                "implementation": {
+                    "type": "string",
+                    "enum": ["present", "absent", "partial"],
+                    "description": "Whether the agent ships working code for its tools, as "
+                    "opposed to only declaring them. The environment runs the agent's own code "
+                    "wherever it exists, so this decides whether anything gets written for it.",
+                },
+                "tool_entrypoints": {
+                    "type": "array",
+                    "description": "How to reach the agent's own implementation of each tool. "
+                    "One entry per tool that has code. Without this the environment has to write "
+                    "a replacement, which tests our reading of the agent instead of the agent.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {
+                                "type": "string",
+                                "description": "The tool name, exactly as in `tools`.",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["import", "construct", "service", "generate"],
+                                "description": "import: a module-level function or a method on a "
+                                "class, reachable directly. construct: it hangs off an object "
+                                "that has to be built first. service: it is already reachable "
+                                "over HTTP. generate: there is no implementation, so one has to "
+                                "be written. Choose generate only when nothing can be reached.",
+                            },
+                            "module": {
+                                "type": "string",
+                                "description": "Importable path as the agent's own code would "
+                                "write it, e.g. package.module.file. Not a filesystem path.",
+                            },
+                            "callable": {
+                                "type": "string",
+                                "description": "What to call inside that module. May be dotted "
+                                "to reach a method on a class, e.g. TheClass.the_method.",
+                            },
+                            "factory": {
+                                "type": "string",
+                                "description": "For construct: the expression that builds the "
+                                "object, including whatever it needs to be constructed with.",
+                            },
+                            "first_arg": {
+                                "type": "string",
+                                "description": "If the callable takes the agent's own state as "
+                                "its first argument, its name. Empty when the callable opens its "
+                                "own connection instead.",
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "Anything about reaching it that the fields above "
+                                "do not carry, especially why a tool cannot be reached.",
+                            },
+                        },
+                    },
+                },
+                "refusal_signature": {
+                    "type": "string",
+                    "description": "How this agent's own code says no in a value it returns "
+                    "rather than by raising, described so it can be recognised, e.g. a string "
+                    "beginning with a particular marker. Production code often reports failure "
+                    "this way, and without this a refusal is recorded as a success, which hides "
+                    "the behaviour most worth testing.",
+                },
+                "data_store": {
+                    "type": "object",
+                    "description": "What the agent's tools read and write, and how to point them "
+                    "at a different one.",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "description": "postgres, clickhouse, mysql, sqlite, in_process for "
+                            "state held in memory, or none.",
+                        },
+                        "configured_by": {
+                            "type": "string",
+                            "description": "How the code chooses its connection: the environment "
+                            "variable it reads, the config file, or the constructor argument. "
+                            "This is what makes substituting a store possible without editing "
+                            "the agent, so say if it is hardcoded.",
+                        },
+                        "schema_from": {
+                            "type": "string",
+                            "description": "Where the schema comes from: its migrations, a DDL "
+                            "file, its ORM models.",
+                        },
+                        "loaded_by": {
+                            "type": "string",
+                            "description": "The agent's own loader, if it has one that builds "
+                            "its starting data, as module and callable.",
+                        },
+                        "loader_module": {
+                            "type": "string",
+                            "description": "The module that loader is imported from, so it can "
+                            "be called rather than reimplemented.",
+                        },
+                        "version": {
+                            "type": "string",
+                            "description": "The engine version, where the agent pins one.",
+                        },
+                        "config_key": {
+                            "type": "string",
+                            "description": "Where a config file holds the connection instead, as "
+                            "a dotted path such as database.url.",
+                        },
+                        "host": {
+                            "type": "string",
+                            "description": "The host the agent expects. Record it even when it "
+                            "is hardcoded: a hardcoded name is not a dead end, it is a name our "
+                            "store can answer to.",
+                        },
+                        "port": {
+                            "type": "integer",
+                            "description": "The port it expects.",
+                        },
+                        "database": {
+                            "type": "string",
+                            "description": "The database name it expects. Ours is created with "
+                            "exactly this name rather than the agent being changed.",
+                        },
+                        "user": {
+                            "type": "string",
+                            "description": "The user it connects as.",
+                        },
+                        "password_from": {
+                            "type": "string",
+                            "description": "Where the password comes from, never the password "
+                            "itself. A contract is written to disk and read by people, so a "
+                            "secret in it outlives the run that needed it.",
+                        },
+                    },
+                },
+                "runtime": {
+                    "type": "object",
+                    "description": "What it takes to run the agent's code.",
+                    "properties": {
+                        "language": {"type": "string"},
+                        "version": {"type": "string"},
+                        "install": {
+                            "type": "string",
+                            "description": "Its own install command, e.g. from its lockfile or "
+                            "requirements. Used as written rather than guessed at.",
+                        },
+                        "workdir": {
+                            "type": "string",
+                            "description": "Where in the source imports resolve from, if not the "
+                            "root.",
+                        },
+                        "dockerfile": {
+                            "type": "string",
+                            "description": "Path to its own Dockerfile, if it has one. Theirs is "
+                            "used in preference to anything written for it.",
+                        },
+                    },
+                },
             },
             [],
         ),

@@ -148,7 +148,14 @@ class Conversation:
         if contract is None:
             raise RuntimeError("cannot go further before there is a contract")
         if stage_name == BUILD:
-            self.stage, _ = build_stage.open_stage(contract, out=self.out, ask=self.ask)
+            self.stage, _ = build_stage.open_stage(
+                contract,
+                out=self.out,
+                ask=self.ask,
+                # Where the agent's own code lives, so its tools can be bound to rather
+                # than rewritten. Empty for an agent given as a specification.
+                source_root=str(getattr(self.source, "root", "") or ""),
+            )
             opening = build_stage.opening(contract)
         elif stage_name == RUN:
             if not self.scenarios_written:

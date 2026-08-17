@@ -35,9 +35,12 @@ from ..tools import schema
 from ..amend import add_rule, drop_rule, fix_tool, widen
 from ..contract import AgentContract
 from .kinds import for_contract
+from ..checks import run_check, run_world_check
+from .mutate import blind, unnoticed
 from .probe import dirty_state, probe
 from .runtime import GeneratedWorld
-from .snapshot import DATABASE, read_manifest, restore, save
+from .snapshot import MANIFEST, read_manifest, restore, save
+from .stores.written import API as OPS_API
 
 WORLD_SERVER = "world"
 
@@ -59,6 +62,101 @@ DB_API = (
 # converges on roughly this bar, and rejects a quarter to a third of what it generates.
 ACCEPTABLE = 0.85
 
+# What a world check is, said where the mistake surfaces. A check that inspects nothing is
+# the failure this whole mechanism exists to catch, so the answer says what "inspects
+# something" means rather than only that the check was rejected.
+WORLD_CHECK_HELP = (
+    "A world check is Python defining check(world), returning None when it holds or a "
+    "sentence saying what is wrong.\n\n"
+    "`world.state()` gives every collection this world has. **A collection is not always a list.**\n"
+    "A table gives a list of records. A collection the agent's own code keeps is often a mapping "
+    "keyed by identifier, and iterating that yields the keys, which are strings. Reading a field "
+    "off one of those is where a check written for the wrong shape fails.\n"
+    "    held = world.state()['some_collection']\n"
+    "    records = list(held.values()) if isinstance(held, dict) else held\n"
+    "    wanted = [one for one in records if one.get('status') == 'pending']\n"
+    "The shapes this world actually has are listed below, so write for those rather than "
+    "guessing.\n\n"
+    "A check also has to inspect something that could be wrong. One that returns None without "
+    "reading the world passes forever, and it is rejected once the world is broken on purpose "
+    "and it stays green."
+)
+
+
+def _shapes(world: Any) -> str:
+    """What this world's collections are. Asked of the world, so every gate says the same thing."""
+    return world.shapes()
+
+# What to read when a binding to the agent's own code will not run. The failure is nearly always
+# the shape of the call rather than the code being unreachable, so the answer says what the
+# shapes are instead of only reporting the exception.
+BINDING_SCOPE = (
+    "Inside a binding, and inside a factory expression, these are the only names that exist:\n"
+    "    args        the arguments the agent passed, as a dict\n"
+    "    db          the world. db.state is the agent's own state, as adopt_state loaded it\n"
+    "    ToolError   to refuse\n"
+    "    json\n"
+    "plus whatever the binding itself imports from the agent's source. There is no `userdata`, no "
+    "`state`, no framework context and no session: if the callable needs one of those, it has to "
+    "be constructed in the factory expression out of what is listed above, or it cannot be "
+    "reached from here at all."
+)
+
+ADOPT_HELP = (
+    "A binding is how one of the agent's own callables is reached. Four things can be wrong:\n"
+    "  - the module path. It is imported from the agent's source root, so use the path its own "
+    "code would use, e.g. package.module.file, not a filesystem path\n"
+    "  - the style. 'function' for a module-level def, 'staticmethod' for one on a class, "
+    "'method' when an instance has to exist first, in which case `factory` is the expression "
+    "that builds it\n"
+    "  - first_arg. If the callable takes the agent's state as its first argument, name it here "
+    "and the world passes what adopt_state loaded. Leave it empty when the callable connects "
+    "for itself\n"
+    "  - smoke_arguments. These are passed as keywords, so they have to match the callable's own "
+    "parameter names, and their values should be real: look at the world first and use an "
+    "identifier that exists, or the call only ever proves the tool can say no\n"
+    "If the tool genuinely cannot be reached without editing the agent, say so and ask. Do not "
+    "write a replacement for it."
+)
+
+
+def _size(value: Any) -> Any:
+    return len(value) if isinstance(value, (list, dict, tuple, str)) else value
+
+
+def _binding(*, module: str, called: str, style: str, first_arg: str, factory: str) -> str:
+    """The handler that calls one of the agent's own callables.
+
+    Written as source rather than held as a closure, so it is saved with the world, readable by
+    whoever wants to know what actually ran, and restored exactly as every other handler is.
+
+    ``called`` may be a dotted path inside the module, which is how a staticmethod is reached:
+    ``CancelPendingOrder.invoke`` imports the class and calls the method on it. Only the first
+    segment is imported.
+    """
+    root = called.split(".")[0]
+    reach = f"from {module} import {root}" if module else ""
+    state = "db.state, " if first_arg else ""
+    # Their code may be async, which is true of every framework-decorated tool. The result is
+    # settled here rather than by the caller so that a handler stays synchronous, which is what
+    # every other part of the world already assumes.
+    if style == "method":
+        built = factory or f"{root}()"
+        attr = called.split(".", 1)[1] if "." in called else "__call__"
+        return (
+            f"{reach}\n"
+            "from fi.alk.harness.world.runtime import settled\n\n"
+            "def handle(args, db):\n"
+            f"    instance = {built}\n"
+            f"    return settled(instance.{attr}({state}**args))\n"
+        )
+    return (
+        f"{reach}\n"
+        "from fi.alk.harness.world.runtime import settled\n\n"
+        "def handle(args, db):\n"
+        f"    return settled({called}({state}**args))\n"
+    )
+
 
 def _ok(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
@@ -68,25 +166,85 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-def _brief(value: Any, limit: int = 400) -> str:
+def _brief(value: Any, limit: int = 1800) -> str:
+    """What a call returned, shortened only when it has to be.
+
+    Generous, and explicit when it cuts. A record from a real agent's data is long, and a reply
+    trimmed silently in the middle of it reads as though the field being looked for is absent:
+    the answer is then six more calls working around something that was there all along.
+    """
     rendered = value if isinstance(value, str) else json.dumps(value, default=str)
-    return rendered if len(rendered) <= limit else rendered[: limit - 3] + "..."
+    if len(rendered) <= limit:
+        return rendered
+    return (
+        rendered[:limit]
+        + f"\n... cut here, {len(rendered) - limit} more characters. Ask for one record rather "
+        "than many if you need the whole of it."
+    )
 
 
-def world_tools(contract: AgentContract, destination: Path) -> Any:
-    """A server exposing the world-building surface for one agent."""
+def world_tools(
+    contract: AgentContract, destination: Path, *, source_root: str = ""
+) -> Any:
+    """A server exposing the world-building surface for one agent.
+
+    ``source_root`` is where the agent's own code lives. With it, a tool can be bound to the
+    agent's own implementation; without it the agent was given as a specification and its
+    tools have to be written here.
+    """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
     # catalogue from scratch to add a single item to it.
-    existing = (destination / DATABASE).exists()
-    world = restore(destination) if existing else GeneratedWorld(":memory:")
+    existing = (destination / MANIFEST).exists()
+    # The store comes from what the contract found, not from a default. An agent whose tools keep
+    # their own state has no database, and opening one for it would be carrying something unused
+    # and describing the world as something it is not.
+    named = str(getattr(getattr(contract, "data_store", None), "kind", "") or "")
+    world = restore(destination) if existing else GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
+    world.refusal_signature = contract.refusal_signature
+    if source_root:
+        world.reach(source_root)
     kind = for_contract(contract)
     catalogue = load_catalogue(destination)
     scores: list[float] = []
+    # The checks that decide whether this world is usable, written here rather than fixed in
+    # advance, because what makes a world usable is a judgement about this agent.
+    world_checks: dict[str, str] = dict(read_manifest(destination).get("world_checks") or {}) if existing else {}
+    # How many times each tool has been attempted, so a binding that cannot be made to work
+    # is told to stop rather than tried indefinitely.
+    tried: dict[str, int] = {}
     sequences: list[dict[str, Any]] = (
         list(read_manifest(destination).get("sequences") or []) if existing else []
     )
+
+    def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
+        """How the world's own checks fare, and which of them cannot fail.
+
+        Run against the world as it stands, and then against worlds broken on purpose. A check
+        that stays green through every kind of damage is reported as blind: it is not verifying
+        anything, whatever it claims to inspect.
+        """
+        import tempfile
+
+        failing = [
+            name
+            for name, source in sorted(world_checks.items())
+            if not run_world_check(source, world, name=name).held
+        ]
+        if not world_checks:
+            return failing, [], {}
+        # Snapshotted first so each mutation gets its own copy and none inherits another's
+        # damage. The world being built is never touched.
+        held = Path(tempfile.mkdtemp())
+        save(world, held, notes="mutation", sequences=sequences)
+        survived = unnoticed(
+            held,
+            sorted(world_checks.items()),
+            run=lambda source, broken: run_world_check(source, broken, name="check"),
+            restore=restore,
+        )
+        return failing, blind(survived), survived
 
     @tool(
         "create_schema",
@@ -171,8 +329,23 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
                 f"{name!r} is not a tool this agent has. It has: "
                 f"{', '.join(sorted(contract.tool_names()))}"
             )
+        # Writing a replacement for a tool the agent already implements is the one thing this
+        # stage must not do. It changes what is being tested from the agent's behaviour to our
+        # reading of it, and the difference does not show up anywhere afterwards.
+        if contract.adoptable(name):
+            entry = contract.entry_for(name)
+            return _err(
+                f"{name} already has an implementation, so it is not ours to write. Use "
+                f"adopt_tool to bind to {entry.module}.{entry.callable} instead.\n"
+                "If that cannot be reached, say so and ask, rather than writing a replacement: "
+                "a generated stand-in that looks right is worse than a tool we admit we could "
+                "not run."
+            )
         world.handlers[name] = str(args["source"])
+        # Same reason as adopting one: running it to prove it works must leave the world as it was.
+        held = world.checkpoint()
         call = world.call(name, args.get("smoke_arguments") or {})
+        world.revert(held)
         if call.refused:
             return _ok(
                 f"{name} defined. Smoke call refused, which is a working refusal: {call.error}"
@@ -184,6 +357,125 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             # the answer says what it does have rather than only what went wrong.
             return _err(f"{said}\n\n{DB_API}")
         return _ok(f"{name} defined and ran. Returned {_brief(call.result)}")
+
+    @tool(
+        "adopt_state",
+        "Load the agent's own starting state by calling its own loader, so the world holds what "
+        "the agent really has rather than a copy of it. Give the module and the callable, for "
+        "example the function that reads its data files.",
+        schema({"module": str, "callable": str}, ["module", "callable"]),
+    )
+    async def adopt_state(args: dict[str, Any]) -> dict[str, Any]:
+        module = str(args["module"])
+        called = str(args["callable"])
+        world.reach(source_root)
+        try:
+            loaded = __import__(module, fromlist=[called])
+            factory = getattr(loaded, called)
+            world.state_object = factory()
+        except Exception as raised:
+            return _err(
+                f"could not load state with {module}.{called}: "
+                f"{type(raised).__name__}: {raised}\n{ADOPT_HELP}"
+            )
+        summary = (
+            {key: _size(value) for key, value in world.state_object.items()}
+            if isinstance(world.state_object, dict)
+            else type(world.state_object).__name__
+        )
+        return _ok(f"state loaded from {module}.{called}: {json.dumps(summary, default=str)}")
+
+    @tool(
+        "adopt_tool",
+        "Bind one tool to the agent's own implementation, so its code runs rather than a "
+        "replacement. Give the module and the callable. `style` is how it is invoked: "
+        "'function' for a plain function, 'staticmethod' for one hanging off a class, "
+        "'method' when an instance has to be built first. `first_arg` names what the agent's "
+        "state is passed as, if its signature takes it. The binding runs immediately, so give "
+        "`smoke_arguments` that a real record in this world would satisfy: an identifier that is "
+        "actually there. A smoke call that refuses proves the binding can refuse, not that it "
+        "works.",
+        schema(
+            {
+                "tool_name": str,
+                "module": str,
+                "callable": str,
+                "style": str,
+                "first_arg": str,
+                "factory": str,
+                "binding": str,
+                "smoke_arguments": dict,
+            },
+            ["tool_name"],
+        ),
+    )
+    async def adopt_tool(args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args["tool_name"])
+        if name not in contract.tool_names():
+            return _err(
+                f"{name!r} is not a tool this agent has. It has: "
+                f"{', '.join(sorted(contract.tool_names()))}"
+            )
+        if not source_root:
+            return _err(
+                "there is no agent source on disk to bind to, so nothing can be adopted here. "
+                "This agent was given as a specification rather than as code, so its tools have "
+                "to be written with define_handler."
+            )
+        world.reach(source_root)
+        # A binding written here wins. The generated shapes cover a plain callable and a method
+        # on an object, which is most agents, but no set of shapes covers every framework, and
+        # guessing wrong is worse than letting whoever read the code write the two lines.
+        written = str(args.get("binding") or "").strip()
+        if written:
+            binding = written
+        elif not str(args.get("module") or ""):
+            return _err(
+                "give either a module and callable to bind to, or a binding of your own.\n\n"
+                + ADOPT_HELP
+            )
+        else:
+            binding = _binding(
+                module=str(args["module"]),
+                called=str(args["callable"]),
+                style=str(args.get("style") or "function"),
+                first_arg=str(args.get("first_arg") or ""),
+                factory=str(args.get("factory") or ""),
+            )
+        world.handlers[name] = binding
+        # Reverted after, because a smoke call against the agent's own code really does what the
+        # tool does: cancelling an order to prove the binding works would spend that order, and
+        # every scenario after it starts from this same world. Proving a tool works must not cost
+        # a record.
+        held = world.checkpoint()
+        call = world.call(name, args.get("smoke_arguments") or {})
+        world.revert(held)
+        if call.refused:
+            return _ok(
+                f"{name} adopted. Its own code answered with a refusal, which is it working: "
+                f"{call.error}"
+            )
+        if not call.ok:
+            del world.handlers[name]
+            tried[name] = tried.get(name, 0) + 1
+            said = f"{name} not adopted, the binding failed: {call.error}"
+            # A name that does not exist is the commonest way this fails, and the answer to it is
+            # the list of names that do, not a repeat of the general advice.
+            if "nameerror" in (call.error or "").lower():
+                said += f"\n\n{BINDING_SCOPE}"
+            if tried[name] >= 3:
+                said += (
+                    f"\n\nThat is {tried[name]} attempts at this one. Some tools cannot be "
+                    "reached without editing the agent: a framework may build them inside a "
+                    "session that does not exist here. Stop and say so, naming this tool and what "
+                    "it would need, and let the person decide. A tool nobody can run is a fact "
+                    "worth reporting, and writing a stand-in instead is the one failure that "
+                    "leaves no trace."
+                )
+            return _err(f"{said}\n\n{ADOPT_HELP}")
+        return _ok(
+            f"{name} adopted and ran, its own code. Returned {_brief(call.result)}"
+        )
 
     @tool(
         "run_tool",
@@ -306,29 +598,50 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
 
     @tool(
         "inspect_world",
-        "Look at what is in the world you are building. Without a table, lists the tables and "
-        "how many rows each holds; with one, returns rows from it.",
-        schema({"table": str, "limit": int}, []),
+        "Look at what is in the world you are building. With no collection named, lists what "
+        "there is and how much is in each. With one, returns records from it. `matching` is plain "
+        "text and filters to records containing it, which is how you find a record in a large "
+        "collection without reading all of it.",
+        schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
         state = world.state()
         table = str(args.get("table") or "")
         if not table:
             return _ok(
-                "\n".join(
-                    f"{name}: {len(rows)} rows" for name, rows in sorted(state.items())
-                )
-                or "no tables yet"
+                "\n".join(f"{name}: {_size(held)}" for name, held in sorted(state.items()))
+                or "nothing in the world yet"
             )
         if table not in state:
             return _err(
-                f"no table {table!r}; there is {', '.join(sorted(state)) or 'nothing'}"
+                f"nothing called {table!r}; there is {', '.join(sorted(state)) or 'nothing'}"
             )
-        rows = state[table]
-        shown = rows[: int(args.get("limit") or 15)]
+        held = state[table]
+        # A collection is a list of rows from a table, or a mapping the agent's own code keeps.
+        # Slicing the second one raises, so the shape is handled rather than assumed.
+        if isinstance(held, dict):
+            found = [{"_key": key, **value} if isinstance(value, dict) else {"_key": key, "value": value}
+                     for key, value in held.items()]
+        elif isinstance(held, list):
+            found = list(held)
+        else:
+            found = [held]
+        matching = str(args.get("matching") or "").strip().lower()
+        if matching:
+            narrowed = [
+                one for one in found if matching in json.dumps(one, default=str).lower()
+            ]
+            if not narrowed:
+                return _ok(
+                    f"nothing in {table} contains {matching!r}, out of {len(found)} records."
+                )
+            found = narrowed
+        shown = found[: int(args.get("limit") or 5)]
         return _ok(
-            f"{len(rows)} rows, showing {len(shown)}:\n"
-            + "\n".join(json.dumps(row, default=str) for row in shown)
+            f"{len(found)} records"
+            + (f" matching {matching!r}" if matching else "")
+            + f", showing {len(shown)}:\n"
+            + "\n".join(_brief(one) for one in shown)
         )
 
     @tool(
@@ -430,6 +743,18 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
         problems = validate_sub_goal(sub_goal)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
+        # Run it here, the same way a handler is run the moment it is defined. A check that raises
+        # is not a check, and accepting one now means every scenario that names it is refused later
+        # for a reason that looks like the scenario's fault rather than this one's.
+        if sub_goal.deterministic():
+            outcome = run_check(sub_goal.check, world, list(world.calls), name=sub_goal.name)
+            if outcome.broken:
+                return _err(
+                    f"Not added. {sub_goal.name} is not a working check: {outcome.said}\n\n"
+                    f"{world.shapes()}\n\n"
+                    "It does not have to hold against the world as it stands, since a sub-goal is "
+                    "about what a run leaves behind. It does have to run without raising."
+                )
         catalogue.sub_goals = [
             one for one in catalogue.sub_goals if one.name != sub_goal.name
         ]
@@ -439,6 +764,107 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
         return _ok(
             f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "
             f"{settled} settled by code: " + ", ".join(sorted(catalogue.names()))
+        )
+
+    @tool(
+        "write_env_file",
+        "Write one file the environment is built from: a Dockerfile, a compose file, a schema, an "
+        "entrypoint, whatever this agent needs. Paths are relative and stay inside the "
+        "environment directory. Call it once per file, then build with run_env_command.",
+        schema({"path": str, "contents": str}, ["path", "contents"]),
+    )
+    async def write_env_file(args: dict[str, Any]) -> dict[str, Any]:
+        from .workspace import listing, write
+
+        try:
+            written = write(destination, str(args["path"]), str(args["contents"]))
+        except ValueError as refused:
+            return _err(str(refused))
+        lines = len(str(args["contents"]).splitlines())
+        return _ok(
+            f"wrote {written.name}, {lines} lines. The environment now has: "
+            + ", ".join(listing(destination))
+        )
+
+    @tool(
+        "run_env_command",
+        "Run one docker or docker compose command from the environment directory: build an image, "
+        "bring a store up, run something inside a container. Only container commands run here, so "
+        "anything the environment needs belongs in a file it builds from rather than in a "
+        "command. Returns the exit code and the output.",
+        schema({"command": str}, ["command"]),
+    )
+    async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
+        from .workspace import run
+
+        code, output = run(destination, str(args["command"]))
+        shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
+        if code != 0:
+            return _err(f"exit {code}\n{shown or '(no output)'}")
+        return _ok(f"ok\n{shown or '(no output)'}")
+
+    @tool(
+        "write_store_ops",
+        "Teach the harness an engine it has never stood up: the image, the port it listens on, "
+        "the environment it needs to boot, and how to read, reset and change what it holds. "
+        "Only needed when the agent's engine is not one inspect_world already lists. Registering "
+        "it says nothing about whether it works: that is decided by proving it, not by either "
+        f"of us.\n\n{OPS_API}",
+        schema(
+            {
+                "engine": str,
+                "image": str,
+                "container_port": int,
+                "boot_env": dict,
+                "dsn_template": str,
+                "code": str,
+            },
+            ["engine", "image", "container_port", "code"],
+        ),
+    )
+    async def write_store_ops(args: dict[str, Any]) -> dict[str, Any]:
+        from .stores import StoreError, supported
+        from .stores.written import register_written
+
+        try:
+            register_written(
+                engine=str(args["engine"]),
+                image=str(args["image"]),
+                container_port=int(args["container_port"]),
+                boot_env={str(k): str(v) for k, v in (args.get("boot_env") or {}).items()},
+                dsn_template=str(args.get("dsn_template") or ""),
+                code=str(args["code"]),
+            )
+        except (StoreError, SyntaxError, ValueError) as exc:
+            return _err(f"not registered: {exc}")
+        return _ok(
+            f"{args['engine']} registered, alongside {', '.join(supported())}. Whether its "
+            "reset is right is decided when the environment is proved, not now."
+        )
+
+    @tool(
+        "add_world_check",
+        "Add one check that decides whether this world is usable. Python defining "
+        "check(world) which returns None when it holds, or a sentence saying what is wrong. "
+        "`world.state()` gives every collection and its contents. It runs immediately, and it is "
+        "later put through a world that has been broken on purpose: a check that stays green "
+        "there is not checking anything.",
+        schema({"name": str, "code": str, "what": str}, ["name", "code"]),
+    )
+    async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args["name"])
+        source = str(args["code"])
+        outcome = run_world_check(source, world, name=name)
+        if outcome.broken:
+            return _err(
+                f"{name} is not a working check: {outcome.said}\n\n"
+                f"{_shapes(world)}\n\n{WORLD_CHECK_HELP}"
+            )
+        world_checks[name] = source
+        held = "holds" if outcome.held else f"fails right now: {outcome.said}"
+        return _ok(
+            f"{name} added, {len(world_checks)} checks: {', '.join(sorted(world_checks))}.\n"
+            f"Against the world as it stands it {held}."
         )
 
     @tool(
@@ -463,7 +889,21 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
                 "not what is failing. Read the failures above literally and fix one of them, or "
                 "say what you are stuck on."
             )
-        return _ok(f"{report.summary()}\nscore {report.score:.2f}{stuck}")
+        failing, cannot_fail, _survived = _verified()
+        own = ""
+        if world_checks:
+            own = f"\n{len(world_checks) - len(failing)}/{len(world_checks)} of your own world checks hold"
+            if failing:
+                own += "\n  failing: " + ", ".join(failing)
+            if cannot_fail:
+                own += (
+                    "\n  these stayed green even with the world emptied and every tool "
+                    "silenced, so they are not checking anything: "
+                    + ", ".join(cannot_fail)
+                )
+        else:
+            own = "\nNo world checks of your own yet. Add them with add_world_check."
+        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{stuck}")
 
     @tool(
         "save_world",
@@ -481,6 +921,31 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
+            )
+        # The world has to prove itself, and the proof has to be capable of failing. Both halves
+        # matter: checks nobody wrote verify nothing, and checks that pass a world with no data
+        # and no working tools verify nothing either.
+        if not world_checks:
+            return _err(
+                "Not saved. This world has no checks of its own yet. Add them with "
+                "add_world_check: what has to be true for this world to be worth testing "
+                "against, as code.\n\n" + WORLD_CHECK_HELP
+            )
+        failing, cannot_fail, _survived = _verified()
+        if failing:
+            return _err(
+                "Not saved. These of your own world checks do not hold: "
+                + ", ".join(failing)
+                + ".\nFix the world, or the check if the check is what is wrong."
+            )
+        if cannot_fail:
+            return _err(
+                "Not saved. These checks stayed green with the world emptied and every tool "
+                "silenced, so they are not verifying anything: "
+                + ", ".join(cannot_fail)
+                + ".\nA check has to inspect something that could actually be wrong. Make each "
+                "of them read the part of the world it claims to be about, and fail when it is "
+                "missing."
             )
         # The environment is not only the world. Every scenario is a delta on what is built
         # here, so a catalogue nobody wrote means every scenario invents its own wording and
@@ -535,12 +1000,16 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             destination,
             notes=str(args.get("notes") or ""),
             sequences=sequences,
+            # Written out with the world. They are judgement about this agent, and a world reopened
+            # without them would have to have them rewritten before it could be saved again.
+            world_checks=world_checks,
         )
         tables = world.state()
         return _ok(
             f"Saved to {path}.\n"
-            f"{len(world.handlers)} tools, {len(tables)} tables, "
-            f"{sum(len(rows) for rows in tables.values())} rows.\n"
+            f"{len(world.handlers)} tools, {len(tables)} collections, "
+            f"{sum(_size(held) for held in tables.values())} records, "
+            f"{len(world_checks)} world checks.\n"
             f"score {report.score:.2f}"
         )
 
@@ -562,6 +1031,12 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             inspect_world,
             write_simulator_prompt,
             add_sub_goal,
+            adopt_state,
+            adopt_tool,
+            write_store_ops,
+            add_world_check,
+            write_env_file,
+            run_env_command,
             check_world,
             save_world,
         ],
@@ -573,6 +1048,8 @@ TOOL_NAMES = (
     "create_schema",
     "seed",
     "change_data",
+    "adopt_state",
+    "adopt_tool",
     "define_handler",
     "run_tool",
     "declare_sequence",
@@ -584,6 +1061,10 @@ TOOL_NAMES = (
     "inspect_world",
     "write_simulator_prompt",
     "add_sub_goal",
+    "write_store_ops",
+    "add_world_check",
+    "write_env_file",
+    "run_env_command",
     "check_world",
     "save_world",
 )

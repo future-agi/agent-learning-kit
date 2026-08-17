@@ -369,8 +369,13 @@ async def say(said: Said):
         if not current.agent and conversation.contract:
             current.agent = conversation.contract.agent
             current.title = conversation.contract.one_liner or current.agent
-        if conversation.source and not current.source:
-            current.source = str(getattr(conversation.source, "root", "") or "")
+        # Recorded whenever it is known, not only when the session has none yet. Reopening a
+        # session rebuilds the conversation from this field, and a session that lost it cannot
+        # reach the agent's own code afterwards: the build stage then reports that the agent has
+        # no source, which reads as a fact about the agent rather than about us.
+        reached = str(getattr(conversation.source, "root", "") or "")
+        if reached:
+            current.source = reached
             current.kind = conversation.source.kind
         sessions.save(current)
 

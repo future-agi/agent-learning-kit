@@ -32,6 +32,90 @@ There is no persona and no opening line. **Variability comes from real condition
 out of stock, the record already exists, the order has already shipped. Those live in
 `setup_code`. Do not invent a character.
 
+## Three parts that must never leak into each other
+
+Getting this wrong is what makes a test worthless, and it is the most common way to write a
+scenario that looks fine and measures nothing.
+
+| | What it is | What it must never contain |
+|---|---|---|
+| **instruction** | what the person on the other side is living through | the answer, the checks, or facts they could not know |
+| **setup** | the world's condition | anything the person is supposed to say |
+| **checks** | the hidden pass or fail rules | anything the agent was told |
+
+## Writing the instruction
+
+**The instruction is a circumstance, not a script.** Write it in the second person, as what this
+person is living through: who they are, what is happening to them, and what they want. It is
+never a list of lines to say, and never the agent's turns.
+
+```
+BAD    Ask for <thing A>. Then change your mind and ask for <thing B> instead.
+       Confirm the total at the end.
+       (a stage direction. The person recites it, and the run measures whether the
+        agent can follow dictation. Nothing about the change of mind is tested,
+        because it arrives exactly when the script says so)
+
+GOOD   You want <thing A>, and you are not particular about <the detail the agent
+       has to settle>. Partway through, you realise <thing B> is what you actually
+       need, and you would rather swap than end up with both.
+       (a situation. What they say is theirs to work out, and the agent has to cope
+        with a change of mind arriving mid-conversation rather than on cue)
+```
+
+Written with placeholders on purpose. Fill them from **this** agent's own data, and never from a
+worked example of another agent.
+
+**What they know but will not volunteer goes in its own paragraph**, marked as such: *"You know
+the reference for it, but you will only give it if asked."* The whole point of many scenarios is
+whether the agent asks. Put that in the instruction and the agent gets it for free;
+leave it out entirely and the scenario cannot be completed.
+
+**Never write personality, accent or mood** unless the scenario is specifically about handling
+one. A rude customer is a different scenario from a polite one only if the correct outcome
+differs.
+
+## Writing setup, and the mistake to avoid
+
+**Whatever the instruction presumes about the world, setup has to make true.** This is where
+scenarios most often go wrong: the instruction says the person is returning an order that has
+already shipped, and setup leaves every order pending, so the agent refuses correctly and the
+scenario fails it for being right.
+
+The rule: read your own instruction back, list every condition it assumes, and make sure `setup_code`
+establishes each one and `ready_code` proves it. An empty `setup_code` is only honest when the base world
+already holds everything the instruction presumes.
+
+## Two scenarios are different only if the right answer differs
+
+Not if the wording differs. "The item is in stock" and "the item is out of stock" are two
+scenarios, because the correct outcome is different. Two polite requests for the same thing are
+one scenario written twice.
+
+## The bar every scenario has to clear
+
+- **A competent agent could plausibly fail it.** If any correct implementation passes for free, it
+  teaches nothing. Do not write it.
+- **A real person could plausibly bring this situation.** Nothing contrived.
+- **Every concrete value is real**, taken from the contract or the world. An invented id or menu
+  item makes the test worthless whatever else it does.
+
+## Plan the whole suite before writing any of it
+
+Writing scenarios one at a time produces a suite that clumps: five variations on the easy path and
+nothing on the parts that break. So partition the work first, out loud, before the first
+`submit_scenario`.
+
+Say how many scenarios each use case gets, **in proportion to how much can genuinely go wrong in
+it**. A use case with rules to enforce, information to gather, or state to change earns a large
+share; one where little can fail earns one scenario or none. Then, for each use case, name the
+distinct **angles** you will write: the ordinary path, the branch that cannot be completed, the
+rule under pressure, the state that has to carry, the same request against a differently seeded
+world.
+
+Show that plan to the person and let them redirect it. It costs one turn and it is the difference
+between twenty tests and twenty rewordings of four.
+
 ## Organise by use case, then by branch
 
 A login flow is not one row with the happy path and the edge cases inside it. It is several:
@@ -69,18 +153,51 @@ refused rather than succeeding.
 
 Python defining `setup(world)`. Leave it empty when the base world is already right.
 
-You have two ways to change things:
+You have two ways to change things, and **neither of them names what the world is kept in**. A
+scenario that wrote SQL would only work against a world that happened to be a database, and the
+store is the thing that varies most between agents.
 
-- `world.call("tool_name", {...})` — act through the agent's own tools. Prefer this. It goes
-  through the same path the agent will, so anything it refuses would have refused the agent too.
-- `world.connection` — a database connection, for state no tool can produce. Use it when a
-  scenario needs a record in a condition the agent could never create itself.
+**Prefer the agent's own tools.** It goes through the same path the agent will, so anything the
+world would refuse to you would have refused the agent too.
 
 ```python
 def setup(world):
-    world.connection.execute("UPDATE stock SET quantity = 5 WHERE item_id = 'widget'")
-    world.connection.commit()
+    world.call("add_to_stock", {"item_id": "widget", "quantity": 5})
 ```
+
+**Otherwise change the world directly**, in collections and records:
+
+```python
+world.put(collection, record, key=...)              # add one record
+world.change(collection, key, changes, by=...)      # change one record
+world.drop(collection, key, by=...)                 # remove one, or all of them with no key
+```
+
+The keyed-on argument names the column a table is keyed on, and is not needed for a collection
+that is keyed already. `world.state()` shows you every collection and what is in it, which is how you find out
+which you are dealing with.
+
+```python
+def setup(world):
+    world.change("stock", "widget", {"quantity": 5}, by="item_id")
+```
+
+Use the direct route only for states no tool can produce: a record already in a condition the
+agent could never create itself.
+
+## A collection is not always a list
+
+`world.state()` gives every collection this world has, and their shapes differ by agent. A table
+gives a list of records. A collection the agent's own code keeps is often a mapping keyed by
+identifier, and iterating that yields the keys, which are strings, so reading a field off one fails.
+
+```python
+held = world.state()["some_collection"]
+records = list(held.values()) if isinstance(held, dict) else held
+```
+
+Look before you write. `inspect_world` shows you which is which, and this applies to `setup_code`,
+`ready_code` and every check.
 
 ## Writing ready_code
 

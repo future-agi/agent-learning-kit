@@ -77,3 +77,35 @@ def all_held(outcomes: Sequence[Outcome]) -> bool:
 
 def broken(outcomes: Sequence[Outcome]) -> list[Outcome]:
     return [one for one in outcomes if one.broken]
+
+def run_world_check(source: str, world: GeneratedWorld, *, name: str = "check") -> Outcome:
+    """Execute one check about the world itself, rather than about a run.
+
+    A world check asks whether the environment is usable at all, so it is written ``check(world)``
+    and there are no calls to give it. Both arities are accepted, because the difference is not
+    worth a rejection: a check written ``check(world, calls)`` out of habit is answering the same
+    question, and gets an empty list.
+    """
+    import inspect
+
+    namespace: dict[str, Any] = {}
+    try:
+        exec(compile(source, f"<world-check:{name}>", "exec"), namespace)
+    except Exception as failed:
+        return Outcome(name, False, f"the check would not compile: {failed}", broken=True)
+
+    checker = namespace.get("check")
+    if not callable(checker):
+        return Outcome(name, False, "the check defines no check(world)", broken=True)
+
+    try:
+        wants = len(inspect.signature(checker).parameters)
+    except (TypeError, ValueError):
+        wants = 1
+    try:
+        said = checker(world) if wants < 2 else checker(world, [])
+    except Exception as failed:
+        return Outcome(
+            name, False, f"the check raised {type(failed).__name__}: {failed}", broken=True
+        )
+    return Outcome(name, said is None, "" if said is None else str(said))

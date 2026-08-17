@@ -90,7 +90,17 @@ def accept_scenario(
 
     proof = prove(scenario, catalogue, world_root)
     if not proof.holds:
-        return _err(f"Not kept. {proof.why()}")
+        said = f"Not kept. {proof.why()}"
+        # Code written against the wrong collection shape is the commonest way setup, ready and a
+        # check fail here, and the exception alone does not say which collections are mappings and
+        # which are lists. The world is asked, so the answer names them.
+        if "attribute" in said.lower() or "not subscriptable" in said.lower():
+            world = restore(world_root)
+            try:
+                said += f"\n\n{world.shapes()}"
+            finally:
+                world.close()
+        return _err(said)
 
     replaced = any(one.name == scenario.name for one in kept)
     kept[:] = [one for one in kept if one.name != scenario.name]
@@ -297,7 +307,7 @@ def scenario_tools(
                     "description": "Python defining setup(world): the changes this scenario "
                     "makes to the environment before the run. Leave empty to run on the base "
                     "world unchanged. Use world.call(tool, args) to act through the agent's own "
-                    "tools, or world.connection for direct SQL. This is code and not a list of "
+                    "tools, or world.put, world.change and world.drop for what no tool can produce. This is code and not a list of "
                     "rows because a scenario may need more than a table changed.",
                 },
                 "ready_code": {

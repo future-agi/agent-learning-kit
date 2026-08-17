@@ -124,6 +124,15 @@ def resolve(kind: str, **kwargs: Any) -> AgentSource:
             f"no agent source of kind {kind!r}; registered kinds are "
             f"{', '.join(sorted(_REGISTRY))}"
         )
+    # An empty root used to resolve to the current directory, which is worse than failing: every
+    # later stage then reads a real path, finds the harness's own repository, and reports that the
+    # agent has no code on disk. Nothing downstream can tell that apart from an agent that really
+    # was given as a specification.
+    if "root" in kwargs and not str(kwargs.get("root") or "").strip():
+        raise ValueError(
+            f"a {kind!r} source needs the path its code lives at, and none was given. If this "
+            "agent has no code on disk, it is not this kind of source."
+        )
     return _REGISTRY[kind](**kwargs)
 
 

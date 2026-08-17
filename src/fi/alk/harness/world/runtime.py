@@ -58,21 +58,42 @@ class Db:
     reproducible.
     """
 
-    connection: sqlite3.Connection
+    # Whatever this agent's records live in. A handler's statements are written in that store's
+    # own language, so this passes them through rather than interpreting them.
+    store: Any
+    # The agent's own state object, where its tools keep what they act on in memory rather than
+    # in a database. Their code is the thing that shapes it, so the world holds it and does not
+    # interpret it: freezing it is a serialisation, and restoring it is the reverse.
+    state: Any = None
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
-        cursor = self.connection.execute(sql, tuple(params))
-        columns = [column[0] for column in (cursor.description or [])]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        return self.store.query(sql, params)
 
     def one(self, sql: str, params: Sequence[Any] = ()) -> dict[str, Any] | None:
         rows = self.query(sql, params)
         return rows[0] if rows else None
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
-        cursor = self.connection.execute(sql, tuple(params))
-        self.connection.commit()
-        return cursor.rowcount
+        return self.store.execute(sql, params)
+
+
+def settled(value: Any) -> Any:
+    """The value, with a coroutine run to completion first.
+
+    A tool the agent wrote may well be async: every framework-decorated tool is. Handlers here
+    are synchronous, and the build stage is itself inside a running event loop, so ``asyncio.run``
+    cannot be called directly. Running it on a worker thread gives it a loop of its own and keeps
+    the handler contract unchanged.
+    """
+    import asyncio
+    import inspect
+
+    if not inspect.isawaitable(value):
+        return value
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, value).result()
 
 
 def _is_refusal(raised: BaseException) -> bool:
@@ -113,11 +134,51 @@ class GeneratedWorld(EnvironmentAdapter):
     tools: list[dict[str, Any]] = []
     handlers: dict[str, str] = {}
 
-    def __init__(self, database: str | Path = ":memory:") -> None:
+    # Where the agent's own code lives, so a handler that binds to one of its tools can import
+    # it. Empty when the world implements the tools itself.
+    source_root: str = ""
+    # The agent's own in-memory state, for tools that take it as an argument instead of
+    # connecting to anything. Held opaquely: their code gives it shape.
+    state_object: Any = None
+    # How this agent says no in a returned value. A tool that answers "Error: no such order" is
+    # refusing, and recording that as a success would hide the very behaviour worth testing.
+    refusal_signature: str = ""
+
+    def __init__(
+        self, database: str | Path = ":memory:", *, store: Any = None, kind: str = ""
+    ) -> None:
+        from .stores import open_store
+
         self.database = str(database)
-        self.connection = sqlite3.connect(self.database, check_same_thread=False)
-        self.connection.execute("PRAGMA foreign_keys = ON")
+        # Where this agent's records live. Given rather than assumed, because the harness
+        # writes statements in whatever the agent's own store speaks and they have to reach
+        # it. A world with no store of its own gets one that says so.
+        self.store = store or open_store(kind or "sqlite", database=self.database)
         self.calls: list[Call] = []
+
+    @property
+    def connection(self) -> Any:
+        """The store's own connection, where it has one.
+
+        Kept so that code written when every world was a SQLite file still works. Anything
+        new should go through the store, or through put, change and drop, so it holds for a
+        world whose records are somewhere else.
+        """
+        found = getattr(self.store, "connection", None)
+        if found is None:
+            raise AttributeError(
+                f"this world's store ({getattr(self.store, 'key', 'unknown')}) has no "
+                "connection. Use the store, or put, change and drop."
+            )
+        return found
+
+    def reach(self, source_root: str) -> None:
+        """Make the agent's own code importable, so a binding can call it rather than copy it."""
+        import sys
+
+        self.source_root = str(source_root or "")
+        if self.source_root and self.source_root not in sys.path:
+            sys.path.insert(0, self.source_root)
 
     # -- EnvironmentAdapter ----------------------------------------------------------
 
@@ -185,7 +246,7 @@ class GeneratedWorld(EnvironmentAdapter):
             handle = namespace.get("handle")
             if not callable(handle):
                 raise RuntimeError("handler defines no handle(args, db)")
-            value = handle(args, Db(self.connection))
+            value = handle(args, Db(self.store, self.state_object))
         except Exception as raised:
             if _is_refusal(raised):
                 return self._record(
@@ -207,7 +268,53 @@ class GeneratedWorld(EnvironmentAdapter):
                     error=f"{type(raised).__name__}: {raised}",
                 )
             )
+        # A tool of the agent's own may refuse by returning rather than by raising, which is
+        # ordinary in code that was never written to be tested. Recording that as a success
+        # would hide exactly the behaviour worth measuring, so the agent's own convention
+        # decides. Only the recording differs: the value still reaches the agent unchanged.
+        if self._refused_by_value(value):
+            return self._record(
+                Call(
+                    name=name,
+                    arguments=args,
+                    result=value,
+                    ok=False,
+                    refused=True,
+                    error=str(value)[:400],
+                )
+            )
         return self._record(Call(name=name, arguments=args, result=value))
+
+    def _refused_by_value(self, value: Any) -> bool:
+        """Whether a returned value is this agent's way of saying no.
+
+        The convention is recorded as a description, because that is what somebody reading the
+        agent's code can actually write: "strings starting with Error:". So the marker is taken
+        from inside it rather than treating the whole sentence as a prefix, which would match
+        nothing and quietly record every refusal as a success.
+        """
+        if not isinstance(value, str) or not value:
+            return False
+        described = (self.refusal_signature or "").strip()
+        if not described:
+            return False
+        for marker in self._markers(described):
+            if value.lower().startswith(marker.lower()):
+                return True
+        return False
+
+    def _markers(self, described: str) -> list[str]:
+        """The literal markers named inside a described convention.
+
+        Anything quoted is taken as written, since that is how a convention gets spelled out. With
+        nothing quoted the whole description is treated as the marker, which is right when somebody
+        recorded just the prefix itself.
+        """
+        import re
+
+        quoted = re.findall(r"[\"'“”‘’`]([^\"'“”‘’`]{1,40})[\"'“”‘’`]", described)
+        found = [one.strip() for one in quoted if one.strip()]
+        return found or [described]
 
     def _record(self, call: Call) -> Call:
         self.calls.append(call)
@@ -228,33 +335,164 @@ class GeneratedWorld(EnvironmentAdapter):
         except sqlite3.Error:
             self.connection.rollback()
 
-    def checkpoint(self) -> sqlite3.Connection:
-        """A copy of the current data, to come back to.
+    def checkpoint(self) -> Any:
+        """A copy of everything the world holds, to come back to.
 
-        Probes mutate: ordering an item inserts a row. Without a way back, each probe runs
-        against the debris of the ones before it, and a check expecting three rows finds seven.
-        The same restore-a-fresh-copy discipline scenarios use, applied to the gate itself.
+        Probes and smoke calls mutate: ordering an item inserts a record, cancelling one changes
+        it. Without a way back, each runs against the debris of the ones before it, and a check
+        expecting three records finds seven.
+
+        Both halves are copied, and that matters more for an adopted world than a generated one.
+        A tool the agent wrote changes the structure it was given, in place. Backing up only the
+        store would leave those changes permanent, so a smoke call against one record would quietly
+        spend it, and whatever ran later against that same record would fail for a reason nothing
+        could see.
         """
-        self._settle()
-        copy = sqlite3.connect(":memory:")
-        self.connection.backup(copy)
-        return copy
+        import copy as duplicate
 
-    def revert(self, checkpoint: sqlite3.Connection) -> None:
-        """Put the data back as it was when the checkpoint was taken."""
         self._settle()
-        checkpoint.backup(self.connection)
+        store = None
+        connection = getattr(self.store, "connection", None)
+        if connection is not None:
+            store = sqlite3.connect(":memory:")
+            connection.backup(store)
+        held = duplicate.deepcopy(self.state_object) if self.state_object is not None else None
+        return {"store": store, "state": held}
+
+    def revert(self, checkpoint: Any) -> None:
+        """Put everything back as it was when the checkpoint was taken."""
+        import copy as duplicate
+
+        self._settle()
+        # A bare connection is accepted so that anything written against the older shape of this
+        # method keeps working rather than reverting nothing at all, which would be silent.
+        if isinstance(checkpoint, sqlite3.Connection):
+            checkpoint.backup(self.connection)
+            return
+        held = (checkpoint or {}).get("store")
+        if held is not None:
+            held.backup(self.connection)
+        if (checkpoint or {}).get("state") is not None:
+            self.state_object = duplicate.deepcopy(checkpoint["state"])
 
     def state(self) -> dict[str, Any]:
-        """Every table and its rows: what the checks compare against after a run."""
-        tables = Db(self.connection).query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        )
-        db = Db(self.connection)
-        return {row["name"]: db.query(f"SELECT * FROM {row['name']}") for row in tables}
+        """What the checks compare against after a run.
+
+        Tables and their rows, plus whatever the agent's own tools keep in memory. A world that
+        adopted the agent's code may have all of its state in the second of those, so a check has
+        to be able to see both without knowing which kind of world it is grading.
+        """
+        found: dict[str, Any] = {
+            name: self.store.records(name) for name in self.store.collections()
+        }
+        if isinstance(self.state_object, dict):
+            # Collections the agent's own code owns. Not merged blindly: a table and a key of
+            # the same name would silently shadow one another, and a check comparing the wrong
+            # one would be wrong in a way nobody could see.
+            for key, value in self.state_object.items():
+                found.setdefault(str(key), value)
+        elif self.state_object is not None:
+            found.setdefault("state", self.state_object)
+        return found
+
+    # -- changing the world, without naming what it is kept in ------------------------
+    #
+    # A scenario changes the world before it runs, and it must not have to know whether the world
+    # is a database, a mapping the agent's own code owns, or something else again. Speaking SQL
+    # here would write SQLite into every scenario ever written, and the store is the one thing
+    # this design expects to vary per agent.
+    #
+    # So the vocabulary is collections and records, which every store has under some name, and
+    # each method dispatches on what the collection actually is. The preferred way to change the
+    # world is still the agent's own tools, because anything they refuse would have refused the
+    # agent too; these are for the states no tool can produce.
+
+    def _table(self, collection: str) -> bool:
+        return bool(self.store.holds(collection))
+
+    def _held(self, collection: str) -> Any:
+        if isinstance(self.state_object, dict):
+            return self.state_object.get(collection)
+        return None
+
+    def put(self, collection: str, record: Mapping[str, Any], *, key: str = "") -> None:
+        """Add one record to a collection, whatever the collection is kept in."""
+        if self._table(collection):
+            self.store.add(collection, record)
+            return
+        held = self._held(collection)
+        if isinstance(held, dict):
+            if not key:
+                raise KeyError(
+                    f"{collection} is keyed, so adding to it needs a key: "
+                    "world.put(collection, record, key=...)"
+                )
+            held[key] = dict(record)
+            return
+        if isinstance(held, list):
+            held.append(dict(record))
+            return
+        raise KeyError(f"no collection called {collection!r}; this world has {sorted(self.state())}")
+
+    def change(self, collection: str, key: str, changes: Mapping[str, Any], *, by: str = "") -> int:
+        """Change records in a collection. Returns how many were changed.
+
+        ``by`` names the column a table is keyed on. A collection the agent's own code keeps is
+        keyed already, so it is not needed there.
+        """
+        if self._table(collection):
+            return self.store.amend(collection, key, changes, by=by)
+        held = self._held(collection)
+        if isinstance(held, dict) and key in held:
+            if isinstance(held[key], dict):
+                held[key].update(dict(changes))
+            else:
+                held[key] = dict(changes)
+            return 1
+        raise KeyError(f"nothing called {key!r} in {collection!r}")
+
+    def drop(self, collection: str, key: str = "", *, by: str = "") -> int:
+        """Remove a record, or the whole contents of a collection when no key is given."""
+        if self._table(collection):
+            return self.store.remove(collection, key, by=by)
+        held = self._held(collection)
+        if isinstance(held, dict):
+            if not key:
+                count = len(held)
+                held.clear()
+                return count
+            return 1 if held.pop(key, None) is not None else 0
+        if isinstance(held, list):
+            count = len(held)
+            del held[:]
+            return count
+        raise KeyError(f"no collection called {collection!r}; this world has {sorted(self.state())}")
+
+    def shapes(self) -> str:
+        """What this world's collections actually are, in words.
+
+        Said wherever code written against the wrong shape fails. A table gives a list of records;
+        a collection the agent's own code keeps is often a mapping keyed by identifier, and
+        iterating that yields strings. No amount of general advice substitutes for naming which is
+        which, for the world in front of whoever got it wrong.
+        """
+        lines = []
+        for name, held in sorted(self.state().items()):
+            if isinstance(held, dict):
+                first = next(iter(held), None)
+                lines.append(
+                    f"  {name}: a mapping of {len(held)} records keyed by identifier"
+                    + (f", e.g. {first!r}" if first is not None else "")
+                    + ". Iterate .values(), or .items() when the key matters."
+                )
+            elif isinstance(held, list):
+                lines.append(f"  {name}: a list of {len(held)} records. Iterate it directly.")
+            else:
+                lines.append(f"  {name}: a single {type(held).__name__}.")
+        return "This world holds:\n" + ("\n".join(lines) or "  nothing yet")
 
     def close(self) -> None:
-        self.connection.close()
+        self.store.close()
 
 
 @dataclass

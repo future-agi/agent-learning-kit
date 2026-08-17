@@ -54,7 +54,7 @@ A run where nothing reached the world says nothing about the agent. Report it as
 
 ## What to say
 
-Say what passed, what failed, and for each failure which of those four it is. Where it is ours,
+Say what passed, what failed, and for each failure which of those four it is. Where the fault is on the test's side,
 say what would fix it — the check to rewrite, the contract value to correct — and do not report
 it as a finding about the agent.
 

@@ -37,11 +37,12 @@ def open_stage(
     *,
     out: Path | None = None,
     ask: Callable[..., Any] | None = None,
+    source_root: str = "",
     max_turns: int = 60,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
-    server, _world = world_tools(contract, destination)
+    server, _world = world_tools(contract, destination, source_root=source_root)
     allowed = [
         "AskUserQuestion",
         *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),

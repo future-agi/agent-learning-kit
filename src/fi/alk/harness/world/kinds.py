@@ -12,9 +12,44 @@ is a class and a registration; nothing in the gate changes.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from .runtime import GeneratedWorld
+
+
+def _rows(collection: Any) -> list[Any]:
+    """One collection's members, whichever shape it is kept in.
+
+    A table gives a list of row mappings. A collection the agent's own code owns is as often a
+    mapping keyed by identifier, and iterating that yields keys rather than records, which is how
+    a check written for one shape silently reads the other.
+    """
+    if isinstance(collection, dict):
+        return list(collection.values())
+    if isinstance(collection, (list, tuple)):
+        return list(collection)
+    return [collection]
+
+
+def _identifiers(state: Mapping[str, Any]) -> set[str]:
+    found: set[str] = set()
+    for name, collection in state.items():
+        if isinstance(collection, dict):
+            # The keys of a mapping are identifiers in their own right, and usually the ones a
+            # tool is called with.
+            found.update(str(key) for key in collection if isinstance(key, str) and key)
+        for row in _rows(collection):
+            if isinstance(row, Mapping):
+                found.update(
+                    value for value in row.values() if isinstance(value, str) and value
+                )
+            elif isinstance(row, str) and row:
+                found.add(row)
+    return found
+
+
+def _sizes(state: Mapping[str, Any]) -> dict[str, int]:
+    return {name: len(_rows(collection)) for name, collection in state.items()}
 
 
 @runtime_checkable
@@ -50,16 +85,10 @@ class SqliteWorld:
     label = "a database behind the agent's tools"
 
     def values_present(self, world: GeneratedWorld) -> set[str]:
-        present: set[str] = set()
-        for rows in world.state().values():
-            for row in rows:
-                for value in row.values():
-                    if isinstance(value, str) and value:
-                        present.add(value)
-        return present
+        return _identifiers(world.state())
 
     def mutable_state(self, world: GeneratedWorld) -> dict[str, int]:
-        return {name: len(rows) for name, rows in world.state().items()}
+        return _sizes(world.state())
 
     def describe(self, world: GeneratedWorld) -> str:
         counts = self.mutable_state(world)
@@ -82,8 +111,10 @@ class BrowserWorld:
 
     def values_present(self, world: GeneratedWorld) -> set[str]:
         present: set[str] = set()
-        for rows in world.state().values():
-            for row in rows:
+        for collection in world.state().values():
+            for row in _rows(collection):
+                if not isinstance(row, Mapping):
+                    continue
                 for column in ("url", "selector", "id", "name", "action"):
                     value = row.get(column)
                     if isinstance(value, str) and value:
@@ -91,7 +122,28 @@ class BrowserWorld:
         return present
 
     def mutable_state(self, world: GeneratedWorld) -> dict[str, int]:
-        return {name: len(rows) for name, rows in world.state().items()}
+        return _sizes(world.state())
+
+    def describe(self, world: GeneratedWorld) -> str:
+        counts = self.mutable_state(world)
+        return ", ".join(f"{name}: {count}" for name, count in sorted(counts.items()))
+
+
+class InProcessWorld:
+    """A world whose state the agent's own code holds, rather than a store we stood up.
+
+    This is what an adopted world usually is: the agent's tools were written to act on a structure
+    they build themselves, so the world holds that structure and does not interpret it.
+    """
+
+    key = "in_process"
+    label = "state the agent's own code keeps"
+
+    def values_present(self, world: GeneratedWorld) -> set[str]:
+        return _identifiers(world.state())
+
+    def mutable_state(self, world: GeneratedWorld) -> dict[str, int]:
+        return _sizes(world.state())
 
     def describe(self, world: GeneratedWorld) -> str:
         counts = self.mutable_state(world)
@@ -101,6 +153,7 @@ class BrowserWorld:
 _REGISTRY: dict[str, Callable[[], WorldKind]] = {
     SqliteWorld.key: SqliteWorld,
     BrowserWorld.key: BrowserWorld,
+    InProcessWorld.key: InProcessWorld,
 }
 
 
@@ -127,6 +180,16 @@ def for_contract(contract: Any) -> WorldKind:
     Chosen rather than guessed at build time: an agent reachable by voice and by browser is one
     agent with two runtimes, and which world to build is a decision about what is being tested.
     """
+    # What the store is, when the contract knows. That is the honest source: how a person reaches
+    # the agent says nothing about what its tools read and write, and an agent whose state lives
+    # in its own process is not a database however it is spoken to.
+    store = getattr(contract, "data_store", None)
+    named = str(getattr(store, "kind", "") or "").lower()
+    if named in _REGISTRY:
+        return resolve(named)
+    if named in ("in_process", "memory", "in-memory", "none", ""):
+        if named:
+            return resolve("in_process")
     modality = str(getattr(contract, "modality", "") or "").lower()
     if modality in ("browser", "computer_use", "cua"):
         return resolve("browser")
