@@ -101,6 +101,10 @@ embeddings = [
 feedback = [
     { name = "chromadb" },
 ]
+harness-ui = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
 langchain = [
     { name = "langchain-core" },
     { name = "langgraph" },
@@ -137,9 +141,11 @@ trinity = [
 [package.dev-dependencies]
 dev = [
     { name = "build" },
+    { name = "fastapi" },
     { name = "hatchling" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -154,6 +160,7 @@ requires-dist = [
     { name = "chromadb", marker = "extra == 'all'", specifier = ">=0.4.0" },
     { name = "chromadb", marker = "extra == 'feedback'", specifier = ">=0.4.0" },
     { name = "claude-agent-sdk", specifier = ">=0.2.139" },
+    { name = "fastapi", marker = "extra == 'harness-ui'", specifier = ">=0.115,<1" },
     { name = "fi-instrumentation-otel", specifier = ">=0.1.16" },
     { name = "gepa", specifier = ">=0.0.17" },
     { name = "httpx", specifier = ">=0.24.0" },
@@ -195,15 +202,18 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'all'", specifier = ">=5.2.0,<6" },
     { name = "transformers", marker = "extra == 'nli'", specifier = ">=5.2.0,<6" },
     { name = "typer", specifier = ">=0.9.0,<1.0.0" },
+    { name = "uvicorn", marker = "extra == 'harness-ui'", specifier = ">=0.30,<1" },
 ]
-provides-extras = ["simulate", "evaluation", "optimize", "livekit", "langchain", "pipecat", "mcp", "a2a", "nli", "embeddings", "feedback", "notebook", "trinity", "all"]
+provides-extras = ["simulate", "evaluation", "optimize", "livekit", "langchain", "pipecat", "mcp", "a2a", "nli", "embeddings", "harness-ui", "feedback", "notebook", "trinity", "all"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "build", specifier = ">=1.5" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "hatchling", specifier = ">=1.25" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "uvicorn", specifier = ">=0.30,<1" },
 ]
 
 [[package]]
@@ -1208,6 +1218,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cc/28/c14e053b6762b1044f34a13aab6859bbf40456d37d23aa286ac24cfd9a5d/executing-2.2.1.tar.gz", hash = "sha256:3632cc370565f6648cc328b32435bd120a1e4ebb20c77e3fdde9a13cd1e533c4", size = 1129488, upload-time = "2025-09-01T09:48:10.866Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/ea/53f2148663b321f21b5a606bd5f191517cf40b7072c0497d3c92c4a13b1e/executing-2.2.1-py2.py3-none-any.whl", hash = "sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017", size = 28317, upload-time = "2025-09-01T09:48:08.5Z" },
+]
+
+[[package]]
+name = "fastapi"
+version = "0.141.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8a/02/91e3416a8fdd715abb903a952a6bec7cdd8d14eed55d415fc8595524c319/fastapi-0.141.1.tar.gz", hash = "sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1", size = 425799, upload-time = "2026-07-29T17:18:05.568Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl", hash = "sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3", size = 131954, upload-time = "2026-07-29T17:18:04.364Z" },
 ]
 
 [[package]]
