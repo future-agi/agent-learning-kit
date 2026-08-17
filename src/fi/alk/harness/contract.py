@@ -196,7 +196,16 @@ def _reached(one: "Dependency") -> str:
     if one.engine:
         said.append(f"stand up {one.engine}{' ' + one.version if one.version else ''}")
     where = one.reached
-    if where.dsn_env:
+    if where.loader_module:
+        # Said first and said plainly, because "stand up inprocess" on its own reads as an
+        # instruction to find something to stand up — and a stage told that, with no loader
+        # named, reached for a server the agent has never used.
+        said.append(
+            f"call the agent's own {where.loader_module}."
+            f"{where.loader_function or 'load_data'} for it; nothing is connected to and no "
+            "server is involved"
+        )
+    elif where.dsn_env:
         said.append(f"point it there with ${where.dsn_env}")
     elif where.config_key:
         said.append(f"point it there with {where.config_key} in its config")

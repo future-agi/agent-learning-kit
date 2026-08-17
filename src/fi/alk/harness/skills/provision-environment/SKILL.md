@@ -46,13 +46,22 @@ contract carries none, whether an engine you cannot identify is worth guessing a
 
 ## How to work
 
-1. **`declare_engine`.** Read the engine off the contract — the driver it imports, the URL
-   scheme it builds, the image its compose file pulls. Never choose one for it: engines
-   disagree about dialect, types and what a transaction means, so an agent tested against the
-   wrong one is graded on queries it never runs. The container starts immediately.
+1. **`declare_engine`** with the engine the contract names. `inspect_environment` first if you
+   want to see what the harness can already stand up.
 
-   If the harness has never stood that engine up, `write_store_ops` first. That is expected,
-   not a failure — an engine nobody wrote down in advance is the normal case.
+   **Never substitute a different engine.** Not a similar one, not a "lightweight equivalent",
+   not a server standing in for something held in memory. An agent whose tools read a dict is
+   not tested by putting that dict in Redis — its queries never run, and every result is about
+   code it does not have. This is the single mistake this whole path exists to prevent, and it
+   does not stop being that mistake because the substitute is convenient.
+
+   Some agents have **no server at all**: they load files into memory and their tools read that
+   structure directly. That is `engine: inprocess`, it is already supported, and the contract
+   names the loader to call. Nothing is stood up and nothing is connected to.
+
+   If the harness genuinely has never seen the engine — it is not in `inspect_environment`'s
+   list — then `write_store_ops`. That is expected, not a failure; an engine nobody wrote down
+   in advance is the normal case.
 
 2. **`run_migrations` with the agent's own migrations.** Find them: an `alembic/` directory, a
    `migrations/` folder, `schema.sql`, the models it defines. Run those.

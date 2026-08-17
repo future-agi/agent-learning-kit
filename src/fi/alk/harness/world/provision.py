@@ -269,7 +269,16 @@ def provision_tools(
     async def inspect_environment(_args: dict[str, Any]) -> dict[str, Any]:
         running = store()
         if running is None:
-            return _ok("nothing is standing yet.")
+            # Said before anything is standing, because this is usually the first tool called
+            # and "nothing yet" answers nothing. A stage that does not know inprocess already
+            # exists goes looking for a server to put the agent's in-memory data in.
+            return _ok(
+                "nothing is standing yet. The harness can already stand up: "
+                f"{', '.join(supported())}.\n"
+                "'inprocess' is for an agent that holds its data in memory and whose tools read "
+                "that structure directly — it starts no server and the agent's own loader fills "
+                "it. Only write_store_ops for an engine genuinely absent from that list."
+            )
         return _ok(
             f"{standing['engine']} {standing['version']} at {running.dsn()}\n"
             f"holds: {_counts(running.state())}\n"
