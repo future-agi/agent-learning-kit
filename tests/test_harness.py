@@ -1998,3 +1998,22 @@ def test_reception_can_hand_over_in_the_turn_that_finds_the_agent(tmp_path):
     # what point_at_agent does, mid-turn
     conversation._found["source"] = RepoSource(name="x", root=tmp_path)
     assert conversation.next_stage() == "understand"
+
+
+def test_the_build_skill_documents_every_method_a_handler_can_call():
+    """A handler gets `db` and nothing else, so if the skill does not say what `db` offers the
+    model guesses — and the guess is sqlite's cursor API, which fails on the smoke call."""
+    import inspect
+
+    from fi.alk.harness.world.runtime import Db
+
+    skill = load_skill("build-environment")
+    methods = [
+        name for name, _ in inspect.getmembers(Db, inspect.isfunction)
+        if not name.startswith("_")
+    ]
+    assert methods, "Db should have methods to document"
+    for name in methods:
+        assert f"db.{name}(" in skill, f"the build skill never shows db.{name}()"
+    # and it warns off the API the model actually reaches for by default
+    assert "fetchone" in skill
