@@ -186,9 +186,30 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
     return base / agent
 
 
+HARNESS = SKILLS_ROOT / "harness.md"
+
+
 def load_skill(name: str) -> str:
-    """A stage's instructions, kept as a file so the method is editable without touching code."""
+    """One stage's instructions, behind what the harness as a whole is for.
+
+    Every stage gets the same opening: what this harness produces, why the division between what
+    a model decides and what code decides exists, and what makes a result worth believing. A
+    stage that knows only its own step does its step well and still gets the point of it wrong —
+    it works around a gate instead of fixing what the gate named, or it reports a number that
+    quietly skipped half its checks.
+
+    The stage's own method follows. Both are files, so how any of this works can be changed
+    without touching code.
+    """
     path = SKILLS_ROOT / name / "SKILL.md"
     if not path.exists():
         raise FileNotFoundError(f"no skill at {path}")
-    return path.read_text(encoding="utf-8")
+    stage = path.read_text(encoding="utf-8")
+    if not HARNESS.exists():
+        return stage
+    return (
+        f"{HARNESS.read_text(encoding='utf-8')}\n\n"
+        "---\n\n"
+        "# The stage you are in now\n\n"
+        f"{stage}"
+    )
