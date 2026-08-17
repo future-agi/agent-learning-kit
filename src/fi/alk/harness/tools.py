@@ -270,7 +270,10 @@ def contract_tools(destination: Path) -> Any:
                             "kind": {
                                 "type": "string",
                                 "description": "datastore, service, file, queue, or whatever "
-                                "this actually is.",
+                                "this actually is. Anything holding the agent's own data is a "
+                                "datastore even when it is hosted somewhere — a managed "
+                                "Postgres and a vector database are datastores, not services. "
+                                "Use service for something it calls and does not store in.",
                             },
                             "what": {
                                 "type": "string",
@@ -281,6 +284,57 @@ def contract_tools(destination: Path) -> Any:
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "The tools that cannot work without it.",
+                            },
+                            "engine": {
+                                "type": "string",
+                                "description": "For a datastore: which engine, so it can be "
+                                "stood up. postgres, mysql, clickhouse, qdrant, redis, mongo, "
+                                "elasticsearch — whatever it actually is. Read it off the "
+                                "driver it imports, the URL scheme it builds, or the image its "
+                                "compose file pulls. NEVER choose one for the agent: engines "
+                                "disagree about dialect and types, so an agent tested against "
+                                "the wrong one is graded on queries it never runs. Record it "
+                                "even when the agent points at a hosted instance — what "
+                                "matters is which engine it speaks to, not who runs it.",
+                            },
+                            "version": {
+                                "type": "string",
+                                "description": "The version, if the source says.",
+                            },
+                            "reached": {
+                                "type": "object",
+                                "description": "How the agent connects to it. This is what "
+                                "lets the harness be there instead of the real thing, and the "
+                                "agent's code is NEVER edited to make it so — record what the "
+                                "agent already expects and the environment is built to match. "
+                                "A hardcoded host is not a dead end: that name is made to "
+                                "resolve to our container.",
+                                "properties": {
+                                    "dsn_env": {
+                                        "type": "string",
+                                        "description": "The environment variable holding its "
+                                        "connection string: DATABASE_URL, QDRANT_URL, PG_DSN. "
+                                        "The easiest seam and the one most agents have.",
+                                    },
+                                    "config_key": {
+                                        "type": "string",
+                                        "description": "Where a config file holds it instead, "
+                                        "as a dotted path: database.url",
+                                    },
+                                    "host": {"type": "string"},
+                                    "port": {"type": "integer"},
+                                    "database": {
+                                        "type": "string",
+                                        "description": "Database, collection or index name.",
+                                    },
+                                    "user": {"type": "string"},
+                                    "password_from": {
+                                        "type": "string",
+                                        "description": "Where the password comes from — an env "
+                                        "var name. NEVER the password itself: this file is "
+                                        "written to disk and read by people.",
+                                    },
+                                },
                             },
                         },
                     },
