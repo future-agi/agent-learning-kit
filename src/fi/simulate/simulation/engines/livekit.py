@@ -14,7 +14,7 @@ from uuid import uuid4
 
 try:
     from livekit import api, rtc
-    from livekit.agents import Agent, AgentSession, function_tool, metrics
+    from livekit.agents import Agent, AgentSession, RunContext, function_tool, metrics
     from livekit.agents.types import (
         ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
         TOPIC_TRANSCRIPTION,
@@ -87,7 +87,7 @@ _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
 # own turn to commit it (a LiveKit turn lands in history only after its TTS
 # finishes playing), then delete the room so neither side keeps talking into a
 # call the other has already left.
-_FINAL_TURN_COMMIT_WAIT_SECONDS = 8.0
+_FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -180,6 +180,7 @@ class _TestRunnerAgent(Agent):
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
+        self._end_speech_handle: Any | None = None
         self._usage_collector = metrics.ModelUsageCollector()
 
     @function_tool(
@@ -189,7 +190,7 @@ class _TestRunnerAgent(Agent):
             "Use this immediately when the caller says goodbye or the objective is done."
         ),
     )
-    async def end_call(self) -> str:
+    async def end_call(self, ctx: RunContext) -> str:
         if self._session is None:
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
@@ -200,8 +201,17 @@ class _TestRunnerAgent(Agent):
                 "Continue the conversation until both speakers have participated "
                 f"and at least {self._min_turn_messages} messages are complete."
             )
+        # The tool runs inside the same SpeechHandle that carries the model's
+        # natural closing sentence. Remember that exact handle before waking
+        # the outer runner so it cannot snapshot history in the brief interval
+        # before TTS starts and ``session.current_speech`` becomes non-None.
+        self._end_speech_handle = ctx.speech_handle
         self._end_requested.set()
         return "Conversation ended."
+
+    async def wait_for_end_speech(self) -> None:
+        if self._end_speech_handle is not None:
+            await self._end_speech_handle
 
     @property
     def started_session(self) -> AgentSession | None:
@@ -1114,6 +1124,23 @@ class LiveKitEngine(BaseEngine):
             # ended, the target talking on is monologuing into a call the other
             # side left.
             conversation_ended.set()
+            if stop_reason == "simulator_end_call":
+                wait_for_end_speech = getattr(
+                    customer_agent,
+                    "wait_for_end_speech",
+                    None,
+                )
+                try:
+                    if callable(wait_for_end_speech):
+                        await asyncio.wait_for(
+                            wait_for_end_speech(),
+                            timeout=_FINAL_TURN_COMMIT_WAIT_SECONDS,
+                        )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Simulator closing speech did not finish before cleanup",
+                        extra={"run_id": run_id, "test_case_id": test_case_id},
+                    )
             _loop = asyncio.get_running_loop()
             _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
             while _loop.time() < _commit_deadline:
@@ -1350,6 +1377,9 @@ class LiveKitEngine(BaseEngine):
                 recorder,
                 simulator_identity=simulator_identity,
                 target_identity=target.identity if target is not None else None,
+                target_track_sid=(
+                    target.audio_track_sid if target is not None else None
+                ),
                 case_directory=case_directory,
                 sample_rate=recorder_sample_rate,
             )
@@ -2031,12 +2061,16 @@ def _attach_recordings(
     *,
     simulator_identity: str,
     target_identity: str | None,
+    target_track_sid: str | None,
     case_directory: Path,
     sample_rate: int,
 ) -> None:
     simulator_paths = recorder.paths_for_participant(simulator_identity)
     target_paths = (
-        recorder.paths_for_participant(target_identity)
+        recorder.paths_for_participant(
+            target_identity,
+            track_sid=target_track_sid,
+        )
         if target_identity is not None
         else []
     )
@@ -2074,9 +2108,22 @@ def _attach_recordings(
             "participant_sid": record.participant_sid,
             "track_sid": record.track_sid,
             "path": str(record.path),
+            "start_offset_frames": record.start_offset_frames,
         }
         for record in recorder.records
     ]
+    speech_starts = [
+        float(message["started_speaking_at"])
+        for message in outcome.messages
+        if isinstance(message.get("started_speaking_at"), (int, float))
+    ]
+    if recorder.recording_started_at is not None and speech_starts:
+        outcome.metadata["recording_offset_ms"] = max(
+            0,
+            round(
+                (min(speech_starts) - recorder.recording_started_at) * 1000
+            ),
+        )
 
 
 def _collapse_recordings(

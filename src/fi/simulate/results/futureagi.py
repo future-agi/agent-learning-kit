@@ -427,19 +427,41 @@ def _ensure_test_execution(client: httpx.Client, run_test_id: str) -> str:
     return _unwrap(start.json())["test_execution_id"]
 
 
-def _allocate_call_ids(client: httpx.Client, test_execution_id: str) -> list[str]:
-    """Claim every CallExecution row for the execution (adopts precreated rows)."""
+def _allocate_call_ids(
+    client: httpx.Client,
+    test_execution_id: str,
+    count: int | None = None,
+) -> list[str]:
+    """Claim exact local-report rows, or all pre-created hosted rows."""
+    if count is not None and count <= 0:
+        return []
+
     call_execution_ids: list[str] = []
     for _ in range(64):  # hard cap to prevent runaway
+        remaining = count - len(call_execution_ids) if count is not None else None
         resp = client.post(
             f"/simulate/api/alk-simulate/test-executions/{test_execution_id}/batch/",
-            json={},
+            json={"count": remaining} if remaining is not None else {},
         )
         resp.raise_for_status()
         body = _unwrap(resp.json())
-        call_execution_ids.extend(body["call_execution_ids"])
-        if not body.get("has_more"):
+        allocated = body["call_execution_ids"]
+        if remaining is not None and len(allocated) > remaining:
+            raise RuntimeError("backend allocated more call executions than requested")
+        call_execution_ids.extend(allocated)
+        if count is not None and len(call_execution_ids) == count:
             break
+        if not allocated or not body.get("has_more"):
+            if count is None:
+                break
+            raise RuntimeError(
+                f"backend allocated {len(call_execution_ids)} of {count} required call executions"
+            )
+
+    if count is not None and len(call_execution_ids) != count:
+        raise RuntimeError(
+            f"backend allocated {len(call_execution_ids)} of {count} required call executions"
+        )
     return call_execution_ids
 
 
@@ -459,7 +481,11 @@ def _submit_via_http(
         if not test_execution_id:
             test_execution_id = _ensure_test_execution(client, run_test_id)
 
-        call_execution_ids = _allocate_call_ids(client, test_execution_id)
+        call_execution_ids = _allocate_call_ids(
+            client,
+            test_execution_id,
+            len(report.test_cases),
+        )
 
         submitted_ids: list[str] = []
         failed: list[dict[str, Any]] = []

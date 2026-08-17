@@ -779,13 +779,22 @@ def test_end_call_waits_for_minimum_balanced_conversation() -> None:
     )
     agent._session = FakeSession()
 
-    result = asyncio.run(agent.end_call())
+    result = asyncio.run(agent.end_call(None))
 
     assert "at least 2 messages" in result
     assert not agent.end_requested.is_set()
 
 
 def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
+    class FakeSpeechHandle:
+        waited = False
+
+        def __await__(self):
+            async def wait():
+                self.waited = True
+
+            return wait().__await__()
+
     class FakeSession:
         history = SimpleNamespace(
             items=[
@@ -811,11 +820,16 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
         min_turn_messages=2,
     )
     agent._session = FakeSession()
+    speech_handle = FakeSpeechHandle()
 
-    result = asyncio.run(agent.end_call())
+    result = asyncio.run(
+        agent.end_call(SimpleNamespace(speech_handle=speech_handle))
+    )
+    asyncio.run(agent.wait_for_end_speech())
 
     assert result == "Conversation ended."
     assert agent.end_requested.is_set()
+    assert speech_handle.waited is True
 
 
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:

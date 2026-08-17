@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ class RecordedTrack:
     participant_sid: str
     track_sid: str
     path: Path
+    start_offset_frames: int = 0
 
 
 class RoomRecorder:
@@ -59,6 +61,7 @@ class RoomRecorder:
         self._track_ids: set[str] = set()
         self._records: list[RecordedTrack] = []
         self._errors: list[BaseException] = []
+        self._recording_started_at: float | None = None
 
     @property
     def records(self) -> tuple[RecordedTrack, ...]:
@@ -67,6 +70,11 @@ class RoomRecorder:
     @property
     def errors(self) -> tuple[BaseException, ...]:
         return tuple(self._errors)
+
+    @property
+    def recording_started_at(self) -> float | None:
+        """Wall-clock epoch used as t=0 for every recorded track."""
+        return self._recording_started_at
 
     async def start(self) -> None:
         if self._running:
@@ -84,6 +92,7 @@ class RoomRecorder:
         room = rtc.Room()
         await room.connect(self._url, token)
         self._room = room
+        self._recording_started_at = time.time()
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         @room.on("track_subscribed")
@@ -96,11 +105,17 @@ class RoomRecorder:
                 if track is not None:
                     self._start_recording(track, publication, participant)
 
-    def paths_for_participant(self, participant_identity: str) -> list[Path]:
+    def paths_for_participant(
+        self,
+        participant_identity: str,
+        *,
+        track_sid: str | None = None,
+    ) -> list[Path]:
         return [
             record.path
             for record in self._records
             if record.participant_identity == participant_identity
+            and (track_sid is None or record.track_sid == track_sid)
         ]
 
     async def aclose(self) -> None:
@@ -135,8 +150,18 @@ class RoomRecorder:
         if track_sid in self._track_ids:
             return
         self._track_ids.add(track_sid)
+        started_at = self._recording_started_at or time.time()
+        start_offset_frames = max(
+            0,
+            round((time.time() - started_at) * self._sample_rate),
+        )
         task = asyncio.create_task(
-            self._record_track(track, publication, participant)
+            self._record_track(
+                track,
+                publication,
+                participant,
+                start_offset_frames=start_offset_frames,
+            )
         )
         self._tasks.add(task)
         task.add_done_callback(self._recording_done)
@@ -146,6 +171,8 @@ class RoomRecorder:
         track: Any,
         publication: Any,
         participant: Any,
+        *,
+        start_offset_frames: int,
     ) -> None:
         participant_identity = str(participant.identity)
         participant_sid = str(participant.sid)
@@ -158,6 +185,7 @@ class RoomRecorder:
             participant_sid=participant_sid,
             track_sid=track_sid,
             path=path,
+            start_offset_frames=start_offset_frames,
         )
         self._records.append(record)
         stream = rtc.AudioStream(track, sample_rate=self._sample_rate, num_channels=1)
@@ -166,6 +194,8 @@ class RoomRecorder:
                 wav_file.setnchannels(1)
                 wav_file.setsampwidth(2)
                 wav_file.setframerate(self._sample_rate)
+                if start_offset_frames:
+                    wav_file.writeframes(b"\x00\x00" * start_offset_frames)
                 async for event in stream:
                     wav_file.writeframes(event.frame.data)
         finally:

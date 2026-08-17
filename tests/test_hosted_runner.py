@@ -141,7 +141,7 @@ def test_sink_submits_into_pre_created_execution(tmp_path, monkeypatch):
         SimulationRunner().run(spec, target=_import(target), result_sink=sink)
     )
 
-    seen = {"create": [], "batch": [], "result": []}
+    seen = {"create": [], "batch": [], "batch_counts": [], "result": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -150,6 +150,7 @@ def test_sink_submits_into_pre_created_execution(tmp_path, monkeypatch):
             return httpx.Response(200, json={"result": {"test_execution_id": "BAD"}})
         if path.endswith("/batch/"):
             seen["batch"].append(path)
+            seen["batch_counts"].append(json.loads(request.content)["count"])
             return httpx.Response(
                 200,
                 json={"result": {"call_execution_ids": ["ce-1"], "has_more": False}},
@@ -184,6 +185,7 @@ def test_sink_submits_into_pre_created_execution(tmp_path, monkeypatch):
     # Pre-created execution -> create endpoint never hit; batch targets te-1.
     assert seen["create"] == []
     assert any("te-1" in path for path in seen["batch"])
+    assert seen["batch_counts"] == [len(report.test_cases)]
     assert seen["result"], "expected a result PATCH per test case"
 
 
