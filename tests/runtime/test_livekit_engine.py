@@ -1615,6 +1615,76 @@ def test_sip_inbound_timeout_yields_typed_no_participant(monkeypatch) -> None:
     assert result.metadata["sip_dispatch_rule_created"] is False
 
 
+def test_sip_inbound_named_rule_with_pinned_trunk_is_reused() -> None:
+    created = []
+
+    class _Sip:
+        async def list_sip_dispatch_rule(self, _request):
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        name="telnyx-rule",
+                        sip_dispatch_rule_id="SD_telnyx",
+                        trunk_ids=["ST_telnyx"],
+                        rule=SimpleNamespace(
+                            dispatch_rule_direct=SimpleNamespace(room_name="room-1")
+                        ),
+                    )
+                ]
+            )
+
+        async def create_sip_dispatch_rule(self, _request):
+            created.append(True)
+            raise AssertionError("a matching pinned rule must be reused")
+
+    transport = livekit.TelephonyTransport(
+        kind="sip_inbound",
+        dispatch_rule_name="telnyx-rule",
+        sip_inbound_trunk_id="ST_telnyx",
+    )
+    result = asyncio.run(
+        livekit._ensure_sip_inbound_dispatch(
+            SimpleNamespace(sip=_Sip()),
+            transport=transport,
+            room_name="room-1",
+        )
+    )
+
+    assert result == ("SD_telnyx", False)
+    assert created == []
+
+
+def test_sip_inbound_named_rule_rejects_mismatched_pinned_trunk() -> None:
+    class _Sip:
+        async def list_sip_dispatch_rule(self, _request):
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        name="telnyx-rule",
+                        sip_dispatch_rule_id="SD_twilio",
+                        trunk_ids=["ST_twilio"],
+                        rule=SimpleNamespace(
+                            dispatch_rule_direct=SimpleNamespace(room_name="room-1")
+                        ),
+                    )
+                ]
+            )
+
+    transport = livekit.TelephonyTransport(
+        kind="sip_inbound",
+        dispatch_rule_name="telnyx-rule",
+        sip_inbound_trunk_id="ST_telnyx",
+    )
+    with pytest.raises(RuntimeError, match="sip_inbound_rule_trunk_mismatch"):
+        asyncio.run(
+            livekit._ensure_sip_inbound_dispatch(
+                SimpleNamespace(sip=_Sip()),
+                transport=transport,
+                room_name="room-1",
+            )
+        )
+
+
 def test_cleanup_logging_redacts_exception_details(caplog) -> None:
     secret = "-".join(("provider", "secret", "value"))
     errors = []
@@ -1898,9 +1968,7 @@ def test_case_crash_yields_dense_failed_result_without_shifting_order(
     statuses = [r.metadata["status"] for r in report.results]
     assert statuses[2] == CaseStatus.FAILED.value
     assert report.results[2].metadata["failure"]["code"] == "case_execution_error"
-    assert all(
-        statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4)
-    )
+    assert all(statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4))
 
 
 def test_on_case_complete_streams_every_index_including_failed_slot(
@@ -1969,7 +2037,9 @@ def test_dispatch_metadata_empty_by_default():
     # A real target agent flips to outbound/no-greet on any dispatch metadata,
     # so the default must be an empty string (not our simulation context).
     assert livekit._dispatch_metadata_json(_agent()) == ""
-    assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    assert (
+        livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    )
     assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata={})) == ""
 
 
