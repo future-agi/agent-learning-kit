@@ -59,8 +59,15 @@ def _counts(state: dict[str, list[dict]]) -> str:
     return ", ".join(f"{name}: {len(rows)}" for name, rows in sorted(state.items())) or "nothing"
 
 
-def provision_tools(contract: AgentContract, destination: Path) -> Any:
-    """A server exposing the provisioning surface for one agent."""
+def provision_tools(
+    contract: AgentContract, destination: Path, source: str | Path | None = None
+) -> Any:
+    """A server exposing the provisioning surface for one agent.
+
+    ``source`` is the agent's repository. An in-memory store is reached by importing the
+    agent's own loader, so the path its modules live under has to be known here; for a store
+    behind a socket it is unused.
+    """
     destination.mkdir(parents=True, exist_ok=True)
     catalogue = load_catalogue(destination)
 
@@ -97,6 +104,8 @@ def provision_tools(contract: AgentContract, destination: Path) -> Any:
                 "port": int,
                 "database": str,
                 "user": str,
+                "loader_module": str,
+                "loader_function": str,
             },
             ["engine"],
         ),
@@ -115,17 +124,30 @@ def provision_tools(contract: AgentContract, destination: Path) -> Any:
         # What the agent already expects, matched rather than changed. A hardcoded host is
         # redirected by a network alias; a hardcoded database name is simply the name we use.
         options: dict[str, Any] = {}
-        for key in ("database", "user"):
-            if args.get(key):
-                options[key] = str(args[key])
-        if args.get("version"):
-            options["version"] = str(args["version"])
+        if args.get("loader_module"):
+            # An in-memory store is reached by importing the agent's own loader, so it takes
+            # where to import from rather than anything to connect to.
+            options["module"] = str(args["loader_module"])
+            options["function"] = str(args.get("loader_function") or "load_data")
+            if source:
+                options["root"] = str(source)
+        else:
+            for key in ("database", "user"):
+                if args.get(key):
+                    options[key] = str(args[key])
+            if args.get("version"):
+                options["version"] = str(args["version"])
 
         try:
             running = resolve(engine, **options)
             running.start()
         except StoreError as exc:
             return _err(f"{engine} did not come up: {exc}")
+        except TypeError as exc:
+            return _err(
+                f"{engine} does not take those: {exc}. A store behind a socket takes version, "
+                "database and user; an in-memory one takes loader_module and loader_function."
+            )
 
         standing.update(
             store=running,
@@ -133,12 +155,22 @@ def provision_tools(contract: AgentContract, destination: Path) -> Any:
             version=str(args.get("version") or ""),
             seam={
                 key: args[key]
-                for key in ("dsn_env", "config_key", "host", "port", "database", "user")
+                for key in (
+                    "dsn_env", "config_key", "host", "port", "database", "user",
+                    "loader_module", "loader_function",
+                )
                 if args.get(key)
             },
             proven=False,
         )
         seam = standing["seam"]
+        if args.get("loader_module"):
+            return _ok(
+                f"{engine} is up, holding what {args['loader_module']}."
+                f"{options['function']} loaded: {_counts(running.state())}. Nothing connects "
+                "to it — the agent's tools read this structure directly. Seed it if the "
+                "contract carries data the loader does not."
+            )
         pointed = (
             f"${seam['dsn_env']}"
             if seam.get("dsn_env")
@@ -331,7 +363,11 @@ def provision_tools(contract: AgentContract, destination: Path) -> Any:
         running = store()
         if running is None:
             return _err("nothing is standing yet. declare_engine first.")
-        if not standing["migrations"]:
+        # An in-memory store has no migration step: the agent's loader is what creates the
+        # structure and fills it, and it already ran. Insisting on one here would be asking for
+        # a schema this agent does not have.
+        by_loader = bool(standing["seam"].get("loader_module"))
+        if not standing["migrations"] and not by_loader:
             return _err(
                 "Not saved. The agent's own migrations were never run, so this schema is not "
                 "the agent's."
