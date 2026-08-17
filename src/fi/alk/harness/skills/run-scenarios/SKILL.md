@@ -1,56 +1,62 @@
 ---
 name: run-scenarios
-description: Run the written scenarios against the real agent and say what the results mean.
+description: Run the validated scenarios against the agent and say what the results mean.
 ---
 
 # Run the scenarios
 
+The environment is built and the scenarios are written and validated. Your job is to run them
+against the agent and say what came back.
+
+Each run costs real money and takes time. Do not run the whole suite because somebody greeted
+you, and do not re-run a scenario that just passed.
+
 ## Talking
 
-You are talking to a person, not running a script. Answer what they ask, briefly. Run what they
-ask you to run. Keep replies short — they can see every tool you call and what it answered.
+Answer what they ask, briefly. Run what they ask you to run. They can see every tool you call
+and what it answered, so do not repeat it back.
 
-Each call costs real money and takes minutes. Do not run the whole suite because somebody said
-hello, and do not re-run a scenario that just passed.
+## Before the first run
 
-## What happens when you run one
+`preflight` costs nothing and catches the failures that would otherwise arrive after the
+expensive part — missing credentials, no way to reach a hosted agent. Run it once at the start.
 
-`run_scenario` does all of it: restores the world, applies the scenario's setup, stands up the
-webhook, points the assistant's **own** tools at it, places the call through ALK's voice case, and
-runs the sub-goals' checks against what the world holds afterwards plus the calls that were made.
+`list_scenarios` shows what can be run, what each one tests, and which of its sub-goals are
+settled by code rather than left to a judge.
 
-It blocks for several minutes. Run one at a time and read the result before starting the next.
+## Running one
 
-`preflight` first, before the first call of a session. It costs nothing and catches the failures
-that would otherwise arrive after the expensive part.
+`run_scenario` does all of it: restores the world, applies the scenario's setup, puts the agent
+in front of it, and runs the checks against what is left behind plus every call the agent made.
+
+It blocks until the run is over. Run one at a time and read the result before starting the next.
 
 ## Reading a result
 
-You get the sub-goals settled by code, the ones left to a judge, and **every tool call the agent
-made, with its arguments and whether the world accepted it**. That last list is where the answer
-usually is.
+You are given each sub-goal and whether it held, and **every tool call the agent made, with its
+arguments and whether the world accepted it**. That last list is usually where the answer is.
 
-Before you report a failure as a finding about the agent, ask which of these it is:
+Before reporting a failure as a finding about the agent, work out which of these it is:
 
-- **The agent did the wrong thing.** A real finding. Say what it did and what it should have done.
-- **The world refused a call the agent was entitled to make.** Look at the arguments. If the agent
-  sent something the contract permits and the world said no, the world or the contract is wrong,
-  not the agent.
-- **The check is wrong.** The commonest one. A sub-goal that encodes *how* an agent should comply
-  fails a correct agent that complied differently — a check that demands a refusal tool call fails
-  an agent that refused from its own prompt without calling anything. Check the outcome, not the
-  route.
-- **The simulated caller did not do its job.** If the caller hung up before asking for what the
-  instruction said, the scenario never happened. That is a simulator prompt problem.
+**The agent did the wrong thing.** A real finding. Say what it did and what it should have done.
 
-A run where nothing reached the world says nothing about the agent. Report it as that, not as a
-failure.
+**The world wrongly refused.** Look at the arguments. If the agent sent something the contract
+permits and the world said no, the world or the contract is wrong, not the agent.
+
+**The check is wrong.** The commonest one. A check that encodes *how* an agent should comply
+fails a correct agent that complied differently — a check demanding a particular tool call fails
+an agent that refused politely without calling anything. Check the outcome, not the route.
+
+**The simulated person never asked.** If they hung up before raising what the instruction said,
+the scenario never happened. That is a simulator problem, not a result.
+
+A run where nothing reached the world says nothing about the agent. Report it as that.
 
 ## What to say
 
-Say what passed, what failed, and for each failure which of the four causes above it is. Where it
-is ours, say what would fix it — the sub-goal to rewrite, the contract argument to correct — and
-do not report it as a finding about the agent.
+Say what passed, what failed, and for each failure which of those four it is. Where it is ours,
+say what would fix it — the check to rewrite, the contract value to correct — and do not report
+it as a finding about the agent.
 
-Judged sub-goals are reported as judged and not counted. Say so rather than letting a `2/2` read
-as though everything was checked.
+Judged sub-goals are reported as judged. Say so, rather than letting a score read as though
+everything in it was measured.
