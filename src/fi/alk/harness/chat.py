@@ -263,6 +263,12 @@ class Conversation:
         if self.stage is None:
             await self.open_quietly()
         await self.stage.say(message, on_event=on_event)  # type: ignore[union-attr]
+        # Before anything acts on this turn, take up what it established. A handoff in the same
+        # turn opens the next stage, and every stage is built from ``self.source``; read it off
+        # afterwards instead and that hop dies on an agent nobody has named, taking the turn with
+        # it and leaving the conversation in reception with no way forward.
+        established = self._take_up()
+        moved = False
         # A handoff moves the request, not just the conversation: the next stage opens and is
         # given the person's own words. Bounded, because each hop is a model turn.
         for _hop in range(3):
@@ -273,22 +279,26 @@ class Conversation:
             if following is None:
                 break
             await self._open(following)
+            moved = True
             await self.stage.say(request, on_event=on_event)  # type: ignore[union-attr]
-        await self._settle(on_event=on_event)
+        if established and not moved:
+            # Nothing is left to decide once the agent is known, so it goes on rather than making
+            # somebody confirm what they already said. Unless a handoff already moved us, which
+            # would make this a second hop over the same request.
+            await self.advance(on_event=on_event)
 
-    async def _settle(self, on_event: Callable[..., Any] | None = None) -> None:
-        """Take up whatever the open stage just established, and keep going.
+    def _take_up(self) -> bool:
+        """Take up whatever the turn just established. True if this turn named the agent.
 
         Reception is the only stage whose result is not a file, so it is the only one the
-        conversation has to read back. Once it knows the agent there is nothing to decide, so it
-        goes straight on rather than making somebody confirm what they already said.
+        conversation has to read back.
         """
         settled = self._found.pop("source", None)
         if settled is None:
-            return
+            return False
         self.source = settled
         self.out = self.out or artifact_dir(settled.name)
-        await self.advance(on_event=on_event)
+        return True
 
     def reachable(self) -> dict[str, str]:
         """Every stage, and why it can or cannot be opened right now.
