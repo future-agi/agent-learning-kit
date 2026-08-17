@@ -108,7 +108,9 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
     if len(kept) < wanted:
         problems.append(
             f"{len(kept)} of {wanted} scenarios so far. Keep writing; the ones that find "
-            "something are usually the awkward ones."
+            f"something are usually the awkward ones. If nobody asked for {wanted}, record the "
+            "number you were actually given with aim_for first, not the number you happen to "
+            "have reached."
         )
     elif len(kept) > wanted:
         problems.append(
