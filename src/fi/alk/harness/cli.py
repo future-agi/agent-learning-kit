@@ -155,6 +155,7 @@ async def _build(args: argparse.Namespace) -> int:
         contract,
         out=destination,
         ask=permission_gate(_ask_operator) if args.interactive else None,
+        source=getattr(args, "path", None),
     )
     await _converse(
         stage,
@@ -368,6 +369,12 @@ def build_parser() -> argparse.ArgumentParser:
     world = sub.add_parser("build", help="build the world from an agent's contract")
     world.add_argument("--name", required=True, help="which agent")
     world.add_argument("--out", default=None, help="artifact directory")
+    world.add_argument(
+        "--path",
+        default=None,
+        help="where the agent's code lives; the provisioning path reads its migrations "
+        "and data loader from there",
+    )
     world.add_argument(
         "--once",
         dest="interactive",

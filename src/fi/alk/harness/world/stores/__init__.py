@@ -123,6 +123,7 @@ def supported() -> tuple[str, ...]:
 
 
 from .container import ContainerStore, strays  # noqa: E402
+from .inprocess import InProcessStore  # noqa: E402
 from .postgres import PostgresStore  # noqa: E402
 
 # Postgres is registered as the worked example, not as the supported list. An engine the
@@ -132,6 +133,7 @@ register_store(PostgresStore.engine, PostgresStore)
 
 __all__ = [
     "ContainerStore",
+    "InProcessStore",
     "PostgresStore",
     "Snapshot",
     "Store",
