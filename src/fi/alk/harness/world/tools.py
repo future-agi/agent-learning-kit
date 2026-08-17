@@ -41,6 +41,20 @@ from .snapshot import DATABASE, read_manifest, restore, save
 
 WORLD_SERVER = "world"
 
+# What a handler is actually given. Said again here, and not only in the skill, because this is
+# where the mistake surfaces: a handler that crashed has a model reading *this* message, and an
+# error naming the failure without naming the API produces the same wrong guess again. Three
+# identical attempts at one handler is what that costs.
+DB_API = (
+    "Inside a handler, `db` has exactly three methods and no cursors:\n"
+    '    db.query("SELECT * FROM t WHERE id = ?", [x])   -> list of dicts, [] if none\n'
+    '    db.one("SELECT * FROM t WHERE id = ?", [x])      -> one dict, or None\n'
+    '    db.execute("INSERT INTO t (a) VALUES (?)", [x])  -> number of rows changed\n'
+    "Rows are dicts, read by column name. db.execute returns a count, not a cursor, so "
+    "calling .fetchone(), .fetchall() or .lastrowid on any of these is a mistake. You also have "
+    "`args`, `ToolError` and `json`, and nothing else — do not import anything."
+)
+
 # Below this, the world is not good enough to build tests on. Synthesis work that measures this
 # converges on roughly this bar, and rejects a quarter to a third of what it generates.
 ACCEPTABLE = 0.85
@@ -165,7 +179,10 @@ def world_tools(contract: AgentContract, destination: Path) -> Any:
             )
         if not call.ok:
             del world.handlers[name]
-            return _err(f"{name} not kept, it crashed on its smoke call: {call.error}")
+            said = f"{name} not kept, it crashed on its smoke call: {call.error}"
+            # A crash is nearly always the handler reaching for something it does not have, so
+            # the answer says what it does have rather than only what went wrong.
+            return _err(f"{said}\n\n{DB_API}")
         return _ok(f"{name} defined and ran. Returned {_brief(call.result)}")
 
     @tool(

@@ -2017,3 +2017,40 @@ def test_the_build_skill_documents_every_method_a_handler_can_call():
         assert f"db.{name}(" in skill, f"the build skill never shows db.{name}()"
     # and it warns off the API the model actually reaches for by default
     assert "fetchone" in skill
+
+
+def test_a_crashed_handler_is_told_what_a_handler_actually_has(tmp_path):
+    """An error naming the failure without naming the API produces the same wrong guess again.
+    Three identical attempts at one handler is what that cost on a real run."""
+    import asyncio
+
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    from fi.alk.harness.world import tools as world_tools
+
+    root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, root)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def define(source):
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "CallToolRequest":
+                answer = await handler(
+                    CallToolRequest(
+                        method="tools/call",
+                        params=CallToolRequestParams(
+                            name="define_handler",
+                            arguments={"tool_name": "add", "source": source},
+                        ),
+                    )
+                )
+                return answer.root.content[0].text
+
+    # the mistake a model actually makes: sqlite's cursor API
+    said = asyncio.run(define(
+        "def handle(args, db):\n"
+        "    return db.execute('SELECT 1').fetchone()\n"
+    ))
+    assert "crashed on its smoke call" in said
+    assert "db.query(" in said and "db.one(" in said and "db.execute(" in said
+    assert "fetchone" in said
