@@ -130,6 +130,13 @@ class Reached(BaseModel):
     # comes from; if it is genuinely needed it is read at provision time and not persisted.
     password_from: str = ""
 
+    # An agent that holds its data in memory is reached by calling the function that loads it,
+    # not by connecting to anything. Recorded so the environment can call the agent's own
+    # loader rather than reading its files and rebuilding the structure itself — which would be
+    # a second implementation of the one thing this path exists to stop reimplementing.
+    loader_module: str = ""
+    loader_function: str = ""
+
     def has_seam(self) -> bool:
         """Whether there is any way to point this agent at our store.
 
@@ -137,7 +144,12 @@ class Reached(BaseModel):
         tested without one, and saying so is more useful than editing it until it can.
         """
         return bool(
-            self.dsn_env or self.config_key or self.host or self.port or self.database
+            self.dsn_env
+            or self.config_key
+            or self.host
+            or self.port
+            or self.database
+            or self.loader_module
         )
 
 
