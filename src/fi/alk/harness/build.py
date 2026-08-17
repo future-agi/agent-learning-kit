@@ -23,13 +23,18 @@ from .config import (
     load_skill,
     permission_gate,
     provider_env,
+    provisioning,
 )
 from .contract import AgentContract
 from .session import Stage
 from .tools import qualified
+from .world.provision import MANIFEST
+from .world.provision import PROVISION_SERVER, provision_tools
+from .world.provision import TOOL_NAMES as PROVISION_TOOL_NAMES
 from .world.tools import TOOL_NAMES, WORLD_SERVER, world_tools
 
 SKILL = "build-environment"
+PROVISION_SKILL = "provision-environment"
 
 
 def open_stage(
@@ -41,19 +46,27 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
-    server, _world = world_tools(contract, destination)
+    # Two build stages that prove different things, so exactly one is live. The old one saves a
+    # world of handlers it wrote; the new one saves an environment the agent's own unmodified
+    # code connects to. See config.provisioning.
+    if provisioning():
+        server, _held = provision_tools(contract, destination)
+        skill, name, names = PROVISION_SKILL, PROVISION_SERVER, PROVISION_TOOL_NAMES
+    else:
+        server, _held = world_tools(contract, destination)
+        skill, name, names = SKILL, WORLD_SERVER, TOOL_NAMES
     allowed = [
         "AskUserQuestion",
-        *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),
+        *(qualified(name, one) for one in names),
     ]
     options = ClaudeAgentOptions(
         system_prompt=(
-            f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
+            f"{load_skill(skill)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
         ),
         # No file tools and no shell. Everything this stage can do goes through a tool that
         # executes it and reports back, which is what makes the guardrails meaningful.
         allowed_tools=allowed,
-        mcp_servers={WORLD_SERVER: server},
+        mcp_servers={name: server},
         # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
         # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
         # whole job is to validate that change.
@@ -67,10 +80,18 @@ def open_stage(
     options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(ask, allowed)
-    return Stage(options, name=SKILL), destination
+    return Stage(options, name=skill), destination
 
 
 def opening(contract: AgentContract) -> str:
+    if provisioning():
+        return (
+            f"Provision the environment for {contract.agent!r}.\n\n"
+            "Stand up the engine it already uses, run its OWN migrations into it, and seed "
+            "from the contract's real data. Do not write a schema and do not touch the "
+            "agent — you are building what it connects to, not a copy of it. Then add the "
+            "sub-goals with their checks as code, prove_environment, and save_environment."
+        )
     return (
         f"Build the world for {contract.agent!r}.\n\n"
         "Design the schema, seed it from the contract's real data, and write one handler per "
@@ -95,4 +116,5 @@ async def build(
         await stage.say(opening(contract), on_event=on_event)
         for follow_up in follow_ups or []:
             await stage.say(follow_up, on_event=on_event)
-    return destination if (destination / "world.sqlite").exists() else None
+    written = MANIFEST if provisioning() else "world.sqlite"
+    return destination if (destination / written).exists() else None
