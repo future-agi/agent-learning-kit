@@ -50,6 +50,26 @@ def chosen_model(model: str | None = None) -> str:
     return model or os.environ.get("ALK_HARNESS_MODEL", DEFAULT_MODEL)
 
 
+def provisioning(enabled: bool | None = None) -> bool:
+    """Whether the build stage provisions the agent's own engine instead of replicating it.
+
+    Off by default, because the two build stages prove different things and cannot both be
+    live: the old one saves a world of handlers it wrote, the new one saves an environment the
+    agent's unmodified code connects to. Until the new path has been run end to end against a
+    real datastore-backed agent, the shipped behaviour stays the shipped behaviour.
+
+    Set ``ALK_HARNESS_PROVISION=1`` to take the new path.
+    """
+    if enabled is not None:
+        return enabled
+    return os.environ.get("ALK_HARNESS_PROVISION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
