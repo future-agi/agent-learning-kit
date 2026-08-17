@@ -152,7 +152,13 @@ def _result_text(block: ToolResultBlock, limit: int = 600) -> str:
 
 
 def _saved_path(block: ToolResultBlock) -> str:
-    """Our tools report what they wrote; surfacing it lets a UI update the artifact pane."""
+    """The path a tool reports having written, if it wrote one.
+
+    Only when the tool actually says it saved something. Matching any path-shaped token in any
+    result meant that reading a file announced it as an artifact — the stage looks like it is
+    producing output while it is still only looking around, and a front end reloads its panes on
+    every read.
+    """
     content = block.content
     if isinstance(content, list):
         content = " ".join(
@@ -160,9 +166,17 @@ def _saved_path(block: ToolResultBlock) -> str:
         )
     if not isinstance(content, str):
         return ""
+    said = content.lower()
+    if not any(verb in said for verb in ("saved", "wrote", "written")):
+        return ""
     for token in content.split():
-        if token.endswith((".json", ".py", ".sqlite")):
-            return token.rstrip(".,")
+        # Trimmed before the check, not after. A tool that ends its sentence — "saved to
+        # out/contract.json." — produces a token ending in the full stop, so testing the
+        # suffix first missed every real save and matched only bare paths, which is what a
+        # file *read* returns. The event fired on exactly the wrong occasions.
+        cleaned = token.strip(".,;:!?)\"'")
+        if cleaned.endswith((".json", ".py", ".sqlite")):
+            return cleaned
     return ""
 
 

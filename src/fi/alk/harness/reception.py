@@ -17,7 +17,13 @@ from typing import Any, Callable
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 
-from .config import chosen_model, gate_hooks, permission_gate, provider_env
+from .config import (
+    UNWANTED,
+    chosen_model,
+    gate_hooks,
+    permission_gate,
+    provider_env,
+)
 from .session import Stage
 from .sources import AgentSource, resolve, supported
 from .tools import qualified, schema
@@ -123,6 +129,7 @@ def open_stage(
         model=chosen_model(),
         env=provider_env(),
     )
+    options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(ask, allowed)
     return Stage(options, name="reception"), found

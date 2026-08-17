@@ -27,7 +27,7 @@ def open_stage(
     *,
     out: Path | None = None,
     ask: Callable[..., Any] | None = None,
-    max_turns: int = 40,
+    max_turns: int = 70,
 ) -> tuple[Stage, Path]:
     """A live understand-the-agent stage, and where it will write."""
     destination = out or artifact_dir(source.name)
@@ -75,7 +75,7 @@ async def understand(
     follow_ups: list[str] | None = None,
     on_event: Callable[..., Any] | None = None,
     ask: Callable[..., Any] | None = None,
-    max_turns: int = 40,
+    max_turns: int = 70,
 ) -> AgentContract | None:
     """Run the stage start to finish and return the contract.
 
