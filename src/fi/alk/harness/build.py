@@ -58,7 +58,7 @@ def open_stage(
     # world of handlers it wrote; the new one saves an environment the agent's own unmodified
     # code connects to. See config.provisioning.
     if provisioning():
-        server, _held = provision_tools(contract, destination)
+        server, _held = provision_tools(contract, destination, source=source)
         skill, name, names = PROVISION_SKILL, PROVISION_SERVER, PROVISION_TOOL_NAMES
     else:
         server, _held = world_tools(contract, destination)
