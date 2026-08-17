@@ -107,6 +107,16 @@ class Conversation:
 
     # -- moving between stages -------------------------------------------------------
 
+    def _source_root(self) -> str | None:
+        """Where the agent's code lives, when it is a repository.
+
+        The provisioning build stage reads the agent's own migrations and data loader from
+        here. A source supplied as a definition rather than a repository has nothing to read,
+        and that stage is then granted no read tools at all.
+        """
+        root = getattr(self.source, "root", None)
+        return str(root) if root else None
+
     async def _close(self) -> None:
         if self.stage is not None:
             self.spent_usd += self.stage.spent_usd
@@ -148,7 +158,9 @@ class Conversation:
         if contract is None:
             raise RuntimeError("cannot go further before there is a contract")
         if stage_name == BUILD:
-            self.stage, _ = build_stage.open_stage(contract, out=self.out, ask=self.ask)
+            self.stage, _ = build_stage.open_stage(
+                contract, out=self.out, ask=self.ask, source=self._source_root()
+            )
             opening = build_stage.opening(contract)
         elif stage_name == RUN:
             if not self.scenarios_written:

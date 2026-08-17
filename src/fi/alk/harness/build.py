@@ -43,8 +43,16 @@ def open_stage(
     out: Path | None = None,
     ask: Callable[..., Any] | None = None,
     max_turns: int = 60,
+    source: str | Path | None = None,
 ) -> tuple[Stage, Path]:
-    """A live build-the-world stage, and where it will write."""
+    """A live build-the-world stage, and where it will write.
+
+    ``source`` is where the agent's code lives, and the provisioning path needs it. That stage
+    is defined by using the agent's **own** migrations and its own data loader, and it cannot
+    do that from the contract alone — the first real run went looking for them with Glob, was
+    refused, and invented a seed instead. Reading the agent is not editing the agent: the read
+    tools are granted, the write ones never are.
+    """
     destination = out or artifact_dir(contract.agent)
     # Two build stages that prove different things, so exactly one is live. The old one saves a
     # world of handlers it wrote; the new one saves an environment the agent's own unmodified
@@ -55,8 +63,13 @@ def open_stage(
     else:
         server, _held = world_tools(contract, destination)
         skill, name, names = SKILL, WORLD_SERVER, TOOL_NAMES
+    # Read-only access to the agent's repository, for the path that has to find its migrations
+    # and its data loader. Read, Glob and Grep and nothing else: no Write, no Edit, no Bash, so
+    # the rule that the agent is never modified is still enforced by there being no verb for it.
+    reading = ["Read", "Glob", "Grep"] if (provisioning() and source) else []
     allowed = [
         "AskUserQuestion",
+        *reading,
         *(qualified(name, one) for one in names),
     ]
     options = ClaudeAgentOptions(
@@ -71,7 +84,13 @@ def open_stage(
         # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
         # whole job is to validate that change.
         permission_mode="default",
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        # Rooted at the agent when there is one to read, so a relative Glob lands in the
+        # repository the stage was told to go looking through rather than in our artifacts.
+        cwd=str(
+            Path(source)
+            if reading and Path(source).exists()
+            else (destination.parent if destination.parent.exists() else Path.cwd())
+        ),
         setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(),
@@ -109,9 +128,12 @@ async def build(
     on_event: Callable[..., Any] | None = None,
     ask: Callable[..., Any] | None = None,
     max_turns: int = 60,
+    source: str | Path | None = None,
 ) -> Path | None:
     """Run the stage start to finish. Returns where the world was written, or None."""
-    stage, destination = open_stage(contract, out=out, ask=ask, max_turns=max_turns)
+    stage, destination = open_stage(
+        contract, out=out, ask=ask, max_turns=max_turns, source=source
+    )
     async with stage:
         await stage.say(opening(contract), on_event=on_event)
         for follow_up in follow_ups or []:
