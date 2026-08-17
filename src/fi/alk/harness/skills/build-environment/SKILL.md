@@ -64,9 +64,22 @@ was wrong.
 your bugs; `ToolError` is the world's answer, and the two are recorded differently.
 
 Inside a handler you have `args`, `db`, `ToolError` and `json`, and nothing else. Do not import
-anything and do not define your own `ToolError`. Use the argument names exactly as the contract
-gives them. A handler that reads a name the tool does not pass finds nothing, quietly does
-nothing, and reports success.
+anything and do not define your own `ToolError`.
+
+`db` has exactly three methods, and no cursors:
+
+```python
+db.query("SELECT * FROM items WHERE id = ?", [args["item_id"]])   # -> list of dicts, [] if none
+db.one("SELECT * FROM items WHERE id = ?", [args["item_id"]])      # -> one dict, or None
+db.execute("INSERT INTO orders (item_id) VALUES (?)", [item_id])   # -> number of rows changed
+```
+
+Rows come back as dicts, so read them by column name. There is nothing to fetch afterwards:
+`db.execute` returns a count, not a cursor, so calling `.fetchone()` on anything is a mistake.
+Use `db.one` when you want a single row and `db.query` when you want several.
+
+Use the argument names exactly as the contract gives them. A handler that reads a name the tool
+does not pass finds nothing, quietly does nothing, and reports success.
 
 ## Seeding
 
