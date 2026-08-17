@@ -1,0 +1,198 @@
+"""The stores the harness stands up for an agent under test.
+
+Two lanes. The registry tests are offline and always run: they are about what the harness
+does when asked for an engine it does not have, which is the behaviour that keeps a run from
+quietly grading an agent against the wrong database. The Postgres tests need a Docker daemon
+and are skipped without one, following the same rule as the bench Docker lane.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from fi.alk.bench._docker import docker_available
+from fi.alk.harness.world.stores import (
+    PostgresStore,
+    Snapshot,
+    StoreError,
+    resolve,
+    supported,
+)
+
+# --- offline: what the harness will and will not stand up -------------------------------
+
+
+def test_postgres_is_registered() -> None:
+    assert "postgres" in supported()
+
+
+def test_resolve_returns_a_store_for_a_known_engine() -> None:
+    assert resolve("postgres").engine == "postgres"
+
+
+def test_an_unknown_engine_is_refused_and_names_what_there_is() -> None:
+    """No fallback. An engine we cannot run is a gap to report, not one to substitute.
+
+    Handing a ClickHouse agent a Postgres would produce a green suite about SQL the agent
+    never executes, which is worse than no suite at all.
+    """
+    with pytest.raises(StoreError) as raised:
+        resolve("clickhouse")
+    assert "clickhouse" in str(raised.value)
+    assert "postgres" in str(raised.value)
+
+
+def test_a_store_has_no_address_before_it_starts() -> None:
+    with pytest.raises(StoreError):
+        PostgresStore().dsn()
+
+
+def test_stopping_a_store_that_never_started_is_safe() -> None:
+    PostgresStore().stop()
+
+
+def test_snapshot_counts_its_rows() -> None:
+    snapshot = Snapshot(rows={"orders": [{"id": 1}, {"id": 2}], "menu": []})
+    assert snapshot.counts() == {"orders": 2, "menu": 0}
+
+
+# --- with docker: a real engine, really reset -------------------------------------------
+
+pg = pytest.mark.skipif(not docker_available(), reason="docker daemon unavailable")
+
+SCHEMA = """
+CREATE TABLE customers (
+    id    serial PRIMARY KEY,
+    name  text NOT NULL,
+    prefs jsonb
+);
+CREATE TABLE orders (
+    id          serial PRIMARY KEY,
+    customer_id int  NOT NULL REFERENCES customers(id),
+    item        text NOT NULL,
+    quantity    int  NOT NULL CHECK (quantity > 0)
+);
+"""
+
+SEED = """
+INSERT INTO customers (name, prefs) VALUES ('ana', '{"spice": "hot"}'), ('bo', '{"spice": "mild"}');
+INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'turkey', 2);
+"""
+
+
+@pytest.fixture(scope="module")
+def store():
+    """One container for the module, because starting costs seconds and resetting does not.
+
+    That is the same shape a suite has: the environment is stood up once and its contents move
+    between scenarios.
+    """
+    running = PostgresStore(version="16")
+    running.start()
+    try:
+        running.apply_sql(SCHEMA)
+        yield running
+    finally:
+        running.stop()
+
+
+@pytest.fixture()
+def seeded(store):
+    """A store holding the seed, put back after whatever the test does to it."""
+    store.restore(Snapshot())
+    store.apply_sql(SEED)
+    return store
+
+
+@pg
+def test_the_schema_is_the_one_that_was_applied(seeded) -> None:
+    """The harness never invents tables. What is here is what the migration created."""
+    assert sorted(seeded.state()) == ["customers", "orders"]
+
+
+@pg
+def test_state_reads_rows_back_including_json(seeded) -> None:
+    assert seeded.state()["customers"][0] == {
+        "id": 1,
+        "name": "ana",
+        "prefs": {"spice": "hot"},
+    }
+
+
+@pg
+def test_rows_come_back_in_a_stable_order(seeded) -> None:
+    """Ordered by primary key, so a check reading the first row is not reading a coin toss."""
+    assert [row["id"] for row in seeded.state()["customers"]] == [1, 2]
+
+
+@pg
+def test_restore_puts_the_rows_back_exactly(seeded) -> None:
+    baseline = seeded.freeze()
+    seeded.apply_sql("INSERT INTO orders (customer_id, item, quantity) VALUES (2, 'ham', 5)")
+    seeded.apply_sql("DELETE FROM orders WHERE customer_id = 2")
+    seeded.apply_sql("DELETE FROM customers WHERE name = 'bo'")
+    assert seeded.state() != baseline.rows
+
+    seeded.restore(baseline)
+    assert seeded.state() == baseline.rows
+
+
+@pg
+def test_restore_puts_the_counters_back_too(seeded) -> None:
+    """Without this the next scenario's first insert gets an id continuing from the last one,
+    and a check naming a specific id fails for a reason that is not the agent's doing."""
+    baseline = seeded.freeze()
+    seeded.apply_sql("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'ham', 1)")
+    seeded.restore(baseline)
+
+    seeded.apply_sql("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'swiss', 1)")
+    fresh = [row for row in seeded.state()["orders"] if row["item"] == "swiss"]
+    assert [row["id"] for row in fresh] == [2]
+
+
+@pg
+def test_restore_survives_foreign_keys_without_ordering_the_tables(seeded) -> None:
+    """The snapshot came from a consistent database, so what goes back is consistent.
+
+    Suspending the constraints beats sorting the tables into dependency order, which is a
+    problem the snapshot means we do not have.
+    """
+    baseline = seeded.freeze()
+    seeded.apply_sql("DELETE FROM orders")
+    seeded.apply_sql("DELETE FROM customers")
+    assert seeded.state()["customers"] == []
+
+    seeded.restore(baseline)
+    assert seeded.state() == baseline.rows
+
+
+@pg
+def test_the_engine_produces_its_own_refusals(seeded) -> None:
+    """A refusal here is the database's, not one we wrote into a handler.
+
+    This is the difference the provisioning approach buys: an agent inserting a row that
+    cannot exist is refused by the same constraint that would refuse it in production.
+    """
+    import psycopg
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        seeded.apply_sql(
+            "INSERT INTO orders (customer_id, item, quantity) VALUES (999, 'x', 1)"
+        )
+
+
+@pg
+def test_a_check_constraint_refuses_too(seeded) -> None:
+    import psycopg
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        seeded.apply_sql(
+            "INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'turkey', 0)"
+        )
+
+
+@pg
+def test_the_dsn_is_what_the_agent_would_be_pointed_at(store) -> None:
+    assert store.dsn().startswith("postgresql://")
+    assert store.env("DATABASE_URL") == {"DATABASE_URL": store.dsn()}
+    assert store.env("PG_DSN")["PG_DSN"] == store.dsn()
