@@ -37,6 +37,16 @@ SKILL = "build-environment"
 PROVISION_SKILL = "provision-environment"
 
 
+def built_artifact() -> str:
+    """The file whose existence means this stage succeeded, on whichever path is live.
+
+    One function rather than the same conditional in each caller. The terminal had its own
+    copy, still asking for ``world.sqlite``, and so announced "No world was saved" and exited
+    non-zero after the first provisioning run had saved everything it was asked to.
+    """
+    return MANIFEST if provisioning() else "world.sqlite"
+
+
 def open_stage(
     contract: AgentContract,
     *,
@@ -138,5 +148,4 @@ async def build(
         await stage.say(opening(contract), on_event=on_event)
         for follow_up in follow_ups or []:
             await stage.say(follow_up, on_event=on_event)
-    written = MANIFEST if provisioning() else "world.sqlite"
-    return destination if (destination / written).exists() else None
+    return destination if (destination / built_artifact()).exists() else None
