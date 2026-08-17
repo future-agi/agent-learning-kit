@@ -95,10 +95,19 @@ def accept_scenario(
     replaced = any(one.name == scenario.name for one in kept)
     kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
+    weak = (
+        "\nWorth tightening: "
+        + ", ".join(proof.weak)
+        + " still held with nothing done. The scenario is graded by its other checks, so it was "
+        "kept, but those sub-goals will report themselves as held for an agent that did nothing. "
+        "A check that asserts the attempt, not only the state it leaves, cannot do that."
+        if proof.weak
+        else ""
+    )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
-        f"nothing is done.\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"nothing is done.{weak}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 

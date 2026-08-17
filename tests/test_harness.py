@@ -1056,6 +1056,42 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
 
 
+def test_a_check_that_cannot_fail_without_calls_is_named_even_though_it_is_kept(tmp_path):
+    """A check comparing calls against rows holds when there are no calls at all, so it reports
+    itself as held for an agent that did nothing. The scenario is still graded by its other
+    checks, so it is kept, but sub-goals are shared and that one would roll up as a pass."""
+    from fi.alk.harness.environment import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="quantity-respected",
+            what="as many rows as there were calls",
+            check=(
+                "def check(world, calls):\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    rows = world.state()['cart']\n"
+                "    if len(rows) != len(made):\n"
+                "        return '%d calls, %d rows' % (len(made), len(rows))\n"
+                "    return None\n"
+            ),
+        )
+    )
+    save_catalogue(catalogue, root)
+    delta = _delta(sub_goals=["item-added", "quantity-respected"])
+    said = accept_scenario(delta, world_root=root, catalogue=catalogue, kept=[])
+    text = said["content"][0]["text"]
+
+    assert not said.get("is_error"), text
+    assert "All three gates pass" in text
+    assert "quantity-respected" in text and "held with nothing done" in text
+    proof = prove(Scenario(**delta), catalogue, root)
+    assert proof.holds and proof.weak == ["quantity-respected"]
+
+
 def test_a_scenario_naming_a_sub_goal_nobody_defined_is_refused(tmp_path):
     from fi.alk.harness.scenario_tools import accept_scenario
 
