@@ -290,11 +290,21 @@ def provision_tools(
 
     @tool(
         "add_sub_goal",
-        "A named thing this agent can be checked on, with its check as code. The check is "
-        "given the store and the calls that were recorded, and returns a sentence when "
-        "something is wrong or None when it held.",
+        "Add a named thing this agent can be checked on, shared by every scenario that needs "
+        "it. Defined here, once, so results roll up: the same sub-goal failing in seven of "
+        "twelve scenarios is one sentence.\n\n"
+        "`check` is Python: define check(world, calls) returning a sentence when something is "
+        "wrong, or None when it held. `world` is the environment afterwards, and "
+        "world.state() gives every group and its rows; `calls` is every tool call made, each "
+        "with .name and .arguments — so a check can insist a call happened with the right "
+        "arguments, not merely that it happened.\n\n"
+        "Do not write a check that asks whether a tool refused. Many agents report a refusal "
+        "by returning an ordinary string, so nothing distinguishes it from success. Check what "
+        "the world holds afterwards, and the arguments the agent actually used.\n\n"
+        "`judged` is not a flag: it is the sentence saying what a model has to decide and why "
+        "code cannot. Leave it empty for anything code can settle, which is most things.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": bool},
+            {"name": str, "what": str, "check": str, "judged": str},
             ["name", "what"],
         ),
     )
@@ -303,7 +313,7 @@ def provision_tools(
             name=str(args["name"]),
             what=str(args.get("what") or ""),
             check=str(args.get("check") or ""),
-            judged=bool(args.get("judged")),
+            judged=str(args.get("judged") or ""),
         )
         problems = validate_sub_goal(one)
         if problems:

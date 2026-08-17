@@ -196,12 +196,17 @@ def _reached(one: "Dependency") -> str:
     if one.engine:
         said.append(f"stand up {one.engine}{' ' + one.version if one.version else ''}")
     where = one.reached
-    if where.loader_module:
+    if where.loader_module or where.loader_function:
         # Said first and said plainly, because "stand up inprocess" on its own reads as an
         # instruction to find something to stand up — and a stage told that, with no loader
         # named, reached for a server the agent has never used.
+        #
+        # Rendered when either half is present, not only when the module is. Half a seam is
+        # worth showing: a function with no module to import it from is a gap the next stage
+        # can ask about, where silence is a gap it will fill with a guess.
         said.append(
-            f"call the agent's own {where.loader_module}."
+            f"call the agent's own "
+            f"{where.loader_module or 'MODULE NOT RECORDED'}."
             f"{where.loader_function or 'load_data'} for it; nothing is connected to and no "
             "server is involved"
         )
