@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .build import built_artifact
 from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .chat import open_conversation
@@ -23,6 +24,7 @@ from .config import (
     chosen_model,
     credentials_hint,
     permission_gate,
+    provisioning,
 )
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
@@ -157,21 +159,29 @@ async def _build(args: argparse.Namespace) -> int:
         ask=permission_gate(_ask_operator) if args.interactive else None,
         source=getattr(args, "path", None),
     )
+    # What "built" means differs by path: the old stage writes a world of handlers it wrote,
+    # the provisioning one writes the recipe for an environment the agent connects to. Asking
+    # for the wrong artifact reports a good run as a failure, which is how the first successful
+    # provisioning run ended with "No world was saved."
+    built = built_artifact()
     await _converse(
         stage,
         build_opening(contract),
         interactive=args.interactive,
-        until=lambda: (destination / "world.sqlite").exists(),
+        until=lambda: (destination / built).exists(),
         nudge=(
-            "Nothing was saved: you finished without calling save_world. Call check_world, "
-            "fix what it names, then save_world."
+            "Nothing was saved: you finished without calling save_environment. Call "
+            "prove_environment, fix what it names, then save_environment."
+            if provisioning()
+            else "Nothing was saved: you finished without calling save_world. Call "
+            "check_world, fix what it names, then save_world."
         ),
     )
 
-    if not (destination / "world.sqlite").exists():
-        print("\nNo world was saved.", file=sys.stderr)
+    if not (destination / built).exists():
+        print("\nNothing was saved.", file=sys.stderr)
         return 1
-    print(f"\nworld: {destination}")
+    print(f"\nenvironment: {destination}" if provisioning() else f"\nworld: {destination}")
     print(f"spent: ${stage.spent_usd:.4f}")
     return 0
 
@@ -182,8 +192,8 @@ async def _scenarios(args: argparse.Namespace) -> int:
     if contract is None:
         print(f"No contract at {destination}. Run `understand` first.", file=sys.stderr)
         return 1
-    if not (destination / "world.sqlite").exists():
-        print(f"No world at {destination}. Run `build` first.", file=sys.stderr)
+    if not (destination / built_artifact()).exists():
+        print(f"No environment at {destination}. Run `build` first.", file=sys.stderr)
         return 1
 
     # With a suite already written, the target is what is there. Somebody who comes back to
