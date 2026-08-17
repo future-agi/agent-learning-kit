@@ -9,17 +9,17 @@ The reference for the rebuild. Written after the corrections in `_scenario-gener
 
 The **environment step** builds everything that is common to every test of one agent: the world
 its tools act on, the prompt that drives a simulated user if it has one, and the catalogue of
-sub-goals it can be checked against. Every **scenario** is then only a *delta* on that base — a
-few values changed after reset, the values substituted into the simulator's prompt, and which
+sub-goals it can be checked against. Every **scenario** is then only a change on that base: what
+it alters after reset, the instruction substituted into the simulator's prompt, and which
 sub-goals must hold. Nothing about a scenario is a template with slots; the harness writes each
 one, and proves it works before keeping it.
 
 ```
 environment step  ─────────────────────────────►  base: world + simulator prompt + sub-goals
                                                           │
-scenario 1 ──► reset → setup delta → run → check ─────────┤
-scenario 2 ──► reset → setup delta → run → check ─────────┤
-scenario N ──► reset → setup delta → run → check ─────────┘
+scenario 1 ──► reset → setup → run → check ───────────────┤
+scenario 2 ──► reset → setup → run → check ───────────────┤
+scenario N ──► reset → setup → run → check ───────────────┘
 ```
 
 ---
@@ -81,17 +81,23 @@ calls. **A refusal is the environment working; a crash is a defect.** It cannot 
 
 ---
 
-## 2. A scenario is a delta
+## 2. A scenario is a change on that base, and it owns a folder
 
 ```
-name         identifier
+name         identifier, and the name of its folder
 use_case     which branch of the agent's real use cases this belongs to
-setup        what changes in the world after reset — a few rows, files, state
+setup.py     def setup(world), what changes after reset. Code, because what a
+             scenario changes is not necessarily the database alone
+ready.py     def ready(world), whether the world holds what this scenario presumes
 instruction  the task. For a conversational agent this is substituted into the
              simulator prompt; for a browser or coding agent it goes to the agent
 solution     the reference trajectory: what a correct agent would do
-sub_goals    which catalogue entries must hold, and what each must show
+checks/*.py  one file per deterministic sub-goal, each runnable on its own
 ```
+
+The file is the artifact. Code lives in files rather than as strings inside JSON, and every check
+carries a `__main__` block so a person can run it by hand against what a run left behind and get
+the same answer the harness got.
 
 Gone from the old shape: `persona`, `opening`, `goal`, and free-text `must` / `must_not` as the
 primary grading. Scenarios are organised **use case → branch**, not by adversarial flavour.
@@ -133,11 +139,22 @@ was invented, tone.
 
 ---
 
-## 4. Two gates on every scenario, before it is kept
+## 4. Three gates on every scenario, before it is kept
 
 Terminal-bench's oracle run, which is the reason its tasks are known to be solvable.
 
-### Gate 1 — solvable
+### Gate 1. Ready
+
+```
+reset → apply setup → run ready                           ⇒ must HOLD
+```
+
+The world must hold what the scenario presumes. A scenario about the last five items is only a
+test of the agent if there really are five; otherwise the agent fails for a precondition we got
+wrong, and the report reads as a finding about the agent. A missing precondition is ours, and this
+is where it is caught.
+
+### Gate 2. Solvable
 
 ```
 reset → apply setup → run the solution → run the checks   ⇒ must PASS
@@ -148,7 +165,7 @@ wrong. Both have already happened here: a scenario asserted a value the agent wa
 to send, and another demanded confirmation of an item that could not be ordered. This catches
 them at write time, with no model involved.
 
-### Gate 2 — not vacuous
+### Gate 3. Not vacuous
 
 ```
 reset → apply setup → run NOTHING → run the checks        ⇒ must FAIL
@@ -156,6 +173,11 @@ reset → apply setup → run NOTHING → run the checks        ⇒ must FAIL
 
 A check that passes without the agent doing anything grades nothing while reporting a result.
 This is the failure that makes a suite quietly green.
+
+Vacuity is judged on *all* checks passing, because one check surviving an empty run ("no
+unavailable item was ordered") is legitimate. A single check that survives is still named, because
+sub-goals are shared: a check that cannot fail without calls would roll up as a pass for an agent
+that did nothing at all.
 
 Neither gate asks a model anything. The environment decides.
 
@@ -196,8 +218,9 @@ A world that really holds rows and can really refuse removes all three.
 | Solution | tool calls | actions | commands |
 | Check | code over world + calls | code over the page + actions | code over the tree |
 
-**What never changes:** the environment is built once and frozen; a scenario is a delta; a
-solution proves it is solvable; a check that cannot fail is rejected; deterministic first.
+**What never changes:** the environment is built once and frozen; a scenario is a change on it; a
+solution proves it is solvable; a scenario whose world is not ready is rejected before it can be
+blamed on the agent; a check that cannot fail is rejected; deterministic first.
 
 ---
 
@@ -205,8 +228,9 @@ solution proves it is solvable; a check that cannot fail is rejected; determinis
 
 1. **Environment step** — the world, the simulator prompt, the sub-goal catalogue, all written by
    the harness rather than by a fixed schema here.
-2. **Scenario shape** — setup / instruction / solution / sub-goal references.
-3. **The two gates** — solvable, and not vacuous.
+2. **Scenario shape**: a folder per scenario: setup / ready / instruction / solution / sub-goal
+   references / a file per check.
+3. **The three gates**: ready, solvable, and not vacuous.
 4. **Run through ALK** — the world serving the tool calls of the real agent.
 
 ---

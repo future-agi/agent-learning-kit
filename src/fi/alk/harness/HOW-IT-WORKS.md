@@ -20,15 +20,20 @@ There is no pipeline. Each stage is a conversation you can interrupt, correct, a
 | Stage | `session.py` | A live model session, held open across turns, emitting typed events |
 | Instructions | `skills/<stage>/SKILL.md` | How that stage works, in prose. Editable without touching code |
 | Tools | `tools.py`, `world/tools.py`, `scenario_tools.py`, `run/tools.py` | The exact half: they execute, validate, and refuse |
-| Artifacts | `artifacts/environments/<agent>/` | What each stage leaves behind for the next |
+| Artifacts | `artifacts/sessions/<id>/` | What each stage leaves behind for the next |
 | Conversation | `chat.py` | Holds one agent's journey through the stages |
+| Session | `sessions.py` | One conversation, one folder: chat and artifacts together |
 
 The artifacts, each the input to the next stage:
 
 ```
 contract.json → world.sqlite + handlers/ + simulator_prompt.md + sub_goals.json
-             → scenarios.json → runs.json
+             → scenarios/<name>/ (+ scenarios.json as the index) → runs.json
 ```
+
+All of it, plus the conversation that produced it, lives in one folder per session. There is
+nothing held in memory that is not also on disk, so closing the page, restarting the server or
+coming back tomorrow all resume the same way: by reading the folder.
 
 ---
 
@@ -151,28 +156,26 @@ Then `world/snapshot.py` writes `world.sqlite`, `handlers/*.py`, `world.py` and 
 
 `scenarios.py`, `skills/write-scenarios/SKILL.md`, tools in `scenario_tools.py`
 
-A scenario is a **delta on the base environment**, not a self-contained script (`scenario.py`):
+A scenario is a **change on the base environment**, and it owns a folder (`folder.py`):
 
-```json
-{
-  "name": "quantity_and_unavailable",
-  "use_case": "ordering with an item the store does not have",
-  "tests": "quantity is honoured and an unavailable drink never reaches the order",
-  "setup": {},
-  "instruction": "Order two hamburgers and ask for a sweet tea.",
-  "variables": {},
-  "solution": [
-    {"tool": "order_regular_item", "arguments": {"item_id": "hamburger"}},
-    {"tool": "order_regular_item", "arguments": {"item_id": "hamburger"}}
-  ],
-  "sub_goals": ["quantity_honored", "unavailable_drink_refused", "no_unrequested_items"],
-  "max_turns": 10
-}
+```
+scenarios/<name>/
+    scenario.json     the instruction, the reference solution, which sub-goals it names
+    setup.py          def setup(world)     what this scenario changes first
+    ready.py          def ready(world)     is the world ready for it
+    checks/<goal>.py  def check(world, calls)   one per deterministic sub-goal
 ```
 
-There is no persona and no opening line. Variability comes from **real conditions**, which live
-in `setup`: rows this one scenario needs on top of the frozen world. The base world stays the
-shared starting point.
+`scenarios.json` is an index over those folders, regenerated from them, so anything wanting the
+whole suite at a glance has it.
+
+Code lives in files, never duplicated into JSON, and the file is the artifact: each check file is
+written with a `__main__` block so it runs standalone against what a run left behind, and a test
+proves the file and the harness give the same answer.
+
+`setup` is **code** rather than a list of rows: what a scenario changes is not necessarily the
+database alone. There is no persona and no opening line. Variability comes from **real
+conditions** that live in `setup`, and the base world stays the shared starting point.
 
 `sub_goals` are **names from the catalogue the environment step defined**, not restated wording.
 That is what makes results roll up: the same sub-goal failing in seven of twelve scenarios is one
@@ -184,19 +187,26 @@ scenario can be proved.
 The writer can **look** (`inspect_world`) and **rehearse** (`try_calls` — run calls against a
 throwaway copy and see what state they leave), so a solution is written from what was observed.
 
-### The gate: two proofs, no model involved
+### The gate: three proofs, no model involved
 
 `prove.py`, called by `submit_scenario` before a scenario is kept:
 
 | | Run | Must |
 |---|---|---|
+| **Ready** | reset → `setup` → `ready` | **hold** |
 | **Solvable** | reset → setup → **the solution** → the checks | **pass** |
 | **Not vacuous** | reset → setup → **nothing** → the checks | **fail** |
 
-If the first fails, either the scenario cannot be passed or the check is wrong. If the second
-passes, the checks grade nothing while reporting a result — the failure that makes a suite
-quietly green. Vacuity is judged on *all* checks passing, because one check surviving an empty run
-("no unavailable item was ordered") is legitimate.
+If the first fails, the world does not hold what the scenario presumes, and running it would test
+us rather than the agent: the agent would fail for a precondition we got wrong, and it would read
+as a finding about the agent. If the second fails, either the scenario cannot be passed or the
+check is wrong. If the third passes, the checks grade nothing while reporting a result, which is
+the failure that makes a suite quietly green.
+
+Vacuity is judged on *all* checks passing, because one check surviving an empty run ("no
+unavailable item was ordered") is legitimate. A single check that survives is still reported, in
+`Proof.weak`: sub-goals are shared, so a check that cannot fail without calls would roll up as a
+pass for an agent that did nothing at all.
 
 `save_scenarios` additionally refuses a suite where no sub-goal is shared by two scenarios,
 because nothing would roll up.
