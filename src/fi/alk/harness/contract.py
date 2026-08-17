@@ -34,6 +34,19 @@ _LIST_FIELDS = (
 )
 _DICT_FIELDS = ("data_schema", "base_environment")
 
+# What each field gets called when it is not called what we call it. Every one of these was
+# written by a model that had read the schema and still reached for the more obvious word.
+_ALIASES = {
+    "real_use_cases": ("use_cases", "usecases", "scenarios", "capabilities"),
+    "hard_constraints": ("constraints", "rules", "policies", "policy", "guardrails"),
+    "system_prompt_excerpt": ("system_prompt", "prompt", "instructions"),
+    "base_environment": ("data", "seed_data", "starting_data", "records"),
+    "data_schema": ("schema", "record_schema", "data_shape"),
+    "agent": ("name", "agent_name"),
+    "one_liner": ("summary", "description"),
+    "notes": ("observations", "remarks"),
+}
+
 
 class ToolSpec(BaseModel):
     """One tool the agent really has.
@@ -92,10 +105,22 @@ class AgentContract(BaseModel):
     @classmethod
     def _normalize_shapes(cls, payload: Any) -> Any:
         """Model JSON varies in benign ways: a list where prose was asked, a bare string where a
-        list was. Normalize instead of rejecting, because shape variance is not a grounding
-        error and rejecting it burns turns on something that does not matter."""
+        list was, a field under the obvious name rather than ours. Normalize instead of
+        rejecting, because none of that is a grounding error and rejecting it burns turns on
+        something that does not matter."""
         if not isinstance(payload, dict):
             return payload
+        # The name we chose is not always the obvious one. `real_use_cases` in particular gets
+        # written as `use_cases`, and the answer it then gets — "no-use-cases" — reads as
+        # missing rather than misnamed, so the same submission comes back again and again with
+        # the shape changed and the name untouched.
+        for ours, others in _ALIASES.items():
+            if payload.get(ours):
+                continue
+            for other in others:
+                if payload.get(other):
+                    payload[ours] = payload[other]
+                    break
         for key in _STRING_FIELDS:
             value = payload.get(key)
             if isinstance(value, list):

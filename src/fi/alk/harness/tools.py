@@ -26,9 +26,12 @@ def _ok(text: str) -> dict[str, Any]:
 # time. What a code means is a separate question, and answering it here keeps the codes exact
 # while the message the model reads says what to actually do.
 _GUIDANCE = {
-    "empty:agent": "give it a short lower-case name; it is only the artifact folder's label",
-    "no-tools": "list the agent's real tools. Nothing downstream can be built without them",
-    "no-use-cases": "list the concrete situations this agent handles, from its tools and data",
+    "empty:agent": "the `agent` field is empty. A short lower-case name; it is only the "
+    "artifact folder's label",
+    "no-tools": "the `tools` field is empty. List the agent's real tools; nothing downstream "
+    "can be built without them",
+    "no-use-cases": "the `real_use_cases` field is empty — note the name, it is not "
+    "`use_cases`. List the concrete situations this agent handles, from its tools and data",
     "no-arguments-on-any-tool": "every tool was recorded with no arguments, which means they "
     "were read and not written down. Put each tool's exact parameter names in args",
     "duplicate-tool-names": "the same tool is listed twice; keep one entry per tool",
@@ -151,11 +154,11 @@ def accept_contract(payload: dict[str, Any], destination: Path) -> dict[str, Any
 
 def contract_tools(destination: Path) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance."""
-    # One nudge, not a wall. A conversational agent with no rules and no prompt excerpt almost
-    # always means the prompt was not found — it often lives away from the main agent file — so
-    # the first such submission is sent back with directions. The second is accepted, because a
-    # gate with no way through would permanently block the rare agent that genuinely has none.
-    nudged = {"done": False}
+    # Each of these is a nudge, not a wall: the first submission missing something that is
+    # nearly always there gets sent back with directions, and a second submission is accepted.
+    # A gate with no way through would permanently block the rare agent that genuinely lacks it,
+    # and this stage cannot tell those two apart from the outside.
+    nudged: set[str] = set()
 
     @tool(
         "submit_contract",
@@ -275,22 +278,41 @@ def contract_tools(destination: Path) -> Any:
         ),
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
-        bare = (
-            args.get("conversational", True)
-            and not args.get("hard_constraints")
-            and not str(args.get("system_prompt_excerpt") or "").strip()
-        )
-        if bare and not nudged["done"]:
-            nudged["done"] = True
+        payload = unwrapped(args)
+
+        thin = [
+            (
+                "prompt",
+                bool(payload.get("conversational", True))
+                and not payload.get("hard_constraints")
+                and not str(payload.get("system_prompt_excerpt") or "").strip(),
+                "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
+                "Its prompt usually exists and often lives away from the main agent file — "
+                "search the whole source for a long instructions string before deciding there "
+                "is none.",
+            ),
+            (
+                "data",
+                bool(payload.get("tools"))
+                and not payload.get("data_schema")
+                and not payload.get("base_environment"),
+                "no data_schema and no base_environment, for an agent that has tools. The world "
+                "every test runs against is built from exactly these two, so without them the "
+                "next stage has no schema to create and no rows to seed, and every tool call it "
+                "makes will refuse. Record the shape of each kind of record the tools read or "
+                "write, and enough real rows to reach every branch those tools have — a "
+                "representative sample for a large dataset, the whole thing for a small one.",
+            ),
+        ]
+        # All of them together, and each only once. Nudging in sequence would cost a turn per
+        # nudge and read as though the requirements were being invented one at a time.
+        say = [said for key, when, said in thin if when and key not in nudged]
+        nudged.update(key for key, when, _ in thin if when)
+        if say:
             return _problems(
-                [
-                    "no hard_constraints and no system_prompt_excerpt, for a conversational "
-                    "agent. Its prompt usually exists and often lives away from the main agent "
-                    "file — search the whole source for a long instructions string before "
-                    "deciding there is none. If there genuinely is none, submit again as is."
-                ]
+                say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(args, destination)
+        return accept_contract(payload, destination)
 
     return create_sdk_mcp_server(
         name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract]

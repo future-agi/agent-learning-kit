@@ -17,6 +17,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 
 from .config import (
     artifact_dir,
+    UNWANTED,
     gate_hooks,
     chosen_model,
     load_skill,
@@ -77,6 +78,7 @@ def open_stage(
         model=chosen_model(),
         env=provider_env(),
     )
+    options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(ask, allowed)
     return Stage(options, name=SKILL), destination

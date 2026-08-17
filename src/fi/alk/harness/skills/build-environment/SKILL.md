@@ -53,6 +53,12 @@ agent has, not a corrected version, and a test written against a corrected world
 the bug the real one has. If an id looks like a typo, that typo is the thing worth testing — do
 not fix it, and do not widen the contract to the spelling you would have chosen.
 
+Seed what the contract carries, and enough of it that every branch a handler has can actually be
+reached: if a tool refuses a cancelled order, there has to be a cancelled order to refuse. Where
+the contract sampled a large dataset rather than reproducing it, that sample is the world — an
+exact replica was never the goal, and a world that exercises the same flows and refuses for the
+same reasons is what is wanted.
+
 Leave it in its natural starting state: empty carts, no in-flight orders. Scenarios add what they
 need.
 

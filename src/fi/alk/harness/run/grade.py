@@ -22,7 +22,13 @@ from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 
-from ..config import chosen_model, gate_hooks, permission_gate, provider_env
+from ..config import (
+    UNWANTED,
+    chosen_model,
+    gate_hooks,
+    permission_gate,
+    provider_env,
+)
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..session import Stage
@@ -199,6 +205,7 @@ async def judge(
         model=chosen_model(model),
         env=provider_env(model),
     )
+    options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(granted=allowed)
     stage = Stage(options, name="judge")

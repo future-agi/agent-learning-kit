@@ -101,9 +101,17 @@ def read_only_session(
         model=chosen_model(model),
         env=provider_env(model),
     )
+    options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(granted=allowed)
     return options
+
+
+# Tools the host offers every session that no stage of this harness has any use for. Denying
+# them at the gate works and is the backstop, but a denial still costs the turn that discovered
+# it — and these get reached for in almost every stage. Naming them as disallowed keeps them out
+# of the tool list the model is shown, so the turn is never spent.
+UNWANTED = ("ToolSearch", "Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch")
 
 
 def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:

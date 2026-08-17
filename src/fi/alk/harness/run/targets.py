@@ -19,7 +19,13 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 
-from ..config import chosen_model, gate_hooks, permission_gate, provider_env
+from ..config import (
+    UNWANTED,
+    chosen_model,
+    gate_hooks,
+    permission_gate,
+    provider_env,
+)
 from ..contract import AgentContract
 from ..session import Stage
 from ..tools import qualified
@@ -176,6 +182,7 @@ class LocalAgent:
         )
         # The agent under test gets its own tools and nothing else. A target that can reach a
         # file or a shell is not the agent anybody deployed.
+        options.disallowed_tools = list(UNWANTED)
         options.hooks = gate_hooks(allowed)
         options.can_use_tool = permission_gate(granted=allowed)
         self._stage = Stage(options, name="target")

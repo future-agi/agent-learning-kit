@@ -1398,7 +1398,9 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
         "real_use_cases": ["do the thing"],
     }
     first = asyncio.run(call(dict(payload)))
-    assert "system_prompt_excerpt" in first and "submit again" in first
+    # Both thin spots are reported together, not one per turn.
+    assert "system_prompt_excerpt" in first and "data_schema" in first
+    assert "submit again" in first
     assert not (tmp_path / "contract.json").exists()
 
     second = asyncio.run(call(dict(payload)))
@@ -1601,3 +1603,115 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
             if name not in {"hand_to_next_stage", "AskUserQuestion"}
         }
         assert not unknown, f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
+
+
+def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
+    """The world is built from data_schema and base_environment. Without them the build stage has
+    no schema to create and no rows to seed, so every tool call it makes refuses — and that looks
+    like a strict world rather than an empty one."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "CallToolRequest":
+                answer = await handler(
+                    CallToolRequest(
+                        method="tools/call",
+                        params=CallToolRequestParams(
+                            name="submit_contract", arguments=payload
+                        ),
+                    )
+                )
+                return answer.root.content[0].text
+
+    payload = {
+        "agent": "dataless",
+        "tools": [{"name": "act", "args": ["x"]}],
+        "real_use_cases": ["do the thing"],
+        "hard_constraints": ["a rule"],
+        "system_prompt_excerpt": "you are a bot",
+    }
+    first = asyncio.run(call(dict(payload)))
+    assert "data_schema" in first and "submit again" in first
+    assert not (tmp_path / "contract.json").exists()
+
+    second = asyncio.run(call(dict(payload)))
+    assert "Accepted" in second
+
+    assert (tmp_path / "contract.json").exists()
+
+
+def test_only_a_tool_that_says_it_saved_reports_an_artifact():
+    """Matching any path-shaped token in any result meant reading a file announced itself as an
+    artifact: the stage looks like it is producing output while it is still only looking around,
+    and a front end reloads its panes on every read."""
+    from dataclasses import dataclass
+
+    from fi.alk.harness.session import _saved_path
+
+    @dataclass
+    class Block:
+        content: object
+        is_error: bool = False
+
+    # a read
+    assert _saved_path(Block("     1\timport json\n     2\tfrom pathlib import Path")) == ""
+    assert _saved_path(Block("/some/agent/envs/retail/__init__.py")) == ""
+    # a write
+    assert _saved_path(Block("Accepted and saved to out/contract.json.")) == "out/contract.json"
+    assert _saved_path(Block("Saved 3 scenarios to out/scenarios.json.")) == "out/scenarios.json"
+    # list-shaped content, as the SDK sometimes gives it
+    assert (
+        _saved_path(Block([{"text": "Saved to artifacts/x/world.sqlite"}]))
+        == "artifacts/x/world.sqlite"
+    )
+
+
+@pytest.mark.parametrize(
+    "written,field,expected",
+    [
+        ({"use_cases": ["a"]}, "real_use_cases", ["a"]),
+        ({"scenarios": ["a"]}, "real_use_cases", ["a"]),
+        ({"rules": ["r"]}, "hard_constraints", ["r"]),
+        ({"constraints": ["r"]}, "hard_constraints", ["r"]),
+        ({"system_prompt": "p"}, "system_prompt_excerpt", "p"),
+        ({"instructions": "p"}, "system_prompt_excerpt", "p"),
+        ({"schema": {"a": 1}}, "data_schema", {"a": 1}),
+        ({"seed_data": {"t": []}}, "base_environment", {"t": []}),
+    ],
+)
+def test_a_field_written_under_the_obvious_name_still_lands(written, field, expected):
+    """Every one of these was written by a model that had read the schema and still reached for
+    the more obvious word. Bouncing it produces a loop: the answer to `use_cases` was
+    'no-use-cases', which reads as missing rather than misnamed, so the same submission comes
+    back with the shape changed and the name untouched."""
+    contract = AgentContract.model_validate({"agent": "x", **written})  # our name already set
+    assert getattr(contract, field) == expected
+
+
+def test_the_agent_name_can_arrive_as_name():
+    assert AgentContract.model_validate({"name": "bot", "tools": []}).agent == "bot"
+
+
+def test_our_own_name_wins_when_both_are_given():
+    contract = AgentContract.model_validate(
+        {"agent": "x", "real_use_cases": ["ours"], "use_cases": ["theirs"]}
+    )
+    assert contract.real_use_cases == ["ours"]
+
+
+def test_the_gate_names_the_field_it_wants(tmp_path):
+    """A code alone cannot be acted on when the mistake is the field's name."""
+    from fi.alk.harness.tools import accept_contract
+
+    said = accept_contract({"agent": "x", "tools": [], "real_use_cases": []}, tmp_path)
+    text = said["content"][0]["text"]
+    assert "`real_use_cases`" in text and "not `use_cases`" in text
+    assert "`tools`" in text

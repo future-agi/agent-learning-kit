@@ -51,7 +51,18 @@ Find, in roughly this order:
    browser-driving agent is `browser`. This decides how it is run later — a voice agent is
    called live; anything else runs locally — so getting it wrong reroutes every test.
 6. **The data.** Where it lives, its shape, and its real contents. In-memory dicts, fixture
-   files, a seeded database. Record enough for a working replica to be built.
+   files, a seeded database.
+
+   Record the **shape** completely: every field of every kind of record, and the values any
+   field is constrained to. Record the **contents** in proportion — a small agent's data goes in
+   whole, and for a large one a representative sample is what belongs in the contract: enough
+   rows to exercise each branch the tools have, chosen to include the awkward ones (an order
+   already cancelled, an item out of stock, a user with no payment method on file). Say in
+   `notes` where the full data lives and roughly how much of it there is.
+
+   An exact replica is not the goal and never was. Copying a thousand records through this stage
+   loses fidelity rather than gaining it; what is needed is a world that exercises the same
+   flows and can still refuse for the same reasons.
 7. **Real use cases.** What this agent is actually for, as concrete situations, drawn from the
    tools and data rather than invented.
 
