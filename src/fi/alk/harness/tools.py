@@ -295,7 +295,15 @@ def contract_tools(destination: Path) -> Any:
                                 "disagree about dialect and types, so an agent tested against "
                                 "the wrong one is graded on queries it never runs. Record it "
                                 "even when the agent points at a hosted instance — what "
-                                "matters is which engine it speaks to, not who runs it.",
+                                "matters is which engine it speaks to, not who runs it.\n"
+                                "Use 'inprocess' when there is no server at all: the agent "
+                                "loads files into memory and its tools read that structure "
+                                "directly. That is still a datastore and still provisionable — "
+                                "the environment calls the agent's own loader. When one "
+                                "function loads several files into one structure, that is ONE "
+                                "datastore with engine 'inprocess', not one dependency per "
+                                "file: the files are where it happens to keep it, and the "
+                                "structure is what the tools actually use.",
                             },
                             "version": {
                                 "type": "string",
@@ -333,6 +341,19 @@ def contract_tools(destination: Path) -> Any:
                                         "description": "Where the password comes from — an env "
                                         "var name. NEVER the password itself: this file is "
                                         "written to disk and read by people.",
+                                    },
+                                    "loader_module": {
+                                        "type": "string",
+                                        "description": "For engine 'inprocess': the importable "
+                                        "module holding the function that loads the data, e.g. "
+                                        "'tau_bench.envs.retail.data'. The environment imports "
+                                        "and calls it rather than reading the files itself, so "
+                                        "what it holds is what the agent would hold.",
+                                    },
+                                    "loader_function": {
+                                        "type": "string",
+                                        "description": "The loading function's name, e.g. "
+                                        "'load_data'.",
                                     },
                                 },
                             },
