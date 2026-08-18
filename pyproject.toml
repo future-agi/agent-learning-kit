@@ -33,6 +33,7 @@ classifiers = [
   "Topic :: Software Development :: Testing",
 ]
 dependencies = [
+  "claude-agent-sdk>=0.2.139",
   "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
   "httpx>=0.24.0",
@@ -87,6 +88,13 @@ a2a = [
 ]
 nli = ["transformers>=5.2.0,<6", "torch>=2.10.0,<3"]
 embeddings = ["sentence-transformers>=5.2.3,<6"]
+# What `harness-ui/server.py` needs to serve the harness over HTTP. Declared rather than left to
+# whatever happens to be in the environment: uv sync removes anything undeclared, so an ad hoc
+# install of these disappears the first time somebody syncs.
+harness-ui = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+]
 feedback = ["chromadb>=0.4.0"]
 notebook = [
   "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb
@@ -149,6 +157,10 @@ dev = [
   "hatchling>=1.25",
   "pytest>=8.3",
   "ruff>=0.9",
+  # Also in the harness-ui extra. Repeated here so that syncing without that extra does not
+  # uninstall the server out from under a working checkout.
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
 ]
 
 [tool.pytest.ini_options]
