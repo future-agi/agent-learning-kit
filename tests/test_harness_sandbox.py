@@ -280,3 +280,33 @@ def test_a_setup_command_keeps_its_quoted_arguments(tmp_path) -> None:
     code, said = run_setup(tmp_path, "cp 'a file.txt' .venv/")
     assert code == 0, said
     assert (tmp_path / ".venv" / "a file.txt").exists()
+
+
+@needs_docker
+@needs_tau
+def test_the_container_accounts_for_what_it_was_asked_to_do(loaded) -> None:
+    """It said nothing at all before: a container that had run fifty calls and one that had run
+    none looked identical from outside, and a failure inside left no trace anywhere."""
+    sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke",
+                 {"order_id": "#W0", "reason": "no longer needed"}, first_arg="data")
+    said = sandbox.recent(loaded, 20)
+    assert "state set:" in said
+    assert "CancelPendingOrder.invoke" in said
+    assert "#W0" in said            # the arguments, not only the name
+    assert "Error: order not found" in said
+
+
+@needs_docker
+@needs_tau
+def test_a_failure_carries_the_containers_own_account(loaded) -> None:
+    """Otherwise a sandbox error reads as "could not run X" while the reason sits in a log
+    nobody is looking at."""
+    from fi.alk.harness.world.sandbox import ToolRefused
+
+    try:
+        sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke", {"nonsense": 1},
+                     first_arg="data")
+    except ToolRefused as refused:
+        # The traceback is in the container's log; the exception names the type.
+        assert "TypeError" in str(refused)
+    assert "raised TypeError" in sandbox.recent(loaded, 30)

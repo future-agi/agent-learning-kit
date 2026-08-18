@@ -32,6 +32,7 @@ PATIENCE = 1800
 
 LABEL = "alk.harness.agent"
 SERVER_AT = "/alk/_serve.py"
+LOG_AT = "/alk/server.log"
 PORT = 8765
 
 # Runs inside the agent's container for the life of the session, holding the world's state.
@@ -55,8 +56,24 @@ def resolve(ask):
         target = getattr(getattr(found, ask["factory"])(), ask["callable"].split(".")[-1])
     return target
 
+def note(said):
+    """One line to stdout, so `docker logs` shows what this container was asked to do.
+
+    It showed nothing at all before: the access log was suppressed and nothing replaced it, so
+    a container that had run fifty calls and one that had run none looked identical from
+    outside, and a failure inside it left no trace anywhere.
+    """
+    print(said, flush=True)
+
+
+def brief(value, limit=160):
+    said = value if isinstance(value, str) else repr(value)
+    return said if len(said) <= limit else said[:limit] + "..."
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
+        # Replaced, not silenced: one line per call below says more than a request log would.
         pass
 
     def _reply(self, body, code=200):
@@ -79,18 +96,31 @@ class Handler(BaseHTTPRequestHandler):
         ask = json.loads(self.rfile.read(length) or "{}")
         if self.path == "/state":
             HELD["state"] = ask.get("state")
+            held = HELD["state"]
+            note("state set: " + brief(
+                {k: len(v) for k, v in held.items()} if isinstance(held, dict) else type(held).__name__
+            ))
             return self._reply({"ok": True})
         if self.path != "/call":
             return self._reply({"ok": False, "error": "no such path"}, 404)
+        called = str(ask.get("module")) + "." + str(ask.get("callable"))
         try:
             target = resolve(ask)
             args = dict(ask.get("args") or {})
+            note("call  " + called + " " + brief(args))
             if ask.get("first_arg"):
                 value = target(HELD["state"], **args)
             else:
                 value = target(**args)
+            note("  ok  " + brief(value))
             self._reply({"ok": True, "result": value})
         except Exception as raised:
+            import traceback
+
+            note("  raised " + type(raised).__name__ + ": " + str(raised))
+            # The whole traceback, because the one line above is rarely enough to see why a
+            # tool inside somebody else's package fell over.
+            note(traceback.format_exc())
             # The tool refusing is an answer; the sandbox breaking is not. Both come back, and
             # the caller decides which it is from `raised`.
             self._reply({"ok": False, "raised": True,
@@ -288,7 +318,7 @@ def stand_up(
     _docker(
         "exec", "--detach", "--env", "PYTHONPATH=/agent:/agent/src", container, "sh", "-c",
         f'if [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; else P=python; fi; '
-        f'exec "$P" {SERVER_AT}',
+        f'exec "$P" {SERVER_AT} >> {LOG_AT} 2>&1',
     )
     _await(container)
     return container
@@ -371,11 +401,30 @@ def call(
     if answer.get("ok"):
         return answer.get("result")
     if answer.get("raised"):
+        # The agent's tool raised. Its behaviour, and the traceback is in the container's log
+        # for whoever wants to see where inside its package it went.
         raise ToolRefused(str(answer.get("error")))
-    raise SandboxError(str(answer.get("error") or "the call failed with no reason given"))
+    raise SandboxError(
+        str(answer.get("error") or "the call failed with no reason given") + recent(container)
+    )
 
 
 def tear_down(session: str) -> None:
     """Remove what this session started. Safe when it started nothing."""
     _docker("rm", "--force", f"alk-agent-{session}".lower(), check=False)
     _docker("network", "rm", f"alk-net-{session}", check=False)
+
+
+def recent(container: str, lines: int = 12) -> str:
+    """What the container last said, appended to a failure that came out of it.
+
+    A sandbox error read as "could not run X" and nothing else, while the reason sat in a log
+    nobody was looking at. Carrying it into the error is the difference between a failure that
+    can be acted on and one that has to be reproduced first.
+    """
+    # Not `docker logs`: that shows PID 1, and the server is exec'd alongside it, so its
+    # output never appears there. It writes to a file inside the container instead.
+    _, said = _docker(
+        "exec", container, "sh", "-c", f"tail -n {lines} {LOG_AT} 2>/dev/null", check=False
+    )
+    return f"\n\nwhat the container last said:\n{said}" if said.strip() else ""
