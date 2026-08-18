@@ -70,6 +70,16 @@ def register_extension(point: str, record: Mapping[str, Any]) -> dict:
 
 
 def register_environment(record: Mapping[str, Any]) -> dict:
+    """Register a descriptive environment **metadata record** (studio extension).
+
+    Canon correspondence (assessment §8 Gap B): the runtime sibling
+    ``fi.simulate.registry.register_environment`` registers a **runnable** plugin
+    factory in ``environment_registry``. This one records metadata (and, for a
+    ``world.kind`` extension carrying a ``kind_token``, writes the contract's
+    extension side-table via ``contract.register_world_kind`` — the frozen canon
+    constants never mutate). A record is not a factory — the two are deliberately
+    unwired.
+    """
     return register_extension("environment", record)
 
 

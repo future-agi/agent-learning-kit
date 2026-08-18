@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from fi.alk import actions, configure, current_config, get_api_key
+from fi.alk.config import AgentLearningConfig
 from fi.alk._facade import optional_module
 from fi.alk.cli import main
 from fi.simulate.manifest import ManifestError
@@ -35,6 +36,26 @@ def _nested_keys(value):
             keys.update(_nested_keys(item))
         return keys
     return set()
+
+
+def test_platform_config_prefers_fi_environment_names():
+    config = AgentLearningConfig.from_env(
+        {
+            "FI_API_KEY": "fi-key",
+            "FI_SECRET_KEY": "fi-secret",
+            "FI_BASE_URL": "https://fi.example",
+            "FUTURE_AGI_API_KEY": "future-key",
+            "FUTURE_AGI_SECRET_KEY": "future-secret",
+            "FUTURE_AGI_API_URL": "https://future.example",
+            "AGENT_LEARNING_API_KEY": "agent-learning-key",
+            "AGENT_LEARNING_SECRET_KEY": "agent-learning-secret",
+            "AGENT_LEARNING_API_URL": "https://agent-learning.example",
+        }
+    )
+
+    assert config.api_key == "fi-key"
+    assert config.secret_key == "fi-secret"
+    assert config.api_url == "https://fi.example"
 
 
 def test_configure_sets_unified_key_environment(monkeypatch):
@@ -16813,10 +16834,10 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
         "public_cli": "agent-learn",
         "public_console_scripts": ["agent-learn"],
         "new_development_home": True,
-        "shared_key_env": "AGENT_LEARNING_API_KEY",
-        "shared_secret_env": "AGENT_LEARNING_SECRET_KEY",
-        "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
-        "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
+        "shared_key_env": "FI_API_KEY",
+        "shared_secret_env": "FI_SECRET_KEY",
+        "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "AGENT_LEARNING_API_KEY"],
+        "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "AGENT_LEARNING_SECRET_KEY"],
         "legacy_public_commands_allowed": False,
         "rejected_legacy_console_scripts": [
             "agent-simulate",
@@ -16857,7 +16878,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
             {
                 "id": "single_public_api_key",
                 "status": "passed",
-                "claim": "AGENT_LEARNING_API_KEY is the shared public key surface.",
+                "claim": "FI_API_KEY is the shared public key surface.",
                 "evidence": "legacy key names are aliases, not new SDK contracts.",
             },
             {

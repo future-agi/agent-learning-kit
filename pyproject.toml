@@ -61,7 +61,12 @@ dependencies = [
 simulate = []
 evaluation = []
 optimize = []
-livekit = ["livekit-agents[openai,silero]>=1.2"]
+livekit = [
+  "aiohttp>=3.10",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
+  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.2",
+  "livekit-plugins-elevenlabs>=1.2",
+]
 langchain = [
   "langchain-core>=1.4.6,<2",            # verified latest stable on PyPI 2026-06-11
   "langgraph>=1.2.4,<2",                 # verified latest stable on PyPI 2026-06-11
@@ -83,12 +88,22 @@ a2a = [
 nli = ["transformers>=5.2.0,<6", "torch>=2.10.0,<3"]
 embeddings = ["sentence-transformers>=5.2.3,<6"]
 feedback = ["chromadb>=0.4.0"]
+notebook = [
+  "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb
+  "nbformat>=5",
+]
 trinity = [
-  "livekit-agents[openai,silero]>=1.2",
+  "aiohttp>=3.10",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
+  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.2",
+  "livekit-plugins-elevenlabs>=1.2",
 ]
 all = [
+  "aiohttp>=3.10",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
   "chromadb>=0.4.0",
-  "livekit-agents[openai,silero]>=1.2",
+  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.2",
+  "livekit-plugins-elevenlabs>=1.2",
   "sentence-transformers>=5.2.3,<6",
   "torch>=2.10.0,<3",
   "transformers>=5.2.0,<6",

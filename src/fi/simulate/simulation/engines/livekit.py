@@ -1,106 +1,299 @@
+from __future__ import annotations
 
-from typing import AsyncIterable, Optional
 import asyncio
+import json
+import logging
 import os
-import contextlib
-import wave
-import numpy as np
+import re
+from dataclasses import dataclass, field
+from urllib.parse import urlsplit
+from pathlib import Path
+from collections.abc import Awaitable, Callable
+from typing import Any, AsyncIterable
+from uuid import uuid4
+
 try:
-    from livekit.agents import Agent, AgentSession, function_tool
-    from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
-    from livekit.plugins import openai, silero
-    from livekit import rtc
-    from livekit.api import AccessToken, VideoGrants
+    from livekit import api, rtc
+    from livekit.agents import Agent, AgentSession, RunContext, function_tool, metrics
+    from livekit.agents.types import (
+        ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+        TOPIC_TRANSCRIPTION,
+    )
     from livekit.agents.voice import ModelSettings
     from livekit.agents.voice.io import TimedString
-except ImportError as e:
+    from livekit.agents.voice.room_io import AudioInputOptions, RoomOptions
+    from livekit.api import AccessToken, VideoGrants
+    from livekit.plugins import silero
+    from livekit.protocol.sip import (
+        CreateSIPDispatchRuleRequest,
+        DeleteSIPDispatchRuleRequest,
+        ListSIPDispatchRuleRequest,
+        SIPDispatchRule,
+        SIPDispatchRuleDirect,
+    )
+except ImportError as exc:
     raise ImportError(
-        "LiveKit SDK is not installed (or incompatible version). "
-        "Install it to use LiveKit/local mode."
-    ) from e
+        "LiveKit mode requires the 'livekit' optional dependency"
+    ) from exc
 
-from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
-from fi.simulate.simulation.models import Scenario, Persona, TestReport, TestCaseResult
-from fi.simulate.simulation.generator import ScenarioGenerator
-from fi.simulate.recording.room_recorder import RoomRecorder
+from datetime import datetime, timezone
+
+from fi.simulate._logging import redacted_exc_info
+from fi.simulate.agent.definition import (
+    AgentDefinition,
+    LiveKitSimulatorRuntime,
+    LLMConfig,
+    ProviderEvidenceConfig,
+    RetellTargetConfig,
+    SimulatorAgentDefinition,
+    STTConfig,
+    TelephonyTransport,
+    TTSConfig,
+    VapiTargetConfig,
+    VoiceProviderTarget,
+)
+from fi.simulate.artifacts.manifest import ArtifactManifestEntry
+from fi.simulate.evidence.base import EvidenceSourceSummary
+from fi.simulate.evidence.providers import (
+    EvidenceContext,
+    ProviderConfigError,
+    ProviderFetchResult,
+    RetellEvidenceSource,
+    VapiEvidenceSource,
+)
+from fi.simulate.endpoints.vapi import VapiCallOriginator
+from fi.simulate.simulation.bridge import LiveKitAudioBridge
+from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
+from fi.simulate.recording.room_recorder import (
+    RoomRecorder,
+    mix_recordings,
+    mix_recordings_stereo,
+)
+from fi.simulate.runtime import (
+    FailureStage,
+    SimulationFailure,
+    TestCaseStatus,
+    derive_test_case_id,
+    new_run_id,
+)
 from fi.simulate.simulation.engines.base import BaseEngine
+from fi.simulate.simulation.generator import ScenarioGenerator
+from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
+from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_prompt
+
+logger = logging.getLogger(__name__)
+_SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
+# On conversation end, wait up to this long for the party still finishing its
+# own turn to commit it (a LiveKit turn lands in history only after its TTS
+# finishes playing), then delete the room so neither side keeps talking into a
+# call the other has already left.
+_FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class _TargetParticipant:
+    identity: str
+    sid: str
+    audio_track_sid: str
+    attributes: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class _CaseOutcome:
+    status: TestCaseStatus
+    transcript: str = ""
+    messages: list[dict[str, str]] = field(default_factory=list)
+    failure: SimulationFailure | None = None
+    audio_input_path: str | None = None
+    audio_output_path: str | None = None
+    audio_combined_path: str | None = None
+    audio_stereo_path: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+    evidence: list[EvidenceSourceSummary] = field(default_factory=list)
+    provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
+
+
+def _dispatch_metadata_json(agent_definition) -> str:
+    """Metadata for the target agent's LiveKit dispatch.
+
+    EMPTY by default: a target agent built from a LiveKit template branches on
+    ``ctx.job.metadata`` and treats any non-empty payload as an outbound/no-greet
+    job, so it never publishes an audio track and readiness times out
+    (``agent_unavailable``). Only a target explicitly built to consume dispatch
+    metadata sets ``agent_definition.dispatch_metadata``.
+    """
+    meta = getattr(agent_definition, "dispatch_metadata", None)
+    return json.dumps(meta, sort_keys=True) if meta else ""
+
+
+def _resolve_target_profile(kind: str):
+    """Look up the target adapter's profile — the factory that replaced the
+    engine's ``transport.kind`` branching. Unknown kinds fail loudly, which is
+    what makes it safe to open ``TelephonyTransport.kind`` from a Literal to a
+    free string later."""
+    from fi.simulate.endpoints.profiles import get_profile
+
+    profile = get_profile(kind)
+    if profile is None:
+        raise ValueError(f"unsupported_transport_kind: {kind}")
+    return profile
+
+
+def _simulator_turn_handling(
+    *,
+    vad: object | None,
+    allow_interruptions: bool | None = None,
+    min_endpointing_delay: float | None = None,
+    max_endpointing_delay: float | None = None,
+) -> dict[str, object]:
+    return {
+        "turn_detection": "vad" if vad is not None else "stt",
+        "endpointing": {
+            "mode": "fixed",
+            "min_delay": min_endpointing_delay or 0.4,
+            "max_delay": max_endpointing_delay or 2.2,
+        },
+        "interruption": {
+            "enabled": (True if allow_interruptions is None else allow_interruptions),
+            "discard_audio_if_uninterruptible": True,
+            "min_duration": 0.3,
+        },
+        "preemptive_generation": {"enabled": True},
+    }
+
 
 class _TestRunnerAgent(Agent):
-    """
-    An agent used by the TestRunner to simulate a customer.
-    """
-    def __init__(self, persona: Persona, **kwargs):
+    def __init__(
+        self,
+        persona: Persona,
+        *,
+        min_turn_messages: int = 0,
+        **kwargs,
+    ):
+        turn_handling = kwargs.setdefault(
+            "turn_handling",
+            _simulator_turn_handling(vad=kwargs.get("vad")),
+        )
         super().__init__(**kwargs)
         self._persona = persona
-        self._session_future = asyncio.Future()
+        self._min_turn_messages = min_turn_messages
+        self._session_turn_handling = turn_handling
+        self._session: AgentSession | None = None
+        self._end_requested = asyncio.Event()
+        self._end_speech_handle: Any | None = None
+        self._usage_collector = metrics.ModelUsageCollector()
 
-    @function_tool()
-    async def end_call(self) -> None:
-        # Simulated customer ends the call when satisfied
-        self.session.say("Thanks, that's all. Goodbye.")
-        await asyncio.sleep(0.2)
-        self.session.shutdown()
+    @function_tool(
+        name="endCall",
+        description=(
+            "End the conversation after you have said one natural closing sentence. "
+            "Use this immediately when the caller says goodbye or the objective is done."
+        ),
+    )
+    async def end_call(self, ctx: RunContext) -> str:
+        if self._session is None:
+            return "Continue the conversation before ending the call."
+        messages = _session_messages(self._session)
+        if len(messages) < self._min_turn_messages or not _has_role_alternation(
+            messages
+        ):
+            return (
+                "Continue the conversation until both speakers have participated "
+                f"and at least {self._min_turn_messages} messages are complete."
+            )
+        # The tool runs inside the same SpeechHandle that carries the model's
+        # natural closing sentence. Remember that exact handle before waking
+        # the outer runner so it cannot snapshot history in the brief interval
+        # before TTS starts and ``session.current_speech`` becomes non-None.
+        self._end_speech_handle = ctx.speech_handle
+        self._end_requested.set()
+        return "Conversation ended."
 
-    async def run(self, room: rtc.Room):
-        # Coalesce None simulator values to safe defaults
-        _min_ep = getattr(self, "min_endpointing_delay", None)
-        _max_ep = getattr(self, "max_endpointing_delay", None)
+    async def wait_for_end_speech(self) -> None:
+        if self._end_speech_handle is not None:
+            await self._end_speech_handle
 
+    @property
+    def started_session(self) -> AgentSession | None:
+        return self._session
+
+    @property
+    def end_requested(self) -> asyncio.Event:
+        return self._end_requested
+
+    @property
+    def model_usage(self) -> list[dict[str, object]]:
+        return [
+            usage.model_dump(mode="json")
+            for usage in sorted(
+                self._usage_collector.flatten(),
+                key=lambda usage: (usage.type, usage.provider, usage.model),
+            )
+        ]
+
+    async def start_session(
+        self,
+        room: rtc.Room,
+        *,
+        participant_kinds: list | None = None,
+        participant_identity: str | None = None,
+    ) -> AgentSession:
         session = AgentSession(
             stt=self.stt,
             llm=self.llm,
             tts=self.tts,
-            vad=None,
-            allow_interruptions=True,
-            # Stable endpointing delays
-            min_endpointing_delay=(_min_ep if _min_ep is not None else 0.4),
-            max_endpointing_delay=(_max_ep if _max_ep is not None else 2.2),
-            # Use STT-based turn detection for stability
-            turn_detection=getattr(self, "turn_detection", "stt"),
-            preemptive_generation=False,
-            discard_audio_if_uninterruptible=True,
-            min_interruption_duration=0.3,
+            vad=self.vad,
+            turn_handling=self._session_turn_handling,
         )
-        self._session_future.set_result(session)
+        self._session = session
+        session.on(
+            "metrics_collected",
+            lambda event: self._usage_collector.collect(event.metrics),
+        )
+        default_kinds = [
+            rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            getattr(
+                rtc.ParticipantKind,
+                "PARTICIPANT_KIND_AGENT",
+                rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            ),
+            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        ]
+        room_kwargs: dict = {
+            "audio_input": AudioInputOptions(
+                pre_connect_audio=False,
+                pre_connect_audio_timeout=3.0,
+            ),
+            # Enabled to build RoomIO's TranscriptSynchronizer, which aligns the
+            # spoken transcript to audio playback. On an interruption the
+            # recorded turn is then truncated to what was actually said instead
+            # of the full LLM text (playback-timing estimate — works with any
+            # TTS, unlike use_tts_aligned_transcript which needs word timing our
+            # Deepgram/Gemini voices don't emit and would drop the turn). The
+            # simulator's transcription is published to the room as a harmless
+            # side effect (our target-transcription handler filters by identity).
+            "text_output": True,
+            "close_on_disconnect": False,
+            "delete_room_on_close": False,
+            "participant_kinds": participant_kinds or default_kinds,
+        }
+        if participant_identity:
+            room_kwargs["participant_identity"] = participant_identity
         await session.start(
             self,
             room=room,
-            room_input_options=RoomInputOptions(
-                delete_room_on_close=False,
-                participant_kinds=[
-                    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-                    getattr(rtc.ParticipantKind, "PARTICIPANT_KIND_AGENT", rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD),
-                ],
-                pre_connect_audio=True,
-                pre_connect_audio_timeout=3.0,
-            ),
-            room_output_options=RoomOutputOptions(transcription_enabled=False),
+            room_options=RoomOptions(**room_kwargs),
         )
-        try:
-            # Give I/O a brief moment to publish tracks before first TTS
-            import asyncio as _asyncio
-            await _asyncio.sleep(0.6)
-            name = str(self._persona.persona.get("name", "customer"))
-        except Exception:
-            name = "customer"
-        situation = self._persona.situation or ""
-        opener = f"Hi, I'm {name}. {situation}".strip()
-        print(f"Opener: {opener}")
-        if opener:
-            session.say(opener)
-        # Reinforce numeric endpointing on the live session
-        try:
-            session.update_options(
-                min_endpointing_delay=(_min_ep if _min_ep is not None else 0.4),
-                max_endpointing_delay=(_max_ep if _max_ep is not None else 2.2),
-            )
-        except Exception:
-            pass
+        return session
 
-    async def get_session(self) -> AgentSession:
-        return await self._session_future
-
-    # Use default stt_node; session-level endpointing is configured in AgentSession
+    def open_conversation(self) -> None:
+        if self._session is None:
+            raise RuntimeError("simulator_session_not_started")
+        initial_message = self._persona.persona.get("initial_message")
+        if isinstance(initial_message, str) and initial_message.strip():
+            self._session.say(initial_message.strip())
+            return
+        self._session.generate_reply()
 
     async def transcription_node(
         self,
@@ -108,23 +301,20 @@ class _TestRunnerAgent(Agent):
         model_settings: ModelSettings,
     ):
         async for chunk in text:
-            if isinstance(chunk, TimedString):
-                print(f"ASR: '{chunk}' ({getattr(chunk, 'start_time', None)} - {getattr(chunk, 'end_time', None)})")
-            else:
-                print(f"LLM: {chunk}")
+            logger.debug(
+                "Simulator transcription chunk",
+                extra={"timed": isinstance(chunk, TimedString)},
+            )
             yield chunk
 
-class LiveKitEngine(BaseEngine):
-    """
-    Execution engine that uses LiveKit to connect a simulated customer agent
-    to a deployed voice agent.
-    """
 
+class LiveKitEngine(BaseEngine):
     async def run(
         self,
-        agent_definition: Optional[AgentDefinition] = None,
-        scenario: Optional[Scenario] = None,
-        simulator: Optional[SimulatorAgentDefinition] = None,
+        agent_definition: AgentDefinition | None = None,
+        livekit_runtime: LiveKitSimulatorRuntime | None = None,
+        scenario: Scenario | None = None,
+        simulator: SimulatorAgentDefinition | None = None,
         num_scenarios: int = 1,
         topic: str | None = None,
         record_audio: bool = False,
@@ -132,344 +322,2181 @@ class LiveKitEngine(BaseEngine):
         recorder_join_delay: float = 0.2,
         min_turn_messages: int = 8,
         max_seconds: float = 45.0,
-        **kwargs
+        connect_timeout: float = 15.0,
+        readiness_timeout: float = 30.0,
+        cleanup_timeout: float = 30.0,
+        conversation_direction: str = "simulator_first",
+        agent_first_silence_timeout_seconds: float = 30.0,
+        recording_root: str | Path = "recordings",
+        recording_case_directory: str | Path | None = None,
+        run_id: str | None = None,
+        max_concurrency: int = 1,
+        on_case_complete: Callable[[int, TestCaseResult], Awaitable[None]]
+        | None = None,
+        on_case_start: Callable[[int], Awaitable[None]] | None = None,
+        **kwargs,
     ) -> TestReport:
         if agent_definition is None:
-            raise ValueError("LiveKitEngine requires 'agent_definition' to be provided.")
-
-        # If no scenario provided, generate personas using generator
+            raise ValueError("LiveKitEngine requires 'agent_definition'.")
+        runtime = _resolve_livekit_runtime(agent_definition, livekit_runtime)
+        if conversation_direction not in {"simulator_first", "agent_first"}:
+            raise ValueError(
+                "conversation_direction must be simulator_first or agent_first"
+            )
+        if agent_first_silence_timeout_seconds <= 0:
+            raise ValueError("agent_first_silence_timeout_seconds must be positive")
         if scenario is None:
-            gen = ScenarioGenerator(agent_definition)
-            # Build a simple topic from provided context if none given
-            if topic is None:
-                agent_ctx = agent_definition.system_prompt
-                sim_ctx = simulator.instructions if simulator and simulator.instructions else ""
-                topic = (sim_ctx or agent_ctx or "customer support scenarios").strip()
-            personas = await gen.generate(topic=topic, num_personas=num_scenarios)
-            scenario = Scenario(name="Generated Scenario", dataset=personas)
-
-        report = TestReport()
-        for persona in scenario.dataset:
-            print(f"Running test case for persona: {persona.persona.get('name', 'Unknown')}")
-            
-            transcript, audio_in, audio_out, audio_combined = await self._run_single_test_case(
+            generator = ScenarioGenerator(
                 agent_definition,
-                persona,
-                simulator,
-                record_audio=record_audio,
-                recorder_sample_rate=recorder_sample_rate,
-                recorder_join_delay=recorder_join_delay,
-                min_turn_messages=min_turn_messages,
-                max_seconds=max_seconds,
+                llm_config=(
+                    simulator.llm
+                    if simulator is not None
+                    else _default_simulator_llm_config()
+                ),
             )
-            
-            report.results.append(
-                TestCaseResult(
-                    persona=persona,
-                    transcript=transcript,
-                    audio_input_path=audio_in,
-                    audio_output_path=audio_out,
-                    audio_combined_path=audio_combined,
+            if topic is None:
+                simulator_context = (
+                    simulator.instructions
+                    if simulator and simulator.instructions
+                    else ""
                 )
+                topic = (
+                    simulator_context
+                    or agent_definition.system_prompt
+                    or "customer support scenarios"
+                ).strip()
+            personas = await generator.generate(
+                topic=topic,
+                num_personas=num_scenarios,
             )
-            
+            scenario = Scenario(name="Generated Scenario", dataset=personas)
+        if runtime.room_name_verbatim and len(scenario.dataset) != 1:
+            raise ValueError("room_name_verbatim requires a single-persona scenario")
+        if (
+            runtime.room_mode == "external"
+            and len(scenario.dataset) > 1
+            and not _has_room_template(runtime.room_name)
+        ):
+            raise ValueError(
+                "external_room_template_required: concurrent-safe multi-case runs "
+                "need {run_id}, {test_case_id}, or {index} in room_name"
+            )
+        transport = agent_definition.transport or TelephonyTransport()
+        profile = _resolve_target_profile(transport.kind)
+        if not profile.uses_external_room and runtime.room_mode != "managed":
+            raise ValueError("managed_transport_requires_managed_room")
+        if (
+            profile.receives_inbound_call
+            and len(scenario.dataset) > 1
+            and not _has_room_template(runtime.room_name)
+        ):
+            raise ValueError(
+                "sip_inbound_room_template_required: multi-case inbound runs "
+                "need {run_id} or {test_case_id} in room_name"
+            )
+        current_run_id = run_id or new_run_id()
+        if recording_case_directory is not None and len(scenario.dataset) != 1:
+            raise ValueError(
+                "recording_case_directory requires a single-persona scenario"
+            )
+        invocation_id = uuid4().hex[:12]
+        report = TestReport()
+
+        # Cases run concurrently up to ``max_concurrency`` (bounded by the
+        # customer agent's own session capacity). SIP legs stay serial: a run
+        # leases a single DID, so overlapping calls would collide. Ask the
+        # resolved profile rather than re-branching on ``transport.kind``.
+        case_concurrency = (
+            1
+            if profile.is_sip
+            else max(1, min(int(max_concurrency or 1), len(scenario.dataset)))
+        )
+        case_semaphore = asyncio.Semaphore(case_concurrency)
+
+        async def _run_case(index: int, persona: Persona) -> TestCaseResult:
+            async with case_semaphore:
+                # Mark this case's row ONGOING the moment it claims a concurrency
+                # slot — cases still queued behind the semaphore stay PENDING.
+                # Best-effort and engine-agnostic; a failed ping never fails the
+                # case (the backend gates the update on PENDING).
+                if on_case_start is not None:
+                    try:
+                        await on_case_start(index)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(
+                            "voice case start callback failed",
+                            exc_info=redacted_exc_info(exc),
+                            extra={
+                                "run_id": current_run_id,
+                                "case_index": index,
+                            },
+                        )
+                persona_ref = persona.version or persona.content_hash()
+                test_case_id = derive_test_case_id(
+                    current_run_id,
+                    persona_ref,
+                    index,
+                )
+                room_name = _resolve_room_name(
+                    runtime,
+                    run_id=current_run_id,
+                    test_case_id=test_case_id,
+                    index=index,
+                    invocation_id=invocation_id,
+                )
+                case_directory = (
+                    Path(recording_case_directory)
+                    if recording_case_directory is not None
+                    else Path(recording_root) / current_run_id / test_case_id
+                )
+                try:
+                    outcome = await self._run_single_test_case(
+                        agent_definition,
+                        runtime,
+                        persona,
+                        simulator,
+                        run_id=current_run_id,
+                        test_case_id=test_case_id,
+                        invocation_id=invocation_id,
+                        room_name=room_name,
+                        case_directory=case_directory,
+                        record_audio=record_audio,
+                        recorder_sample_rate=recorder_sample_rate,
+                        recorder_join_delay=recorder_join_delay,
+                        min_turn_messages=min_turn_messages,
+                        max_seconds=max_seconds,
+                        connect_timeout=connect_timeout,
+                        readiness_timeout=readiness_timeout,
+                        cleanup_timeout=cleanup_timeout,
+                        conversation_direction=conversation_direction,
+                        agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    # One case crashing must neither sink the batch nor leave a
+                    # hole that shifts the positional result-to-CallExecution
+                    # mapping — emit a dense failed case in its slot.
+                    logger.error(
+                        "voice case crashed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": current_run_id,
+                            "test_case_id": test_case_id,
+                        },
+                    )
+                    failure = SimulationFailure(
+                        stage=FailureStage.RUNNING,
+                        code="case_execution_error",
+                        message=f"{type(exc).__name__}: {exc}",
+                        retryable=False,
+                    )
+                    result = TestCaseResult(
+                        persona=persona,
+                        transcript="",
+                        messages=[],
+                        metadata={
+                            "engine": "livekit",
+                            "run_id": current_run_id,
+                            "test_case_id": test_case_id,
+                            "invocation_id": invocation_id,
+                            "status": TestCaseStatus.FAILED.value,
+                            "room_name": room_name,
+                            "room_mode": runtime.room_mode,
+                            "failure": failure.model_dump(
+                                mode="json", exclude_none=True
+                            ),
+                        },
+                    )
+                else:
+                    metadata = {
+                        "engine": "livekit",
+                        "run_id": current_run_id,
+                        "test_case_id": test_case_id,
+                        "invocation_id": invocation_id,
+                        "status": outcome.status.value,
+                        "room_name": room_name,
+                        "room_mode": runtime.room_mode,
+                        **outcome.metadata,
+                    }
+                    if outcome.failure is not None:
+                        metadata["failure"] = outcome.failure.model_dump(
+                            mode="json",
+                            exclude_none=True,
+                        )
+                    if outcome.evidence:
+                        metadata["evidence"] = [
+                            item.model_dump(mode="json", exclude_none=True)
+                            for item in outcome.evidence
+                        ]
+                    if outcome.provider_artifacts:
+                        metadata["provider_artifacts"] = [
+                            entry.model_dump(mode="json", exclude_none=True)
+                            for entry in outcome.provider_artifacts
+                        ]
+                    result = TestCaseResult(
+                        persona=persona,
+                        transcript=outcome.transcript,
+                        messages=outcome.messages,
+                        metadata=metadata,
+                        audio_input_path=outcome.audio_input_path,
+                        audio_output_path=outcome.audio_output_path,
+                        audio_combined_path=outcome.audio_combined_path,
+                        audio_stereo_path=outcome.audio_stereo_path,
+                    )
+
+            # Stream the finished case AFTER releasing the semaphore — a slow
+            # result PATCH (recording upload) must not hold a concurrency slot.
+            # A streaming error never fails the case; finalize reconciles it.
+            if on_case_complete is not None:
+                try:
+                    await on_case_complete(index, result)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "voice case stream callback failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": current_run_id,
+                            "test_case_id": test_case_id,
+                        },
+                    )
+            return result
+
+        # ``gather`` preserves argument order regardless of completion order, so
+        # ``report.results`` stays in dataset order — the positional contract the
+        # FutureAGI sink relies on to map results to pre-allocated CallExecutions.
+        results = await asyncio.gather(
+            *(
+                _run_case(index, persona)
+                for index, persona in enumerate(scenario.dataset)
+            )
+        )
+        report.results.extend(results)
         return report
 
     async def _run_single_test_case(
         self,
         agent_definition: AgentDefinition,
+        runtime: LiveKitSimulatorRuntime,
         persona: Persona,
         simulator: SimulatorAgentDefinition | None,
         *,
-        record_audio: bool = False,
-        recorder_sample_rate: int = 8000,
-        recorder_join_delay: float = 0.2,
-        min_turn_messages: int = 8,
-        max_seconds: float = 45.0,
-    ) -> tuple[str, str | None, str | None, str | None]:
-        livekit_api_key = os.environ.get("LIVEKIT_API_KEY")
-        livekit_api_secret = os.environ.get("LIVEKIT_API_SECRET")
+        run_id: str,
+        test_case_id: str,
+        invocation_id: str,
+        room_name: str,
+        case_directory: Path,
+        record_audio: bool,
+        recorder_sample_rate: int,
+        recorder_join_delay: float,
+        min_turn_messages: int,
+        max_seconds: float,
+        connect_timeout: float,
+        readiness_timeout: float,
+        cleanup_timeout: float,
+        conversation_direction: str,
+        agent_first_silence_timeout_seconds: float,
+    ) -> _CaseOutcome:
+        api_key = os.environ.get(runtime.api_key_env)
+        api_secret = os.environ.get(runtime.api_secret_env)
+        if not api_key or not api_secret:
+            return _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.PREPARING,
+                "livekit_credentials_missing",
+                f"{runtime.api_key_env} and {runtime.api_secret_env} are required",
+            )
+        simulator_identity = f"fagi-simulator-{test_case_id[-12:]}"
+        recorder_identity = f"fagi-recorder-{test_case_id[-12:]}"
+        room = rtc.Room()
+        models: LiveKitModels | None = None
+        recorder: RoomRecorder | None = None
+        customer_agent: _TestRunnerAgent | None = None
+        session: AgentSession | None = None
+        api_client: api.LiveKitAPI | None = None
+        target: _TargetParticipant | None = None
+        target_transcription_mode = False
+        target_transcription_handler_registered = False
+        target_transcription_tasks: set[asyncio.Task[None]] = set()
+        # Set the moment the conversation ends. A target transcription stream
+        # still in flight at that point is the target's final utterance; it must
+        # be recorded into the transcript, but WITHOUT triggering another
+        # simulator reply (the call is over).
+        conversation_ended = asyncio.Event()
+        # Every target utterance, captured straight off its transcription stream
+        # independently of the simulator session. Once the session starts
+        # draining it rejects new input ("speech scheduling is paused"), so a
+        # target closing delivered after the simulator is done never reaches the
+        # chat context. These are merged into the report so the trailing target
+        # turn is never lost.
+        captured_target_turns: list[str] = []
+        # agent_first (target greets first): the target can publish its greeting
+        # transcription before the main handler is registered post-readiness, and
+        # the LiveKit client DROPS a text-stream header that arrives with no
+        # handler. So for managed external-room agent_first we register an early
+        # buffer handler right after connect, defer the target dispatch until the
+        # buffer is live, and drain the buffered streams through the (unchanged,
+        # unconditional) main handler once the target is selected.
+        pending_target_transcriptions: list[tuple["rtc.TextStreamReader", str]] = []
+        target_dispatch_deferred = False
+        _MAX_BUFFERED_TARGET_STREAMS = 16
+        managed_room_owned = runtime.room_mode == "managed"
+        room_connected = False
+        cleanup_errors: list[str] = []
+        outcome: _CaseOutcome | None = None
+        sip_dispatch_rule_id: str | None = None
+        sip_dispatch_rule_created = False
+        vapi_originator: VapiCallOriginator | None = None
+        provider_call_id: str | None = None
+        provider_termination_source: str | None = None
+        audio_bridge: LiveKitAudioBridge | None = None
+        bridge_task: asyncio.Task[None] | None = None
+        case_started_at = datetime.now(timezone.utc)
+        transport = agent_definition.transport or TelephonyTransport()
+        profile = _resolve_target_profile(transport.kind)
+        provider_target = agent_definition.target
+        effective_target_identity = agent_definition.target_participant_identity
+        effective_readiness_timeout = (
+            transport.readiness_timeout_seconds
+            if profile.receives_inbound_call
+            and transport.readiness_timeout_seconds is not None
+            else readiness_timeout
+        )
+        sip_answer_timeout = transport.answer_timeout_seconds or max(
+            connect_timeout, 60.0
+        )
 
-        if not all([livekit_api_key, livekit_api_secret]):
-            raise ValueError("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set.")
+        def buffer_target_transcription(
+            reader: "rtc.TextStreamReader",
+            participant_identity: str,
+        ) -> None:
+            # Early (pre-readiness) handler for managed external-room agent_first.
+            # ``target.audio_track_sid`` isn't known yet, so attribute by the same
+            # exclusion ``_wait_for_target_audio`` uses — anything that is not the
+            # simulator or recorder is target-worthy. The main handler re-applies
+            # the strict track/identity filter when draining, so over-buffering is
+            # safe.
+            nonlocal target_transcription_mode
+            pid = str(participant_identity)
+            if pid in (simulator_identity, recorder_identity):
+                return
+            if len(pending_target_transcriptions) >= _MAX_BUFFERED_TARGET_STREAMS:
+                logger.warning(
+                    "target_transcription_buffer_full: dropping stream (buffered=%d)",
+                    len(pending_target_transcriptions),
+                )
+                return
+            pending_target_transcriptions.append((reader, pid))
+            # Kill the duplicate-response race at the source: the target is
+            # speaking, so disable the simulator's STT now — otherwise STT would
+            # also transcribe the greeting and emit a second, duplicate reply.
+            # Dispatch is deferred until after ``session.start()``, so a buffered
+            # stream implies a live session.
+            if not target_transcription_mode and session is not None:
+                session.input.set_audio_enabled(False)
+                session.clear_user_turn()
+                target_transcription_mode = True
 
-        customer_room = rtc.Room()
-        
         try:
+            if managed_room_owned:
+                api_client = api.LiveKitAPI(
+                    _api_url(str(runtime.url)),
+                    api_key,
+                    api_secret,
+                )
+                if not profile.places_outbound_call:
+                    try:
+                        await asyncio.wait_for(
+                            api_client.room.create_room(
+                                api.CreateRoomRequest(name=room_name)
+                            ),
+                            timeout=connect_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        outcome = _failure_outcome(
+                            TestCaseStatus.TIMED_OUT,
+                            FailureStage.PREPARING,
+                            "livekit_room_create_timeout",
+                            "LiveKit room creation exceeded its deadline",
+                            retryable=True,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "LiveKit room creation failed",
+                            exc_info=redacted_exc_info(exc),
+                            extra={
+                                "run_id": run_id,
+                                "test_case_id": test_case_id,
+                                "room_name": room_name,
+                            },
+                        )
+                        outcome = _failure_outcome(
+                            TestCaseStatus.FAILED,
+                            FailureStage.PREPARING,
+                            "livekit_room_create_failed",
+                            "Failed to create the LiveKit room",
+                            details=_safe_provider_error_details(
+                                exc, operation="room_create"
+                            ),
+                        )
+                if outcome is None and profile.uses_external_room:
+                    # agent_first: defer the target dispatch until AFTER the early
+                    # buffer handler is registered (post room.connect), so the
+                    # target's greeting transcription is never dropped for lack of
+                    # a handler. simulator_first dispatches now, unchanged.
+                    if conversation_direction == "agent_first":
+                        target_dispatch_deferred = True
+                    else:
+                        await asyncio.wait_for(
+                            api_client.agent_dispatch.create_dispatch(
+                                api.CreateAgentDispatchRequest(
+                                    agent_name=agent_definition.agent_name
+                                    or agent_definition.name,
+                                    room=room_name,
+                                    metadata=_dispatch_metadata_json(agent_definition),
+                                )
+                            ),
+                            timeout=connect_timeout,
+                        )
+                elif outcome is None and profile.receives_inbound_call:
+                    try:
+                        (
+                            sip_dispatch_rule_id,
+                            sip_dispatch_rule_created,
+                        ) = await asyncio.wait_for(
+                            _ensure_sip_inbound_dispatch(
+                                api_client,
+                                transport=transport,
+                                room_name=room_name,
+                            ),
+                            timeout=connect_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        outcome = _failure_outcome(
+                            TestCaseStatus.TIMED_OUT,
+                            FailureStage.PREPARING,
+                            "sip_inbound_dispatch_timeout",
+                            "SIP inbound dispatch provisioning exceeded its deadline",
+                            retryable=True,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "SIP inbound dispatch provisioning failed",
+                            exc_info=redacted_exc_info(exc),
+                            extra={
+                                "run_id": run_id,
+                                "test_case_id": test_case_id,
+                                "room_name": room_name,
+                            },
+                        )
+                        outcome = _failure_outcome(
+                            TestCaseStatus.FAILED,
+                            FailureStage.PREPARING,
+                            "sip_inbound_dispatch_failed",
+                            "Failed to provision SIP inbound dispatch",
+                            details=_safe_provider_error_details(
+                                exc, operation="sip_dispatch"
+                            ),
+                        )
+            if outcome is not None:
+                return outcome
             token = (
-                AccessToken(livekit_api_key, livekit_api_secret)
-                .with_identity(persona.persona.get("name", "customer"))
-                .with_grants(VideoGrants(room_join=True, room=agent_definition.room_name))
+                AccessToken(api_key, api_secret)
+                .with_identity(simulator_identity)
+                .with_grants(VideoGrants(room_join=True, room=room_name))
                 .to_jwt()
             )
-
-            # Join the simulator as an Agent participant so it shows as Agent
-            # in LiveKit and benefits from agent-specific behavior. Fall back if unsupported.
-            try:
-                opts = rtc.ConnectOptions()
-                # ParticipantKind may not exist on older SDKs
-                if hasattr(rtc, "ParticipantKind"):
-                    opts.participant_kind = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
-                await customer_room.connect(str(agent_definition.url), token, opts)
-            except Exception:
-                await customer_room.connect(str(agent_definition.url), token)
-            print(f"✓ Customer '{persona.persona.get('name')}' connected to room")
-            
-            customer_agent = self._create_customer_agent(persona, simulator)
-
-            # Optionally start a separate recorder participant to capture all audio
-            recorder: RoomRecorder | None = None
+            await asyncio.wait_for(
+                room.connect(str(runtime.url), token),
+                timeout=connect_timeout,
+            )
+            room_connected = True
+            if conversation_direction == "agent_first" and profile.uses_external_room:
+                # Buffer any target greeting that arrives before readiness; the
+                # LiveKit client drops a text-stream header with no handler.
+                room.register_text_stream_handler(
+                    TOPIC_TRANSCRIPTION, buffer_target_transcription
+                )
+                target_transcription_handler_registered = True
             if record_audio:
-                if livekit_api_key and livekit_api_secret:
-                    recorder = RoomRecorder(
-                        url=str(agent_definition.url),
-                        api_key=livekit_api_key,
-                        api_secret=livekit_api_secret,
-                        room_name=agent_definition.room_name,
-                        sample_rate=recorder_sample_rate,
-                        join_delay_s=recorder_join_delay,
+                recorder = RoomRecorder(
+                    url=str(runtime.url),
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    room_name=room_name,
+                    identity=recorder_identity,
+                    sample_rate=recorder_sample_rate,
+                    output_dir=case_directory / "audio",
+                    join_delay_s=recorder_join_delay,
+                )
+                await asyncio.wait_for(
+                    recorder.start(),
+                    timeout=connect_timeout,
+                )
+            customer_agent, models = await self._create_customer_agent(
+                persona,
+                simulator,
+                call_type=(
+                    "inbound"
+                    if conversation_direction == "simulator_first"
+                    else "outbound"
+                ),
+                agent_name=agent_definition.name,
+                min_turn_messages=min_turn_messages,
+            )
+            sip_participant_identity: str | None = None
+            bridge_identity: str | None = None
+            if profile.places_outbound_call:
+                identity_template = (
+                    transport.participant_identity
+                    or "sip-caller-{invocation_id}-{test_case_id}"
+                )
+                sip_participant_identity = identity_template.format(
+                    test_case_id=test_case_id,
+                    run_id=run_id,
+                    invocation_id=invocation_id,
+                )
+                if effective_target_identity is None:
+                    effective_target_identity = sip_participant_identity
+            elif profile.uses_web_audio_bridge:
+                bridge_identity = (
+                    f"fagi-{profile.bridge_provider}-bridge-{test_case_id[-12:]}"
+                )
+                effective_target_identity = bridge_identity
+            session_participant_kinds = None
+            session_participant_identity: str | None = None
+            if profile.joins_as_sip_participant:
+                session_participant_kinds = [rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
+                session_participant_identity = (
+                    effective_target_identity or sip_participant_identity
+                )
+            session = await asyncio.wait_for(
+                customer_agent.start_session(
+                    room,
+                    participant_kinds=session_participant_kinds,
+                    participant_identity=session_participant_identity,
+                ),
+                timeout=connect_timeout,
+            )
+            if target_dispatch_deferred:
+                # Session + early buffer handler are live; now dispatch the target
+                # so its greeting stream is captured, not dropped.
+                assert api_client is not None
+                await asyncio.wait_for(
+                    api_client.agent_dispatch.create_dispatch(
+                        api.CreateAgentDispatchRequest(
+                            agent_name=agent_definition.agent_name
+                            or agent_definition.name,
+                            room=room_name,
+                            metadata=_dispatch_metadata_json(agent_definition),
+                        )
+                    ),
+                    timeout=connect_timeout,
+                )
+            if profile.uses_web_audio_bridge:
+                try:
+                    connector = profile.build_connector(
+                        provider_target,
+                        conversation_direction=conversation_direction,
                     )
-                    # Join immediately to capture early utterances
-                    await recorder.start()
-
-            # Start the agent in a background task
-            asyncio.create_task(customer_agent.run(room=customer_room))
-
-            # Wait for the session to be created
-            customer_session = await customer_agent.get_session()
-
-            # Stream transcripts and messages in real-time
-            def _on_user_input_transcribed(ev):
+                    audio_bridge = LiveKitAudioBridge(
+                        url=str(runtime.url),
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        room_name=room_name,
+                        identity=bridge_identity or "fagi-provider-bridge",
+                        connector=connector,
+                    )
+                    await asyncio.wait_for(
+                        audio_bridge.connect(), timeout=connect_timeout
+                    )
+                    provider_call_id = audio_bridge.call_id
+                    bridge_task = asyncio.create_task(audio_bridge.run())
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "web_bridge_start_timeout",
+                        "Provider web call creation exceeded its deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "Provider web bridge creation failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "transport": transport.kind,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "web_bridge_start_failed",
+                        "Failed to start the provider web bridge",
+                        details=_safe_provider_error_details(
+                            exc, operation="web_bridge_start"
+                        ),
+                    )
+                    return outcome
+            if profile.places_outbound_call and api_client is not None:
                 try:
-                    suffix = "" if getattr(ev, "is_final", False) else "…"
-                    print(f"ASR(user): {getattr(ev, 'transcript', '')}{suffix}")
-                except Exception:
-                    pass
-
-            def _on_conversation_item_added(ev):
+                    logger.info(
+                        "sip_outbound_dialing",
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                        },
+                    )
+                    await asyncio.wait_for(
+                        api_client.sip.create_sip_participant(
+                            api.CreateSIPParticipantRequest(
+                                sip_trunk_id=transport.sip_trunk_id,
+                                sip_number=transport.sip_number,
+                                sip_call_to=transport.sip_call_to,
+                                room_name=room_name,
+                                participant_identity=sip_participant_identity,
+                                wait_until_answered=True,
+                                play_ringtone=True,
+                            )
+                        ),
+                        timeout=sip_answer_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "sip_answer_timeout",
+                        "Outbound SIP call was not answered before the deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "SIP dial failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "sip_dial_failed",
+                        "Failed to dial the SIP participant",
+                        details=_safe_provider_error_details(exc, operation="sip_dial"),
+                    )
+                    return outcome
+            if profile.receives_inbound_call:
+                logger.info(
+                    "sip_inbound_ready",
+                    extra={
+                        "run_id": run_id,
+                        "test_case_id": test_case_id,
+                        "room_name": room_name,
+                        "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                        "sip_dispatch_rule_created": sip_dispatch_rule_created,
+                    },
+                )
+            if transport.inbound_call_originator == "vapi":
                 try:
-                    item = getattr(ev, "item", None)
-                    role = getattr(item, "role", None)
-                    text = getattr(item, "text_content", None)
-                    if role and text:
-                        print(f"MSG({role}): {text}")
-                except Exception:
-                    pass
+                    vapi_originator = VapiCallOriginator.from_env()
+                    vapi_call = await asyncio.wait_for(
+                        vapi_originator.start(), timeout=connect_timeout
+                    )
+                    provider_call_id = vapi_call.call_id
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "vapi_call_start_timeout",
+                        "Vapi call creation exceeded its deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "Vapi call creation failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "vapi_call_start_failed",
+                        "Failed to start the Vapi call",
+                        details=_safe_provider_error_details(
+                            exc, operation="vapi_call_start"
+                        ),
+                    )
+                    return outcome
+            target = await _wait_for_target_audio(
+                room,
+                excluded_identities={simulator_identity, recorder_identity},
+                target_identity=effective_target_identity,
+                timeout=effective_readiness_timeout,
+            )
+            # RoomIO auto-links to the first participant that joined — the
+            # recorder, which publishes no audio — so the simulator's STT never
+            # hears the target. Re-point it at the target readiness selected.
+            target_room_io = getattr(session, "room_io", None)
+            if target_room_io is not None:
+                target_room_io.set_participant(target.identity)
 
-            customer_session.on("user_input_transcribed", _on_user_input_transcribed)
-            customer_session.on("conversation_item_added", _on_conversation_item_added)
+            # Swap the early buffer handler for the authoritative one. The
+            # unregister → def → register sequence has NO await between the
+            # unregister and register, so no header can land unhandled in the gap
+            # (LiveKit allows one handler per topic and raises on double-register).
+            if target_transcription_handler_registered:
+                room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+                target_transcription_handler_registered = False
 
-            # Wait for natural session close (tool-triggered or remote hangup), with hard timeout
-            closed = asyncio.Event()
-            def _on_close(ev):
-                closed.set()
-            customer_session.on("close", _on_close)
+            # The target's mic track stays open for the whole call, so STT never
+            # finalizes a turn; the agent's authoritative turns arrive on its
+            # lk.transcription stream instead. Consume that stream and feed each
+            # completed target utterance into the simulator as a user turn.
+            def on_target_transcription(
+                reader: "rtc.TextStreamReader",
+                participant_identity: str,
+            ) -> None:
+                nonlocal target_transcription_mode
+                attrs = reader.info.attributes or {}
+                transcribed_track_id = attrs.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID)
+                if transcribed_track_id:
+                    if transcribed_track_id != target.audio_track_sid:
+                        return
+                elif str(participant_identity) != target.identity:
+                    return
+                # First target transcription means the target is speaking — stop
+                # the redundant simulator STT so it cannot emit duplicate turns.
+                if not target_transcription_mode:
+                    session.input.set_audio_enabled(False)
+                    session.clear_user_turn()
+                    target_transcription_mode = True
+                task = asyncio.create_task(
+                    _forward_target_transcription(
+                        reader,
+                        session,
+                        conversation_ended=conversation_ended,
+                        captured_target_turns=captured_target_turns,
+                    )
+                )
+                target_transcription_tasks.add(task)
+                task.add_done_callback(target_transcription_tasks.discard)
 
-            try:
-                await asyncio.wait_for(closed.wait(), timeout=max_seconds)
-            except asyncio.TimeoutError:
-                with contextlib.suppress(Exception):
-                    customer_session.shutdown()
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(closed.wait(), timeout=5)
-            
-            # Get transcript from history (dedupe partial repeats)
-            if customer_session:
-                lines: list[str] = []
-                last_by_role: dict[str, str] = {}
-                for item in customer_session.history.items:
-                    item_type = getattr(item, "type", None)
-                    role = getattr(item, "role", None)
-                    text = getattr(item, "text_content", None)
-                    if item_type == "message" and text is not None and role is not None:
-                        prev = last_by_role.get(role)
-                        # Deduplicate streaming partials by collapsing near-duplicates
-                        if prev and (text.startswith(prev) or prev.startswith(text)):
-                            # Replace last line for this role
-                            for i in range(len(lines) - 1, -1, -1):
-                                if lines[i].startswith(f"{role}:"):
-                                    lines[i] = f"{role}: {text}"
-                                    break
-                        else:
-                            lines.append(f"{role}: {text}")
-                        last_by_role[role] = text
-                transcript = "\n".join(lines)
+            room.register_text_stream_handler(
+                TOPIC_TRANSCRIPTION, on_target_transcription
+            )
+            target_transcription_handler_registered = True
+
+            # Drain greeting streams buffered before readiness through the
+            # authoritative handler (it re-applies the strict track/identity
+            # filter, so over-buffered non-target streams are dropped here).
+            buffered_streams = list(pending_target_transcriptions)
+            pending_target_transcriptions.clear()
+            for buffered_reader, buffered_identity in buffered_streams:
+                on_target_transcription(buffered_reader, buffered_identity)
+
+            if conversation_direction == "simulator_first":
+                customer_agent.open_conversation()
+            stop_reason = await _wait_for_conversation_end(
+                room,
+                session,
+                customer_agent=customer_agent,
+                target_identity=target.identity,
+                timeout=max_seconds,
+                conversation_direction=conversation_direction,
+                agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                provider_task=bridge_task,
+            )
+            # End the call cleanly. First let the party that just spoke commit its
+            # own final turn — a LiveKit turn only lands in history once its TTS
+            # finishes — bounded so we do not wait on the other side. We do NOT
+            # wait for the target's trailing speech: once the conversation has
+            # ended, the target talking on is monologuing into a call the other
+            # side left.
+            conversation_ended.set()
+            if stop_reason == "simulator_end_call":
+                wait_for_end_speech = getattr(
+                    customer_agent,
+                    "wait_for_end_speech",
+                    None,
+                )
+                try:
+                    if callable(wait_for_end_speech):
+                        await asyncio.wait_for(
+                            wait_for_end_speech(),
+                            timeout=_FINAL_TURN_COMMIT_WAIT_SECONDS,
+                        )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Simulator closing speech did not finish before cleanup",
+                        extra={"run_id": run_id, "test_case_id": test_case_id},
+                    )
+            _loop = asyncio.get_running_loop()
+            _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
+            while _loop.time() < _commit_deadline:
+                try:
+                    if session.current_speech is None:
+                        break
+                except Exception:  # noqa: BLE001
+                    break
+                await asyncio.sleep(0.2)
+            # Delete the room so the target agent can't keep monologuing into a
+            # dead call (its audio would be recorded but is untranscribable once
+            # the simulator has left) — the recording then ends when the call
+            # actually ends, matching the transcript.
+            if api_client is not None and managed_room_owned:
+                try:
+                    await asyncio.wait_for(
+                        api_client.room.delete_room(
+                            api.DeleteRoomRequest(room=room_name)
+                        ),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "LiveKit room delete on conversation end failed",
+                        exc_info=redacted_exc_info(exc),
+                    )
+            messages = _canonical_report_messages(session)
+            messages = _merge_captured_target_turns(messages, captured_target_turns)
+            outcome = _conversation_outcome(
+                stop_reason,
+                messages,
+                min_turn_messages=min_turn_messages,
+            )
+        except asyncio.TimeoutError:
+            stage = (
+                FailureStage.READINESS
+                if session is not None and target is None
+                else FailureStage.PREPARING
+            )
+            if stage == FailureStage.READINESS and profile.receives_inbound_call:
+                code = "sip_inbound_no_participant"
+                message = "No inbound SIP participant joined before deadline"
+            elif stage == FailureStage.READINESS:
+                code = "agent_unavailable"
+                message = "Target agent did not become ready"
             else:
-                transcript = "Error: Agent session was not created."
-            
-        except Exception as e:
-            print(f"Error during test case: {e}")
-            return (f"Error: {e}", None, None, None)
+                code = "livekit_connect_timeout"
+                message = "LiveKit setup exceeded its deadline"
+            status = (
+                TestCaseStatus.AGENT_UNAVAILABLE
+                if stage == FailureStage.READINESS
+                else TestCaseStatus.TIMED_OUT
+            )
+            outcome = _failure_outcome(
+                status,
+                stage,
+                code,
+                message,
+                retryable=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "LiveKit test case failed",
+                exc_info=redacted_exc_info(exc),
+                extra={
+                    "run_id": run_id,
+                    "test_case_id": test_case_id,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            outcome = _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.RUNNING if session is not None else FailureStage.PREPARING,
+                "livekit_case_failed",
+                "LiveKit test case failed",
+                details={"exception_type": type(exc).__name__},
+            )
         finally:
-            # Support both property and method across versions
-            try:
-                if getattr(customer_room, "isconnected", False):
-                    if callable(customer_room.isconnected):
-                        if customer_room.isconnected():
-                            await customer_room.disconnect()
-                    elif customer_room.isconnected:
-                        await customer_room.disconnect()
-                elif getattr(customer_room, "is_connected", False):
-                    if customer_room.is_connected:
-                        await customer_room.disconnect()
-            except Exception:
-                pass
-                print("✓ Customer disconnected")
-            # Stop recorder if running
-            if recorder is not None:
-                with contextlib.suppress(Exception):
-                    await recorder.aclose()
-
-        # Resolve per-persona input/output recordings and build combined WAV
-        def _find_paths_for_identity(room_name: str, identity: str) -> list[str]:
-            try:
-                # listdir and filter to avoid glob deps
-                files = [os.path.join("recordings", f) for f in os.listdir("recordings") if f.startswith(f"{room_name}-{identity}-track-") and f.endswith(".wav")]
-                return sorted(files, key=lambda p: os.path.getmtime(p), reverse=True)
-            except Exception:
-                return []
-
-        def _pick_best(paths: list[str]) -> str | None:
-            if not paths:
-                return None
-            return max(paths, key=lambda p: (os.path.getsize(p), os.path.getmtime(p)))
-
-        persona_name = str(persona.persona.get("name", "customer"))
-        in_candidates = _find_paths_for_identity(agent_definition.room_name, persona_name)
-
-        # Auto-pick a likely agent identity (prefer cloud/local agent-looking ids)
-        def _list_identities(room_name: str) -> list[str]:
-            try:
-                ids: set[str] = set()
-                for f in os.listdir("recordings"):
-                    if not f.endswith(".wav"):
-                        continue
-                    if not f.startswith(f"{room_name}-"):
-                        continue
-                    rest = f[len(room_name)+1:]
-                    parts = rest.split("-track-")
-                    if len(parts) != 2:
-                        continue
-                    identity = parts[0]
-                    ids.add(identity)
-                return sorted(ids)
-            except Exception:
-                return []
-
-        identities = _list_identities(agent_definition.room_name)
-        candidate_agent_ids = [i for i in identities if i not in {persona_name, "recorder"}]
-
-        def _agent_rank(i: str) -> tuple[int, float]:
-            score = 0
-            if i.startswith("agent-"):
-                score += 2
-            if i == "support-agent":
-                score += 3
-            best = _pick_best(_find_paths_for_identity(agent_definition.room_name, i))
-            size = os.path.getsize(best) if best and os.path.exists(best) else 0
-            return (score, float(size))
-
-        chosen_agent_id: str | None = None
-        if candidate_agent_ids:
-            chosen_agent_id = max(candidate_agent_ids, key=_agent_rank)
-        out_candidates = _find_paths_for_identity(agent_definition.room_name, chosen_agent_id) if chosen_agent_id else []
-        audio_in = _pick_best(in_candidates)
-        audio_out = _pick_best(out_candidates)
-
-        audio_combined: str | None = None
-        try:
-            # Overlay all recorder tracks for this room (covers any agent identity)
-            def _find_all_room_tracks(room_name: str) -> list[str]:
+            if target_transcription_handler_registered:
+                room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+            pending_target_transcriptions.clear()
+            pending_transcriptions = list(target_transcription_tasks)
+            for pending in pending_transcriptions:
+                pending.cancel()
+            if pending_transcriptions:
+                await asyncio.gather(*pending_transcriptions, return_exceptions=True)
+            session_to_close = session or (
+                getattr(customer_agent, "started_session", None)
+                if customer_agent is not None
+                else None
+            )
+            if session_to_close is not None:
                 try:
-                    files = [os.path.join("recordings", f) for f in os.listdir("recordings")
-                             if f.startswith(f"{room_name}-") and f.endswith(".wav") and "-combined" not in f]
-                    return sorted(files, key=lambda p: os.path.getmtime(p))
-                except Exception:
-                    return []
+                    await _close_agent_session(
+                        session_to_close,
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "session_close",
+                        run_id,
+                        test_case_id,
+                    )
+            if models is not None:
+                try:
+                    await asyncio.wait_for(
+                        models.aclose(),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "models_close",
+                        run_id,
+                        test_case_id,
+                    )
+            if recorder is not None:
+                try:
+                    await asyncio.wait_for(
+                        recorder.aclose(),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "recorder_close",
+                        run_id,
+                        test_case_id,
+                    )
+            if audio_bridge is not None:
+                try:
+                    await asyncio.wait_for(
+                        audio_bridge.aclose(), timeout=cleanup_timeout
+                    )
+                    if bridge_task is not None:
+                        await asyncio.wait_for(bridge_task, timeout=cleanup_timeout)
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "bridge_close",
+                        run_id,
+                        test_case_id,
+                    )
+            if room_connected:
+                try:
+                    await asyncio.wait_for(room.disconnect(), timeout=cleanup_timeout)
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "room_disconnect",
+                        run_id,
+                        test_case_id,
+                    )
+            if vapi_originator is not None:
+                try:
+                    if provider_call_id is not None:
+                        await asyncio.wait_for(
+                            vapi_originator.stop(provider_call_id),
+                            timeout=cleanup_timeout,
+                        )
+                        provider_termination_source = "sdk_originator_cleanup"
+                    await vapi_originator.close()
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "vapi_call_stop",
+                        run_id,
+                        test_case_id,
+                    )
+            if (
+                api_client is not None
+                and sip_dispatch_rule_id
+                and sip_dispatch_rule_created
+            ):
+                try:
+                    await asyncio.wait_for(
+                        _delete_sip_dispatch_rule(api_client, sip_dispatch_rule_id),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:
+                    if not _is_not_found(exc):
+                        _record_cleanup_error(
+                            cleanup_errors,
+                            exc,
+                            "sip_dispatch_delete",
+                            run_id,
+                            test_case_id,
+                        )
+            if api_client is not None and managed_room_owned:
+                try:
+                    await asyncio.wait_for(
+                        api_client.room.delete_room(
+                            api.DeleteRoomRequest(room=room_name)
+                        ),
+                        timeout=cleanup_timeout,
+                    )
+                except Exception as exc:
+                    if not _is_not_found(exc):
+                        _record_cleanup_error(
+                            cleanup_errors,
+                            exc,
+                            "room_delete",
+                            run_id,
+                            test_case_id,
+                        )
+            if api_client is not None:
+                try:
+                    await api_client.aclose()
+                except Exception as exc:
+                    _record_cleanup_error(
+                        cleanup_errors,
+                        exc,
+                        "api_close",
+                        run_id,
+                        test_case_id,
+                    )
+        if outcome is None:
+            outcome = _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.FINALIZING,
+                "livekit_outcome_missing",
+                "LiveKit test case ended without an outcome",
+            )
+        if recorder is not None:
+            _attach_recordings(
+                outcome,
+                recorder,
+                simulator_identity=simulator_identity,
+                target_identity=target.identity if target is not None else None,
+                target_track_sid=(
+                    target.audio_track_sid if target is not None else None
+                ),
+                case_directory=case_directory,
+                sample_rate=recorder_sample_rate,
+            )
+            if recorder.errors:
+                cleanup_errors.extend(
+                    f"recording:{type(error).__name__}" for error in recorder.errors
+                )
+        if agent_definition.provider_evidence is not None:
+            provider_summary, provider_artifacts = await _collect_provider_evidence(
+                config=agent_definition.provider_evidence,
+                transport=transport,
+                run_id=run_id,
+                test_case_id=test_case_id,
+                case_directory=case_directory,
+                started_at=case_started_at,
+                target=target,
+                provider_call_id_hint=provider_call_id,
+                provider_api_key=_target_api_key(provider_target),
+                provider_api_base_url=_target_evidence_base_url(provider_target),
+                termination_source=provider_termination_source,
+            )
+            if provider_summary is not None:
+                outcome.evidence.append(provider_summary)
+                if provider_call_id is None:
+                    resolved_call_id = provider_summary.metadata.get("call_id")
+                    if resolved_call_id:
+                        provider_call_id = str(resolved_call_id)
+            outcome.provider_artifacts.extend(provider_artifacts)
+        outcome.metadata.update(
+            {
+                "simulator_participant_identity": simulator_identity,
+                "target_participant_identity": (
+                    target.identity if target is not None else None
+                ),
+                "target_participant_sid": target.sid if target is not None else None,
+                "target_audio_track_sid": (
+                    target.audio_track_sid if target is not None else None
+                ),
+                "target_participant_attributes": (
+                    dict(target.attributes) if target is not None else {}
+                ),
+                "cleanup_status": "failed" if cleanup_errors else "completed",
+                "cleanup_errors": cleanup_errors,
+                "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                "sip_dispatch_rule_created": sip_dispatch_rule_created,
+                "target_provider": (
+                    provider_target.provider if provider_target is not None else None
+                ),
+                "provider_call_id": provider_call_id,
+                "vapi_call_id": (
+                    provider_call_id
+                    if profile.evidence_provider == "vapi"
+                    or transport.inbound_call_originator == "vapi"
+                    else None
+                ),
+                "retell_call_id": (
+                    provider_call_id
+                    if profile.evidence_provider == "retell"
+                    else None
+                ),
+                "simulator_model_usage": (
+                    customer_agent.model_usage
+                    if customer_agent is not None
+                    and hasattr(customer_agent, "model_usage")
+                    else []
+                ),
+            }
+        )
+        return outcome
 
-            mix_inputs = _find_all_room_tracks(agent_definition.room_name)
-            if mix_inputs:
-                os.makedirs("recordings", exist_ok=True)
-                audio_combined = os.path.join("recordings", f"{agent_definition.room_name}-{persona_name}-combined.wav")
-                arrays: list[np.ndarray] = []
-                max_len = 0
-                for p in mix_inputs:
-                    with wave.open(p, "rb") as wf:
-                        frames = wf.readframes(wf.getnframes())
-                        arr = np.frombuffer(frames, dtype=np.int16)
-                        arrays.append(arr)
-                        if arr.shape[0] > max_len:
-                            max_len = arr.shape[0]
-                if arrays and max_len > 0:
-                    mix = np.zeros(max_len, dtype=np.int32)
-                    for arr in arrays:
-                        if arr.shape[0] < max_len:
-                            pad = np.zeros(max_len - arr.shape[0], dtype=arr.dtype)
-                            arr = np.concatenate([arr, pad])
-                        mix += arr.astype(np.int32)
-                    mix = np.clip(mix, -32768, 32767).astype(np.int16)
-                    with wave.open(audio_combined, "wb") as wf_out:
-                        wf_out.setnchannels(1)
-                        wf_out.setsampwidth(2)
-                        wf_out.setframerate(8000)
-                        wf_out.writeframes(mix.tobytes())
-                    print(f"✓ Combined conversation saved: {audio_combined}")
-        except Exception as e:
-            print(f"Combined mix failed: {e}")
-
-        return (transcript, audio_in, audio_out, audio_combined)
-
-    def _create_customer_agent(self, persona: Persona, simulator: SimulatorAgentDefinition | None) -> _TestRunnerAgent:
-        customer_prompt = self._create_customer_prompt(persona)
-
-        # Build components from simulator config or use sensible defaults
+    async def _create_customer_agent(
+        self,
+        persona: Persona,
+        simulator: SimulatorAgentDefinition | None,
+        *,
+        call_type: CallType = "inbound",
+        agent_name: str | None = None,
+        min_turn_messages: int = 0,
+    ) -> tuple[_TestRunnerAgent, LiveKitModels]:
+        customer_prompt = build_voice_simulator_prompt(
+            persona,
+            call_type=call_type,
+            agent_name=agent_name,
+            additional_instructions=(
+                simulator.instructions if simulator is not None else None
+            ),
+            default_language=(
+                simulator.stt.language if simulator is not None else None
+            ),
+        )
         if simulator is None:
-            stt_model = openai.STT(language="en")
-            llm_model = openai.LLM(model="gpt-4o-mini", temperature=0.6)
-            tts_model = openai.TTS(model="tts-1", voice="alloy")
-            vad_model = silero.VAD.load()
+            voice_provider = os.environ.get(
+                "SIMULATOR_VOICE_PROVIDER", "openai"
+            ).lower()
+            llm_config = _default_simulator_llm_config()
+            stt_config = STTConfig(
+                provider=voice_provider,
+                model=os.environ.get("SIMULATOR_STT_MODEL", "gpt-4o-mini-transcribe"),
+            )
+            tts_config = TTSConfig(
+                provider=voice_provider,
+                model=os.environ.get("SIMULATOR_TTS_MODEL", "gpt-4o-mini-tts"),
+                voice=os.environ.get("SIMULATOR_TTS_VOICE_ID", "alloy"),
+            )
             instructions = customer_prompt
             allow_interruptions = None
-            min_ep = None
-            max_ep = None
-            use_aligned = None
+            min_endpointing_delay = None
+            max_endpointing_delay = None
+            use_aligned_transcript = None
         else:
-            stt_model = openai.STT(language=simulator.stt.language)
-            llm_model = openai.LLM(model=simulator.llm.model, temperature=simulator.llm.temperature)
-            tts_model = openai.TTS(model=simulator.tts.model, voice=simulator.tts.voice)
-            vad_model = silero.VAD.load()
-            # Merge simulator instructions with persona-derived prompt so both are applied
-            if simulator.instructions:
-                instructions = f"{simulator.instructions}\n\n{customer_prompt}"
-            else:
-                instructions = customer_prompt
+            llm_config = simulator.llm
+            stt_config = simulator.stt
+            tts_config = simulator.tts
+            instructions = customer_prompt
             allow_interruptions = simulator.allow_interruptions
-            min_ep = simulator.min_endpointing_delay
-            max_ep = simulator.max_endpointing_delay
-            use_aligned = simulator.use_tts_aligned_transcript
-
+            min_endpointing_delay = simulator.min_endpointing_delay
+            max_endpointing_delay = simulator.max_endpointing_delay
+            use_aligned_transcript = simulator.use_tts_aligned_transcript
+        # Per-persona voice: a persona may carry a ``voice`` (or ``voice_id``)
+        # attribute so different simulated customers sound different. Deepgram
+        # encodes the voice in the model name (``aura-*``); every other provider
+        # uses the dedicated ``voice`` field. Falls back to the simulator/global
+        # default when the persona does not specify one.
+        persona_attrs = getattr(persona, "persona", None)
+        persona_voice = (
+            (persona_attrs.get("voice") or persona_attrs.get("voice_id"))
+            if isinstance(persona_attrs, dict)
+            else None
+        )
+        if persona_voice:
+            field = "model" if tts_config.provider == "deepgram" else "voice"
+            tts_config = tts_config.model_copy(update={field: str(persona_voice)})
+        models = await build_livekit_models(
+            llm_config=llm_config,
+            stt_config=stt_config,
+            tts_config=tts_config,
+        )
+        vad = silero.VAD.load()
         agent = _TestRunnerAgent(
             persona=persona,
-            stt=stt_model,
-            llm=llm_model,
-            tts=tts_model,
-            vad=vad_model,
+            min_turn_messages=min_turn_messages,
+            stt=models.stt,
+            llm=models.llm,
+            tts=models.tts,
+            vad=vad,
             instructions=instructions,
-            allow_interruptions=allow_interruptions,
-            min_endpointing_delay=min_ep,
-            max_endpointing_delay=max_ep,
-            use_tts_aligned_transcript=use_aligned,
+            turn_handling=_simulator_turn_handling(
+                vad=vad,
+                allow_interruptions=allow_interruptions,
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            ),
+            use_tts_aligned_transcript=use_aligned_transcript,
         )
-        return agent
+        return agent, models
 
-    def _create_customer_prompt(self, persona: Persona) -> str:
-        return (
-            "You are a realistic customer in a support call. "
-            f"Profile: {persona.persona}. "
-            f"Situation: {persona.situation}. "
-            f"Goal: {persona.outcome}. "
-            "Have a natural back-and-forth conversation, asking clarifying questions. "
-            "Keep the conversation going for at least 6 turns unless the problem is fully solved. "
-            "When you are satisfied and done, call the `end_call` tool to hang up. "
-            "Use short, spoken-style sentences."
+
+async def _wait_for_target_audio(
+    room: rtc.Room,
+    *,
+    excluded_identities: set[str],
+    target_identity: str | None,
+    timeout: float,
+) -> _TargetParticipant:
+    ready = asyncio.Event()
+    selected: _TargetParticipant | None = None
+
+    def inspect_room(*_args) -> None:
+        nonlocal selected
+        selected = _find_target_audio(
+            room,
+            excluded_identities=excluded_identities,
+            target_identity=target_identity,
         )
+        if selected is not None:
+            ready.set()
+
+    room.on("participant_connected", inspect_room)
+    room.on("track_published", inspect_room)
+    room.on("track_subscribed", inspect_room)
+    inspect_room()
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=timeout)
+    finally:
+        _remove_room_listener(room, "participant_connected", inspect_room)
+        _remove_room_listener(room, "track_published", inspect_room)
+        _remove_room_listener(room, "track_subscribed", inspect_room)
+    if selected is None:
+        raise asyncio.TimeoutError
+    return selected
+
+
+async def _forward_target_transcription(
+    reader: "rtc.TextStreamReader",
+    session: "AgentSession",
+    *,
+    conversation_ended: "asyncio.Event | None" = None,
+    captured_target_turns: list[str] | None = None,
+) -> None:
+    try:
+        transcript = (await reader.read_all()).strip()
+        if not transcript:
+            return
+        # Capture the target's turn independently of the simulator session FIRST.
+        # Once the session drains it rejects new input ("speech scheduling is
+        # paused"), so a closing delivered after the simulator is done never
+        # reaches the chat context. This list is merged into the report so the
+        # trailing target turn survives regardless of session state.
+        if captured_target_turns is not None:
+            captured_target_turns.append(transcript)
+        # Best-effort commit onto the chat context too (keeps the live
+        # conversation coherent while the session is still running).
+        try:
+            session.history.add_message(role="user", content=transcript)
+        except Exception:  # noqa: BLE001
+            pass
+        # Only elicit a simulator response while the conversation is live; once
+        # it has ended the target's turn is recorded but the simulator stays
+        # silent.
+        if conversation_ended is None or not conversation_ended.is_set():
+            try:
+                session.generate_reply()
+            except RuntimeError:
+                # Session is already closing; the turn is captured above.
+                pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to consume target transcription stream",
+            exc_info=redacted_exc_info(exc),
+        )
+
+
+def _find_target_audio(
+    room: rtc.Room,
+    *,
+    excluded_identities: set[str],
+    target_identity: str | None,
+) -> _TargetParticipant | None:
+    candidates: list[tuple[int, _TargetParticipant]] = []
+    agent_kind = getattr(
+        rtc.ParticipantKind,
+        "PARTICIPANT_KIND_AGENT",
+        None,
+    )
+    for participant in room.remote_participants.values():
+        identity = str(participant.identity)
+        if identity in excluded_identities:
+            continue
+        if target_identity is not None and identity != target_identity:
+            continue
+        priority = 0 if getattr(participant, "kind", None) == agent_kind else 1
+        for publication in participant.track_publications.values():
+            if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
+                continue
+            attrs = dict(getattr(participant, "attributes", {}) or {})
+            candidates.append(
+                (
+                    priority,
+                    _TargetParticipant(
+                        identity=identity,
+                        sid=str(participant.sid),
+                        audio_track_sid=str(publication.sid),
+                        attributes={
+                            str(key): str(value) for key, value in attrs.items()
+                        },
+                    ),
+                )
+            )
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1].identity))[0][1]
+
+
+# A run ends naturally when the simulator calls ``endCall``; this is only the
+# backstop for a conversation that has genuinely stalled or already finished but
+# never hung up. Kept long so normal turn-gaps (STT endpoint + LLM + TTS latency)
+# never trip it — the run is never cut off at a message count.
+_SILENCE_BACKSTOP_SECONDS = 60.0
+
+
+async def _wait_for_conversation_end(
+    room: rtc.Room,
+    session: AgentSession,
+    *,
+    customer_agent: _TestRunnerAgent,
+    target_identity: str,
+    timeout: float,
+    conversation_direction: str,
+    agent_first_silence_timeout_seconds: float,
+    provider_task: asyncio.Task[None] | None = None,
+) -> str:
+    closed = asyncio.Event()
+    target_disconnected = asyncio.Event()
+
+    def on_close(_event) -> None:
+        closed.set()
+
+    def on_participant_disconnected(participant) -> None:
+        if str(participant.identity) == target_identity:
+            target_disconnected.set()
+
+    session.on("close", on_close)
+    room.on("participant_disconnected", on_participant_disconnected)
+    tasks = {
+        "closed": asyncio.create_task(closed.wait()),
+        "target_disconnected": asyncio.create_task(target_disconnected.wait()),
+        "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
+        "conversation_settled": asyncio.create_task(
+            _wait_for_conversation_silence(session)
+        ),
+    }
+    if conversation_direction == "agent_first":
+        tasks["conversation_silence_timeout"] = asyncio.create_task(
+            _wait_for_agent_first_silence(
+                session,
+                timeout_seconds=agent_first_silence_timeout_seconds,
+            )
+        )
+    if provider_task is not None:
+        tasks["provider_disconnected"] = provider_task
+    try:
+        done, pending = await asyncio.wait(
+            set(tasks.values()),
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        owned_pending = {
+            task
+            for name, task in tasks.items()
+            if task in pending and name != "provider_disconnected"
+        }
+        for task in owned_pending:
+            task.cancel()
+        if owned_pending:
+            await asyncio.gather(*owned_pending, return_exceptions=True)
+        if not done:
+            return "timeout"
+        for reason in (
+            "simulator_end_call",
+            "target_disconnected",
+            "conversation_silence_timeout",
+            "conversation_settled",
+            "provider_disconnected",
+            "closed",
+        ):
+            task = tasks.get(reason)
+            if task is not None and task in done:
+                return "session_closed" if reason == "closed" else reason
+        return "session_closed"
+    finally:
+        _remove_room_listener(
+            room,
+            "participant_disconnected",
+            on_participant_disconnected,
+        )
+
+
+async def _wait_for_conversation_silence(
+    session: AgentSession,
+    *,
+    quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
+) -> None:
+    """Finish only after a long, genuine stretch of mutual silence.
+
+    The simulator ends a call by calling ``endCall`` once the scenario is done;
+    this is only the backstop for a conversation that has actually stalled (or
+    already finished but never hung up). It deliberately does **not** look at the
+    message count — a run is never cut off at a floor, it runs as long as turns
+    keep flowing. The timer resets on every new message and while either side is
+    speaking, so only a real ``quiet_seconds`` gap of nothing ends the call.
+    """
+    last_signature: tuple[tuple[str, str], ...] | None = None
+    stable_since: float | None = None
+    loop = asyncio.get_running_loop()
+    while True:
+        messages = _session_messages(session)
+        signature = tuple((message["role"], message["content"]) for message in messages)
+        participant_speaking = (
+            getattr(session, "agent_state", None) == "speaking"
+            or getattr(session, "user_state", None) == "speaking"
+        )
+        if participant_speaking:
+            stable_since = None
+        elif stable_since is None or signature != last_signature:
+            stable_since = loop.time()
+        elif loop.time() - stable_since >= quiet_seconds:
+            return
+        last_signature = signature
+        await asyncio.sleep(0.1)
+
+
+async def _wait_for_agent_first_silence(
+    session: AgentSession,
+    *,
+    timeout_seconds: float,
+) -> None:
+    last_signature: tuple[tuple[str, str], ...] = ()
+    last_change = asyncio.get_running_loop().time()
+    while True:
+        messages = _session_messages(session)
+        signature = tuple((message["role"], message["content"]) for message in messages)
+        if signature != last_signature:
+            last_signature = signature
+            last_change = asyncio.get_running_loop().time()
+        roles = {message["role"] for message in messages if message["content"]}
+        if {"user", "assistant"}.issubset(
+            roles
+        ) and asyncio.get_running_loop().time() - last_change >= timeout_seconds:
+            return
+        await asyncio.sleep(0.1)
+
+
+def _session_messages(session: AgentSession) -> list[dict[str, Any]]:
+    """Return normalized transcript messages with real per-item speech timing.
+
+    Each dict carries:
+      role, content: str
+      started_speaking_at, stopped_speaking_at: float | None
+          Real audio timing from ``ChatMessage.metrics`` (seconds since epoch).
+          See livekit.agents.llm.chat_context.MetricsReport.
+      created_at: float
+          Fallback wall-clock stamp from ``ChatMessage.created_at`` (used when
+          the metrics timestamps are missing, e.g. text-only turns).
+      interrupted: bool
+      e2e_latency: float | None
+          Agent-side turn latency, when reported by LiveKit.
+
+    Downstream code turns these into millisecond offsets so the platform can
+    recompute WPM, talk-ratio and interruption counts with real overlap data.
+    """
+    messages: list[dict[str, Any]] = []
+    for item in session.history.items:
+        if getattr(item, "type", None) != "message":
+            continue
+        role = getattr(item, "role", None)
+        text = getattr(item, "text_content", None)
+        if role is None or text is None:
+            continue
+        interrupted = bool(getattr(item, "interrupted", False))
+        created_at = float(getattr(item, "created_at", 0.0) or 0.0)
+        metrics = getattr(item, "metrics", None) or {}
+        started_speaking_at = _maybe_float(metrics.get("started_speaking_at"))
+        stopped_speaking_at = _maybe_float(metrics.get("stopped_speaking_at"))
+        e2e_latency = _maybe_float(metrics.get("e2e_latency"))
+        current: dict[str, Any] = {
+            "role": str(role),
+            "content": str(text),
+            "created_at": created_at,
+            "started_speaking_at": started_speaking_at,
+            "stopped_speaking_at": stopped_speaking_at,
+            "interrupted": interrupted,
+            "e2e_latency": e2e_latency,
+        }
+        if messages and messages[-1]["role"] == current["role"]:
+            previous = messages[-1]
+            previous_text = previous["content"]
+            if current["content"].startswith(previous_text):
+                # Newer emission extends the previous partial — keep the
+                # earliest start we saw, adopt the latest stop.
+                current["started_speaking_at"] = (
+                    previous.get("started_speaking_at")
+                    or current["started_speaking_at"]
+                )
+                current["created_at"] = previous["created_at"] or created_at
+                messages[-1] = current
+            elif previous_text.startswith(current["content"]):
+                previous["interrupted"] = previous.get("interrupted") or interrupted
+                previous["stopped_speaking_at"] = (
+                    previous.get("stopped_speaking_at")
+                    or current["stopped_speaking_at"]
+                )
+            elif previous.get("interrupted") or interrupted:
+                previous["content"] = (
+                    f"{previous_text} {current['content']}".strip()
+                )
+                previous["interrupted"] = interrupted
+                previous["stopped_speaking_at"] = (
+                    current["stopped_speaking_at"]
+                    or previous.get("stopped_speaking_at")
+                )
+            else:
+                messages.append(current)
+            continue
+        messages.append(current)
+    return messages
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
+    """Emit report messages with roles remapped to the test-agent perspective.
+
+    LiveKit reports our simulator as ``assistant`` and the target agent as
+    ``user`` (the SDK connects with role ``agent``); we swap those so the
+    downstream platform sees:
+      role="user"      → simulator / customer
+      role="assistant" → agent-under-test
+    which matches the CallTranscript convention.
+
+    Timing anchors (``started_speaking_at`` / ``stopped_speaking_at``) travel
+    through unchanged so the platform can derive ms offsets.
+    """
+    role_map = {"assistant": "user", "user": "assistant"}
+    messages: list[dict[str, Any]] = []
+    for source in _session_messages(session):
+        messages.append(
+            {
+                "role": role_map.get(source["role"], source["role"]),
+                "content": source["content"],
+                "created_at": source.get("created_at"),
+                "started_speaking_at": source.get("started_speaking_at"),
+                "stopped_speaking_at": source.get("stopped_speaking_at"),
+                "interrupted": source.get("interrupted", False),
+                "e2e_latency": source.get("e2e_latency"),
+            }
+        )
+    return messages
+
+
+def _merge_captured_target_turns(
+    messages: list[dict[str, Any]],
+    captured_target_turns: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Append target turns captured off the transcription stream that never
+    reached the session history.
+
+    The target's closing is often delivered after the simulator session has
+    started draining (it rejects new input with "speech scheduling is paused"),
+    so it is recorded in ``captured_target_turns`` but missing from the report.
+    Each captured turn is the target (``assistant`` in the report perspective).
+    Deduped against existing content — including partial/extended emissions of
+    the same turn — so nothing already recorded is doubled. Appended after the
+    existing turns (they are trailing utterances) with a synthetic timing just
+    past the last message so downstream ms-offset ordering keeps them last.
+    """
+    if not captured_target_turns:
+        return messages
+    assistant_texts = [
+        (m.get("content") or "").strip()
+        for m in messages
+        if m.get("role") == "assistant" and m.get("content")
+    ]
+
+    def _already_present(text: str) -> bool:
+        return any(text in existing or existing in text for existing in assistant_texts)
+
+    last_ts = 0.0
+    for m in messages:
+        for key in ("stopped_speaking_at", "started_speaking_at", "created_at"):
+            value = m.get(key)
+            if isinstance(value, (int, float)) and value > last_ts:
+                last_ts = value
+
+    merged = list(messages)
+    for offset, raw in enumerate(captured_target_turns, start=1):
+        text = (raw or "").strip()
+        if not text or _already_present(text):
+            continue
+        ts = (last_ts + offset) if last_ts else None
+        merged.append(
+            {
+                "role": "assistant",
+                "content": text,
+                "created_at": ts,
+                "started_speaking_at": ts,
+                "stopped_speaking_at": ts,
+                "interrupted": False,
+                "e2e_latency": None,
+            }
+        )
+        assistant_texts.append(text)
+    return merged
+
+
+def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
+    roles = {msg.get("role") for msg in messages if msg.get("content")}
+    return "user" in roles and "assistant" in roles
+
+
+def _conversation_outcome(
+    stop_reason: str,
+    messages: list[dict[str, str]],
+    *,
+    min_turn_messages: int,
+) -> _CaseOutcome:
+    transcript = "\n".join(
+        f"{message['role']}: {message['content']}" for message in messages
+    )
+    if stop_reason == "timeout":
+        return _failure_outcome(
+            TestCaseStatus.TIMED_OUT,
+            FailureStage.RUNNING,
+            "conversation_timeout",
+            "Conversation exceeded its deadline",
+            transcript=transcript,
+            messages=messages,
+            retryable=True,
+        )
+    if stop_reason in {"conversation_silence_timeout", "session_closed"}:
+        code = stop_reason
+        message = (
+            "Agent-first conversation stalled after it began"
+            if stop_reason == "conversation_silence_timeout"
+            else "Conversation session closed before a natural end condition"
+        )
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            code,
+            message,
+            transcript=transcript,
+            messages=messages,
+            retryable=True,
+        )
+    if len(messages) < min_turn_messages or not _has_role_alternation(messages):
+        code = (
+            "target_disconnected"
+            if stop_reason == "target_disconnected"
+            else "insufficient_conversation"
+        )
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            code,
+            "Conversation ended before the required alternating turns completed",
+            transcript=transcript,
+            messages=messages,
+            retryable=stop_reason in {"target_disconnected", "session_closed"},
+            details={
+                "stop_reason": stop_reason,
+                "turn_count": str(len(messages)),
+                "minimum_turn_count": str(min_turn_messages),
+            },
+        )
+    return _CaseOutcome(
+        status=TestCaseStatus.COMPLETED,
+        transcript=transcript,
+        messages=messages,
+        metadata={"stop_reason": stop_reason},
+    )
+
+
+def _failure_outcome(
+    status: TestCaseStatus,
+    stage: FailureStage,
+    code: str,
+    message: str,
+    *,
+    transcript: str = "",
+    messages: list[dict[str, str]] | None = None,
+    retryable: bool = False,
+    details: dict[str, str] | None = None,
+) -> _CaseOutcome:
+    return _CaseOutcome(
+        status=status,
+        transcript=transcript,
+        messages=messages or [],
+        failure=SimulationFailure(
+            stage=stage,
+            code=code,
+            message=message,
+            retryable=retryable,
+            provider="livekit",
+            details=details or {},
+        ),
+    )
+
+
+def _attach_recordings(
+    outcome: _CaseOutcome,
+    recorder: RoomRecorder,
+    *,
+    simulator_identity: str,
+    target_identity: str | None,
+    target_track_sid: str | None,
+    case_directory: Path,
+    sample_rate: int,
+) -> None:
+    simulator_paths = recorder.paths_for_participant(simulator_identity)
+    target_paths = (
+        recorder.paths_for_participant(
+            target_identity,
+            track_sid=target_track_sid,
+        )
+        if target_identity is not None
+        else []
+    )
+    audio_directory = case_directory / "audio"
+    input_path = _collapse_recordings(
+        simulator_paths,
+        audio_directory / "simulator.wav",
+        sample_rate=sample_rate,
+    )
+    output_path = _collapse_recordings(
+        target_paths,
+        audio_directory / "target.wav",
+        sample_rate=sample_rate,
+    )
+    combined_path = mix_recordings(
+        [path for path in (input_path, output_path) if path is not None],
+        audio_directory / "combined.wav",
+        sample_rate=sample_rate,
+    )
+    stereo_path = mix_recordings_stereo(
+        [path for path in (input_path,) if path is not None],
+        [path for path in (output_path,) if path is not None],
+        audio_directory / "stereo.wav",
+        sample_rate=sample_rate,
+    )
+    outcome.audio_input_path = str(input_path) if input_path is not None else None
+    outcome.audio_output_path = str(output_path) if output_path is not None else None
+    outcome.audio_combined_path = (
+        str(combined_path) if combined_path is not None else None
+    )
+    outcome.audio_stereo_path = str(stereo_path) if stereo_path is not None else None
+    outcome.metadata["recording_tracks"] = [
+        {
+            "participant_identity": record.participant_identity,
+            "participant_sid": record.participant_sid,
+            "track_sid": record.track_sid,
+            "path": str(record.path),
+            "start_offset_frames": record.start_offset_frames,
+        }
+        for record in recorder.records
+    ]
+    speech_starts = [
+        float(message["started_speaking_at"])
+        for message in outcome.messages
+        if isinstance(message.get("started_speaking_at"), (int, float))
+    ]
+    if recorder.recording_started_at is not None and speech_starts:
+        outcome.metadata["recording_offset_ms"] = max(
+            0,
+            round(
+                (min(speech_starts) - recorder.recording_started_at) * 1000
+            ),
+        )
+
+
+def _collapse_recordings(
+    paths: list[Path],
+    destination: Path,
+    *,
+    sample_rate: int,
+) -> Path | None:
+    if not paths:
+        return None
+    if len(paths) == 1:
+        return paths[0]
+    return mix_recordings(paths, destination, sample_rate=sample_rate)
+
+
+def _target_api_key(target: VoiceProviderTarget | None) -> str | None:
+    if target is None:
+        return None
+    return os.environ.get(target.api_key_env) or None
+
+
+def _target_evidence_base_url(target: VoiceProviderTarget | None) -> str | None:
+    if isinstance(target, VapiTargetConfig):
+        return str(target.api_base_url).rstrip("/")
+    if isinstance(target, RetellTargetConfig):
+        parsed = urlsplit(str(target.api_url))
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return None
+
+
+def _default_simulator_llm_config() -> LLMConfig:
+    return LLMConfig(
+        provider=os.environ.get("SIMULATOR_LLM_PROVIDER", "openai"),
+        model=os.environ.get("SIMULATOR_LLM_MODEL", "gpt-4o-mini"),
+        temperature=0.6,
+    )
+
+
+def _resolve_livekit_runtime(
+    agent_definition: AgentDefinition,
+    runtime: LiveKitSimulatorRuntime | None,
+) -> LiveKitSimulatorRuntime:
+    if runtime is not None:
+        return runtime
+    if agent_definition.url is None or not agent_definition.room_name:
+        raise ValueError(
+            "livekit_runtime_required: provide LiveKitSimulatorRuntime or legacy "
+            "AgentDefinition url and room_name"
+        )
+    return LiveKitSimulatorRuntime(
+        url=agent_definition.url,
+        room_name=agent_definition.room_name,
+        room_mode=agent_definition.room_mode,
+    )
+
+
+def _resolve_room_name(
+    runtime: LiveKitSimulatorRuntime,
+    *,
+    run_id: str,
+    test_case_id: str,
+    index: int,
+    invocation_id: str,
+) -> str:
+    rendered = runtime.room_name.format(
+        run_id=run_id,
+        test_case_id=test_case_id,
+        index=index,
+        invocation_id=invocation_id,
+    )
+    if runtime.room_mode == "external" or getattr(runtime, "room_name_verbatim", False):
+        return rendered
+    prefix = _SAFE_ROOM.sub("-", rendered).strip("-._") or "simulation"
+    suffix_parts = []
+    if invocation_id not in prefix:
+        suffix_parts.append(invocation_id)
+    if test_case_id not in prefix:
+        suffix_parts.append(test_case_id[-12:])
+    suffix = "-" + "-".join(suffix_parts) if suffix_parts else ""
+    return f"{prefix[: 255 - len(suffix)]}{suffix}"
+
+
+def _has_room_template(room_name: str) -> bool:
+    return any(
+        marker in room_name for marker in ("{run_id}", "{test_case_id}", "{index}")
+    )
+
+
+def _api_url(url: str) -> str:
+    if url.startswith("wss://"):
+        return "https://" + url.removeprefix("wss://")
+    if url.startswith("ws://"):
+        return "http://" + url.removeprefix("ws://")
+    return url
+
+
+def _remove_room_listener(room: rtc.Room, event: str, listener) -> None:
+    try:
+        room.off(event, listener)
+    except (AttributeError, ValueError):
+        logger.debug("LiveKit listener was already removed", extra={"event": event})
+
+
+async def _close_agent_session(session: AgentSession, *, timeout: float) -> None:
+    """Close without cancelling LiveKit's recursive activity teardown on timeout."""
+    close_session = getattr(session, "aclose", None)
+    if close_session is None:
+        session.shutdown(drain=False)
+        return
+    close_task = asyncio.create_task(close_session())
+    try:
+        await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
+    except asyncio.TimeoutError:
+        close_task.add_done_callback(_consume_background_task_result)
+        raise
+
+
+def _consume_background_task_result(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except (Exception, asyncio.CancelledError):
+        pass
+
+
+def _is_not_found(exc: Exception) -> bool:
+    code = getattr(exc, "code", None)
+    return str(getattr(code, "value", code)).lower() in {
+        "not_found",
+        "404",
+    }
+
+
+def _record_cleanup_error(
+    errors: list[str],
+    exc: Exception,
+    operation: str,
+    run_id: str,
+    test_case_id: str,
+) -> None:
+    errors.append(f"{operation}:{type(exc).__name__}")
+    logger.error(
+        "LiveKit cleanup operation failed",
+        exc_info=redacted_exc_info(exc),
+        extra={
+            "run_id": run_id,
+            "test_case_id": test_case_id,
+            "operation": operation,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+
+_LIVEKIT_INBOUND_TRUNK_ENV = "LIVEKIT_INBOUND_TRUNK_ID"
+
+
+def _safe_provider_error_details(
+    exc: Exception, *, operation: str
+) -> dict[str, object]:
+    """Extract sanitized error attributes for report failures.
+
+    Never returns the exception message; only structural fields that are
+    known to be safe from LiveKit/Twirp exception classes.
+    """
+
+    code = getattr(exc, "code", None)
+    if code is not None:
+        code_value = getattr(code, "value", None)
+        if code_value is None and not isinstance(code, (str, int)):
+            code_value = str(code)
+        else:
+            code_value = code_value if code_value is not None else code
+    else:
+        code_value = None
+    status = getattr(exc, "status", None)
+    details: dict[str, object] = {
+        "operation": operation,
+        "exception_type": type(exc).__name__,
+    }
+    if code_value is not None:
+        details["provider_code"] = code_value
+    if status is not None:
+        try:
+            details["http_status"] = int(status)
+        except (TypeError, ValueError):
+            details["http_status"] = str(status)
+    metadata = getattr(exc, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("sip_status_code", "sip_status", "sip-code"):
+            value = metadata.get(key)
+            if value is not None:
+                details["sip_status_code"] = str(value)
+                break
+    return details
+
+
+async def _ensure_sip_inbound_dispatch(
+    api_client: api.LiveKitAPI,
+    *,
+    transport: TelephonyTransport,
+    room_name: str,
+) -> tuple[str, bool]:
+    """Return ``(sip_dispatch_rule_id, created_by_sdk)``.
+
+    When ``transport.dispatch_rule_name`` is supplied the SDK verifies
+    the rule exists and reuses it. Otherwise the SDK provisions a
+    per-run direct rule bound to ``LIVEKIT_INBOUND_TRUNK_ID`` that routes
+    incoming calls into ``room_name`` — the same room the local
+    simulator has already joined — and returns its id so the caller can
+    tear it down.
+    """
+
+    existing = await api_client.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
+    if transport.dispatch_rule_name:
+        for rule in existing.items:
+            if rule.name != transport.dispatch_rule_name:
+                continue
+            direct = (
+                getattr(rule.rule, "dispatch_rule_direct", None) if rule.rule else None
+            )
+            direct_room = getattr(direct, "room_name", "") if direct is not None else ""
+            if not direct_room:
+                raise RuntimeError(
+                    "sip_inbound_rule_mismatch: "
+                    f"{transport.dispatch_rule_name} is not a direct rule"
+                )
+            if direct_room != room_name:
+                raise RuntimeError(
+                    "sip_inbound_rule_mismatch: "
+                    f"{transport.dispatch_rule_name} targets a different room"
+                )
+            return rule.sip_dispatch_rule_id, False
+        raise RuntimeError(f"sip_inbound_rule_missing: {transport.dispatch_rule_name}")
+    trunk_id = os.environ.get(_LIVEKIT_INBOUND_TRUNK_ENV)
+    if not trunk_id:
+        raise RuntimeError(
+            f"sip_inbound_trunk_missing: set {_LIVEKIT_INBOUND_TRUNK_ENV}"
+        )
+    for rule in existing.items:
+        if trunk_id and trunk_id in rule.trunk_ids:
+            raise RuntimeError(
+                "sip_inbound_route_conflict: existing dispatch rule "
+                f"{rule.sip_dispatch_rule_id} already covers this trunk"
+            )
+    rule_name = f"sim-inbound-{room_name[-24:]}"
+    resp = await api_client.sip.create_sip_dispatch_rule(
+        CreateSIPDispatchRuleRequest(
+            rule=SIPDispatchRule(
+                dispatch_rule_direct=SIPDispatchRuleDirect(
+                    room_name=room_name,
+                ),
+            ),
+            trunk_ids=[trunk_id],
+            hide_phone_number=False,
+            name=rule_name,
+        )
+    )
+    return resp.sip_dispatch_rule_id, True
+
+
+async def _delete_sip_dispatch_rule(api_client: api.LiveKitAPI, rule_id: str) -> None:
+    await api_client.sip.delete_sip_dispatch_rule(
+        DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
+    )
+
+
+async def _collect_provider_evidence(
+    *,
+    config: ProviderEvidenceConfig,
+    transport: TelephonyTransport,
+    run_id: str,
+    test_case_id: str,
+    case_directory: Path,
+    started_at: datetime,
+    target: _TargetParticipant | None,
+    provider_call_id_hint: str | None = None,
+    provider_api_key: str | None = None,
+    provider_api_base_url: str | None = None,
+    termination_source: str | None = None,
+) -> tuple[EvidenceSourceSummary | None, list[ArtifactManifestEntry]]:
+    call_id_hint = provider_call_id_hint
+    caller_phone = transport.sip_number if transport.kind == "sip_outbound" else None
+    callee_phone = transport.sip_call_to if transport.kind == "sip_outbound" else None
+    if target is not None:
+        if call_id_hint is None and config.participant_attribute:
+            call_id_hint = target.attributes.get(config.participant_attribute)
+        caller_phone = caller_phone or (
+            target.attributes.get("sip.from")
+            or target.attributes.get("sip.fromUser")
+            or target.attributes.get("sip.callerNumber")
+        )
+        callee_phone = callee_phone or (
+            target.attributes.get("sip.to")
+            or target.attributes.get("sip.toUser")
+            or target.attributes.get("sip.calledNumber")
+        )
+    context = EvidenceContext(
+        run_id=run_id,
+        test_case_id=test_case_id,
+        case_directory=case_directory,
+        started_at=started_at,
+        call_id_hint=call_id_hint,
+        caller_phone=caller_phone,
+        callee_phone=callee_phone,
+        termination_source=termination_source,
+    )
+    try:
+        if config.provider == "vapi":
+            adapter = VapiEvidenceSource(
+                config,
+                api_key=provider_api_key,
+                api_base_url=provider_api_base_url,
+            )
+        elif config.provider == "retell":
+            adapter = RetellEvidenceSource(
+                config,
+                api_key=provider_api_key,
+                api_base_url=provider_api_base_url,
+            )
+        else:
+            raise ProviderConfigError(
+                f"unsupported_provider_evidence: {config.provider}"
+            )
+    except ProviderConfigError as exc:
+        summary = EvidenceSourceSummary(
+            source_id=f"{config.provider}:unconfigured",
+            adapter=config.provider,
+            evidence_class=_EVIDENCE_PROVIDER_REPORTED,
+            available=False,
+            redactions=["auth", "phone_e164"],
+            metadata={"provider": config.provider, "reason": str(exc)},
+        )
+        return summary, []
+    try:
+        await adapter.connect(context)
+        result: ProviderFetchResult = await adapter.fetch_final()
+    except Exception as exc:  # noqa: BLE001 — provider failures are first-class evidence
+        logger.warning(
+            "Provider evidence adapter failed",
+            exc_info=redacted_exc_info(exc),
+            extra={
+                "provider": config.provider,
+                "run_id": run_id,
+                "test_case_id": test_case_id,
+            },
+        )
+        summary = EvidenceSourceSummary(
+            source_id=f"{config.provider}:error",
+            adapter=config.provider,
+            evidence_class=_EVIDENCE_PROVIDER_REPORTED,
+            available=False,
+            redactions=["auth", "phone_e164"],
+            metadata={
+                "provider": config.provider,
+                "reason": "adapter_exception",
+                "exception_type": type(exc).__name__,
+            },
+        )
+        return summary, []
+    finally:
+        try:
+            await adapter.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Provider evidence adapter close failed",
+                extra={
+                    "provider": config.provider,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+    return result.summary, result.artifacts
+
+
+# Import lazily to avoid a module-import cycle with ProviderConfigError above.
+from fi.simulate.evidence.base import EvidenceClass as _EvidenceClass  # noqa: E402
+
+_EVIDENCE_PROVIDER_REPORTED = _EvidenceClass.PROVIDER_REPORTED

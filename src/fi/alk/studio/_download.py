@@ -17,6 +17,7 @@ entries in the library index — never a standalone artifact kind.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import urllib.error
@@ -51,6 +52,7 @@ _PERSONA_PATHS = {
     "workspace": "/simulate/api/personas/workspace/",
 }
 _SCENARIO_PATH = "/simulate/scenarios/"
+_DATASET_TABLE_PATH = "/model-hub/develops/{dataset_id}/get-dataset-table/"
 
 # Platform text-style/speech knobs carried verbatim (§6.3): NO dial mapping
 # at pull time in v1 (a dial without a shipped realization metric does not
@@ -118,9 +120,169 @@ def _field(payload: Mapping[str, Any], snake: str) -> Any:
     return payload.get(camel)
 
 
+class ScenarioDownloadError(RuntimeError):
+    """A platform Scenario exists but its generated dataset cannot be admitted."""
+
+
 def checksum_payload(payload: Any) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _result(payload: Any) -> Mapping[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    result = payload.get("result")
+    return result if isinstance(result, Mapping) else payload
+
+
+def _cell_value(value: Any) -> Any:
+    if isinstance(value, Mapping) and "cell_value" in value:
+        return value["cell_value"]
+    return value
+
+
+def map_dataset_table_rows(payload: Any) -> List[Dict[str, Any]]:
+    result = _result(payload)
+    column_config = result.get("column_config")
+    table = result.get("table")
+    if not isinstance(column_config, list) or not isinstance(table, list):
+        raise ScenarioDownloadError("dataset table response is missing columns or rows")
+    names = {
+        str(column.get("id")): str(column.get("name"))
+        for column in column_config
+        if isinstance(column, Mapping) and column.get("id") and column.get("name")
+    }
+    mapped = []
+    for item in table:
+        if not isinstance(item, Mapping):
+            continue
+        row = {
+            name: _cell_value(item[column_id])
+            for column_id, name in names.items()
+            if column_id in item
+        }
+        row["row_id"] = str(item.get("row_id") or "")
+        row["order"] = item.get("order")
+        mapped.append(row)
+    return mapped
+
+
+def fetch_dataset_rows(
+    base: str,
+    headers: Mapping[str, str],
+    dataset_id: str,
+    *,
+    page_size: int = 500,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    page = 0
+    while True:
+        query = urllib.parse.urlencode(
+            {"page_size": min(max(page_size, 1), 500), "current_page_index": page}
+        )
+        payload = _get_json(
+            f"{base}{_DATASET_TABLE_PATH.format(dataset_id=dataset_id)}?{query}",
+            headers,
+        )
+        page_rows = map_dataset_table_rows(payload)
+        rows.extend(page_rows)
+        result = _result(payload)
+        metadata = result.get("metadata")
+        total_pages = (
+            int(metadata.get("total_pages") or 0)
+            if isinstance(metadata, Mapping)
+            else 0
+        )
+        page += 1
+        if total_pages:
+            if page >= total_pages:
+                break
+        elif len(page_rows) < min(max(page_size, 1), 500):
+            break
+    return rows
+
+
+def _parse_persona(value: Any) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                try:
+                    parsed = ast.literal_eval(stripped)
+                except (SyntaxError, ValueError):
+                    parsed = None
+            if isinstance(parsed, Mapping):
+                return dict(parsed)
+            return {"description": stripped}
+    return {}
+
+
+def _persona_from_dataset_row(
+    row: Mapping[str, Any],
+    *,
+    pin: Mapping[str, Any],
+) -> Persona:
+    persona_data = _parse_persona(row.get("persona"))
+    custom = {
+        str(key): value
+        for key, value in row.items()
+        if key not in {"persona", "situation", "outcome", "row_id", "order"}
+    }
+    if custom:
+        persona_data["platform_columns"] = custom
+    provenance_pin = dict(pin)
+    provenance_pin.update(
+        {
+            "platform_row_id": str(row.get("row_id") or ""),
+            "platform_row_order": row.get("order"),
+        }
+    )
+    return Persona(
+        persona=persona_data or {"name": "Generated Persona"},
+        situation=str(row.get("situation") or "Generated platform scenario."),
+        outcome=str(row.get("outcome") or "The task completes successfully."),
+        provenance=PersonaProvenance(
+            evidence_class="cloud_downloaded",
+            source_format="futureagi",
+            raw=json.dumps(row, sort_keys=True, default=str),
+            pin=provenance_pin,
+        ),
+    )
+
+
+def hydrate_platform_scenario(
+    detail: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    pin: Mapping[str, Any],
+) -> Scenario:
+    scenario_pin = dict(pin)
+    scenario_pin.update(
+        {
+            "platform_scenario_id": str(_field(detail, "id") or ""),
+            "platform_dataset_id": str(
+                _field(detail, "dataset_id") or _field(detail, "dataset") or ""
+            ),
+            "platform_status": str(_field(detail, "status") or ""),
+        }
+    )
+    return Scenario(
+        name=str(_field(detail, "name") or "Generated Scenario"),
+        description=(
+            str(_field(detail, "description"))
+            if _field(detail, "description")
+            else None
+        ),
+        dataset=[
+            _persona_from_dataset_row(row, pin=scenario_pin)
+            for row in rows
+        ],
+    )
 
 
 def validate_download(
@@ -336,30 +498,38 @@ def _scenario_rows(
     identifier: str,
     detail: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    """Dataset-row composition (BUILD §6.2): prefer the ``/export/`` payload
-    when the endpoint exists; else rows embedded on the detail read;
-    ``rows_available: false`` is a legal recorded pull state."""
+    dataset_id = _field(detail, "dataset_id") or _field(detail, "dataset")
+    if dataset_id:
+        try:
+            rows = fetch_dataset_rows(base, headers, str(dataset_id))
+        except (urllib.error.HTTPError, urllib.error.URLError, ScenarioDownloadError) as exc:
+            raise ScenarioDownloadError(
+                f"failed to retrieve dataset for platform Scenario {identifier}"
+            ) from exc
+        return {
+            "rows_available": True,
+            "rows": rows,
+            "rows_source": "dataset_table",
+        }
+    for key in ("rows", "dataset_rows"):
+        value = detail.get(key)
+        if isinstance(value, list):
+            return {
+                "rows_available": True,
+                "rows": [dict(row) for row in value],
+                "rows_source": key,
+            }
     try:
         export = _get_json(f"{base}{_SCENARIO_PATH}{identifier}/export/", headers)
-        rows = _rows(export) or _rows(export.get("dataset", {})) if isinstance(export, Mapping) else _rows(export)
-        if rows:
-            return {"rows_available": True, "rows": rows, "rows_source": "export"}
     except (urllib.error.HTTPError, urllib.error.URLError):
-        pass
-    for key in ("dataset_rows", "rows"):
-        value = detail.get(key)
-        if isinstance(value, list) and value:
-            return {"rows_available": True, "rows": [dict(r) for r in value], "rows_source": key}
-    return {"rows_available": False, "rows": [], "rows_source": None}
-
-
-def _compose_dataset_row(row: Mapping[str, Any]) -> Dict[str, Any]:
-    if {"persona", "situation", "outcome"} <= set(row):
-        return dict(row)
+        return {"rows_available": False, "rows": [], "rows_source": None}
+    rows = _rows(export)
+    if not rows and isinstance(export, Mapping):
+        rows = _rows(export.get("dataset", {}))
     return {
-        "persona": dict(row),
-        "situation": str(row.get("situation") or "Pulled scenario row."),
-        "outcome": str(row.get("outcome") or "The task completes successfully."),
+        "rows_available": bool(rows),
+        "rows": rows,
+        "rows_source": "export" if rows else None,
     }
 
 
@@ -389,23 +559,42 @@ def pull_scenarios(
 
     pulled: List[Dict[str, Any]] = []
     quarantined: List[Dict[str, Any]] = []
-    for detail in details:
+    for listed_detail in details:
+        detail = dict(listed_detail)
         identifier = str(_field(detail, "id") or "")
+        if identifier and not (
+            _field(detail, "dataset_id") or _field(detail, "dataset")
+        ):
+            detail = dict(
+                _get_json(f"{base}{_SCENARIO_PATH}{identifier}/", headers)
+            )
+        rows_block = _scenario_rows(base, headers, identifier, detail)
+        artifact = {
+            "id": identifier,
+            "updated_at": _field(detail, "updated_at"),
+            "scenario": detail,
+            "rows": rows_block["rows"],
+        }
         try:
-            pin = validate_download(detail, source=host)
+            pin = validate_download(artifact, source=host)
         except DownloadRejected as rejection:
-            entry = {"platform_id": identifier, "content_scan": {
-                "status": "flagged", "findings": rejection.findings,
-            }}
+            entry = {
+                "platform_id": identifier,
+                "content_scan": {
+                    "status": "flagged",
+                    "findings": rejection.findings,
+                },
+            }
             if library is not None:
                 path = quarantine_payload(
                     f"scenario-{identifier or 'unknown'}",
-                    dict(detail), rejection.findings, library=library,
+                    artifact,
+                    rejection.findings,
+                    library=library,
                 )
                 entry["quarantine_file"] = str(path)
             quarantined.append(entry)
             continue
-        rows_block = _scenario_rows(base, headers, identifier, detail)
         persona_ids = []
         metadata = detail.get("metadata")
         if isinstance(metadata, Mapping):
@@ -418,20 +607,10 @@ def pull_scenarios(
                 )
             except (urllib.error.HTTPError, urllib.error.URLError):
                 continue
-        dataset = [
-            _compose_dataset_row(row) for row in rows_block["rows"]
-        ] or [{
-            "persona": {"name": str(_field(detail, "name") or "Pulled Persona")},
-            "situation": str(_field(detail, "description") or "Pulled scenario."),
-            "outcome": "The task completes successfully.",
-        }]
-        scenario = Scenario(
-            name=str(_field(detail, "name") or f"pulled-scenario-{identifier}"),
-            description=(
-                str(_field(detail, "description"))
-                if _field(detail, "description") else None
-            ),
-            dataset=dataset,
+        scenario = hydrate_platform_scenario(
+            detail,
+            rows_block["rows"],
+            pin=pin,
         )
         entry: Dict[str, Any] = {
             "platform_id": identifier,
@@ -473,7 +652,11 @@ def pull_scenarios(
 
 __all__ = [
     "PERSONA_DOWNLOAD_PIN_FIELDS",
+    "ScenarioDownloadError",
     "checksum_payload",
+    "fetch_dataset_rows",
+    "hydrate_platform_scenario",
+    "map_dataset_table_rows",
     "map_platform_persona",
     "pull_personas",
     "pull_scenarios",

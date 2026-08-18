@@ -6,7 +6,7 @@ from fi.simulate.simulation.engines.local_text import LocalTextEngine
 # LiveKit isn't installed (or version mismatches exist).
 try:  # pragma: no cover
     from fi.simulate.simulation.engines.livekit import LiveKitEngine
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     LiveKitEngine = None  # type: ignore
 
 __all__ = ["BaseEngine", "CloudEngine", "LiveKitEngine", "LocalTextEngine"]

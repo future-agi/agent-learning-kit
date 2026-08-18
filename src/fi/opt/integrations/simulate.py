@@ -1028,10 +1028,41 @@ def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
         from ..optimizers.futureagi_replay import FutureAGIRegressionReplayOptimizer
 
         return FutureAGIRegressionReplayOptimizer
+    if normalized in {
+        "curriculum",
+        "agent_curriculum",
+        "agent_curriculum_optimizer",
+        "staged",
+    }:
+        from ..optimizers.agent_curriculum import AgentCurriculumOptimizer
+
+        return AgentCurriculumOptimizer
+    if normalized in {
+        "pareto",
+        "agent_pareto",
+        "agent_pareto_optimizer",
+        "multi_objective",
+        "multi_objective_pareto",
+    }:
+        from ..optimizers.agent_pareto import AgentParetoOptimizer
+
+        return AgentParetoOptimizer
+    if normalized in {
+        "feedback",
+        "agent_feedback",
+        "agent_feedback_optimizer",
+        "diagnostic_feedback",
+    }:
+        from ..optimizers.agent_feedback import AgentFeedbackOptimizer
+
+        return AgentFeedbackOptimizer
     raise ValueError(
         "optimization.optimizer.algorithm must be one of: agent, evolution, "
         "social_memory, council, society_role_graph, tpe, bandit, "
-        "regression_replay"
+        "regression_replay, curriculum, pareto, feedback (deterministic agent "
+        "backends), or a generative token routed through the generative "
+        "eval-suite bridge: gepa, protegi, metaprompt, promptwizard, "
+        "random_search, bayesian_search"
     )
 
 
@@ -1051,6 +1082,12 @@ def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
         return "bandit"
     if name == "FutureAGIRegressionReplayOptimizer":
         return "regression_replay"
+    if name == "AgentCurriculumOptimizer":
+        return "curriculum"
+    if name == "AgentParetoOptimizer":
+        return "pareto"
+    if name == "AgentFeedbackOptimizer":
+        return "feedback"
     return "agent"
 
 

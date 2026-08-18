@@ -259,6 +259,10 @@ class TestCaseResult(BaseModel):
         default=None,
         description="Optional path to a single WAV containing the mixed conversation.",
     )
+    audio_stereo_path: str | None = Field(
+        default=None,
+        description="Optional path to a 2-channel WAV: ch0 customer, ch1 assistant.",
+    )
 
 class TestReport(BaseModel):
     """

@@ -70,15 +70,22 @@ class MetaPromptOptimizer(BaseOptimizer):
     performance and rewrite it. This is inspired by the `promptim` library.
     """
 
-    def __init__(self, teacher_generator: LiteLLMGenerator):
+    def __init__(
+        self,
+        teacher_generator: LiteLLMGenerator,
+        task_model: Optional[str] = None,
+    ):
         """
         Initializes the MetaPrompt Optimizer.
 
         Args:
             teacher_generator: A powerful generator (e.g., GPT-4o, Claude 3 Opus)
                 used to analyze performance and generate new prompts.
+            task_model: Model used to run candidate prompts while scoring them.
+                Defaults to the teacher generator's model.
         """
         self.teacher = teacher_generator
+        self.task_model = task_model
 
     def optimize(
         self,
@@ -198,7 +205,9 @@ class MetaPromptOptimizer(BaseOptimizer):
     ) -> IterationHistory | None:
         """Scores a single prompt and returns its history."""
         try:
-            temp_generator = LiteLLMGenerator("gpt-4o-mini", prompt)
+            temp_generator = LiteLLMGenerator(
+                self.task_model or self.teacher.model_name, prompt
+            )
             generated_outputs = [
                 temp_generator.generate(example) for example in dataset
             ]

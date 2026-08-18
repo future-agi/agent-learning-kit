@@ -226,15 +226,26 @@ def _normalize_protocol(value: str) -> str:
 
 
 def _openai_tool_spec(tool: Mapping[str, Any]) -> dict[str, Any]:
-    name = str(tool.get("name") or tool.get("tool") or tool.get("id") or "tool")
+    # Accept both the flat SDK tool shape ({name, description, parameters}) and
+    # the OpenAI-nested shape ({"type": "function", "function": {...}}). Without
+    # reading the nested ``function`` block, a nested spec loses its name and the
+    # model is handed a tool literally called "tool" — so it can never call the
+    # real tool and the environment's mock never matches.
+    fn = tool.get("function") if isinstance(tool.get("function"), Mapping) else {}
+    name = str(
+        tool.get("name") or fn.get("name") or tool.get("tool") or tool.get("id") or "tool"
+    )
     parameters = tool.get("parameters")
     if not isinstance(parameters, Mapping):
+        parameters = fn.get("parameters")
+    if not isinstance(parameters, Mapping):
         parameters = {"type": "object", "properties": {}}
+    description = tool.get("description") or fn.get("description") or f"Tool {name}"
     return {
         "type": "function",
         "function": {
             "name": name,
-            "description": str(tool.get("description") or f"Tool {name}"),
+            "description": str(description),
             "parameters": dict(parameters),
         },
     }

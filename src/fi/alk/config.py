@@ -7,14 +7,14 @@ from typing import Mapping, Optional
 
 DEFAULT_API_URL = "https://api.futureagi.com"
 API_KEY_ENV_NAMES = (
-    "AGENT_LEARNING_API_KEY",
-    "FUTURE_AGI_API_KEY",
     "FI_API_KEY",
+    "FUTURE_AGI_API_KEY",
+    "AGENT_LEARNING_API_KEY",
 )
 SECRET_KEY_ENV_NAMES = (
-    "AGENT_LEARNING_SECRET_KEY",
-    "FUTURE_AGI_SECRET_KEY",
     "FI_SECRET_KEY",
+    "FUTURE_AGI_SECRET_KEY",
+    "AGENT_LEARNING_SECRET_KEY",
 )
 
 
@@ -51,8 +51,9 @@ class AgentLearningConfig:
         return cls(
             api_key=api_key,
             secret_key=secret_key or api_key,
-            api_url=source.get("AGENT_LEARNING_API_URL")
+            api_url=source.get("FI_BASE_URL")
             or source.get("FUTURE_AGI_API_URL")
+            or source.get("AGENT_LEARNING_API_URL")
             or DEFAULT_API_URL,
             project_id=source.get("AGENT_LEARNING_PROJECT_ID")
             or source.get("FUTURE_AGI_PROJECT_ID"),
@@ -115,8 +116,9 @@ def _sync_env(config: AgentLearningConfig) -> None:
         os.environ["FUTURE_AGI_SECRET_KEY"] = secret_key
         os.environ["FI_SECRET_KEY"] = secret_key
     if config.api_url:
-        os.environ["AGENT_LEARNING_API_URL"] = config.api_url
+        os.environ["FI_BASE_URL"] = config.api_url
         os.environ["FUTURE_AGI_API_URL"] = config.api_url
+        os.environ["AGENT_LEARNING_API_URL"] = config.api_url
     if config.project_id:
         os.environ["AGENT_LEARNING_PROJECT_ID"] = config.project_id
         os.environ["FUTURE_AGI_PROJECT_ID"] = config.project_id

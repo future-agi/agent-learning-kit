@@ -72,8 +72,10 @@ class PromptWizardOptimizer(BaseOptimizer):
         mutate_rounds: int = 3,
         refine_iterations: int = 2,
         beam_size: int = 1,
+        task_model: Optional[str] = None,
     ):
         self.teacher = teacher_generator
+        self.task_model = task_model
         self.mutate_rounds = mutate_rounds
         self.refine_iterations = refine_iterations
         self.beam_size = beam_size
@@ -237,7 +239,9 @@ class PromptWizardOptimizer(BaseOptimizer):
             f"Entering mutation phase for instruction: '{base_instruction[:100]}...'"
         )
         all_variations = set()
-        temp_generator = LiteLLMGenerator("gpt-5-mini", "{prompt}")
+        temp_generator = LiteLLMGenerator(
+            self.task_model or self.teacher.model_name, "{prompt}"
+        )
         for i in range(self.mutate_rounds):
             logger.debug(f"Mutation round {i + 1}/{self.mutate_rounds}")
             prompt = MUTATE_PROMPT.format(
@@ -305,7 +309,9 @@ class PromptWizardOptimizer(BaseOptimizer):
     ) -> List[Dict[str, Any]]:
         logger.debug(f"Getting errors for prompt: '{prompt[:100]}...'")
         subset = random.sample(dataset, min(len(dataset), sample_size))
-        temp_generator = LiteLLMGenerator("gpt-4o-mini", prompt)
+        temp_generator = LiteLLMGenerator(
+                self.task_model or self.teacher.model_name, prompt
+            )
         generated_outputs = [temp_generator.generate(example) for example in subset]
         eval_inputs = [
             data_mapper.map(gen_out, ex)
@@ -330,7 +336,9 @@ class PromptWizardOptimizer(BaseOptimizer):
         logger.debug(f"Scoring {len(prompts)} candidate prompts.")
         histories = []
         for i, prompt in enumerate(prompts):
-            temp_generator = LiteLLMGenerator("gpt-4o-mini", prompt)
+            temp_generator = LiteLLMGenerator(
+                self.task_model or self.teacher.model_name, prompt
+            )
             generated_outputs = [
                 temp_generator.generate(example) for example in dataset
             ]

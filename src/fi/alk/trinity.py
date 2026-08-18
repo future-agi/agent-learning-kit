@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
+from ._paths import project_root as discover_project_root
 from .config import current_config
 
 
@@ -549,6 +550,7 @@ V1_LIVE_FAILURE_LAYERS = [
 V1_LIVE_LANE_GUARDED_IMPORT_FILES = [
     "src/fi/simulate/simulation/engines/livekit.py",
     "src/fi/simulate/simulation/generator.py",
+    "src/fi/simulate/simulation/livekit_models.py",
     "src/fi/simulate/recording/room_recorder.py",
     "src/fi/simulate/agent/wrappers/langchain.py",
 ]
@@ -6636,7 +6638,7 @@ def consolidation_metadata() -> dict[str, Any]:
         {
             "id": "single_public_api_key",
             "status": "passed",
-            "claim": "AGENT_LEARNING_API_KEY is the shared public key surface.",
+            "claim": "FI_API_KEY is the shared public key surface.",
             "evidence": "legacy key names are aliases, not new SDK contracts.",
         },
         {
@@ -6652,10 +6654,10 @@ def consolidation_metadata() -> dict[str, Any]:
         "public_cli": "agent-learn",
         "public_console_scripts": list(PUBLIC_CONSOLE_SCRIPTS),
         "new_development_home": True,
-        "shared_key_env": "AGENT_LEARNING_API_KEY",
-        "shared_secret_env": "AGENT_LEARNING_SECRET_KEY",
-        "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
-        "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
+        "shared_key_env": "FI_API_KEY",
+        "shared_secret_env": "FI_SECRET_KEY",
+        "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "AGENT_LEARNING_API_KEY"],
+        "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "AGENT_LEARNING_SECRET_KEY"],
         "legacy_public_commands_allowed": False,
         "rejected_legacy_console_scripts": list(REJECTED_LEGACY_CONSOLE_SCRIPTS),
         "unified_python_modules": list(PUBLIC_MODULES.values()),
@@ -9758,7 +9760,7 @@ def assert_release_ready(project_root: str | Path | None = None) -> dict[str, An
 def _release_project_root(project_root: str | Path | None) -> Path:
     if project_root is not None:
         return Path(project_root).expanduser().resolve()
-    return Path(__file__).resolve().parents[2]
+    return discover_project_root(__file__)
 
 
 def _append_release_check(

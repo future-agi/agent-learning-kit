@@ -64,6 +64,64 @@ _JSON_PATH_ASSERTIONS = (
     | _JSON_PATH_NOT_CONTAINS_ASSERTIONS
 )
 
+# Assertion tokens that score the case output with a hosted FutureAGI eval
+# template via ``fi.evals.evaluate`` (platform/turing engine by default,
+# using FI_API_KEY / FI_SECRET_KEY / FI_BASE_URL). Pass = score >= threshold.
+_FI_EVAL_ASSERTIONS = {
+    "fi_eval",
+    "fi_evals",
+    "platform_eval",
+    "platform",
+    "turing",
+}
+
+# Extra eval-input keys an ``fi_eval`` assertion may template from the case
+# vars before forwarding to the platform (``output`` is always the case output).
+_FI_EVAL_INPUT_KEYS = (
+    "input",
+    "context",
+    "expected",
+    "query",
+    "reference",
+    "instructions",
+    "prompt",
+    "criteria",
+)
+
+# Generative (LLM prompt-rewriting) optimizer tokens. These run the real
+# optimizers in ``fi.opt.optimizers`` through the generative eval-suite bridge
+# rather than the deterministic agent/target search backends.
+_GENERATIVE_OPTIMIZER_TOKENS = {
+    "gepa": "gepa",
+    "protegi": "protegi",
+    "pro_te_gi": "protegi",
+    "metaprompt": "metaprompt",
+    "meta_prompt": "metaprompt",
+    "promptwizard": "promptwizard",
+    "prompt_wizard": "promptwizard",
+    "random_search": "random_search",
+    "random": "random_search",
+    "bayesian_search": "bayesian_search",
+    "bayesian": "bayesian_search",
+    "bayes": "bayesian_search",
+}
+
+
+def _generative_optimizer_token(optimizer_cfg: Any) -> Optional[str]:
+    """Return the canonical generative optimizer token, or None for Family A."""
+    if not isinstance(optimizer_cfg, Mapping):
+        return None
+    raw = (
+        optimizer_cfg.get("algorithm")
+        or optimizer_cfg.get("type")
+        or optimizer_cfg.get("name")
+        or optimizer_cfg.get("strategy")
+    )
+    if not raw:
+        return None
+    norm = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    return _GENERATIVE_OPTIMIZER_TOKENS.get(norm)
+
 
 @dataclass(frozen=True)
 class EvalSuiteOptions:
@@ -246,8 +304,39 @@ def optimize_eval_suite(
     prepared = _prepare_eval_suite(runtime_suite, base_dir=suite_path.parent)
     cli = _cli()
     optimization = cli._optimization_config(prepared)
-    target_config = cli._target_config(optimization)
     optimizer_config = cli._optimizer_config(optimization)
+
+    # Generative (LLM prompt-rewriting) optimizers run through their own bridge
+    # and don't need a deterministic search-space target, so route them before
+    # `_target_config` (which requires one).
+    generative_token = _generative_optimizer_token(optimization.get("optimizer"))
+    if generative_token and not opts.dry_run:
+        try:
+            from fi.opt.integrations.generative_suite import (
+                optimize_eval_suite_generative,
+            )
+        except Exception as exc:  # pragma: no cover - optional dependency clarity
+            raise ManifestError(
+                "Agent Learning Kit generative optimizer engine is required for "
+                f"the `{generative_token}` optimizer."
+            ) from exc
+        payload = optimize_eval_suite_generative(
+            prepared,
+            suite_path=suite_path,
+            name=str(prepared.get("name") or suite_path.stem),
+            token=generative_token,
+            optimizer_config=dict(optimizer_config or {}),
+            threshold=float(optimization.get("threshold", 0.5)),
+            started=started,
+        )
+        payload["eval_suite"] = _eval_suite_descriptor(prepared)
+        payload.setdefault("summary", {})
+        payload["summary"]["provider_count"] = len(_as_list(prepared.get("providers")))
+        payload["summary"]["prompt_count"] = len(_as_list(prepared.get("prompts")))
+        payload["summary"]["test_count"] = len(_as_list(prepared.get("tests")))
+        return payload
+
+    target_config = cli._target_config(optimization)
     if opts.dry_run:
         return {
             "schema_version": CLI_SCHEMA_VERSION,
@@ -446,6 +535,13 @@ def _normalize_assertion(assertion: Any, test_id: str, index: int) -> Dict[str, 
     assertion_type = str(item["type"])
     if assertion_type in _JSON_PATH_ASSERTIONS and not item.get("path"):
         raise ManifestError(f"assertion {index} in test `{test_id}` requires a path")
+    if assertion_type in _FI_EVAL_ASSERTIONS:
+        if not (item.get("eval") or item.get("metric") or item.get("name") or item.get("value")):
+            raise ManifestError(
+                f"assertion {index} in test `{test_id}` requires an `eval` "
+                "(hosted template name)"
+            )
+        return item
     requires_value = assertion_type not in _JSON_PATH_EXISTS_ASSERTIONS
     if requires_value and "value" not in item:
         raise ManifestError(f"assertion {index} in test `{test_id}` requires a value")
@@ -470,7 +566,7 @@ def _run_eval_case(
         base_dir=base_dir,
     )
     assertion_results = [
-        _evaluate_assertion(assertion, output)
+        _evaluate_assertion(assertion, output, variables)
         for assertion in _as_list(test.get("assertions"))
     ]
     failures = [item for item in assertion_results if not item.get("passed")]
@@ -549,7 +645,75 @@ def _provider_output(
         if inspect.isawaitable(value):
             value = asyncio.run(value)
         return str(value)
+    if provider_type in {"litellm", "llm", "vertex", "vertex_ai", "gemini"}:
+        return _litellm_provider_output(
+            provider=provider,
+            prompt=prompt,
+            variables=variables,
+            provider_type=provider_type,
+        )
     raise ManifestError(f"unsupported eval suite provider type: {provider_type}")
+
+
+def _litellm_provider_output(
+    *,
+    provider: Mapping[str, Any],
+    prompt: str,
+    variables: Mapping[str, Any],
+    provider_type: str,
+) -> str:
+    """Call a live LLM through litellm.
+
+    Routes any litellm-supported model. Use ``type: vertex`` (or ``gemini``)
+    with a bare ``model`` name to reach Vertex AI — authentication comes from
+    ``GOOGLE_APPLICATION_CREDENTIALS`` and routing from the ``vertex_project`` /
+    ``vertex_location`` provider fields (or the matching ``VERTEXAI_*`` env
+    vars). Use ``type: litellm`` with a fully-qualified model string
+    (``vertex_ai/gemini-2.5-flash``, ``gpt-4o-mini``, ``claude-3-5-sonnet``)
+    for any other provider.
+    """
+    try:
+        import litellm
+    except Exception as exc:  # pragma: no cover - import guard
+        raise ManifestError(
+            f"provider type `{provider_type}` requires litellm; reinstall "
+            "agent-learning-kit"
+        ) from exc
+
+    model = str(provider.get("model") or "").strip()
+    if not model:
+        raise ManifestError(f"provider `{provider.get('id')}` requires a model")
+    if provider_type in {"vertex", "vertex_ai", "gemini"} and "/" not in model:
+        model = f"vertex_ai/{model}"
+
+    render_ctx = {**variables, "prompt": prompt, "input": prompt}
+    messages: List[Dict[str, Any]] = []
+    system_prompt = provider.get("system") or provider.get("system_prompt")
+    if system_prompt:
+        messages.append(
+            {"role": "system", "content": _render_template(str(system_prompt), render_ctx)}
+        )
+    messages.append({"role": "user", "content": prompt})
+
+    kwargs: Dict[str, Any] = dict(_as_dict(provider.get("params")))
+    for key in (
+        "vertex_project",
+        "vertex_location",
+        "vertex_credentials",
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "api_base",
+        "api_key",
+    ):
+        value = provider.get(key)
+        if value is not None and key not in kwargs:
+            kwargs[key] = value
+
+    litellm.drop_params = True
+    response = litellm.completion(model=model, messages=messages, **kwargs)
+    content = response.choices[0].message.content
+    return str(content or "")
 
 
 def _artifact_provider_output(
@@ -667,10 +831,16 @@ def _artifact_path_tokens(path: str) -> List[str]:
     return tokens
 
 
-def _evaluate_assertion(assertion: Mapping[str, Any], output: str) -> Dict[str, Any]:
+def _evaluate_assertion(
+    assertion: Mapping[str, Any],
+    output: str,
+    variables: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     assertion_type = str(assertion.get("type") or "contains").lower().replace("-", "_")
     if assertion_type in _JSON_PATH_ASSERTIONS:
         return _evaluate_json_path_assertion(assertion, output, assertion_type)
+    if assertion_type in _FI_EVAL_ASSERTIONS:
+        return _evaluate_fi_eval_assertion(assertion, output, variables or {})
     expected = assertion.get("value")
     text = str(output)
     expected_text = str(expected)
@@ -689,6 +859,124 @@ def _evaluate_assertion(assertion: Mapping[str, Any], output: str) -> Dict[str, 
         "expected": expected,
         "actual": output,
         "passed": bool(passed),
+    }
+
+
+def _evaluate_fi_eval_assertion(
+    assertion: Mapping[str, Any],
+    output: str,
+    variables: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Score the case output with a hosted FutureAGI eval template.
+
+    Dispatches to ``fi.evals.evaluate`` on the platform (turing) engine by
+    default; credentials come from ``FI_API_KEY`` / ``FI_SECRET_KEY`` /
+    ``FI_BASE_URL`` (or per-assertion overrides). Pass when the returned score
+    is >= ``threshold`` (default 0.5).
+    """
+    eval_name = (
+        assertion.get("eval")
+        or assertion.get("metric")
+        or assertion.get("name")
+        or assertion.get("value")
+    )
+    if not eval_name:
+        raise ManifestError(
+            "fi_eval assertion requires an `eval` (hosted template name)."
+        )
+    threshold = float(assertion.get("threshold", 0.5))
+    engine = str(assertion.get("engine") or "turing").strip().lower()
+    model = assertion.get("model")
+
+    inputs: Dict[str, Any] = {"output": output}
+    for key in _FI_EVAL_INPUT_KEYS:
+        if key in assertion:
+            inputs[key] = _render_template(str(assertion[key]), variables)
+    extra_inputs = assertion.get("inputs")
+    if isinstance(extra_inputs, Mapping):
+        for key, val in extra_inputs.items():
+            inputs[str(key)] = (
+                _render_template(val, variables) if isinstance(val, str) else val
+            )
+
+    try:
+        from fi.evals import evaluate as _fi_evaluate
+    except Exception as exc:  # pragma: no cover - optional dependency clarity
+        raise ManifestError(
+            "fi_eval assertion requires the FutureAGI evals engine (fi.evals). "
+            "Install the evals extra to score against platform templates."
+        ) from exc
+
+    call_kwargs: Dict[str, Any] = dict(inputs)
+    if engine and engine != "auto":
+        call_kwargs["engine"] = engine
+    if model:
+        call_kwargs["model"] = model
+    for cred_key, cfg_key in (
+        ("fi_api_key", "api_key"),
+        ("fi_secret_key", "secret_key"),
+        ("fi_base_url", "base_url"),
+    ):
+        if assertion.get(cfg_key):
+            call_kwargs[cred_key] = assertion[cfg_key]
+
+    try:
+        result = _fi_evaluate(str(eval_name), **call_kwargs)
+    except Exception as exc:
+        return {
+            "type": "fi_eval",
+            "eval": eval_name,
+            "engine": engine,
+            "threshold": threshold,
+            "expected": f">= {threshold}",
+            "actual": None,
+            "passed": False,
+            "error": str(exc),
+        }
+
+    score = getattr(result, "score", None)
+    reason = getattr(result, "reason", "") or ""
+    try:
+        score_value = float(score)
+    except (TypeError, ValueError):
+        score_value = 0.0
+    return {
+        "type": "fi_eval",
+        "eval": eval_name,
+        "engine": engine,
+        "threshold": threshold,
+        "score": round(score_value, 4),
+        "reason": reason,
+        "expected": f">= {threshold}",
+        "actual": round(score_value, 4),
+        "passed": bool(score_value >= threshold),
+    }
+
+
+def evaluate_assertions(
+    output: str,
+    assertions: Sequence[Mapping[str, Any]],
+    *,
+    variables: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Score an output against a list of eval-suite assertions.
+
+    Public helper used by the generative optimizer bridge so candidate prompts
+    are scored against the suite's own assertions (including ``fi_eval``
+    platform templates). Returns pass-rate plus per-assertion detail.
+    """
+    variables = dict(variables or {})
+    results = [
+        _evaluate_assertion(assertion, output, variables)
+        for assertion in (assertions or [])
+    ]
+    if not results:
+        return {"score": 1.0, "passed": True, "results": []}
+    passed = sum(1 for item in results if item.get("passed"))
+    return {
+        "score": passed / len(results),
+        "passed": passed == len(results),
+        "results": results,
     }
 
 

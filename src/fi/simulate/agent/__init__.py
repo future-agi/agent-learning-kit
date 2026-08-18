@@ -1,5 +1,21 @@
-from .definition import AgentDefinition, LLMConfig, TTSConfig, STTConfig, VADConfig, SimulatorAgentDefinition
-from .wrapper import AgentInput, AgentResponse, AgentWrapper, SimulationArtifact, SimulationEvent
+from .definition import (
+    AgentDefinition,
+    LiveKitSimulatorRuntime,
+    LLMConfig,
+    RetellTargetConfig,
+    SimulatorAgentDefinition,
+    STTConfig,
+    TTSConfig,
+    VADConfig,
+    VapiTargetConfig,
+)
+from .wrapper import (
+    AgentInput,
+    AgentResponse,
+    AgentWrapper,
+    SimulationArtifact,
+    SimulationEvent,
+)
 from .generic import GenericAgentWrapper, wrap_agent
 from .frameworks import (
     FrameworkAdapterSpec,
@@ -31,7 +47,12 @@ from .realtime import (
     realtime_stack_contract,
     run_realtime_stack_probe,
 )
-from .mocks import EchoAgentWrapper, RuleBasedAgentWrapper, ScriptedAgentWrapper, make_tool_response
+from .mocks import (
+    EchoAgentWrapper,
+    RuleBasedAgentWrapper,
+    ScriptedAgentWrapper,
+    make_tool_response,
+)
 from .wrappers import (
     OpenAIAgentWrapper,
     LangChainAgentWrapper,
@@ -44,6 +65,9 @@ from .wrappers import (
 
 __all__ = [
     "AgentDefinition",
+    "LiveKitSimulatorRuntime",
+    "VapiTargetConfig",
+    "RetellTargetConfig",
     "LLMConfig",
     "TTSConfig",
     "STTConfig",

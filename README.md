@@ -98,6 +98,11 @@ Then run the golden path against the bundled example manifests. The
 `required_env` list — that list is CI wiring metadata, not a provider
 credential, so any placeholder value works.
 
+> Prefer the SDK spine over the CLI?
+> [Spec + Runner](docs/simulate/spec-and-runner.md) runs the same simulation as
+> one `SimulationSpec` fed to one `SimulationRunner` — the plug-and-play surface
+> behind every simulation.
+
 Evaluate a suite:
 
 ```bash
