@@ -39,8 +39,9 @@ INDEX = "scenarios.json"
 _RUNNABLE = '''
 
 if __name__ == "__main__":
-    # Run this check by hand against what a run left behind:
-    #     python <this file> <world.sqlite> [calls.json]
+    # Run this check by hand against what a run left behind. The first argument is anything
+    # inside the saved world's folder, because not every world has a database to name:
+    #     python <this file> <world folder>/manifest.json [calls.json]
     import json as _json
     import sys as _sys
     from pathlib import Path as _Path
@@ -92,8 +93,18 @@ def _run(source: str, name: str, entry: str, *args: Any) -> Outcome:
         return Outcome(
             False, f"{name} raised {type(failed).__name__}: {failed}", broken=True
         )
-    if said is None or said is True:
+    # The convention is that a complaint is a sentence, and anything else means it held. An empty
+    # string is the case worth naming: it reads as "no complaint" to whoever wrote it, and taking
+    # it as a failure produces a rejection with no reason attached, which cannot be acted on and
+    # sends the author hunting for a problem that is not there.
+    if said is None or said is True or (isinstance(said, str) and not said.strip()):
         return Outcome(True)
+    if said is False:
+        return Outcome(
+            False,
+            f"{name} returned False without saying what is wrong. Return the sentence instead, "
+            "or None if it holds.",
+        )
     return Outcome(False, str(said))
 
 

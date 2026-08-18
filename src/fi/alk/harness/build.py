@@ -25,6 +25,7 @@ from .config import (
     provider_env,
 )
 from .contract import AgentContract
+from .world.snapshot import saved as world_saved
 from .session import Stage
 from .tools import qualified
 from .world.tools import TOOL_NAMES, WORLD_SERVER, world_tools
@@ -96,4 +97,4 @@ async def build(
         await stage.say(opening(contract), on_event=on_event)
         for follow_up in follow_ups or []:
             await stage.say(follow_up, on_event=on_event)
-    return destination if (destination / "world.sqlite").exists() else None
+    return destination if world_saved(destination) else None

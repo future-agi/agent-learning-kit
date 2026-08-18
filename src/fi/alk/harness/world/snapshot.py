@@ -23,6 +23,19 @@ DATABASE = "world.sqlite"
 HANDLERS = "handlers"
 MANIFEST = "manifest.json"
 STATE = "state.json"
+
+
+def saved(path: str | Path | None) -> bool:
+    """Whether a world has been written here.
+
+    One function, because this question gets asked from six places: the build stage, the
+    conversation, the session listing, the CLI and the UI. Asked as "is there a world.sqlite"
+    each of those was really asking "is this a SQLite world", so an agent whose state lives in
+    services and files saved a world that scored 1.00 and was then invisible to all of them.
+    """
+    return bool(path) and (Path(path) / MANIFEST).exists()
+
+
 WORLD_MODULE = "world.py"
 
 _MODULE = '''"""Generated world for {agent}. Do not edit by hand; regenerate instead.
@@ -49,8 +62,15 @@ class World(GeneratedWorld):
 
 
 def load(database=None):
-    """The world, restored from its snapshot unless another database is given."""
-    return World(database or (_HERE / "world.sqlite"))
+    """This world, restored from the snapshot beside this file.
+
+    Through `restore` rather than by opening a database directly, because not every world has
+    one: an agent whose state lives in services and files keeps its records in the snapshot, and
+    naming a SQLite file would hand back an empty world instead of this one.
+    """
+    from fi.alk.harness.world.snapshot import restore
+
+    return restore(_HERE, into=database) if database else restore(_HERE)
 '''
 
 
@@ -165,6 +185,11 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
             with world.connection:
                 origin.backup(world.connection)
             origin.close()
+        else:
+            # A store that keeps its records somewhere other than a SQLite file loads them its own
+            # way. Without this the world comes back with an empty store, and everything a check
+            # reads is whatever happened to land in the agent's state instead.
+            world.store.load_from(root)
     else:
         target = Path(into)
         target.parent.mkdir(parents=True, exist_ok=True)

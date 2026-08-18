@@ -76,6 +76,31 @@ class Db:
     def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
         return self.store.execute(sql, params)
 
+    # -- reading without a query language ---------------------------------------------
+    #
+    # Not every agent has a database. One whose state lives in services and files gets a world
+    # whose collections the harness invented, and there is no dialect to write a SELECT in. A
+    # handler that could only issue SQL would be unable to read the world it was given at all.
+
+    def collections(self) -> list[str]:
+        """Every collection this world holds, by name."""
+        return list(self.store.collections())
+
+    def records(self, collection: str) -> list[dict[str, Any]]:
+        """Every record in one collection. The store-agnostic way to read."""
+        return list(self.store.records(collection))
+
+    def find(self, collection: str, **fields: Any) -> list[dict[str, Any]]:
+        """The records in a collection whose fields all match what was asked for."""
+        return [
+            record
+            for record in self.records(collection)
+            if all(record.get(field) == value for field, value in fields.items())
+        ]
+
+    def add(self, collection: str, record: Mapping[str, Any]) -> int:
+        return self.store.add(collection, record)
+
 
 def settled(value: Any) -> Any:
     """The value, with a coroutine run to completion first.
@@ -312,9 +337,14 @@ class GeneratedWorld(EnvironmentAdapter):
         """
         import re
 
-        quoted = re.findall(r"[\"'“”‘’`]([^\"'“”‘’`]{1,40})[\"'“”‘’`]", described)
-        found = [one.strip() for one in quoted if one.strip()]
-        return found or [described]
+        # A convention written for people gets quoted the way people quote, and a model writing
+        # JSON often escapes those quotes. Left in, the backslash ends up inside the marker, so
+        # "Error:" is looked for as 'Error:\' and matches nothing at all. Every refusal is then
+        # recorded as a success, which is the failure this whole field exists to prevent.
+        plain = described.replace('\\"', '"').replace("\\'", "'")
+        quoted = re.findall(r"[\"'“”‘’`]([^\"'“”‘’`]{1,40})[\"'“”‘’`]", plain)
+        found = [one.strip().strip("\\").strip() for one in quoted]
+        return [one for one in found if one] or [plain.strip()]
 
     def _record(self, call: Call) -> Call:
         self.calls.append(call)
@@ -330,10 +360,15 @@ class GeneratedWorld(EnvironmentAdapter):
         use". Left unsettled, the first read-only handler poisons every probe after it, and the
         world can never be checked or saved.
         """
+        connection = getattr(self.store, "connection", None)
+        if connection is None:
+            # Nothing to settle. A store with no transactions has no open one to close, and
+            # reaching for a connection it never had would fail every probe on such a world.
+            return
         try:
-            self.connection.commit()
+            connection.commit()
         except sqlite3.Error:
-            self.connection.rollback()
+            connection.rollback()
 
     def checkpoint(self) -> Any:
         """A copy of everything the world holds, to come back to.
@@ -351,11 +386,10 @@ class GeneratedWorld(EnvironmentAdapter):
         import copy as duplicate
 
         self._settle()
-        store = None
-        connection = getattr(self.store, "connection", None)
-        if connection is not None:
-            store = sqlite3.connect(":memory:")
-            connection.backup(store)
+        # Through the store's own freeze rather than a SQLite backup, so a world whose records
+        # live somewhere else is revertible too. Every store knows how to go back; only some of
+        # them have a connection to copy.
+        store = self.store.freeze()
         held = duplicate.deepcopy(self.state_object) if self.state_object is not None else None
         return {"store": store, "state": held}
 
@@ -371,7 +405,7 @@ class GeneratedWorld(EnvironmentAdapter):
             return
         held = (checkpoint or {}).get("store")
         if held is not None:
-            held.backup(self.connection)
+            self.store.restore(held)
         if (checkpoint or {}).get("state") is not None:
             self.state_object = duplicate.deepcopy(checkpoint["state"])
 
@@ -431,6 +465,15 @@ class GeneratedWorld(EnvironmentAdapter):
             return
         if isinstance(held, list):
             held.append(dict(record))
+            return
+        # A collection nobody has created yet is made here rather than refused. An agent whose
+        # state lives in services and files has no store to declare tables in, so every collection
+        # the world needs is one the harness invents: refusing the first record leaves that agent
+        # with a world that cannot hold anything at all.
+        made = getattr(self.store, "start_collection", None)
+        if callable(made):
+            made(collection, keyed=bool(key))
+            self.store.add(collection, {**record, "_id": key} if key else record)
             return
         raise KeyError(f"no collection called {collection!r}; this world has {sorted(self.state())}")
 

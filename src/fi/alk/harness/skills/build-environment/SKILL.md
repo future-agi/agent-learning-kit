@@ -52,11 +52,18 @@ The contract says which tools have code and where it is. For each of those:
 `define_handler` is for tools with a definition and no implementation. It refuses a tool the
 contract says has code, and that refusal is not something to work around.
 
-**When a tool cannot be reached, say so and ask.** Some tools are not importable at all: a
-framework may define them as closures inside a class, so there is nothing to bind to. Report which
-tools those are and what you would need, and let the person decide. Writing a stand-in because
-binding was awkward is the one failure with no visible symptom: everything goes green and the
-result is about code nobody deployed.
+**When a tool genuinely cannot be reached, record it with `cannot_reach_tool`.** Some
+implementations are out of reach from here: a framework builds them as closures inside a class, or
+they need a live client or a package this environment does not have. Say which tool and what
+stopped it. That writes the reason onto the contract and then lets you write a handler for it.
+
+Two things about that. It is for after `adopt_tool` has actually failed, not instead of trying:
+the reason you give is the only record anyone will have that the tool was a stand-in. And it is
+worth telling the person too, because a world of stand-ins may not be worth running at all, and
+that is their call rather than yours.
+
+Writing a stand-in without recording it is the one failure with no visible symptom: everything
+goes green and the result is about code nobody deployed.
 
 **Their code refuses in its own way.** Code written for production often returns an error value
 rather than raising, so a string beginning with an error marker is a refusal rather than a result.
@@ -97,7 +104,18 @@ your bugs; `ToolError` is the world's answer, and the two are recorded different
 Inside a handler you have `args`, `db`, `ToolError` and `json`, and nothing else. Do not import
 anything and do not define your own `ToolError`.
 
-`db` has exactly three methods, and no cursors:
+`db` reads the world two ways, and has no cursors.
+
+**These work on every world, database or not:**
+
+```python
+db.records("items")                      # -> every record in a collection, as dicts
+db.find("items", item_id=args["id"])     # -> the ones whose fields all match
+db.collections()                         # -> the collection names
+db.add("orders", {"item_id": item_id})   # -> put one record in
+```
+
+**These work only where the world has a query language**, which not every agent's does:
 
 ```python
 db.query("SELECT * FROM items WHERE id = ?", [args["item_id"]])   # -> list of dicts, [] if none
@@ -105,12 +123,33 @@ db.one("SELECT * FROM items WHERE id = ?", [args["item_id"]])      # -> one dict
 db.execute("INSERT INTO orders (item_id) VALUES (?)", [item_id])   # -> number of rows changed
 ```
 
-Rows come back as dicts, so read them by column name. There is nothing to fetch afterwards:
+An agent whose state lives in services and files has no database, and those three raise for it.
+Write handlers with the first four and they work whatever the world turns out to be.
+
+Records come back as dicts, so read them by field name. There is nothing to fetch afterwards:
 `db.execute` returns a count, not a cursor, so calling `.fetchone()` on anything is a mistake.
 Use `db.one` when you want a single row and `db.query` when you want several.
 
 Use the argument names exactly as the contract gives them. A handler that reads a name the tool
 does not pass finds nothing, quietly does nothing, and reports success.
+
+## Take the agent's store before you fill one yourself
+
+If the agent ships or builds a store of its own, **`adopt_store` it**. One call takes the whole
+thing: its schema, its keys, its indexes, and every row, exactly as the agent has them.
+
+This matters more than it looks. Seeding by hand means retyping somebody's data through a model,
+and what comes out is smaller and tidier than what went in: a few hundred rows instead of
+thousands, the awkward ones quietly dropped, the accented names spelled the easy way. The agent's
+queries were written against the real thing. A test against the tidied copy is a test of a
+different database.
+
+So the order is: adopt the store if there is one, and only seed what the adopted store does not
+already hold. `create_schema` and `seed` are for an agent with no store to take, or for the parts
+a scenario needs that the agent's own data has no example of.
+
+If the store is empty, or is built on first run, or lives somewhere you cannot reach, **say so and
+ask**. Do not fill the gap with data you made up.
 
 ## Seeding
 
@@ -202,6 +241,11 @@ A thin prompt is the commonest reason a run tells you nothing: the simulated per
 question instantly and correctly, so the agent is never tested on eliciting anything. What makes
 it worth reading is the behaviour it pins down. Cover all of these, for **this** agent:
 
+- **Which part they play, said outright.** They are the one making contact, not the agent being
+  contacted. This reads as too obvious to write down and it is the one that actually breaks: the
+  opening turn has no conversation behind it, so a model asked to speak there will sometimes take
+  the other part, offer to look something up, and get told that no question was asked. Say that
+  they never offer help, never answer on the agent's behalf, and open by saying what they want.
 - **They are living it, not describing it.** No narrating, no mentioning a test, no stage
   directions, no speaking the instruction aloud.
 - **One short turn at a time**, the way people actually talk in this channel. Someone speaking
@@ -264,8 +308,9 @@ Never work around a contract you believe is wrong. Everything after you inherits
 
 ## How to work
 
-1. `create_schema` with the whole schema.
-2. `seed` each table from the contract's data.
+1. `adopt_store` if the agent has a store of its own. Otherwise `create_schema` with the whole
+   schema.
+2. `seed` whatever the adopted store does not already hold, from the contract's data.
 3. `define_handler` for each tool, one at a time. Each runs the moment you define it — read what
    comes back.
 4. `run_tool` to try the refusals yourself. Call something with an identifier that was never

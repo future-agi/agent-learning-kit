@@ -151,6 +151,36 @@ class SqliteStore(Records):
                 f"INSERT INTO {COUNTERS} (name, seq) VALUES (?, ?)", (name, seq)
             )
 
+    def clear(self) -> None:
+        """Empty every table, whatever references what.
+
+        Foreign keys are suspended for the duration rather than the tables being sorted into
+        dependency order. Deleting them one at a time in the wrong order fails on the referenced
+        ones, and a caller that swallows those failures is left believing it emptied a store that
+        still holds most of its data.
+        """
+        self.connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            for name in self.collections():
+                self.connection.execute(f'DELETE FROM "{name}"')
+            self.connection.commit()
+        finally:
+            self.connection.execute("PRAGMA foreign_keys = ON")
+
+    def take(self, held: str | Path) -> None:
+        """Become a copy of another SQLite database: the agent's own.
+
+        The whole file, schema and data together, rather than rows read out and written back. An
+        agent's real store carries things a reconstruction loses: its exact types, its indexes,
+        its keys, and every oddity in the data that its queries were actually written against.
+        """
+        origin = sqlite3.connect(f"file:{Path(held)}?mode=ro", uri=True)
+        try:
+            with self.connection:
+                origin.backup(self.connection)
+        finally:
+            origin.close()
+
     # -- going back, on disk ---------------------------------------------------------
 
     def save_to(self, path: str | Path) -> None:
@@ -159,10 +189,25 @@ class SqliteStore(Records):
         # Settled first: an open read transaction makes the copy fail, and a handler that only
         # read leaves one behind.
         self.connection.commit()
-        copy = sqlite3.connect(root / self.FILE)
+        held = root / self.FILE
+        # A world whose live database already is the saved file has nothing to copy, and copying
+        # it would be a backup onto its own file. SQLite retries a locked destination rather than
+        # refusing, so that does not fail: it hangs, with no error and no timeout, and the build
+        # stops dead somewhere nobody is looking.
+        if self._same_file(held):
+            return
+        copy = sqlite3.connect(held)
         with copy:
             self.connection.backup(copy)
         copy.close()
+
+    def _same_file(self, held: Path) -> bool:
+        if self.database == ":memory:":
+            return False
+        live = Path(self.database)
+        if not live.exists() or not held.exists():
+            return str(live) == str(held)
+        return live.samefile(held)
 
     def load_from(self, path: str | Path) -> None:
         held = Path(path) / self.FILE

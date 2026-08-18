@@ -2578,3 +2578,455 @@ def test_emptying_a_store_is_something_restore_can_reproduce():
     assert store.state() == {"orders": []}
     # The group itself survives, because the agent's own code indexes into it.
     assert store.data == {"orders": {}}
+
+
+def test_saving_a_world_that_already_lives_in_the_saved_file_does_not_hang(tmp_path):
+    """An agent that connects by URI needs the world to be a real file, and the obvious file to
+    give it is the one the world is saved to.
+
+    SQLite retries a locked backup destination rather than refusing, so backing a database up onto
+    its own file does not fail, it hangs, with no error and no timeout. The build then stops dead
+    somewhere nobody is looking.
+    """
+    import threading
+
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.snapshot import restore, save
+
+    world = GeneratedWorld(tmp_path / "world.sqlite")
+    world.store.apply("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t (v) VALUES ('a');")
+
+    done = threading.Event()
+
+    def keep():
+        save(world, tmp_path, sequences=[])
+        done.set()
+
+    worker = threading.Thread(target=keep, daemon=True)
+    worker.start()
+    assert done.wait(20), "saving a world onto its own file hung"
+    assert len(restore(tmp_path).state()["t"]) == 1
+
+
+def test_a_world_takes_the_agents_own_store_rather_than_retyping_it(tmp_path):
+    """Seeding by hand means retyping somebody's data through a model, and what comes out is
+    smaller and tidier than what went in: fewer rows, the awkward ones dropped, the accented names
+    spelled the easy way. The agent's queries were written against the real thing."""
+    import sqlite3
+
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    theirs = tmp_path / "theirs.db"
+    origin = sqlite3.connect(theirs)
+    origin.executescript(
+        "CREATE TABLE Customer (CustomerId INTEGER PRIMARY KEY, Name TEXT, Company TEXT);"
+        "INSERT INTO Customer (Name, Company) VALUES ('Luis Goncalves', 'Embraer');"
+        "INSERT INTO Customer (Name, Company) VALUES ('Leonie Kohler', NULL);"
+    )
+    origin.commit()
+    origin.close()
+
+    world = GeneratedWorld(":memory:")
+    world.store.take(theirs)
+
+    held = world.state()["Customer"]
+    assert len(held) == 2
+    # Their schema, not one inferred from the rows: the nullable column survives as null.
+    assert held[1]["Company"] is None
+    # And taking it is read-only on their side, so testing an agent never edits its data.
+    assert theirs.stat().st_size > 0
+
+
+def test_a_missing_store_names_the_root_and_what_is_under_it(tmp_path):
+    """A message that says a path was wrong without saying what the right ones are turns one call
+    into a search, over a filesystem this stage deliberately cannot list. That is how the same
+    wrong guess gets made three times."""
+    from fi.alk.harness.world.tools import _stores_here
+
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "chinook.db").write_bytes(b"x" * 4096)
+    (tmp_path / "agent.py").write_text("print('hi')", encoding="utf-8")
+
+    said = _stores_here(str(tmp_path))
+    assert str(tmp_path) in said, "the root itself has to be named"
+    assert "nested/chinook.db" in said
+    assert "4 KB" in said
+    # A python file is not a store, and listing it would bury the one that is.
+    assert "agent.py" not in said
+
+    # And with no root at all, say that rather than reporting an empty directory.
+    assert "not told where" in _stores_here("")
+
+
+def test_a_tool_that_cannot_be_reached_has_a_way_out_that_is_recorded(tmp_path):
+    """Without one there is no legitimate exit at all: define_handler refuses because the tool has
+    an implementation, adopt_tool fails because that implementation needs something this
+    environment does not have, and the only moves left are to give up or to lie."""
+    from fi.alk.harness.amend import unreachable
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="x",
+        tools=[{"name": "look", "args": ["q"]}],
+        real_use_cases=["a plain sentence"],
+        tool_entrypoints=[
+            {"tool": "look", "mode": "construct", "module": "vendor.tools", "callable": "Look._run"}
+        ],
+    )
+    assert contract.adoptable("look")
+
+    # Not without a reason: this is the only record that the tool was a stand-in.
+    held, said = unreachable(contract, tmp_path, tool_name="look", why="  ")
+    assert not held and "say why" in said
+
+    held, said = unreachable(
+        contract, tmp_path, tool_name="look", why="built by a framework that needs a live client"
+    )
+    assert held
+    # The refusal is lifted, so a handler can be written.
+    assert not contract.adoptable("look")
+    # And the reason survives, on the contract, where a reader will find it.
+    assert any("could not be reached" in one for one in contract.amendments)
+    assert "live client" in contract.entry_for("look").notes
+
+    kept = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+    assert kept["tool_entrypoints"][0]["mode"] == "generate"
+
+    # And a tool that never had an implementation was never blocked, so there is nothing to record.
+    again, said = unreachable(contract, tmp_path, tool_name="look", why="same reason")
+    assert not again and "nothing is blocking" in said
+
+
+def test_a_refusal_convention_written_with_escaped_quotes_still_matches():
+    """A convention written for people gets quoted the way people quote, and a model writing JSON
+    escapes those quotes. Left in, the backslash lands inside the marker, so "Error:" is looked for
+    as 'Error:\\' and matches nothing. Every refusal is then recorded as a success, silently."""
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld(":memory:")
+    world.refusal_signature = (
+        'sql_db_query and sql_db_schema return plain error strings beginning with \\"Error:\\" '
+        '(e.g. \\"Error: (sqlite3.OperationalError) ...\\") on failure rather than raising'
+    )
+    assert world._markers(world.refusal_signature)[0] == "Error:"
+    assert world._refused_by_value("Error: DML statements are not permitted.")
+    assert not world._refused_by_value("[('AC/DC',), ('Accept',)]")
+
+    # And the plain unescaped form, which is what a human writing the contract would put.
+    world.refusal_signature = 'strings starting with "Error: "'
+    assert world._refused_by_value("Error: no such order")
+
+
+def test_emptying_a_world_survives_foreign_keys(tmp_path):
+    """A real schema has references. Deleting table by table fails on the referenced ones, and a
+    caller that swallows those failures believes it emptied a store still holding most of its data.
+
+    The gate then reports every check as verifying nothing, because they are all still reading real
+    rows, and somebody rewrites checks that were correct.
+    """
+    from fi.alk.harness.world.mutate import _empty, left
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld(":memory:")
+    world.store.apply(
+        "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT);"
+        "CREATE TABLE Album (AlbumId INTEGER PRIMARY KEY, Title TEXT, ArtistId INTEGER,"
+        "  FOREIGN KEY (ArtistId) REFERENCES Artist (ArtistId));"
+        "INSERT INTO Artist (ArtistId, Name) VALUES (1, 'AC/DC');"
+        "INSERT INTO Album (AlbumId, Title, ArtistId) VALUES (1, 'Let There Be Rock', 1);"
+    )
+    assert sum(len(rows) for rows in world.state().values()) == 2
+
+    _empty(world)
+    assert left(world) == {}, "a referenced table has to be emptied too"
+
+
+def test_a_mutation_that_does_not_land_accuses_nobody():
+    """The gate accuses a check of verifying nothing when it stays green through damage. That is
+    only fair if the damage happened."""
+    from fi.alk.harness.world.mutate import EMPTIED, SILENCED, UNDAMAGED, blind, unnoticed
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    class Stubborn(GeneratedWorld):
+        def __init__(self):
+            super().__init__(":memory:")
+            self.store.apply("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('kept');")
+            # A store that quietly refuses to empty, which is what a foreign key looked like.
+            self.store.clear = lambda: None
+
+    held = type("Outcome", (), {"held": True})()
+    survived = unnoticed(
+        "anywhere",
+        [("reads_the_world", "def check(world):\n    return None\n")],
+        run=lambda source, world: held,
+        restore=lambda _root: Stubborn(),
+    )
+
+    assert survived[EMPTIED] == [], "nothing can be concluded from damage that did not happen"
+    assert survived[UNDAMAGED] and "would not empty" in survived[UNDAMAGED][0]
+    # The check stayed green through silencing, but that alone is not blindness.
+    assert survived[SILENCED] == ["reads_the_world"]
+    assert blind(survived) == []
+
+
+def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
+    """The opening turn is the one with no conversation behind it, and a model asked to speak into
+    that gap sometimes takes the other part.
+
+    Both of these are real opening lines from a run: the agent then replied that no question had
+    been asked, and the scenario failed for a reason that had nothing to do with the agent.
+    """
+    from fi.alk.harness.run.conversation import OPENING, _answered_as_the_agent
+
+    assert _answered_as_the_agent("Sure! Let me find the database and make that update for you.")
+    assert _answered_as_the_agent("I'd be happy to look that up! Let me check the database.")
+    assert _answered_as_the_agent("What would you like to know about the database?")
+
+    # What a person actually says, which must survive untouched.
+    assert not _answered_as_the_agent("How many of your customers are based in Canada?")
+    assert not _answered_as_the_agent(
+        "I want all track prices changed to 0.99 for the promotion, can you update them?"
+    )
+    assert not _answered_as_the_agent("Which genre has the highest average listener rating?")
+
+    # And the instruction that produces the opening says which part to play.
+    assert "you speak first" in OPENING
+    assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
+
+
+def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():
+    """Where the right behaviour is to decline and touch nothing, every check about the world holds
+    with nothing done, and the explanation is the only real evidence.
+
+    Judged on that alone, the gate rejects exactly the scenarios that test a refusal. An agent that
+    did nothing also said nothing, so a judged sub-goal cannot be passed by an empty run.
+    """
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.environment import Catalogue, SubGoal
+    from fi.alk.harness.prove import Proof
+
+    catalogue = Catalogue(
+        sub_goals=[
+            SubGoal(name="no_dml_attempted", what="nothing was written", check="def check(w,c):\n    return None\n"),
+            SubGoal(name="refused_clearly", what="it explained the refusal", judged="needs the reply read"),
+        ]
+    )
+    assert catalogue.named("no_dml_attempted").deterministic()
+    assert not catalogue.named("refused_clearly").deterministic()
+
+    # The state check holds with nothing done, which on its own would read as vacuous.
+    proof = Proof()
+    proof.with_nothing = [Outcome("no_dml_attempted", True, "")]
+    proof.weak = ["no_dml_attempted"]
+
+    everything_weak = len(proof.weak) == len(proof.with_nothing)
+    assert everything_weak
+    judged = [
+        name
+        for name in ["no_dml_attempted", "refused_clearly"]
+        if (found := catalogue.named(name)) is not None and not found.deterministic()
+    ]
+    assert judged == ["refused_clearly"]
+    # Which is what spares the scenario.
+    assert not (everything_weak and not judged)
+
+
+def test_a_setup_or_ready_that_says_nothing_is_not_a_complaint():
+    """The convention is that a complaint is a sentence. An empty string reads as "no complaint" to
+    whoever wrote it, and taking it as a failure produces a rejection with no reason attached: the
+    author is then sent hunting for a problem that is not there."""
+    from fi.alk.harness.folder import _run
+
+    for returning in ("''", "'   '", "None", "True"):
+        outcome = _run(f"def ready(world):\n    return {returning}\n", "s/ready.py", "ready", None)
+        assert outcome.ok, f"returning {returning} should read as holding"
+        assert outcome.said == ""
+
+    # A real complaint survives untouched.
+    complained = _run(
+        "def ready(world):\n    return 'no pending orders'\n", "s/ready.py", "ready", None
+    )
+    assert not complained.ok and complained.said == "no pending orders"
+
+    # And False is a failure that says nothing, so the message says that rather than being blank.
+    bare = _run("def ready(world):\n    return False\n", "s/ready.py", "ready", None)
+    assert not bare.ok and "without saying what is wrong" in bare.said
+
+
+def test_an_optional_field_may_be_null():
+    """Filling a field that does not apply with null is what a model does, and it is not wrong: the
+    alternative is inventing a value.
+
+    Rejecting it costs a turn, and the rejection does not say which field was at fault. "None is
+    not of type 'string'" is the whole message, on a tool with twenty properties.
+    """
+    import jsonschema
+
+    from fi.alk.harness.tools import schema
+
+    shape = schema({"name": str, "note": str, "size": int}, ["name"])
+
+    # Required stays strict.
+    assert shape["properties"]["name"]["type"] == "string"
+    assert shape["properties"]["note"]["type"] == ["string", "null"]
+    assert shape["properties"]["size"]["type"] == ["integer", "null"]
+
+    jsonschema.validate({"name": "x", "note": None, "size": None}, shape)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"name": None}, shape)
+
+    # A property given as a full fragment is left exactly as written.
+    spelled = schema({"size": {"type": "string", "enum": ["S", "M"]}}, [])
+    assert spelled["properties"]["size"] == {"type": "string", "enum": ["S", "M"]}
+
+
+def test_an_agent_with_no_store_still_gets_a_world_that_holds_things():
+    """An agent whose state lives in services and files has no store to declare collections in, so
+    every collection the world needs is one the harness invents.
+
+    Refusing the first record leaves that agent with a world that cannot hold anything at all, and
+    there is no other way for the build to put its stand-in data somewhere.
+    """
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld(":memory:", kind="in_process")
+    assert world.state() == {}
+
+    world.put("reports", {"title": "first"})
+    world.put("reports", {"title": "second"})
+    assert len(world.state()["reports"]) == 2
+
+    # A keyed collection stays keyed, so a scenario can name one record.
+    world.put("sources", {"url": "a"}, key="s1")
+    assert world.change("sources", "s1", {"url": "b"}) == 1
+    assert world.state()["sources"] == [{"_id": "s1", "url": "b"}]
+
+    assert world.drop("reports") == 2
+    assert world.state()["reports"] == []
+
+
+def test_a_handler_can_read_a_world_that_has_no_query_language():
+    """An agent whose state lives in services and files gets a world whose collections the harness
+    invented, and there is no dialect to write a SELECT in.
+
+    A handler that could only issue SQL would be unable to read the world it was given at all,
+    which is where the build stalls: seed works, then nothing can look at what was seeded.
+    """
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld(":memory:", kind="in_process")
+    world.put("search_results", {"query": "solar", "title": "Solar in 2026", "rank": 1})
+    world.put("search_results", {"query": "wind", "title": "Wind at sea", "rank": 1})
+
+    world.handlers = {
+        "search": (
+            "def handle(args, db):\n"
+            "    found = db.find('search_results', query=args['query'])\n"
+            "    if not found:\n"
+            "        raise ToolError('no results')\n"
+            "    return [one['title'] for one in found]\n"
+        )
+    }
+    assert world.call("search", {"query": "solar"}).result == ["Solar in 2026"]
+    # And a handler can still say no, which is the behaviour worth testing.
+    assert world.call("search", {"query": "nothing"}).refused
+
+    # The collection names are reachable too, without knowing what kind of store this is.
+    assert world.call(
+        "search", {"query": "wind"}
+    ).ok
+
+
+def test_a_world_with_no_database_can_still_be_reverted():
+    """Every probe and every smoke call takes a checkpoint first, so a world that cannot be
+    checkpointed cannot be built at all: define_handler fails before the handler body even runs,
+    and the error names the store rather than anything the author wrote."""
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld(":memory:", kind="in_process")
+    world.put("reports", {"title": "first"})
+
+    held = world.checkpoint()
+    world.put("reports", {"title": "second"})
+    assert len(world.state()["reports"]) == 2
+
+    world.revert(held)
+    assert [one["title"] for one in world.state()["reports"]] == ["first"]
+
+    # And defining a handler, which is what actually stalled: it checkpoints around the smoke call.
+    world.handlers = {"look": "def handle(args, db):\n    return len(db.records('reports'))\n"}
+    assert world.call("look", {}).result == 1
+
+
+def test_a_world_with_no_database_still_counts_as_built(tmp_path):
+    """Whether a stage is done is keyed on the manifest, not on a database file.
+
+    Keyed on the database, an agent whose state lives in services and files stays "not built"
+    forever: the world saves, scores 1.00, and the conversation still cannot leave the build stage
+    because the file it is looking for was never going to exist.
+    """
+    from fi.alk.harness.chat import Conversation
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    world = GeneratedWorld(":memory:", kind="in_process")
+    world.put("reports", {"title": "first"})
+    save(world, tmp_path, sequences=[])
+
+    assert not (tmp_path / "world.sqlite").exists(), "this world has no database, by construction"
+    assert Conversation(out=tmp_path).world_built
+
+    # And a world that does have one is still built, which is the case that already worked.
+    other = tmp_path / "sql"
+    save(GeneratedWorld(":memory:"), other, sequences=[])
+    assert Conversation(out=other).world_built
+
+
+def test_a_storeless_world_comes_back_on_the_right_side_of_the_seam(tmp_path):
+    """The store and the agent's own state are two different things, and both are written beside
+    the world. Sharing one filename means whichever is written second wins.
+
+    The symptom is quiet: the world reads correctly, because state() merges both sides, but the
+    store is empty. The mutation gate then empties a store that was never holding anything and
+    reports every check as verifying nothing.
+    """
+    from fi.alk.harness.world.mutate import _empty, left
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.snapshot import restore, save
+
+    world = GeneratedWorld(":memory:", kind="in_process")
+    world.put("reports", {"title": "first"})
+    world.put("reports", {"title": "second"})
+    save(world, tmp_path, sequences=[])
+
+    again = restore(tmp_path)
+    assert again.store.state()["reports"], "the records belong to the store"
+    assert again.state_object is None, "and not to the agent's own state, which it never had"
+    assert len(again.state()["reports"]) == 2
+
+    # Which is what lets the gate actually break this world.
+    _empty(again)
+    assert left(again) == {}
+
+
+def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
+    """The folders are the truth and they are what gets read back. Writing the survivors without
+    taking the others away means a dropped scenario returns on the next load, still failing, and
+    dropping it appears to do nothing at all."""
+    from fi.alk.harness.environment import Catalogue, SubGoal
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
+
+    catalogue = Catalogue(
+        sub_goals=[SubGoal(name="held", what="it held", check="def check(w,c):\n    return None\n")]
+    )
+    made = [
+        Scenario(name="keeper", instruction="a thing happens", sub_goals=["held"]),
+        Scenario(name="goner", instruction="another thing", sub_goals=["held"]),
+    ]
+    write_scenarios(made, tmp_path, catalogue)
+    assert sorted(one.name for one in load_scenarios(tmp_path)) == ["goner", "keeper"]
+
+    write_scenarios([made[0]], tmp_path, catalogue)
+    assert [one.name for one in load_scenarios(tmp_path)] == ["keeper"]
+    assert not (tmp_path / "scenarios" / "goner").exists()

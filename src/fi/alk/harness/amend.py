@@ -258,3 +258,61 @@ def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> lis
             if absent:
                 missing.append(f"{tool.name}.{argument}: {', '.join(absent)}")
     return missing
+
+
+def unreachable(
+    contract: AgentContract,
+    destination: Path,
+    *,
+    tool_name: str,
+    why: str,
+) -> tuple[bool, str]:
+    """Record that a tool's own implementation cannot be run here, and let one be written instead.
+
+    The harness refuses to write a replacement for a tool the agent already implements, because a
+    stand-in that looks right is worse than a tool we admit we could not run. But some
+    implementations genuinely cannot be reached: they are built by a framework that needs a live
+    client, or they live in a package this environment does not have. Without a way to say so, the
+    build has no legitimate exit at all, and the only ways forward are to give up or to lie.
+
+    So this is the exit, and it costs something: the reason is recorded on the contract, next to
+    the tool, permanently. Anyone reading it afterwards can tell which tools ran the agent's own
+    code and which were stand-ins, which is the distinction the refusal exists to protect.
+    """
+    spec = next((tool for tool in contract.tools if tool.name == tool_name), None)
+    if spec is None:
+        return False, (
+            f"{tool_name!r} is not a tool this agent has. It has: "
+            f"{', '.join(sorted(contract.tool_names()))}"
+        )
+    if not why.strip():
+        return False, (
+            "say why it cannot be reached. An unexplained stand-in is indistinguishable from not "
+            "having tried, and this is the one record that it was a stand-in at all."
+        )
+    entry = contract.entry_for(tool_name)
+    if entry is None or entry.mode == "generate":
+        return False, (
+            f"{tool_name} has no implementation recorded, so nothing is blocking a handler for "
+            "it. Write one with define_handler."
+        )
+
+    was = entry.mode
+    entry.mode = "generate"
+    entry.notes = (f"{entry.notes} " if entry.notes else "") + f"unreachable here: {why.strip()}"
+    contract.amendments.append(
+        f"{tool_name} was recorded as {was} but could not be reached, so the world implements it: "
+        f"{why.strip()}"
+    )
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / CONTRACT).write_text(
+        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return True, (
+        f"Recorded: {tool_name} could not be run from the agent's own code here. define_handler "
+        "will now accept one for it, and the contract carries the reason so nobody later reads "
+        "this as the agent's own tool having been tested."
+    )

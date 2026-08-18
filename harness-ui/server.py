@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -38,6 +37,8 @@ from fi.alk.harness.config import chosen_model, credentials_hint  # noqa: E402
 from fi.alk.harness.run import run_suite  # noqa: E402
 from fi.alk.harness.scenarios import load as load_scenarios  # noqa: E402
 from fi.alk.harness.understand import load as load_contract  # noqa: E402
+from fi.alk.harness.world.snapshot import restore as restore_world  # noqa: E402
+from fi.alk.harness.world.snapshot import saved as world_saved  # noqa: E402
 
 app = FastAPI(title="harness")
 
@@ -431,20 +432,22 @@ async def contract():
 @app.get("/api/world")
 async def world():
     out = current.path if current else None
-    path = out / "world.sqlite" if out else None
-    if not path or not path.exists():
+    if not world_saved(out):
         return JSONResponse({"tables": []})
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    # Restored rather than read out of a database file, because not every world has one. An agent
+    # whose state lives in services and files saves a world with collections and no SQLite, and
+    # opening it by filename showed an empty page for a world that was really there.
+    held = restore_world(out)
     try:
-        names = [row[0] for row in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-        tables = []
-        for name in names:
-            count = db.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-            cursor = db.execute(f"SELECT * FROM {name} LIMIT 200")
-            columns = [col[0] for col in cursor.description]
-            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            tables.append({"name": name, "count": count, "columns": columns, "rows": rows})
+        tables = [
+            {
+                "name": name,
+                "count": len(records),
+                "columns": sorted({field for record in records[:200] for field in record}),
+                "rows": records[:200],
+            }
+            for name, records in sorted(held.state().items())
+        ]
         manifest = {}
         manifest_path = out / "manifest.json"
         if manifest_path.exists():
@@ -462,7 +465,7 @@ async def world():
             "notes": manifest.get("notes", ""),
         }
     finally:
-        db.close()
+        held.close()
 
 
 @app.get("/api/scenarios")
@@ -481,7 +484,7 @@ async def scenarios():
     if not out:
         return []
     catalogue = load_catalogue(out)
-    built = (out / "world.sqlite").exists()
+    built = world_saved(out)
     found = []
     for one in load_scenarios(out):
         body = one.model_dump()

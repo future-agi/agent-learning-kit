@@ -38,7 +38,11 @@ class InProcessStore:
 
     engine = "in_process"
     key = "in_process"
-    FILE = "state.json"
+    # Deliberately not state.json, which the snapshot uses for the agent's own state object. Two
+    # different things sharing one filename means whichever is written second wins, and the world
+    # comes back with its records on the wrong side of the seam: the store empty, everything in
+    # the agent's state, and the mutation gate then emptying a store that was never holding it.
+    FILE = "collections.json"
 
     def __init__(
         self,
@@ -173,6 +177,15 @@ class InProcessStore:
             return []
         return [{"value": group}]
 
+    def start_collection(self, collection: str, *, keyed: bool = False) -> None:
+        """Make a collection that does not exist yet.
+
+        For an agent with no store of its own, every collection is one the harness invents, so
+        there is nothing to declare them in advance the way a schema does for a database.
+        """
+        if collection not in self.data:
+            self.data[collection] = {} if keyed else []
+
     def add(self, collection: str, record: Mapping[str, Any]) -> int:
         group = self.data.get(collection)
         if isinstance(group, list):
@@ -244,6 +257,16 @@ class InProcessStore:
         return [row for row in found if isinstance(row, dict) and _reads(row, by) == key]
 
     # -- going back ------------------------------------------------------------------
+
+    def clear(self) -> None:
+        """Empty every group, keeping its shape: the agent's own code indexes into these."""
+        for name, group in self.data.items():
+            if isinstance(group, dict):
+                group.clear()
+            elif isinstance(group, list):
+                group.clear()
+            else:
+                self.data[name] = None
 
     def freeze(self) -> Snapshot:
         """A deep copy. Nothing sits behind these records, so there are no counters to carry."""

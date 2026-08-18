@@ -32,11 +32,11 @@ from ..environment import (
     validate_sub_goal,
 )
 from ..tools import schema
-from ..amend import add_rule, drop_rule, fix_tool, widen
+from ..amend import add_rule, drop_rule, fix_tool, unreachable, widen
 from ..contract import AgentContract
 from .kinds import for_contract
 from ..checks import run_check, run_world_check
-from .mutate import blind, unnoticed
+from .mutate import UNDAMAGED, blind, unnoticed
 from .probe import dirty_state, probe
 from .runtime import GeneratedWorld
 from .snapshot import MANIFEST, read_manifest, restore, save
@@ -49,13 +49,20 @@ WORLD_SERVER = "world"
 # error naming the failure without naming the API produces the same wrong guess again. Three
 # identical attempts at one handler is what that costs.
 DB_API = (
-    "Inside a handler, `db` has exactly three methods and no cursors:\n"
+    "Inside a handler, `db` reads the world two ways and has no cursors.\n\n"
+    "Works on every world, database or not:\n"
+    '    db.records("orders")              -> every record in a collection, as dicts\n'
+    '    db.find("orders", status="new")   -> the ones whose fields all match\n'
+    '    db.collections()                  -> the collection names\n'
+    '    db.add("orders", {"id": "o1"})    -> put one record in\n\n'
+    "Only where this world has a query language, which not every agent does:\n"
     '    db.query("SELECT * FROM t WHERE id = ?", [x])   -> list of dicts, [] if none\n'
     '    db.one("SELECT * FROM t WHERE id = ?", [x])      -> one dict, or None\n'
-    '    db.execute("INSERT INTO t (a) VALUES (?)", [x])  -> number of rows changed\n'
-    "Rows are dicts, read by column name. db.execute returns a count, not a cursor, so "
-    "calling .fetchone(), .fetchall() or .lastrowid on any of these is a mistake. You also have "
-    "`args`, `ToolError` and `json`, and nothing else — do not import anything."
+    '    db.execute("INSERT INTO t (a) VALUES (?)", [x])  -> number of rows changed\n\n'
+    "If this world has no connection, those three raise and the first four are what to use. "
+    "Records are dicts read by field name. db.execute returns a count, not a cursor, so calling "
+    ".fetchone(), .fetchall() or .lastrowid on any of these is a mistake. You also have `args`, "
+    "`ToolError` and `json`, and nothing else. Do not import anything."
 )
 
 # Below this, the world is not good enough to build tests on. Synthesis work that measures this
@@ -122,6 +129,40 @@ ADOPT_HELP = (
 
 def _size(value: Any) -> Any:
     return len(value) if isinstance(value, (list, dict, tuple, str)) else value
+
+
+# What a store file is called, when nobody has said where it is. Extensions rather than names,
+# because the name is the agent's business and the extension is the convention.
+STORE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".duckdb", ".dump", ".sql")
+
+
+def _stores_here(source_root: str) -> str:
+    """Where the agent's code is, and which files under it look like a store.
+
+    Said rather than left to be guessed. A message that reports a path was wrong without saying
+    what the right ones are turns one call into a search, and the search is over a filesystem this
+    stage deliberately cannot list.
+    """
+    if not source_root:
+        return (
+            "This stage was not told where the agent's code lives, so a relative path has nothing "
+            "to resolve against. Give an absolute path, or say that the source root is missing."
+        )
+    root = Path(source_root)
+    seen: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if len(seen) >= 12:
+            break
+        if path.is_file() and path.suffix.lower() in STORE_SUFFIXES:
+            size = path.stat().st_size
+            measure = f"{size // 1024} KB" if size else "empty"
+            seen.append(f"    {path.relative_to(root)}  ({measure})")
+    if not seen:
+        return (
+            f"The agent's code is at {root}, and nothing under it looks like a store. If it "
+            "builds or downloads one on first run, say so and ask rather than inventing data."
+        )
+    return "The agent's code is at " + str(root) + ", and these look like stores:\n" + "\n".join(seen)
 
 
 def _binding(*, module: str, called: str, style: str, first_arg: str, factory: str) -> str:
@@ -262,7 +303,9 @@ def world_tools(
 
     @tool(
         "seed",
-        "Insert rows. Rows is a list of objects whose keys are column names.",
+        "Put records into a collection. Rows is a list of objects whose keys are field names. "
+        "Works whether or not this world has a database: a collection that does not exist yet is "
+        "made, which is how an agent with no store of its own gets one.",
         {"table": str, "rows": list},
     )
     async def seed(args: dict[str, Any]) -> dict[str, Any]:
@@ -271,22 +314,19 @@ def world_tools(
         for row in rows:
             if not isinstance(row, dict) or not row:
                 continue
-            columns = ", ".join(row)
-            marks = ", ".join("?" for _ in row)
             try:
-                world.connection.execute(
-                    f"INSERT INTO {table} ({columns}) VALUES ({marks})",
-                    list(row.values()),
-                )
+                # Through the world rather than the connection, so this is the same call for a
+                # table, for a structure the agent's own code keeps, and for an agent that has no
+                # store at all and whose collections the harness is inventing.
+                world.put(table, row)
                 written += 1
             except Exception as failed:
-                world.connection.rollback()
                 return _err(
-                    f"{written} rows written, then {table} rejected a row: {failed}"
+                    f"{written} records written, then {table} rejected one: {failed}\n"
+                    f"{_shapes(world)}"
                 )
-        world.connection.commit()
         total = len(world.state().get(table, []))
-        return _ok(f"{written} rows inserted into {table}; {total} rows there now")
+        return _ok(f"{written} records put into {table}; {total} there now")
 
     @tool(
         "change_data",
@@ -337,9 +377,11 @@ def world_tools(
             return _err(
                 f"{name} already has an implementation, so it is not ours to write. Use "
                 f"adopt_tool to bind to {entry.module}.{entry.callable} instead.\n"
-                "If that cannot be reached, say so and ask, rather than writing a replacement: "
-                "a generated stand-in that looks right is worse than a tool we admit we could "
-                "not run."
+                "If you have tried and it genuinely cannot be reached from here, say so with "
+                "cannot_reach_tool and what stopped it. That records the reason on the contract "
+                "and then lets you write one. Do not write a replacement without it: a generated "
+                "stand-in nobody knows is a stand-in is worse than a tool we admit we could not "
+                "run."
             )
         world.handlers[name] = str(args["source"])
         # Same reason as adopting one: running it to prove it works must leave the world as it was.
@@ -384,6 +426,50 @@ def world_tools(
             else type(world.state_object).__name__
         )
         return _ok(f"state loaded from {module}.{called}: {json.dumps(summary, default=str)}")
+
+    @tool(
+        "adopt_store",
+        "Take the agent's own store as this world's starting data, so the world holds what the "
+        "agent really has. Give the path to it, relative to the agent's source or absolute. Use "
+        "this whenever the agent ships or builds a store of its own: seeding it by hand instead "
+        "produces a smaller, invented dataset that its real queries were never written against.",
+        schema({"path": str, "note": str}, ["path"]),
+    )
+    async def adopt_store(args: dict[str, Any]) -> dict[str, Any]:
+        given = str(args["path"]).strip()
+        found = Path(given)
+        if not found.is_absolute() and source_root:
+            found = Path(source_root) / given
+        if not found.exists() and source_root:
+            # An absolute path that is wrong is nearly always the agent's own repo-relative path
+            # read out of its source, so the same name under the real root is worth trying before
+            # reporting a miss.
+            under = Path(source_root) / Path(given).name
+            if under.exists():
+                found = under
+        if not found.exists():
+            return _err(
+                f"nothing at {found}.\n{_stores_here(source_root)}"
+            )
+        if found.is_file() and found.stat().st_size == 0:
+            return _err(
+                f"{found} is empty, so there is nothing to adopt. If the agent builds or "
+                "downloads its store on first run, say so and ask rather than inventing data."
+            )
+        try:
+            world.store.take(found)
+        except AttributeError:
+            return _err(
+                f"a {world.store.engine} store cannot take another one yet. Seed it instead, or "
+                "say what it would need."
+            )
+        except Exception as raised:
+            return _err(f"could not take {found}: {type(raised).__name__}: {raised}")
+        state = world.state()
+        return _ok(
+            f"adopted {found.name}: "
+            + (", ".join(f"{name}: {len(rows)}" for name, rows in sorted(state.items())) or "nothing")
+        )
 
     @tool(
         "adopt_tool",
@@ -576,6 +662,23 @@ def world_tools(
             tool_name=str(args.get("tool_name") or ""),
             argument=str(args.get("argument") or ""),
             values=[str(value) for value in (args.get("values") or [])],
+            why=str(args.get("why") or ""),
+        )
+        return _ok(said) if done else _err(said)
+
+    @tool(
+        "cannot_reach_tool",
+        "Record that a tool's own implementation cannot be run here, so the world may implement "
+        "it instead. Only after adopt_tool has genuinely failed: say what stopped it, in one "
+        "line. The reason is written onto the contract permanently, because it is the only "
+        "record that this tool was a stand-in rather than the agent's own code.",
+        schema({"tool_name": str, "why": str}, ["tool_name", "why"]),
+    )
+    async def cannot_reach_tool(args: dict[str, Any]) -> dict[str, Any]:
+        done, said = unreachable(
+            contract,
+            destination,
+            tool_name=str(args.get("tool_name") or ""),
             why=str(args.get("why") or ""),
         )
         return _ok(said) if done else _err(said)
@@ -889,7 +992,7 @@ def world_tools(
                 "not what is failing. Read the failures above literally and fix one of them, or "
                 "say what you are stuck on."
             )
-        failing, cannot_fail, _survived = _verified()
+        failing, cannot_fail, survived = _verified()
         own = ""
         if world_checks:
             own = f"\n{len(world_checks) - len(failing)}/{len(world_checks)} of your own world checks hold"
@@ -900,6 +1003,12 @@ def world_tools(
                     "\n  these stayed green even with the world emptied and every tool "
                     "silenced, so they are not checking anything: "
                     + ", ".join(cannot_fail)
+                )
+            # Said out loud, because the alternative is a person rewriting checks that were right.
+            for note in (survived or {}).get(UNDAMAGED, []):
+                own += (
+                    f"\n  the emptied test could not be run: {note}. Nothing is concluded from "
+                    "it, so this is ours to fix rather than yours."
                 )
         else:
             own = "\nNo world checks of your own yet. Add them with add_world_check."
@@ -1025,6 +1134,7 @@ def world_tools(
             declare_sequence,
             drop_sequence,
             amend_contract,
+            cannot_reach_tool,
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
@@ -1032,6 +1142,7 @@ def world_tools(
             write_simulator_prompt,
             add_sub_goal,
             adopt_state,
+            adopt_store,
             adopt_tool,
             write_store_ops,
             add_world_check,
@@ -1049,12 +1160,14 @@ TOOL_NAMES = (
     "seed",
     "change_data",
     "adopt_state",
+    "adopt_store",
     "adopt_tool",
     "define_handler",
     "run_tool",
     "declare_sequence",
     "drop_sequence",
     "amend_contract",
+    "cannot_reach_tool",
     "add_rule",
     "drop_rule",
     "fix_tool",

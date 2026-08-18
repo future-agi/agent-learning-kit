@@ -72,6 +72,40 @@ class Transcript:
         return [call for call in self.calls if not call.ok and not call.refused]
 
 
+# What the simulated person is asked for on the turn that has no conversation behind it. It says
+# which part they are playing, because that is exactly what is ambiguous here: a model handed a
+# system prompt about an agent, and asked to speak with nothing preceding it, will sometimes reply
+# as the agent instead of to it.
+OPENING = (
+    "The conversation is starting and you speak first. You are the person making contact, not "
+    "the agent being contacted. Say what you came to say, in your own words, and nothing else. "
+    "Do not offer to look anything up, do not answer on their behalf, and do not greet them and "
+    "wait: say the thing you actually want."
+)
+
+# How an opening turn reads when the part has been swapped. Offers of help, not requests for it.
+_AS_THE_AGENT = (
+    "let me ",
+    "i'll look",
+    "i will look",
+    "i'd be happy to look",
+    "i can help you with that",
+    "how can i help",
+    "how may i help",
+    "what would you like to know",
+    "i'll check",
+    "i will check",
+    "let me check",
+    "sure! let me",
+)
+
+
+def _answered_as_the_agent(said: str) -> bool:
+    """Whether the opening line is the agent's part rather than the person's."""
+    opening = said.strip().lower()
+    return any(mark in opening for mark in _AS_THE_AGENT)
+
+
 def customer_prompt(
     scenario: Scenario, contract: AgentContract, written: str = ""
 ) -> str:
@@ -141,10 +175,16 @@ async def converse(
         # The customer opens, in its own words. The scenario's instruction is written *about*
         # the caller ("orders two burgers and asks for..."), so speaking it verbatim would hand
         # the agent a stage direction instead of a person.
-        opening = await customer.say(
-            "The conversation is starting. Say your opening line, and nothing else."
-        )
+        opening = await customer.say(OPENING)
         said = opening.text.strip() or scenario.instruction
+        if _answered_as_the_agent(said):
+            # The opening turn is the one with no conversation behind it, and a model asked to
+            # speak into that gap will sometimes take the other part: it offers to look something
+            # up, the agent replies that no question was asked, and the run fails for a reason
+            # that has nothing to do with the agent. The instruction is the fallback, because a
+            # blunt version of the right question tests more than a fluent version of the wrong
+            # one.
+            said = scenario.instruction
         record("customer", said)
         for _turn in range(max(1, scenario.max_turns)):
             reply = await target.say(said)

@@ -25,6 +25,8 @@ from typing import Any, Callable
 from .runtime import GeneratedWorld
 
 EMPTIED = "emptied"
+# Not a kind of damage: how the report says the damage itself did not happen.
+UNDAMAGED = "could not be damaged"
 SILENCED = "silenced"
 
 # What a silenced tool answers. Deliberately a plain empty string: it is the shape a handler
@@ -35,16 +37,44 @@ _MUTE = "def handle(args, db):\n    return ''\n"
 def _empty(world: GeneratedWorld) -> None:
     """Take the contents out of the world, leaving its shape intact.
 
-    Through the world's own vocabulary rather than a store's, so this works the same against a
-    database, a mapping the agent's code owns, or whatever a later store turns out to be.
+    The store empties itself where it can, because only it knows what its engine needs: a
+    relational one has to suspend foreign keys, or deleting a referenced table fails and most of
+    the data stays. Dropping collection by collection through the world's own vocabulary is the
+    fallback, for a store that has no opinion.
     """
-    for name in list(world.state()):
-        try:
-            world.drop(name)
-        except Exception:
-            # A collection that cannot be emptied is not a reason to abandon the mutation: the
-            # remaining ones still damage the world, and the checks still have to notice.
-            continue
+    emptied = getattr(world.store, "clear", None)
+    if callable(emptied):
+        emptied()
+    else:
+        for name in list(world.state()):
+            try:
+                world.drop(name)
+            except Exception:
+                # One collection that will not empty is not a reason to abandon the mutation. What
+                # survives is reported by `left`, so the gate can tell a check that failed to
+                # notice from a mutation that never happened.
+                continue
+    # The agent's own state, where its code keeps what its tools act on. A world can have both.
+    held = world.state_object
+    if isinstance(held, dict):
+        for name, group in held.items():
+            if isinstance(group, dict):
+                group.clear()
+            elif isinstance(group, list):
+                group.clear()
+            else:
+                held[name] = None
+
+
+def left(world: GeneratedWorld) -> dict[str, int]:
+    """What is still in the world after it was supposed to be empty.
+
+    The gate accuses a check of verifying nothing when it stays green through damage. That
+    accusation is only fair if the damage actually happened: a store that quietly refused to
+    empty leaves every check reading real data and looking vacuous, and the person then rewrites
+    a check that was right all along.
+    """
+    return {name: len(rows) for name, rows in world.state().items() if rows}
 
 
 def _silence(world: GeneratedWorld) -> None:
@@ -78,6 +108,17 @@ def unnoticed(
         broken = restore(world_root)
         try:
             apply(broken)
+            if name == EMPTIED:
+                remaining = left(broken)
+                if remaining:
+                    # The mutation did not land, so nothing can be concluded from it. Saying so is
+                    # the point: reporting these checks as blind would have somebody rewrite a
+                    # check that was reading the world correctly the whole time.
+                    survived[name] = []
+                    survived.setdefault(UNDAMAGED, []).append(
+                        f"the world would not empty: {remaining}"
+                    )
+                    continue
             still_green = []
             for check_name, source in checks:
                 outcome = run(source, broken)
@@ -95,5 +136,7 @@ def blind(survived: dict[str, list[str]]) -> list[str]:
     """Checks that stayed green through every kind of damage."""
     if not survived:
         return []
-    kinds = list(survived.values())
+    kinds = [names for kind, names in survived.items() if kind != UNDAMAGED]
+    if not kinds:
+        return []
     return sorted(set(kinds[0]).intersection(*kinds[1:])) if len(kinds) > 1 else sorted(kinds[0])

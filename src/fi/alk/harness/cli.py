@@ -28,6 +28,7 @@ from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
 from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
+from .world.snapshot import saved as world_saved
 from .run.targets import supported as target_kinds
 from .sources import resolve, supported
 from .understand import load, open_stage, opening
@@ -160,14 +161,14 @@ async def _build(args: argparse.Namespace) -> int:
         stage,
         build_opening(contract),
         interactive=args.interactive,
-        until=lambda: (destination / "world.sqlite").exists(),
+        until=lambda: world_saved(destination),
         nudge=(
             "Nothing was saved: you finished without calling save_world. Call check_world, "
             "fix what it names, then save_world."
         ),
     )
 
-    if not (destination / "world.sqlite").exists():
+    if not world_saved(destination):
         print("\nNo world was saved.", file=sys.stderr)
         return 1
     print(f"\nworld: {destination}")
@@ -181,7 +182,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
     if contract is None:
         print(f"No contract at {destination}. Run `understand` first.", file=sys.stderr)
         return 1
-    if not (destination / "world.sqlite").exists():
+    if not world_saved(destination):
         print(f"No world at {destination}. Run `build` first.", file=sys.stderr)
         return 1
 

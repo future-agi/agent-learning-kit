@@ -535,16 +535,27 @@ def schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
         schema({"name": str,
                 "size": {"type": "string", "enum": ["S", "M", "L"]}}, ["name"])
     """
+    wanted = list(required)
     return {
         "type": "object",
         "properties": {
             name: dict(kind)
             if isinstance(kind, dict)
-            else {"type": _JSON_TYPES.get(kind, "string")}
+            else _typed(_JSON_TYPES.get(kind, "string"), optional=name not in wanted)
             for name, kind in properties.items()
         },
-        "required": list(required),
+        "required": wanted,
     }
+
+
+def _typed(kind: str, *, optional: bool) -> dict[str, Any]:
+    """One property's type, letting an optional field be null.
+
+    Filling a field that does not apply with null is what a model does, and it is not wrong: the
+    alternative is inventing a value. Rejecting it costs a whole turn, and the rejection does not
+    even say which field was at fault: "None is not of type 'string'" is the entire message.
+    """
+    return {"type": [kind, "null"]} if optional else {"type": kind}
 
 
 def qualified(server: str, tool_name: str) -> str:

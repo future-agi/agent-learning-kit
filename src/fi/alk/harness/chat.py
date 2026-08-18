@@ -25,6 +25,7 @@ from .config import artifact_dir
 from .contract import AgentContract
 from .session import Stage
 from .sources import AgentSource, resolve
+from .world.snapshot import saved as world_saved
 
 RECEPTION = "reception"
 UNDERSTAND = "understand"
@@ -77,7 +78,11 @@ class Conversation:
 
     @property
     def world_built(self) -> bool:
-        return bool(self.out) and (self.out / "world.sqlite").exists()
+        # The manifest, not a database file. Every saved world writes one; only some of them have
+        # a SQLite file beside it, and an agent whose state lives in services and files has none.
+        # Keyed on the database, such a world stays "not built" forever and the conversation can
+        # never leave this stage, however well the build actually went.
+        return world_saved(self.out)
 
     @property
     def scenarios_written(self) -> bool:

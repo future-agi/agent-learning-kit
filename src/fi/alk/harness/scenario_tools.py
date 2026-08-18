@@ -27,7 +27,7 @@ from .environment import (
     save_catalogue,
     validate_sub_goal,
 )
-from .folder import apply_setup, read_all, write_folder, write_index
+from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import prepared, prove
 from .scenario import Scenario, validate_scenario
 from .tools import schema
@@ -51,7 +51,26 @@ def write_scenarios(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     for one in scenarios:
         write_folder(one, catalogue, destination)
+    _forget_dropped(scenarios, destination)
     return write_index(scenarios, destination)
+
+
+def _forget_dropped(scenarios: list[Scenario], destination: Path) -> None:
+    """Remove the folders of scenarios that are no longer in the suite.
+
+    The folders are the truth, and they are what gets read back. Writing the survivors without
+    taking the others away means a dropped scenario returns on the next load, still failing, and
+    dropping it appears to do nothing at all.
+    """
+    import shutil
+
+    root = Path(destination) / SCENARIOS
+    if not root.exists():
+        return
+    keeping = {one.name for one in scenarios}
+    for folder in root.iterdir():
+        if folder.is_dir() and folder.name not in keeping:
+            shutil.rmtree(folder)
 
 
 def load_scenarios(destination: Path) -> list[Scenario]:

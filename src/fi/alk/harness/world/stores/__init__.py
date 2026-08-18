@@ -163,6 +163,10 @@ class Held:
     def remove(self, collection: str, key: str = "", *, by: str = "") -> int:
         raise StoreError(_UNWRITABLE.format(engine=self.engine, verb="remove from"))
 
+    def clear(self) -> None:
+        """Empty it, by restoring a snapshot that holds nothing."""
+        self.restore(Snapshot())  # type: ignore[attr-defined]
+
     def save_to(self, path: str | Path) -> None:
         import json
 

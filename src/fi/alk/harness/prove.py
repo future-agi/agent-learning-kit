@@ -199,7 +199,19 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     # empty run is often legitimate — "no order was placed" is a real thing to assert about a
     # refusal scenario — but a whole set of them means nothing is being graded.
     proof.weak = [one.name for one in proof.with_nothing if one.held]
-    proof.vacuous = bool(proof.with_nothing) and len(proof.weak) == len(
-        proof.with_nothing
+    # A judged sub-goal reads what the agent said, and an agent that did nothing said nothing, so
+    # it cannot be passed by an empty run the way a state check can. That matters for a whole
+    # legitimate class of scenario: where the right behaviour is to decline and touch nothing,
+    # every check about the world holds vacuously and the explanation is the only real evidence.
+    # Without this the gate rejects exactly the scenarios that test a refusal.
+    judged = [
+        name
+        for name in scenario.sub_goals
+        if (found := catalogue.named(name)) is not None and not found.deterministic()
+    ]
+    proof.vacuous = (
+        bool(proof.with_nothing)
+        and len(proof.weak) == len(proof.with_nothing)
+        and not judged
     )
     return proof

@@ -89,12 +89,13 @@ class Session:
         """
         from .environment import load_catalogue
         from .folder import read_all
+        from .world.snapshot import saved as world_saved
 
         scenarios = read_all(self.path) if self.path.exists() else []
         runs = _runs(self.path)
         return {
             "contract": (self.path / "contract.json").exists(),
-            "world": (self.path / "world.sqlite").exists(),
+            "world": world_saved(self.path),
             "simulator_prompt": (self.path / "simulator_prompt.md").exists(),
             "sub_goals": len(load_catalogue(self.path).sub_goals) if self.path.exists() else 0,
             "scenarios": len(scenarios),
