@@ -999,7 +999,17 @@ def world_tools(
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
         from .workspace import run
 
-        code, output = run(destination, str(args["command"]), extra=_store_env(world, str(getattr(getattr(contract, "data_store", None), "configured_by", "") or "")))
+        configured = str(
+            getattr(getattr(contract, "data_store", None), "configured_by", "") or ""
+        )
+        held = _store_env(world, configured)
+        # Written to a file as well as passed as environment. These variables reach the docker
+        # command, not the containers it starts -- one build asked a container for
+        # $ALK_STORE_DSN, got nothing, concluded the store was not running, and set about
+        # bringing up a second Postgres beside the one it already had. A compose file can read
+        # this with `env_file:`, which is how the address gets inside.
+        _write_store_env(destination, held)
+        code, output = run(destination, str(args["command"]), extra=held)
         shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
         if code != 0:
             return _err(f"exit {code}\n{shown or '(no output)'}")
@@ -1444,3 +1454,26 @@ def _never_ran(said: str) -> bool:
     # A RuntimeError raised at import time is the same thing wearing a different name: the
     # sandwich agent checks for its web build at module scope and raises if it is absent.
     return any(mark in said for mark in NEVER_RAN) or "Run 'make" in said
+
+
+def _write_store_env(destination: Path, held: dict[str, str]) -> None:
+    """Put the store's address beside the compose file, for the containers it starts.
+
+    Environment set on a docker command does not cross into the container it launches, and
+    nothing said so: a build asked a container for $ALK_STORE_DSN, got an empty string, decided
+    the store was not running, and began standing up a second one.
+    """
+    if not held:
+        return
+    from .workspace import env_root
+
+    # The in-container spelling wins for the plain name here, because everything reading this
+    # file is by definition inside a container.
+    lines = dict(held)
+    inside = lines.pop("ALK_STORE_DSN_IN_CONTAINER", "")
+    if inside:
+        lines["ALK_STORE_DSN"] = inside
+        lines["ALK_STORE_HOST"] = "host.docker.internal"
+    (env_root(destination) / "store.env").write_text(
+        "".join(f"{name}={value}\n" for name, value in sorted(lines.items())), encoding="utf-8"
+    )

@@ -54,9 +54,11 @@ def test_one_is_written_where_the_agent_ships_none(tmp_path) -> None:
 
 
 def test_an_install_is_worked_out_where_the_contract_gives_none(tmp_path) -> None:
+    """Read and installed by name rather than through -r: the file may carry includes and
+    comments, and what has to land in the image is the packages themselves."""
     (tmp_path / "requirements.txt").write_text("requests\n")
     recipe, _ = sandbox.dockerfile_for(tmp_path, Runtime())
-    assert "pip install -r requirements.txt" in recipe.read_text()
+    assert "RUN pip install --no-cache-dir requests" in recipe.read_text()
 
 
 def test_an_agent_that_says_nothing_is_a_finding_not_a_guess(tmp_path) -> None:
@@ -310,3 +312,68 @@ def test_a_failure_carries_the_containers_own_account(loaded) -> None:
         # The traceback is in the container's log; the exception names the type.
         assert "TypeError" in str(refused)
     assert "raised TypeError" in sandbox.recent(loaded, 30)
+
+
+# --- an agent does not have to be a package -------------------------------------------------
+
+
+def test_dependencies_install_without_the_project_being_installable(tmp_path) -> None:
+    """`pip install -e .` needs a build backend, and plenty of agents have none: a folder with
+    main.py and a requirements file, an app under src/ with no packaging metadata, a
+    subdirectory of a monorepo. One failed on exactly that -- and the package install was never
+    the point, since the code is copied in and reached through PYTHONPATH already."""
+    from fi.alk.harness.contract import Runtime
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0.1"\n'
+        'dependencies = ["sqlalchemy>=2.0", "psycopg[binary]>=3.2"]\n'
+    )
+    recipe, _ = sandbox.dockerfile_for(tmp_path, Runtime(install="pip install -e ."))
+    written = recipe.read_text()
+    # the declared requirements, and they must succeed
+    assert "RUN pip install --no-cache-dir 'sqlalchemy>=2.0' 'psycopg[binary]>=3.2'" in written
+    # the project itself, attempted and allowed to fail
+    assert "RUN pip install -e . || true" in written
+
+
+def test_a_requirements_file_is_read_and_its_noise_skipped(tmp_path) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    (tmp_path / "requirements.txt").write_text("# a note\nrequests==2.31.0\nrich\n-r other.txt\n")
+    assert sandbox._declared(tmp_path) == ["requests==2.31.0", "rich"]
+    recipe, _ = sandbox.dockerfile_for(tmp_path, Runtime())
+    assert "requests==2.31.0 rich" in recipe.read_text()
+
+
+def test_an_agent_declaring_nothing_is_a_finding(tmp_path) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    with pytest.raises(SandboxError, match="finding to report"):
+        sandbox.dockerfile_for(tmp_path, Runtime())
+
+
+# --- and the path it was handed may not be the project ---------------------------------------
+
+
+def test_the_project_root_is_found_from_a_subdirectory(tmp_path) -> None:
+    """Pointing at a subdirectory is normal -- "the agent is in this folder" -- and the file
+    declaring its dependencies is often a level or two up. One agent was given as <repo>/src,
+    the pyproject sat in <repo>, and the build failed saying nothing about a path."""
+    repo = tmp_path / "repo"
+    (repo / "src" / "pkg").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text('[project]\nname="x"\nversion="0.1"\n')
+    assert sandbox._with_a_manifest(repo / "src") == repo
+    assert sandbox._with_a_manifest(repo / "src" / "pkg") == repo
+
+
+def test_a_directory_with_its_own_manifest_is_left_alone(tmp_path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests\n")
+    assert sandbox._with_a_manifest(tmp_path) == tmp_path
+
+
+def test_it_does_not_climb_forever_looking_for_somebody_elses_project(tmp_path) -> None:
+    """Climbing to the filesystem root would eventually find a manifest belonging to something
+    else entirely."""
+    deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f"
+    deep.mkdir(parents=True)
+    assert sandbox._with_a_manifest(deep) == deep

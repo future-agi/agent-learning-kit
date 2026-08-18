@@ -139,7 +139,7 @@ RUN apt-get update \\
  && rm -rf /var/lib/apt/lists/*
 COPY . /agent
 RUN pip install --no-cache-dir uv 2>/dev/null || true
-RUN {install}
+{install}
 """
 
 
@@ -207,22 +207,73 @@ def dockerfile_for(
         return root / declared, True
 
     written = root / ".alk-generated.Dockerfile"
-    install = _command(str(getattr(runtime, "install", "") or ""))
-    if not install:
-        install = "pip install -e ." if (root / "pyproject.toml").exists() else (
-            "pip install -r requirements.txt" if (root / "requirements.txt").exists() else ""
-        )
-    if not install:
+    steps = _install_steps(root, runtime)
+    if not steps:
         raise SandboxError(
-            f"{root} says nothing about how it is installed -- no Dockerfile, no install "
-            "command in the contract, no pyproject and no requirements. Its tools cannot be run "
-            "here, and that is a finding to report rather than a gap to write around."
+            f"{root} says nothing about what it needs -- no Dockerfile, no install command in "
+            "the contract, no pyproject and no requirements. Its tools cannot be run here, and "
+            "that is a finding to report rather than a gap to write around."
         )
     written.write_text(
-        DOCKERFILE.format(version=_version(str(getattr(runtime, "version", ""))), install=install),
+        DOCKERFILE.format(version=_version(str(getattr(runtime, "version", ""))), install=steps),
         encoding="utf-8",
     )
     return written, False
+
+
+def _declared(root: Path) -> list[str]:
+    """What the agent says it needs, from whichever file it says it in.
+
+    Read rather than installed-by-proxy. ``pip install -e .`` only works on a project that is
+    packageable, and plenty of agents are not: a folder with main.py and a requirements file, an
+    app under src/ with no packaging metadata, a subdirectory of a monorepo. One failed on
+    exactly that -- no build-system table, so pip had nothing to build with.
+    """
+    manifest = root / "pyproject.toml"
+    if manifest.exists():
+        try:
+            import tomllib
+
+            found = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - an unreadable manifest is not a reason to stop
+            found = {}
+        listed = ((found.get("project") or {}).get("dependencies")) or []
+        if listed:
+            return [str(one) for one in listed]
+    requirements = root / "requirements.txt"
+    if requirements.exists():
+        return [
+            line.strip()
+            for line in requirements.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith(("#", "-"))
+        ]
+    return []
+
+
+def _install_steps(root: Path, runtime: object) -> str:
+    """The RUN lines that put the agent's dependencies in the image.
+
+    Its dependencies are the point; installing the project itself is not. The code is copied in
+    and reached through PYTHONPATH, so it is already importable -- and the package install is
+    the part that fails on an agent that was never meant to be packaged. So the declared
+    requirements go in first and must succeed, and the project install is attempted afterwards
+    and allowed not to.
+    """
+    import shlex as quoting
+
+    said = _command(str(getattr(runtime, "install", "") or ""))
+    declared = _declared(root)
+    lines: list[str] = []
+    if declared:
+        listed = " ".join(quoting.quote(one) for one in declared)
+        lines.append(f"RUN pip install --no-cache-dir {listed}")
+    if said:
+        # What the agent itself says, but never fatal: it is usually `pip install -e .`, which
+        # is exactly the step that cannot work on a project with no build backend.
+        lines.append(f"RUN {said} || true")
+    elif (root / "pyproject.toml").exists():
+        lines.append("RUN pip install --no-cache-dir -e . || true")
+    return "\n".join(lines)
 
 
 def _command(said: str) -> str:
@@ -250,7 +301,7 @@ def context_for(source_root: Path | str, runtime: object) -> Path:
     ``components/python/src`` means the root is three levels above it. Climbing that far turns
     the package back into the repository it came from.
     """
-    root = Path(source_root)
+    root = _with_a_manifest(Path(source_root))
     workdir = str(getattr(runtime, "workdir", "") or "").strip("./")
     if not workdir or workdir == ".":
         return root
@@ -262,6 +313,33 @@ def context_for(source_root: Path | str, runtime: object) -> Path:
         if climbed.name and (climbed.parent / Path(workdir)).is_dir():
             return climbed.parent
         climbed = climbed.parent
+    return root
+
+
+MANIFESTS = ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg")
+
+
+def _with_a_manifest(root: Path, climb: int = 4) -> Path:
+    """The nearest directory at or above ``root`` that says what the agent needs.
+
+    Pointing at a subdirectory is a normal thing to do -- "the agent is in this folder" -- and
+    the thing that declares its dependencies is often a level or two up. One agent was given as
+    <repo>/src, because that is the directory its packages import from, while the pyproject sat
+    in <repo>; the image was built from src, `pip install` found nothing to install, and the
+    failure said nothing about a path.
+
+    Bounded, and it keeps what it was given when nothing turns up: climbing to the filesystem
+    root looking for a manifest would eventually find somebody else's.
+    """
+    if any((root / named).exists() for named in MANIFESTS):
+        return root
+    found = root
+    for _ in range(climb):
+        found = found.parent
+        if found == found.parent:
+            break
+        if any((found / named).exists() for named in MANIFESTS):
+            return found
     return root
 
 

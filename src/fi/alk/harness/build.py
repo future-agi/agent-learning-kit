@@ -30,6 +30,25 @@ from .session import Stage
 from .tools import qualified
 from .world.tools import TOOL_NAMES, WORLD_SERVER, world_tools
 
+def _artifacts_root(destination: Path) -> Path:
+    return destination.parent if destination.parent.exists() else Path.cwd()
+
+
+def _reading_root(source_root: str, contract: AgentContract) -> Path:
+    """Where to read the agent from: its repository, not the package inside it.
+
+    The same answer the container build uses, so a path that works in one works in the other
+    and both agree with contract.runtime.workdir, which is written repository-relative.
+    """
+    from .world.sandbox import context_for
+
+    try:
+        found = context_for(source_root, getattr(contract, "runtime", None))
+    except Exception:  # noqa: BLE001 - a root we cannot work out is just the one we were given
+        return Path(source_root)
+    return found if found.is_dir() else Path(source_root)
+
+
 SKILL = "build-environment"
 
 
@@ -71,11 +90,11 @@ def open_stage(
         permission_mode="default",
         # Rooted at the agent when there is one to read, so a relative Glob lands in the
         # repository this stage was told to go looking through rather than in our artifacts.
-        cwd=str(
-            Path(source_root)
-            if reading and Path(source_root).is_dir()
-            else (destination.parent if destination.parent.exists() else Path.cwd())
-        ),
+        # The same root the agent's container is built from. Rooted at the package instead,
+        # a repository-relative path resolves under itself -- one stage globbed
+        # components/python/src/main.py from inside components/python, found nothing, and
+        # ended by asking a person to add a file that was there all along.
+        cwd=str(_reading_root(source_root, contract) if reading else _artifacts_root(destination)),
         setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(),
