@@ -39,13 +39,31 @@ from .tools import qualified
 SKILL = "write-scenarios"
 
 
+# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
+# one more to correct what a gate refused.
+TURNS_EACH = 3
+# Enough to write a handful without the budget being the thing that stops it.
+TURNS_FLOOR = 120
+
+
+def turns_for(wanted: int) -> int:
+    """A turn budget that grows with the suite being asked for.
+
+    A fixed ceiling is what made asking for a large suite pointless: generation stopped partway
+    through, and `save_scenarios` refuses a count that does not match what was asked for, so a run
+    that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
+    the request, or the request cannot be honoured.
+    """
+    return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
+
+
 def open_stage(
     contract: AgentContract,
     *,
     out: Path | None = None,
     wanted: int = 10,
     ask: Callable[..., Any] | None = None,
-    max_turns: int = 80,
+    max_turns: int = 0,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -74,7 +92,7 @@ def open_stage(
         permission_mode="default",
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         setting_sources=[],
-        max_turns=max_turns,
+        max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
         env=provider_env(),
     )
@@ -115,7 +133,7 @@ async def write(
     follow_ups: list[str] | None = None,
     on_event: Callable[..., Any] | None = None,
     ask: Callable[..., Any] | None = None,
-    max_turns: int = 80,
+    max_turns: int = 0,
 ) -> list[Scenario]:
     """Run the stage start to finish. Returns whatever scenarios were saved."""
     stage, destination = open_stage(

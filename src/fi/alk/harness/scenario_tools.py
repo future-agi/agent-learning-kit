@@ -19,18 +19,12 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .contract import AgentContract
-from .environment import (
-    Catalogue,
-    SubGoal,
-    load_catalogue,
-    load_simulator_prompt,
-    save_catalogue,
-    validate_sub_goal,
-)
+from .catalogue import Catalogue, SubGoal, load_catalogue, save_catalogue, validate_sub_goal
+from .simulator import load_simulator_prompt
 from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import prepared, prove
 from .scenario import Scenario, validate_scenario
-from .tools import schema
+from .tools import brief, schema
 from .world.snapshot import restore
 
 SCENARIO_SERVER = "scenarios"
@@ -145,16 +139,35 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
     problems: list[str] = []
     if len(kept) < wanted:
         problems.append(
-            f"{len(kept)} of {wanted} scenarios so far. Keep writing; the ones that find "
-            f"something are usually the awkward ones. If nobody asked for {wanted}, record the "
-            "number you were actually given with aim_for first, not the number you happen to "
-            "have reached."
+            f"{len(kept)} of the {wanted} asked for. The ones that find something are usually "
+            "the awkward ones, so this is worth finishing rather than stopping here. If nobody "
+            f"asked for {wanted}, record what they did ask for with aim_for."
         )
     elif len(kept) > wanted:
         problems.append(
-            f"{len(kept)} scenarios but {wanted} were asked for. Drop the ones that add least "
-            "with drop_scenario. The number came from the person who asked."
+            f"{len(kept)} scenarios against a target of {wanted}. If they asked for more, "
+            "aim_for records the new size; reopening a suite starts with the target set to what "
+            "is already there, so adding to one always reads like this. If you wrote extra "
+            "nobody asked for, drop_scenario takes them off."
         )
+    # Two scenarios claiming the same use case are either the same test twice, or one of them is
+    # mislabelled. Both happened in the same suite: a delivered-order refusal was filed under
+    # "cancel a pending order", which is neither what it tests nor distinguishable afterwards
+    # from the scenario that really does test that. A use case is how coverage is counted, so a
+    # duplicate quietly overstates it.
+    claimed: dict[str, list[str]] = {}
+    for one in kept:
+        case = (one.use_case or "").strip().lower()
+        if case:
+            claimed.setdefault(case, []).append(one.name)
+    for case, names in claimed.items():
+        if len(names) > 1:
+            problems.append(
+                f"{' and '.join(names)} both claim the use case {case!r}. Give each the use case "
+                "it actually exercises, or drop the one that duplicates the other. Coverage is "
+                "counted by use case, so two scenarios sharing one hides a gap."
+            )
+
     # Sub-goals are shared so results roll up. A suite where every scenario invents its own is a
     # suite whose results cannot be added together.
     used = [name for one in kept for name in one.sub_goals]
@@ -241,9 +254,7 @@ def scenario_tools(
                 elif not call.ok:
                     lines.append(f"{call.name}: CRASHED — {call.error}")
                 else:
-                    lines.append(
-                        f"{call.name}: ok — {json.dumps(call.result, default=str)[:200]}"
-                    )
+                    lines.append(f"{call.name}: ok — {brief(call.result)}")
             state = world.state()
             lines.append(
                 "state afterwards: "
@@ -251,7 +262,7 @@ def scenario_tools(
             )
             for name, rows in sorted(state.items()):
                 if rows and len(rows) <= 6:
-                    lines.append(f"{name}: " + json.dumps(rows, default=str)[:700])
+                    lines.append(f"{name}: " + brief(rows, limit=1200))
             return _ok("\n".join(lines) or "no calls were made")
         finally:
             world.close()
@@ -444,8 +455,13 @@ def scenario_tools(
 
     @tool(
         "aim_for",
-        "Set how many scenarios are wanted. Only when the person you are talking to says a "
-        "number, never to get past a refusal about having written too many.",
+        "Set how many scenarios are wanted. Call it whenever the person changes what they are "
+        "asking for: a number outright, or asking for more without naming one, in which case the "
+        "count is the size of the suite once you have written them. Adding to an existing suite "
+        "always needs this, because reopening one starts with the target set to what is already "
+        "there.\n\n"
+        "What it is not for is saving a suite nobody asked for. Writing extra and then raising "
+        "the target to match is how a request for four becomes thirteen that nobody reviews.",
         schema({"count": int}, ["count"]),
     )
     async def aim_for(args: dict[str, Any]) -> dict[str, Any]:
@@ -471,11 +487,18 @@ def scenario_tools(
             return _err(f"no scenario called {name!r}")
         return _ok(f"{name} dropped. {len(kept)} left")
 
-    @tool("save_scenarios", "Write the kept scenarios out.", schema({}, []))
+    @tool(
+        "save_scenarios",
+        "Write the kept scenarios out. Every one has already been proved by submit_scenario, so "
+        "this always saves; anything else worth knowing comes back alongside.",
+        schema({}, []),
+    )
     async def save_scenarios(_args: dict[str, Any]) -> dict[str, Any]:
-        problems = not_ready(kept, target["count"], catalogue)
-        if problems:
-            return _err("Not saved. " + "\n  - ".join(problems))
+        # Always written. Each of these already cleared all three gates on its way in, so this is
+        # persistence and not a second opinion: refusing here left proved work in memory only,
+        # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
+        # What is off about the suite is said, not enforced.
+        noted = not_ready(kept, target["count"], catalogue)
         path = write_scenarios(kept, destination, catalogue)
         judged = sum(
             1
@@ -483,7 +506,7 @@ def scenario_tools(
             for name in one.sub_goals
             if (found := catalogue.named(name)) and not found.deterministic()
         )
-        return _ok(
+        said = (
             f"Saved {len(kept)} scenarios. Each has its own folder under "
             f"{destination / 'scenarios'} holding scenario.json, setup.py, ready.py and one "
             f"runnable file per check; {path.name} indexes them.\n"
@@ -491,6 +514,9 @@ def scenario_tools(
             "solution passes its checks, and those checks fail when nothing is done.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
+        if noted:
+            said += "\n\nWorth looking at, none of it stopping the save:\n  - " + "\n  - ".join(noted)
+        return _ok(said)
 
     server = create_sdk_mcp_server(
         name=SCENARIO_SERVER,

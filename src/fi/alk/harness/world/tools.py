@@ -22,16 +22,9 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from ..environment import (
-    SubGoal,
-    load_simulator_prompt,
-    load_catalogue,
-    save_catalogue,
-    save_simulator_prompt,
-    validate_simulator_prompt,
-    validate_sub_goal,
-)
-from ..tools import schema
+from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
+from ..simulator import load_simulator_prompt, save_simulator_prompt, validate_simulator_prompt
+from ..tools import brief as _brief, schema
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, unreachable, widen
 from ..contract import AgentContract
 from .kinds import for_contract
@@ -205,23 +198,6 @@ def _ok(text: str) -> dict[str, Any]:
 
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-
-def _brief(value: Any, limit: int = 1800) -> str:
-    """What a call returned, shortened only when it has to be.
-
-    Generous, and explicit when it cuts. A record from a real agent's data is long, and a reply
-    trimmed silently in the middle of it reads as though the field being looked for is absent:
-    the answer is then six more calls working around something that was there all along.
-    """
-    rendered = value if isinstance(value, str) else json.dumps(value, default=str)
-    if len(rendered) <= limit:
-        return rendered
-    return (
-        rendered[:limit]
-        + f"\n... cut here, {len(rendered) - limit} more characters. Ask for one record rather "
-        "than many if you need the whole of it."
-    )
 
 
 def world_tools(
@@ -832,7 +808,7 @@ def world_tools(
         if problems:
             return _err("Not saved:\n  - " + "\n  - ".join(problems))
         path = save_simulator_prompt(prompt, destination)
-        from ..environment import variables_in
+        from ..simulator import variables_in
 
         return _ok(
             f"Saved to {path}. Scenarios must fill: "

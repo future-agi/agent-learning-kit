@@ -561,3 +561,25 @@ def _typed(kind: str, *, optional: bool) -> dict[str, Any]:
 def qualified(server: str, tool_name: str) -> str:
     """The name an in-process MCP tool is granted under."""
     return f"mcp__{server}__{tool_name}"
+
+
+def brief(value: Any, limit: int = 1800) -> str:
+    """What a call returned, shortened only when it has to be.
+
+    Generous, and explicit when it cuts. A record from a real agent's data is long, and a reply
+    trimmed silently in the middle of it reads as though the field being looked for is absent:
+    the answer is then six more calls working around something that was there all along.
+
+    Shared, because every stage that shows a caller what a tool answered has the same problem and
+    they were not agreeing about it: one showed 1800 characters and said when it cut, the other
+    showed 200 and said nothing, so the stage that most needs to read a record was the one that
+    could not.
+    """
+    rendered = value if isinstance(value, str) else json.dumps(value, default=str)
+    if len(rendered) <= limit:
+        return rendered
+    return (
+        rendered[:limit]
+        + f"\n... cut here, {len(rendered) - limit} more characters. Ask for one record rather "
+        "than many if you need the whole of it."
+    )
