@@ -149,12 +149,24 @@ def _version(said: str) -> str:
     return f"{found.group(1)}.{found.group(2)}" if found else "3.11"
 
 
-def dockerfile_for(source_root: Path | str, runtime: object) -> tuple[Path, bool]:
+def dockerfile_for(
+    source_root: Path | str, runtime: object, written: Path | str | None = None
+) -> tuple[Path, bool]:
     """The Dockerfile to build this agent from, and whether it is the agent's own.
 
     Its own wins, always. A Dockerfile in the repository is the environment its author says the
     code runs in, and anything generated here is at best a good guess at the same thing.
     """
+    # One the stage wrote for this session wins over everything. It was written by whoever read
+    # the repository and watched the generated one fail, and ignoring it is how a build ends up
+    # repeating a recipe already known not to work -- one said so: "the harness always uses its
+    # own generated Dockerfile and ignores my override".
+    if written:
+        found = Path(written)
+        for candidate in (found, found / "Dockerfile", found / "env" / "Dockerfile"):
+            if candidate.is_file():
+                return candidate, True
+
     root = Path(source_root)
     for named in ("Dockerfile", "dockerfile"):
         if (root / named).exists():
@@ -230,7 +242,13 @@ def network_for(session: str) -> str:
     return name
 
 
-def stand_up(session: str, source_root: Path | str, runtime: object, store: object = None) -> str:
+def stand_up(
+    session: str,
+    source_root: Path | str,
+    runtime: object,
+    store: object = None,
+    written: Path | str | None = None,
+) -> str:
     """Build the agent's image, start it, and put it where the store is. Returns the container.
 
     Everything runs this way, not only agents that fail to import here. When the agent's code
@@ -240,7 +258,7 @@ def stand_up(session: str, source_root: Path | str, runtime: object, store: obje
     behaviour, rather than a fast path that quietly differs from the slow one.
     """
     root = context_for(source_root, runtime)
-    recipe, _its_own = dockerfile_for(root, runtime)
+    recipe, _its_own = dockerfile_for(root, runtime, written)
     tag = f"alk-agent-{session}".lower()
     _docker("build", "-t", tag, "-f", str(recipe), str(root))
 

@@ -245,3 +245,38 @@ def test_the_context_climbs_to_the_repository(tmp_path, root, workdir, climbs) -
         (tmp_path / workdir).mkdir(parents=True, exist_ok=True)
     found = sandbox.context_for(base, Runtime(workdir=workdir))
     assert found.is_dir()
+
+
+def test_a_dockerfile_the_stage_wrote_wins(tmp_path) -> None:
+    """It was written by whoever read the repository and watched the generated one fail.
+
+    Ignoring it is how a build repeats a recipe already known not to work: one said so
+    outright -- "the harness always uses its own generated Dockerfile and ignores my override".
+    """
+    from fi.alk.harness.contract import Runtime
+
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / "pyproject.toml").write_text("[project]\nname='x'\n")
+    env = tmp_path / "session" / "env"
+    env.mkdir(parents=True)
+    (env / "Dockerfile").write_text("FROM python:3.12-slim\nRUN echo written-by-the-stage\n")
+
+    recipe, its_own = sandbox.dockerfile_for(agent, Runtime(install="pip install -e ."), env)
+    assert its_own and "written-by-the-stage" in recipe.read_text()
+
+    # and with nothing written, the generated one is still used
+    plain, generated = sandbox.dockerfile_for(agent, Runtime(install="pip install -e ."))
+    assert not generated and "pip install -e ." in plain.read_text()
+
+
+def test_a_setup_command_keeps_its_quoted_arguments(tmp_path) -> None:
+    """Split on whitespace, `cp "a file.py" dest/` becomes three arguments and the quotes
+    arrive as part of the filename."""
+    from fi.alk.harness.world.workspace import run_setup
+
+    (tmp_path / "a file.txt").write_text("x")
+    (tmp_path / ".venv").mkdir()
+    code, said = run_setup(tmp_path, "cp 'a file.txt' .venv/")
+    assert code == 0, said
+    assert (tmp_path / ".venv" / "a file.txt").exists()

@@ -575,6 +575,8 @@ def world_tools(
                         source_root,
                         getattr(contract, "runtime", None),
                         store=getattr(world, "store", None),
+                        # Where write_env_file puts what this stage wrote.
+                        written=destination / "env",
                     )
                 )
             except SandboxError as failed:
@@ -1095,9 +1097,16 @@ def world_tools(
             source_root, str(args["command"]), extra=_store_env(world, configured)
         )
         shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
+        # Echoed back, because without it a failure cannot be read afterwards: one build died on
+        # "cp: ok is not a directory" and the command that produced it appears nowhere in the log,
+        # so what went wrong is unknowable from the record.
+        ran = str(args["command"])
         if code != 0:
-            return _err(f"exit {code}\n{shown or '(no output)'}")
-        return _ok(f"ok\n{shown or '(no output)'}\nThe store now holds: {world.store.collections()}")
+            return _err(f"`{ran}` exited {code}\n{shown or '(no output)'}")
+        return _ok(
+            f"`{ran}` ok\n{shown or '(no output)'}\n"
+            f"The store now holds: {world.store.collections()}"
+        )
 
     @tool(
         "check_world",

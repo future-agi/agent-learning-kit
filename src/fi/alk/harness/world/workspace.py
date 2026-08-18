@@ -192,7 +192,12 @@ def run_setup(
     root = Path(source_root)
     if not root.is_dir():
         return 1, f"no agent source at {root}"
-    words = command.split()
+    # shlex, as run() already does. Split on whitespace, `cp "a file.py" dest/` becomes three
+    # arguments and the quotes arrive as part of the filename.
+    try:
+        words = shlex.split(command)
+    except ValueError as badly:
+        return 1, f"that command does not parse: {badly}"
     if not words:
         return 1, "no command given"
 
