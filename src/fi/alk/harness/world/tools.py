@@ -534,7 +534,19 @@ def world_tools(
                 "This agent was given as a specification rather than as code, so its tools have "
                 "to be written with define_handler."
             )
-        world.reach(source_root)
+        # Whether this can be bound is worked out here, now, rather than trusted from the
+        # contract -- which decided it before the store, the path or anything else existed.
+        module_named = str(args.get("module") or "")
+        if module_named:
+            ok, said = _make_importable(world, source_root, module_named)
+            if not ok:
+                return _err(said)
+            if said:
+                # Found somewhere other than the root we were handed; worth saying, because the
+                # contract will have recorded that as a reason the tool was unreachable.
+                pass
+        else:
+            world.reach(source_root)
         # A binding written here wins. The generated shapes cover a plain callable and a method
         # on an object, which is most agents, but no set of shapes covers every framework, and
         # guessing wrong is worse than letting whoever read the code write the two lines.
@@ -1307,3 +1319,50 @@ def _store_env(world: Any, configured_by: str = "") -> dict[str, str]:
         if value not in (None, ""):
             out[name] = str(value)
     return out
+
+
+def _make_importable(world: Any, source_root: str, module: str) -> tuple[bool, str]:
+    """Get ``module`` importable from the agent's checkout, and say so if it cannot be.
+
+    Decided here rather than taken from the contract. The contract's verdict on whether a tool
+    can be reached is written while reading the agent, before any of this exists, and it has
+    been wrong both ways: one agent's tools were recorded as needing a live database to import
+    and import fine without one; another was recorded unreachable because its package sits one
+    directory further down than the path it was given.
+
+    So the import is simply tried, and where it fails the tree is searched for the module that
+    was named -- ``app.agent`` is ``app/agent.py`` somewhere under the checkout, and its root is
+    whatever directory makes that path work.
+    """
+    import importlib
+
+    world.reach(source_root)
+    try:
+        importlib.import_module(module)
+        return True, ""
+    except ImportError as first:
+        wanted = first
+
+    root = Path(source_root)
+    tail = module.split(".")
+    # Both shapes: a module file, and a package directory with an __init__.
+    targets = (Path(*tail).with_suffix(".py"), Path(*tail) / "__init__.py")
+    for target in targets:
+        for found in root.rglob(target.name):
+            if not str(found).endswith(str(target)):
+                continue
+            base = str(found)[: -len(str(target))].rstrip("/")
+            if any(part in {".venv", "venv", "node_modules", ".git"} for part in found.parts):
+                continue
+            world.reach(base)
+            try:
+                importlib.import_module(module)
+                return True, base
+            except ImportError:
+                continue
+    return False, (
+        f"{module!r} could not be imported from {source_root}: {wanted}. Look for where it "
+        "actually lives -- a package often sits under src/ or the repository's own subfolder. "
+        "If it genuinely cannot be imported here, say so with cannot_reach_tool and stop: the "
+        "tool is not written by us."
+    )
