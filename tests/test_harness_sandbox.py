@@ -168,3 +168,19 @@ def test_a_module_that_is_not_there_is_the_sandbox_saying_so(loaded) -> None:
 
     with pytest.raises((SandboxError, ToolRefused)):
         sandbox.call(loaded, "no.such.module", "whatever", {})
+
+
+@pytest.mark.parametrize(
+    "said, wanted",
+    [
+        # What one agent's contract actually recorded. A shell reads the bracket as a syntax
+        # error, and the image build fails before anything else is tried.
+        ("pip install -e . (from repo root; pyproject.toml present)", "pip install -e ."),
+        ("uv sync --dev", "uv sync --dev"),
+        # The trailing "." is the argument, not punctuation.
+        ("pip install -e .", "pip install -e ."),
+        ("pip install -r requirements.txt", "pip install -r requirements.txt"),
+    ],
+)
+def test_an_install_command_survives_however_the_contract_explained_it(said, wanted) -> None:
+    assert sandbox._command(said) == wanted

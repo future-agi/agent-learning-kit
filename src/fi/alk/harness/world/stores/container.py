@@ -130,6 +130,15 @@ class ContainerStore(Held):
         self._started = False
         self.port = None
 
+    def close(self) -> None:
+        """Closing the store puts its container down.
+
+        Without this the container outlives everything that knew about it. A world closed at
+        the end of a build left a Postgres running for an hour, findable only by label and
+        attributable to nobody.
+        """
+        self.stop()
+
     def _published_port(self) -> int:
         mapping = docker("port", self.container, f"{self.container_port}/tcp")
         if not mapping:

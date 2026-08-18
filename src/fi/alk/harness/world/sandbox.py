@@ -159,7 +159,7 @@ def dockerfile_for(source_root: Path | str, runtime: object) -> tuple[Path, bool
         return root / declared, True
 
     written = root / ".alk-generated.Dockerfile"
-    install = str(getattr(runtime, "install", "") or "").strip()
+    install = _command(str(getattr(runtime, "install", "") or ""))
     if not install:
         install = "pip install -e ." if (root / "pyproject.toml").exists() else (
             "pip install -r requirements.txt" if (root / "requirements.txt").exists() else ""
@@ -175,6 +175,19 @@ def dockerfile_for(source_root: Path | str, runtime: object) -> tuple[Path, bool
         encoding="utf-8",
     )
     return written, False
+
+
+def _command(said: str) -> str:
+    """The runnable part of however the contract phrased an install step.
+
+    It is written by something reading a repository, and it explains itself: one agent recorded
+    "pip install -e . (from repo root; pyproject.toml present)", which a shell reads as a syntax
+    error at the bracket. The commentary is dropped and what is left has to look like a command.
+    """
+    # Only the commentary goes. Trailing punctuation is left alone: the "." in
+    # "pip install -e ." is the argument, and stripping it produces a command that fails
+    # for a reason nobody would guess from reading it.
+    return said.split("(")[0].strip()
 
 
 def network_for(session: str) -> str:
