@@ -114,6 +114,50 @@ def load_simulator_prompt(destination: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+# True of every simulated person, whatever the agent. Kept here rather than asked for in the
+# skill because a rule the build stage rewrites each time is a rule it can word badly or leave
+# out, and this is the one whose absence ends a run at the front door.
+ALWAYS = """
+An identifier is anything the agent looks up: an email address, a postcode, an order or booking
+reference, an account number. Never invent one. A made up identifier matches no record, so the
+lookup fails, the agent cannot get past verifying you, and nothing after that is tested. If you
+were not given one, say you do not have it to hand, which is what a real person says. Ordinary
+details with nothing behind them, why you want it, what colour it was, whether a time suits you,
+you can answer plainly and then stay consistent.
+""".strip()
+
+# Additionally true when the conversation is spoken. What the agent receives is a transcription of
+# synthesised speech, so anything that transcribes badly is destroyed before the agent can act on
+# it, and the transcript still shows what was meant rather than what arrived. That makes it look
+# like the agent's mistake.
+SPOKEN = """
+You are speaking, not typing, and you are heard through a transcriber.
+
+Say a run of digits one at a time: "seven nine two two", never "7922".
+
+Spell anything containing punctuation letter by letter, slowly. Email addresses are the case that
+matters: said as a word, "noah.brown" comes back as "no doubt at Brown" and the dot arrives as a
+second "at", so the address the agent gets is not the one you have. Spell it out instead.
+
+Say amounts, dates and times as words: "twenty five dollars fifty", "the fourteenth of November",
+"half past three".
+
+Write no markup at all. No asterisks, brackets, bullets or headings; each one is either read
+aloud or garbled. Leave a space after a full stop.
+
+You need not be fluent. A filler word, a correction, a half finished sentence are all how people
+really sound, and an agent that only copes with clean speech has not been tested.
+""".strip()
+
+
+def with_rules(prompt: str, *, spoken: bool = False) -> str:
+    """One scenario's filled prompt, plus the rules that hold for every one of them."""
+    parts = [prompt.strip(), ALWAYS]
+    if spoken:
+        parts.append(SPOKEN)
+    return "\n\n".join(part for part in parts if part)
+
+
 def variables_in(prompt: str) -> set[str]:
     """The slots a scenario has to fill.
 

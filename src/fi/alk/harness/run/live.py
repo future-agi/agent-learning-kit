@@ -162,16 +162,19 @@ def grade(scenario: Scenario, world: GeneratedWorld, world_root: Path) -> LiveRu
 
 def instruction_for(scenario: Scenario, world_root: Path) -> str:
     """What the simulated person is told, from the prompt the environment step wrote."""
+    from ..environment import with_rules
+
     written = load_simulator_prompt(world_root)
     if not written:
-        return scenario.instruction
+        # Even with no prompt written for this agent, the caller is still on a phone.
+        return with_rules(scenario.instruction, spoken=True)
     filled, missing = fill(written, scenario.slots())
     if missing:
         raise RuntimeError(
             f"the simulator prompt asks for {', '.join(missing)}, which {scenario.name} does "
             "not supply. An unfilled slot reaches the caller verbatim."
         )
-    return filled
+    return with_rules(filled, spoken=True)
 
 
 def wire(

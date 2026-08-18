@@ -253,9 +253,16 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
 - **What they volunteer and what they hold back.** They do not recite everything they know. If
   their circumstance says a detail is only given when asked, they wait to be asked, even if the
   conversation stalls.
-- **What they do when the agent asks something their circumstance does not cover.** Making
-  something up corrupts the run. Say what to do instead: give a plausible ordinary answer and
-  stay consistent with it for the rest of the conversation.
+- **What they do when the agent asks something their circumstance does not cover.** This splits in
+  two and getting it wrong wastes whole runs.
+  - A **soft detail** with nothing behind it, what colour it was, why they want it, whether the
+    day suits them: give a plausible ordinary answer and stay consistent with it. Stonewalling
+    here just stalls the conversation.
+  - An **identifier the agent will look up**, an email, a postcode, an order number, an account
+    or booking reference: **never invent one.** A made up identifier cannot match a real record,
+    so the lookup fails, the agent cannot authenticate them, and the run ends at the front door
+    testing nothing. Say they do not have it to hand, which is what a real person says. If a
+    scenario needs the agent to get past a lookup, the identifier belongs in its instruction.
 - **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
   circumstance. Never keep pushing forever, and never invent a new goal.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
@@ -278,6 +285,11 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
 There is no persona. Do not invent characters, moods or backstories, and never write accents or
 emotional styling. What varies between scenarios is real conditions: what is in stock, whether the
 record already exists, what this person knows.
+
+**Do not write how to speak.** Saying numbers a digit at a time, spelling an email out, avoiding
+markup: those are the same for every agent, so they are appended to whatever you write, every
+time, from `environment.SPOKEN`. Writing them yourself only risks contradicting them. Write what
+this person wants and how they behave; the mechanics of being heard are handled.
 
 ### What a usable one looks like
 

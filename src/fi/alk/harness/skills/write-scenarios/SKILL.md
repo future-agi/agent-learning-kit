@@ -153,6 +153,14 @@ refused rather than succeeding.
 
 Python defining `setup(world)`. Leave it empty when the base world is already right.
 
+**Write every setup against the base world, never against a scenario you wrote before it.** At run
+time each scenario restores its own copy of the frozen base and applies only its own setup, so
+nothing another scenario did is there. This is easy to get wrong while writing several in a row:
+you have just set an order to "delivered" for one scenario, and the next one reads as though that
+still holds. It does not. If a scenario needs a record in a particular state, its own setup puts
+it there, whatever any earlier scenario happened to do. The same goes for the calls you make while
+rehearsing with `try_calls`: those run on a throwaway copy and change nothing anybody else sees.
+
 You have two ways to change things, and **neither of them names what the world is kept in**. A
 scenario that wrote SQL would only work against a world that happened to be a database, and the
 store is the thing that varies most between agents.
