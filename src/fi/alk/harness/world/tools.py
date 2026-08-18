@@ -17,6 +17,7 @@ Three habits throughout, for the same reason:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -907,7 +908,7 @@ def world_tools(
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
         from .workspace import run
 
-        code, output = run(destination, str(args["command"]), extra=_store_env(world))
+        code, output = run(destination, str(args["command"]), extra=_store_env(world, str(getattr(getattr(contract, "data_store", None), "configured_by", "") or "")))
         shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
         if code != 0:
             return _err(f"exit {code}\n{shown or '(no output)'}")
@@ -976,6 +977,38 @@ def world_tools(
             f"{name} added, {len(world_checks)} checks: {', '.join(sorted(world_checks))}.\n"
             f"Against the world as it stands it {held}."
         )
+
+    @tool(
+        "run_setup_command",
+        "Run the agent's OWN setup command, in the agent's own directory, against the store this "
+        "world already has: `alembic upgrade head`, `python manage.py migrate`, `prisma migrate "
+        "deploy`, whatever this agent uses. The store's address is in the environment as "
+        "$ALK_STORE_DSN and under the variable the agent itself reads, so its tooling connects "
+        "without being told.\n\n"
+        "Use this for the schema, always, in preference to writing one. A schema you typed out "
+        "yourself is a guess, and every check written against it inherits the guess.\n\n"
+        "The agent's repository is checked before and after: a command that modifies it is "
+        "refused, because what the agent ships is what gets measured.",
+        schema({"command": str}, ["command"]),
+    )
+    async def run_setup_command(args: dict[str, Any]) -> dict[str, Any]:
+        from .workspace import run_setup
+
+        if not source_root:
+            return _err(
+                "there is no agent source to run it in; this world was built from a contract "
+                "alone, so its schema has to come from somewhere else."
+            )
+        configured = str(
+            getattr(getattr(contract, "data_store", None), "configured_by", "") or ""
+        )
+        code, output = run_setup(
+            source_root, str(args["command"]), extra=_store_env(world, configured)
+        )
+        shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
+        if code != 0:
+            return _err(f"exit {code}\n{shown or '(no output)'}")
+        return _ok(f"ok\n{shown or '(no output)'}\nThe store now holds: {world.store.collections()}")
 
     @tool(
         "check_world",
@@ -1155,6 +1188,7 @@ def world_tools(
             add_world_check,
             write_env_file,
             run_env_command,
+            run_setup_command,
             check_world,
             save_world,
         ],
@@ -1185,12 +1219,13 @@ TOOL_NAMES = (
     "add_world_check",
     "write_env_file",
     "run_env_command",
+    "run_setup_command",
     "check_world",
     "save_world",
 )
 
 
-def _store_env(world: Any) -> dict[str, str]:
+def _store_env(world: Any, configured_by: str = "") -> dict[str, str]:
     """Where this world's store is, for a command that has to reach it.
 
     The agent's own migration tool is the only thing that can create the agent's schema, and it
@@ -1209,6 +1244,12 @@ def _store_env(world: Any) -> dict[str, str]:
     if not dsn or "://" not in dsn:
         return {}
     out = {"ALK_STORE_DSN": dsn}
+    # Under the name the agent itself reads, so its own tooling connects without being told.
+    # This is the redirection the contract has been recording all along: `configured_by` names
+    # the variable, and setting it is the whole of pointing the agent at us.
+    named = re.search(r"\b([A-Z][A-Z0-9_]{2,})\b", str(configured_by or ""))
+    if named:
+        out[named.group(1)] = dsn
     # A container cannot reach the host on 127.0.0.1: that is the container itself. Docker
     # publishes the host under this name, so the same store needs a second spelling.
     out["ALK_STORE_DSN_IN_CONTAINER"] = dsn.replace("127.0.0.1", "host.docker.internal").replace(

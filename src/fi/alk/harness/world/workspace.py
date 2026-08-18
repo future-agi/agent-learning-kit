@@ -132,3 +132,108 @@ def run(
         )
     output = ((done.stdout or "") + (done.stderr or "")).strip()
     return done.returncode, output
+
+
+# Directories whose contents change as a side effect of running anything, and say nothing about
+# whether the agent's own source was touched.
+NOISE = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache", ".mypy_cache"}
+
+
+def _fingerprint(root: Path) -> dict[str, tuple[int, int]]:
+    """What the agent's repository looks like right now, cheaply.
+
+    Size and modification time rather than content: this runs before and after every setup
+    command, and hashing a repository twice per migration would cost more than the migration.
+    Anything that writes to a file moves both.
+    """
+    out: dict[str, tuple[int, int]] = {}
+    for found in root.rglob("*"):
+        if not found.is_file() or NOISE & set(found.parts):
+            continue
+        try:
+            stat = found.stat()
+        except OSError:
+            continue
+        out[str(found.relative_to(root))] = (stat.st_size, stat.st_mtime_ns)
+    return out
+
+
+def run_setup(
+    source_root: Path | str,
+    command: str,
+    *,
+    patience: int = PATIENCE,
+    extra: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    """Run the agent's own setup command, in the agent's own directory.
+
+    This exists because only the agent's own tooling can produce the agent's own schema. Alembic,
+    Django's migrate, Prisma -- none of them are a SQL file that could be applied through the
+    store, and a schema transcribed by hand instead is a guess that every check written against
+    it inherits. Watching that happen is what this is for: pointed at an agent with alembic
+    migrations, the build stage tried sixteen times to run them through a container, gave up, and
+    wrote the tables itself. They were nearly right, which is the worst kind of wrong.
+
+    Wider than ``run``, deliberately, and the guarantee that the agent is never modified is kept
+    by checking rather than by there being no way: the repository is fingerprinted before and
+    after, and a command that changed anything is reported as having done so. Running a migration
+    does not write to the source; something that does is worth stopping for.
+    """
+    root = Path(source_root)
+    if not root.is_dir():
+        return 1, f"no agent source at {root}"
+    words = command.split()
+    if not words:
+        return 1, "no command given"
+
+    before = _fingerprint(root)
+    try:
+        done = subprocess.run(  # nosec B603 — list args, never shell=True
+            words,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=patience,
+            env=_with_tools_on_path(extra, root),
+        )
+    except FileNotFoundError:
+        return 1, (
+            f"{words[0]!r} is not installed where the harness runs. The agent's own tooling has "
+            "to be reachable to run its migrations; install it, or run it inside a container "
+            "with run_env_command."
+        )
+    except subprocess.TimeoutExpired:
+        return 1, f"gave up after {patience}s"
+
+    output = ((done.stdout or "") + (done.stderr or "")).strip()
+    changed = sorted(
+        name for name, mark in _fingerprint(root).items() if before.get(name) != mark
+    )
+    gone = sorted(name for name in before if name not in _fingerprint(root))
+    if changed or gone:
+        listed = ", ".join((changed + gone)[:6])
+        return 1, (
+            f"REFUSED: that command modified the agent's own repository ({listed}). The agent "
+            "under test is never edited -- what it ships is what is measured. Run something that "
+            "only touches the store.\n" + output
+        )
+    return done.returncode, output
+
+
+def _with_tools_on_path(extra: dict[str, str] | None, root: Path) -> dict[str, str]:
+    """The environment for a setup command, with the tooling beside this interpreter reachable.
+
+    A migration tool is installed into an environment, not onto the system, so ``alembic`` is a
+    file next to the running ``python`` rather than something on PATH. Without this the command
+    fails as "not installed" when it is installed, just not where a bare PATH looks.
+    """
+    import sys
+
+    environment = {**os.environ, **(extra or {})}
+    beside = str(Path(sys.executable).parent)
+    environment["PATH"] = beside + os.pathsep + environment.get("PATH", "")
+    # And the agent's own code importable by its own tooling: an alembic env.py imports the
+    # models it migrates, so a migration run from anywhere but an installed checkout fails on
+    # its first import rather than on anything to do with the database.
+    environment["PYTHONPATH"] = str(root) + os.pathsep + environment.get("PYTHONPATH", "")
+    return environment
