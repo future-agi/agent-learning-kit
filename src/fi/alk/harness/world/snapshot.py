@@ -12,6 +12,7 @@ starting point instead of drifting toward whichever scenario was written last.
 from __future__ import annotations
 
 import json
+import pprint
 import shutil
 import sqlite3
 from pathlib import Path
@@ -97,8 +98,11 @@ def save(
         _MODULE.format(
             agent=world.name,
             notes=notes or "Generated from the agent's contract.",
-            tools=json.dumps(world.tools, indent=4),
-            handler_names=json.dumps(sorted(world.handlers)),
+            # Python, not JSON. json.dumps writes null/true/false, which are valid JSON and
+            # not names Python has, so the generated module raised NameError on import for
+            # every tool with an argument that had no fixed set of values.
+            tools=pprint.pformat(world.tools, indent=4, width=88, sort_dicts=False),
+            handler_names=pprint.pformat(sorted(world.handlers), width=88),
         ),
         encoding="utf-8",
     )

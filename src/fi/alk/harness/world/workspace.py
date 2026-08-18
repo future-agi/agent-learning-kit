@@ -103,7 +103,7 @@ def run(
     pointed at it. Without that the only way to run a migration is to bring up a second database
     to run it against, which is a copy of the thing the harness is already holding.
     """
-    words = command.split()
+    words = _named_project(command.split(), destination)
     if not words:
         return 1, "no command given"
     if words[0] not in ALLOWED:
@@ -237,3 +237,42 @@ def _with_tools_on_path(extra: dict[str, str] | None, root: Path) -> dict[str, s
     # its first import rather than on anything to do with the database.
     environment["PYTHONPATH"] = str(root) + os.pathsep + environment.get("PYTHONPATH", "")
     return environment
+
+
+# Compose names its containers after the directory it ran in, and puts no label of ours on them.
+# So a run that is killed between "up" and "down" leaves a database running that nothing can
+# find again: not by name, because the name is generic, and not by label, because there is none.
+PROJECT = "alk-env"
+
+
+def _named_project(words: list[str], destination: Path) -> list[str]:
+    """A compose command, made findable afterwards.
+
+    Given a project name derived from the session, every container it starts is called
+    ``alk-env-<session>-<service>-1``, which is enough for ``strays`` to list them and for a
+    person to remove them. Left alone if the command already names one.
+    """
+    if len(words) < 2 or words[0] != "docker" or words[1] != "compose":
+        return words
+    if any(one in ("-p", "--project-name") for one in words):
+        return words
+    session = Path(destination).name or "world"
+    return [*words[:2], "-p", f"{PROJECT}-{session}", *words[2:]]
+
+
+def strays() -> list[str]:
+    """Containers a killed run left behind, both kinds.
+
+    The store's own are labelled; compose's are found by the project name given above.
+    """
+    from .stores.container import docker
+
+    listed = docker(
+        "ps", "--format", '{{.Names}}\t{{.Label "com.docker.compose.project"}}', check=False
+    )
+    out = []
+    for line in listed.splitlines():
+        name, _, project = line.partition("\t")
+        if project.startswith(PROJECT):
+            out.append(name.strip())
+    return out

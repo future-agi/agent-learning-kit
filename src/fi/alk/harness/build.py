@@ -44,23 +44,38 @@ def open_stage(
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
     server, _world = world_tools(contract, destination, source_root=source_root)
+    # Read-only access to the agent, where there is an agent to read. adopt_tool and
+    # adopt_store are asked for a path into somebody else's repository, and this stage had no
+    # way to look: pointed at an agent whose tools it was told to reuse, it tried Read, was
+    # refused, said it would work from the contract alone, and wrote its own versions of two
+    # tools -- inventing menu validation the real agent does not have. Read, Glob and Grep and
+    # nothing else: no Write, no Edit, no shell, so the agent is still never modified.
+    reading = ["Read", "Glob", "Grep"] if source_root else []
     allowed = [
         "AskUserQuestion",
+        *reading,
         *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),
     ]
     options = ClaudeAgentOptions(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
         ),
-        # No file tools and no shell. Everything this stage can do goes through a tool that
-        # executes it and reports back, which is what makes the guardrails meaningful.
+        # No writing and no shell. Everything this stage can change goes through a tool that
+        # executes it and reports back, which is what makes the guardrails meaningful;
+        # reading the agent is not changing it.
         allowed_tools=allowed,
         mcp_servers={WORLD_SERVER: server},
         # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
         # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
         # whole job is to validate that change.
         permission_mode="default",
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        # Rooted at the agent when there is one to read, so a relative Glob lands in the
+        # repository this stage was told to go looking through rather than in our artifacts.
+        cwd=str(
+            Path(source_root)
+            if reading and Path(source_root).is_dir()
+            else (destination.parent if destination.parent.exists() else Path.cwd())
+        ),
         setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(),
