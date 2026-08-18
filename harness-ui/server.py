@@ -29,6 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -42,6 +43,18 @@ from fi.alk.harness.world.snapshot import restore as restore_world  # noqa: E402
 from fi.alk.harness.world.snapshot import saved as world_saved  # noqa: E402
 
 app = FastAPI(title="harness")
+
+# A separate front end is expected. The page in static/ is one renderer over this API and
+# deliberately not the only possible one, so a development server on another port has to be able
+# to reach it. Open because this binds to loopback and holds no credentials of its own; anything
+# exposed beyond localhost needs a real answer here first.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Where agents live. Almost never inside this repo: the harness is in one place and the agent
 # being tested is somewhere else on disk nearly every time.
