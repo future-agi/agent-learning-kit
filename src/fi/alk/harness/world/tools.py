@@ -32,7 +32,7 @@ from ..environment import (
     validate_sub_goal,
 )
 from ..tools import schema
-from ..amend import add_rule, drop_rule, fix_tool, unreachable, widen
+from ..amend import add_rule, drop_rule, fix_tool, set_modality, unreachable, widen
 from ..contract import AgentContract
 from .kinds import for_contract
 from ..checks import run_check, run_world_check
@@ -700,6 +700,24 @@ def world_tools(
         return _ok(said) if done else _err(said)
 
     @tool(
+        "set_modality",
+        "Correct how a person actually reaches this agent: voice, chat or browser. Modality "
+        "picks the world, the simulated person and the transport, so a wrong one does not weaken "
+        "a run, it runs a different test. Use it when the operator says where the agent is "
+        "deployed and the contract disagrees: an agent's code reads the same answering a chat "
+        "window or a phone call, so where it is deployed is something only they can settle.",
+        {"modality": str, "why": str},
+    )
+    async def set_modality_tool(args: dict[str, Any]) -> dict[str, Any]:
+        done, said = set_modality(
+            contract,
+            destination,
+            modality=str(args.get("modality") or ""),
+            why=str(args.get("why") or ""),
+        )
+        return _ok(said) if done else _err(said)
+
+    @tool(
         "inspect_world",
         "Look at what is in the world you are building. With no collection named, lists what "
         "there is and how much is in each. With one, returns records from it. `matching` is plain "
@@ -1138,6 +1156,7 @@ def world_tools(
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
+            set_modality_tool,
             inspect_world,
             write_simulator_prompt,
             add_sub_goal,
@@ -1171,6 +1190,7 @@ TOOL_NAMES = (
     "add_rule",
     "drop_rule",
     "fix_tool",
+    "set_modality",
     "inspect_world",
     "write_simulator_prompt",
     "add_sub_goal",

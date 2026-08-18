@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .contract import AgentContract, validate_contract
+from .contract import MODALITIES, AgentContract, validate_contract
 
 CONTRACT = "contract.json"
 
@@ -125,6 +125,55 @@ def add_rule(
         f"added. The agent now has {len(contract.hard_constraints)} rules, and this one is "
         "graded from here on."
     )
+
+
+def set_modality(
+    contract: AgentContract, destination: Path, *, modality: str, why: str
+) -> tuple[bool, str]:
+    """Correct how a person actually reaches this agent.
+
+    Worth its own amendment because modality is the one field that reroutes everything: it picks
+    the world, the simulator and the transport, so a wrong value does not degrade a run, it runs
+    a different test. And it is the field the source is least able to settle. An agent's code
+    reads the same whether it is answering a chat window or a phone call, so a reader with no
+    other evidence concludes whatever the repository looks like, which for a text benchmark is
+    text, even when the person asking said they had deployed it to a phone number.
+
+    Where the agent is deployed is a fact about somebody's setup rather than about the source, so
+    when the two disagree the person is right and the source is describing a different runtime of
+    the same agent. Recorded like every other amendment, because it is still a change to what was
+    read.
+    """
+    named = (modality or "").strip().lower()
+    if named not in MODALITIES:
+        return False, f"{named!r} is not a modality. It is one of: {', '.join(MODALITIES)}"
+    if not why.strip():
+        return False, "say why: modality decides how every scenario is run"
+    if named == contract.modality:
+        return False, f"the contract already says {named}"
+
+    was = contract.modality
+    contract.modality = named
+    contract.amendments.append(f"modality {was} -> {named}: {why.strip()}")
+    problems = validate_contract(contract)
+    if problems:
+        contract.modality = was
+        contract.amendments.pop()
+        return False, "the amended contract would not be valid: " + "; ".join(problems)
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / CONTRACT).write_text(
+        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    reached = {
+        "voice": "a call placed to the agent where it is hosted, its own tools answered over a "
+        "webhook",
+        "chat": "a typed conversation, the agent reconstructed here from its contract",
+        "browser": "a browser the agent drives",
+    }[named]
+    return True, f"modality is now {named}. Every scenario will be run as {reached}."
 
 
 def drop_rule(

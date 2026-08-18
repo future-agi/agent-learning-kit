@@ -203,12 +203,40 @@ class GeneratedWorld(EnvironmentAdapter):
         return found
 
     def reach(self, source_root: str) -> None:
-        """Make the agent's own code importable, so a binding can call it rather than copy it."""
+        """Make the agent's own code importable, so a binding can call it rather than copy it.
+
+        Two directories go on the path, not one. An agent pointed at flatly is imported from where
+        it sits, but an agent laid out as a package is nearly always pointed at the part under
+        test rather than at its root: `tau_bench/envs/retail` is where the agent is, while
+        `tau_bench.envs.retail.data` only resolves from the repository above it. Adding just the
+        directory named makes every import the agent's own code writes fail, which arrives as
+        "No module named tau_bench" and reads as the package being absent rather than as us
+        having pointed at the middle of it.
+
+        The package root is found the way Python finds it: walk up while each directory is itself
+        a package, and stop at the first that is not.
+        """
         import sys
 
         self.source_root = str(source_root or "")
-        if self.source_root and self.source_root not in sys.path:
-            sys.path.insert(0, self.source_root)
+        for path in self._import_roots(self.source_root):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+
+    @staticmethod
+    def _import_roots(source_root: str) -> list[str]:
+        """Where the agent's code can be imported from: where it sits, and its package root."""
+        if not source_root:
+            return []
+        roots = [source_root]
+        here = Path(source_root)
+        # Bounded by the filesystem root: `parents` stops there, so a source outside any package
+        # simply never enters the loop.
+        while (here / "__init__.py").exists() and here.parent != here:
+            here = here.parent
+            if str(here) not in roots:
+                roots.append(str(here))
+        return roots
 
     # -- EnvironmentAdapter ----------------------------------------------------------
 
@@ -349,7 +377,12 @@ class GeneratedWorld(EnvironmentAdapter):
         plain = described.replace('\\"', '"').replace("\\'", "'")
         quoted = re.findall(r"[\"'“”‘’`]([^\"'“”‘’`]{1,40})[\"'“”‘’`]", plain)
         found = [one.strip().strip("\\").strip() for one in quoted]
-        return [one for one in found if one] or [plain.strip()]
+        # A convention that lists examples separates them, and the separator sits between one
+        # closing quote and the next opening one, so it is matched as though it were quoted too.
+        # A marker of "," would make any result beginning with a comma a refusal, so anything
+        # without a character a message could start with is dropped.
+        found = [one for one in found if any(char.isalnum() for char in one)]
+        return found or [plain.strip()]
 
     def _record(self, call: Call) -> Call:
         # Stamped here rather than by the caller, so every call is stamped and none of them
