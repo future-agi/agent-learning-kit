@@ -460,6 +460,37 @@ async def contract():
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# How many records of a collection the page shows. Enough to see the shape of the data without
+# sending a thousand orders to a browser.
+SHOWN = 200
+
+
+def _table(name: str, records: Any) -> dict:
+    """One collection, in the shape the page draws, whatever the collection is kept in.
+
+    A collection is not always a list. A table gives a list of records; a collection the agent's
+    own code keeps is usually a mapping keyed by identifier, and slicing one of those raises
+    rather than returning the first few. That took out the whole Environment tab for any adopted
+    agent, which is every agent whose state was worth adopting.
+    """
+    if isinstance(records, dict):
+        # Keyed, so the key is a column in its own right: it is what every other record refers to
+        # this one by, and dropping it would show rows nothing could be matched against.
+        rows = [{"_key": key, **value} if isinstance(value, dict) else {"_key": key, "value": value}
+                for key, value in list(records.items())[:SHOWN]]
+    elif isinstance(records, list):
+        rows = [one if isinstance(one, dict) else {"value": one} for one in records[:SHOWN]]
+    else:
+        # A scalar or something else the agent keeps. Shown as itself rather than hidden.
+        rows = [{"value": records}]
+    return {
+        "name": name,
+        "count": len(records) if isinstance(records, (dict, list)) else 1,
+        "columns": sorted({field for row in rows for field in row}),
+        "rows": rows,
+    }
+
+
 @app.get("/api/world")
 async def world():
     out = current.path if current else None
@@ -470,15 +501,7 @@ async def world():
     # opening it by filename showed an empty page for a world that was really there.
     held = restore_world(out)
     try:
-        tables = [
-            {
-                "name": name,
-                "count": len(records),
-                "columns": sorted({field for record in records[:200] for field in record}),
-                "rows": records[:200],
-            }
-            for name, records in sorted(held.state().items())
-        ]
+        tables = [_table(name, records) for name, records in sorted(held.state().items())]
         manifest = {}
         manifest_path = out / "manifest.json"
         if manifest_path.exists():
@@ -507,7 +530,7 @@ async def scenarios():
     scenario shown as validated when the world has since changed underneath it is worse than one
     shown as unknown.
     """
-    from fi.alk.harness.environment import load_catalogue
+    from fi.alk.harness.catalogue import load_catalogue
     from fi.alk.harness.folder import folder_for
     from fi.alk.harness.prove import prove
 
@@ -572,7 +595,8 @@ async def scenario_file(name: str, path: str):
 @app.get("/api/subgoals")
 async def subgoals():
     """The shared catalogue. What every scenario is checked against."""
-    from fi.alk.harness.environment import load_catalogue, load_simulator_prompt
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.simulator import load_simulator_prompt
 
     out = current.path if current else None
     if not out:

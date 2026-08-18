@@ -184,6 +184,9 @@
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr:last-child td { border-bottom: 0; }
   .scroll-x { overflow-x: auto; }
+  /* A nested value is long. Kept on one line so the row stays readable, with the whole thing on
+     hover, rather than one order turning a table into a wall. */
+  td.clip { max-width: 30rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
   .scroll-xy { overflow: auto; max-height: 21rem; }
   .scroll-xy thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
 
@@ -930,6 +933,19 @@ function callsNode(calls) {
   return list;
 }
 
+/* One cell. A record's field is not always a scalar: an adopted world keeps nested objects and
+   lists where a database would have had columns, and String() turns every one of those into
+   "[object Object]", which is how a whole table of real data reads as nothing at all. */
+function cellText(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) {
+    // The count first, because "3 items" is the useful part and the contents are the detail.
+    return value.length ? `[${value.length}] ${JSON.stringify(value)}` : "[]";
+  }
+  return JSON.stringify(value);
+}
+
 function dataTable(columns, rows, { tall = false } = {}) {
   const wrap = el("div", tall ? "scroll-xy" : "scroll-x");
   const grid = el("table");
@@ -939,7 +955,13 @@ function dataTable(columns, rows, { tall = false } = {}) {
   const tbody = el("tbody"); grid.appendChild(tbody);
   for (const row of rows) {
     const line = el("tr");
-    for (const col of columns) line.appendChild(el("td", "", String(row[col] ?? "")));
+    for (const col of columns) {
+      const full = cellText(row[col]);
+      const cell = el("td", full.length > 120 ? "clip" : "", full.length > 120 ? full.slice(0, 120) + "…" : full);
+      // The whole value on hover, so a truncated cell is still readable without leaving the page.
+      if (full.length > 120) cell.title = full;
+      line.appendChild(cell);
+    }
     tbody.appendChild(line);
   }
   wrap.appendChild(grid);
@@ -1657,6 +1679,10 @@ async function tabRunsLegacy(body) {
 
 /* ---------------- the stream ---------------- */
 
+/* Who is speaking. "harness" is what the code calls this thing, not what it should be called to
+   somebody using it. General on purpose until it is named properly: one place to change. */
+const SPEAKER = "tester";
+
 function bubbleYou(text) {
   const msg = el("div", "msg you");
   msg.appendChild(el("div", "who", "you"));
@@ -1666,7 +1692,7 @@ function bubbleYou(text) {
 
 function newHarnessMsg() {
   const msg = el("div", "msg");
-  msg.appendChild(el("div", "who", "harness"));
+  msg.appendChild(el("div", "who", SPEAKER));
   $("thread").appendChild(msg);
   return msg;
 }

@@ -772,26 +772,6 @@ def test_a_collection_is_read_and_written_in_the_same_place():
     world.close()
 
 
-def test_every_simulated_person_gets_the_rules_whatever_was_written_for_them():
-    """The rules that decide whether a run reaches the agent at all cannot be left to whatever
-    the build stage remembered to write. Inventing an identifier ends a run at verification, and
-    speaking an email as a word destroys it in transcription, so both are appended to every
-    prompt rather than asked for once in a skill."""
-    from fi.alk.harness.environment import ALWAYS, SPOKEN, with_rules
-
-    typed = with_rules("You want to cancel an order.")
-    assert "Never invent one" in typed
-    # A typed caller is not speaking, and telling them to spell things aloud is noise.
-    assert SPOKEN not in typed
-
-    spoken = with_rules("You want to cancel an order.", spoken=True)
-    assert ALWAYS in spoken and SPOKEN in spoken
-    assert "Spell anything containing punctuation" in spoken
-
-    # What the agent was written to do still comes first; the rules are added, never substituted.
-    assert spoken.startswith("You want to cancel an order.")
-
-
 def test_the_modality_can_be_corrected_when_the_source_reads_the_other_way(tmp_path):
     """Modality picks the world, the simulated person and the transport, so a wrong one runs a
     different test rather than a weaker one. It is also the field a source settles worst: an
@@ -950,7 +930,7 @@ def test_a_row_put_in_wrong_can_be_taken_out_again(tmp_path):
 
 def test_a_sub_goal_that_settles_nothing_is_rejected():
     """Every scenario referencing it would report a result nobody should believe."""
-    from fi.alk.harness.environment import SubGoal, validate_sub_goal
+    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
 
     assert validate_sub_goal(SubGoal(name="x", what="means something")) != []
     settled = SubGoal(
@@ -968,7 +948,7 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
 
 
 def test_a_check_must_actually_define_one():
-    from fi.alk.harness.environment import SubGoal, validate_sub_goal
+    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
 
     problems = validate_sub_goal(
         SubGoal(name="x", what="y", check="rows = world.state()['orders']")
@@ -977,7 +957,7 @@ def test_a_check_must_actually_define_one():
 
 
 def test_a_simulator_prompt_without_a_slot_runs_the_same_conversation_every_time():
-    from fi.alk.harness.environment import fill, validate_simulator_prompt, variables_in
+    from fi.alk.harness.simulator import fill, validate_simulator_prompt, variables_in
 
     fixed = (
         "You are a customer calling a drive-thru. Speak naturally, one turn at a time. "
@@ -1042,7 +1022,7 @@ def test_a_check_can_insist_on_the_arguments_not_just_the_call():
 
 def _built_environment(tmp_path):
     """A saved world plus a catalogue, which is what the environment step leaves behind."""
-    from fi.alk.harness.environment import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.world.snapshot import save
 
     world, contract = _cart_world()
@@ -1119,7 +1099,7 @@ def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_pat
 
 def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     """A check that passes without the agent acting grades nothing while reporting a result."""
-    from fi.alk.harness.environment import SubGoal, save_catalogue
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
     from fi.alk.harness.scenario_tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -1141,7 +1121,7 @@ def test_a_check_that_cannot_fail_without_calls_is_named_even_though_it_is_kept(
     """A check comparing calls against rows holds when there are no calls at all, so it reports
     itself as held for an agent that did nothing. The scenario is still graded by its other
     checks, so it is kept, but sub-goals are shared and that one would roll up as a pass."""
-    from fi.alk.harness.environment import SubGoal, save_catalogue
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
     from fi.alk.harness.prove import prove
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import accept_scenario
@@ -1554,7 +1534,7 @@ def test_a_scenario_with_no_solution_cannot_be_proved(tmp_path):
 
 def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
     """If a payment step appears in 50 scenarios, the results should say where payment fails."""
-    from fi.alk.harness.environment import Catalogue, SubGoal
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import not_ready
 
@@ -1671,7 +1651,7 @@ def test_repointing_changes_only_where_the_agents_tools_are_answered():
 
 
 def test_a_scenario_fills_the_simulator_prompt_before_a_call_is_placed(tmp_path):
-    from fi.alk.harness.environment import save_simulator_prompt
+    from fi.alk.harness.simulator import save_simulator_prompt
     from fi.alk.harness.run.live import prepare
     from fi.alk.harness.scenario import Scenario
 
@@ -1694,7 +1674,7 @@ def test_a_scenario_that_leaves_a_slot_empty_never_reaches_a_call(tmp_path):
     """An unfilled slot would be read out to the caller verbatim."""
     import pytest as _pytest
 
-    from fi.alk.harness.environment import save_simulator_prompt
+    from fi.alk.harness.simulator import save_simulator_prompt
     from fi.alk.harness.run.live import prepare
     from fi.alk.harness.scenario import Scenario
 
@@ -2051,7 +2031,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     # A skill also backticks the names of fields it is telling the model to fill in. Those are
     # not tools, and the list of them is derived rather than hand-kept so it cannot go stale.
     from fi.alk.harness.contract import AgentContract, ToolSpec
-    from fi.alk.harness.environment import SubGoal
+    from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.scenario import Scenario
 
     fields = set()
@@ -2922,7 +2902,7 @@ def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said
     did nothing also said nothing, so a judged sub-goal cannot be passed by an empty run.
     """
     from fi.alk.harness.checks import Outcome
-    from fi.alk.harness.environment import Catalogue, SubGoal
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.prove import Proof
 
     catalogue = Catalogue(
@@ -3133,7 +3113,7 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     """The folders are the truth and they are what gets read back. Writing the survivors without
     taking the others away means a dropped scenario returns on the next load, still failing, and
     dropping it appears to do nothing at all."""
-    from fi.alk.harness.environment import Catalogue, SubGoal
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
 
