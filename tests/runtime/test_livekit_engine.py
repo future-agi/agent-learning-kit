@@ -529,6 +529,13 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
         def off(self, event, callback):
             self.listeners.get(event, []).remove(callback)
 
+        def register_text_stream_handler(self, topic, handler=None):
+            self.listeners.setdefault(("text_stream", topic), []).append(handler)
+            return handler
+
+        def unregister_text_stream_handler(self, topic):
+            self.listeners.pop(("text_stream", topic), None)
+
     class FakeRoomService:
         async def create_room(self, request):
             calls.append(("create_room", request.name))
@@ -635,11 +642,11 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
     assert result.metadata["target_participant_identity"] == "target-agent"
     dispatch = next(call for call in calls if call[0] == "dispatch")
     assert dispatch[1:3] == ("registered-agent", room_name)
-    dispatch_metadata = json.loads(dispatch[3])
-    assert dispatch_metadata["target_instructions"] == "Help the caller."
-    assert dispatch_metadata["simulator_participant_identity"] == (
-        "fagi-simulator-" + result.metadata["test_case_id"][-12:]
-    )
+    # Dispatch metadata is empty by default (d13f8c2): a template-built target
+    # treats any payload as an outbound/no-greet job and never publishes audio.
+    # Metadata forwarding is covered by test_dispatch_metadata_* below; only a
+    # target that opts in via AgentDefinition.dispatch_metadata gets a payload.
+    assert dispatch[3] == ""
     assert ("delete_room", room_name) in calls
     assert ("open",) in calls
 
@@ -1325,6 +1332,12 @@ class _FakeRoomAudio:
         return callback
 
     def off(self, event, callback):
+        pass
+
+    def register_text_stream_handler(self, topic, handler=None):
+        return handler
+
+    def unregister_text_stream_handler(self, topic):
         pass
 
 
