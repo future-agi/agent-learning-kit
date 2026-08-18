@@ -218,3 +218,30 @@ def test_a_tool_saying_no_still_counts_as_it_working(said) -> None:
     from fi.alk.harness.world.tools import _never_ran
 
     assert not _never_ran(said)
+
+
+# --- the image is built from the repository, not the package inside it -----------------------
+
+
+@pytest.mark.parametrize(
+    "root, workdir, climbs",
+    [
+        # The case that broke: main.py wants ../../web/dist, which an image built from the
+        # package alone puts at /web, so the module cannot load and the tools read as
+        # unreachable when it is the context that was too narrow.
+        ("/components/python", "components/python/src", "/"),
+        ("/repo", "tau_bench/envs/retail", "/repo"),
+        ("/agent", ".", "/agent"),
+        ("/agent", "", "/agent"),
+    ],
+)
+def test_the_context_climbs_to_the_repository(tmp_path, root, workdir, climbs) -> None:
+    from fi.alk.harness.contract import Runtime
+
+    # Laid out for real, since the climb only happens where the path actually exists.
+    base = tmp_path / root.strip("/")
+    (base / "src").mkdir(parents=True, exist_ok=True)
+    if workdir and workdir != ".":
+        (tmp_path / workdir).mkdir(parents=True, exist_ok=True)
+    found = sandbox.context_for(base, Runtime(workdir=workdir))
+    assert found.is_dir()

@@ -196,8 +196,12 @@ class GeneratedWorld(EnvironmentAdapter):
         found = getattr(self.store, "connection", None)
         if found is None:
             raise AttributeError(
-                f"this world's store ({getattr(self.store, 'key', 'unknown')}) has no "
-                "connection. Use the store, or put, change and drop."
+                f"this world's store ({getattr(self.store, 'key', 'unknown')}) has no SQL "
+                "connection, so there is no schema to create and no statement to run against "
+                "it.\n"
+                "Its records are held as collections. Put them there with seed, change them "
+                "with change_data, and read them with inspect_world -- the shape comes from "
+                "what you seed rather than from a CREATE TABLE."
             )
         return found
 

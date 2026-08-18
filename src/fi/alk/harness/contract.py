@@ -367,14 +367,7 @@ class AgentContract(BaseModel):
                 f"{self.refusal_signature}"
             )
         if self.data_store:
-            store = self.data_store
-            parts.append(
-                "ITS DATA STORE:\n"
-                f"  kind: {store.kind or 'unspecified'}\n"
-                f"  connection comes from: {store.configured_by or 'unknown'}\n"
-                f"  schema from: {store.schema_from or 'unknown'}\n"
-                f"  its own loader: {store.loaded_by or 'none'}"
-            )
+            parts.append(_store_block(self.data_store))
         if self.runtime:
             run = self.runtime
             parts.append(
@@ -440,3 +433,49 @@ def validate_contract(contract: AgentContract) -> list[str]:
     if duplicates:
         problems.append(f"duplicate-tool-names:{','.join(duplicates)}")
     return problems
+
+
+def _store_block(store: "DataStore") -> str:
+    """Everything recorded about the agent's store, for whoever has to stand one up.
+
+    Written out in full because the short version was not enough: host, port, database, user,
+    version and the loader's module were all recorded by the reading stage and all dropped
+    here, so the build stage was told "stand up inprocess" with no loader named and went
+    looking for a server to put the agent's in-memory data in. Six fields it already had.
+
+    What is absent is said as well as what is present. "build it to match" is only actionable
+    against values, and a stage that cannot see them will invent its own.
+    """
+    said = [
+        "ITS DATA STORE:",
+        f"  kind: {store.kind or 'unspecified'}"
+        + (f" {store.version}" if store.version else ""),
+        f"  connection comes from: {store.configured_by or store.config_key or 'unknown'}",
+        f"  schema from: {store.schema_from or 'unknown'}",
+    ]
+    # Both, where an agent has both: one names the variable and the other the key inside a
+    # file it reads, and either alone leaves a stage guessing which it is meant to set.
+    if store.config_key and store.configured_by:
+        said.append(f"  and in its config at: {store.config_key}")
+    if store.loader_module or store.loaded_by:
+        # Both halves, always. Named apart they read as one fact split in two, and a stage told
+        # only the function has nothing to import it from.
+        said.append(
+            f"  its own loader: {store.loader_module or 'MODULE NOT RECORDED'}"
+            f".{store.loaded_by or 'load_data'} — call it rather than reading its files"
+        )
+    expects = [
+        f"{label} {value}"
+        for label, value in (
+            ("host", store.host), ("port", store.port),
+            ("database", store.database), ("user", store.user),
+        )
+        if value
+    ]
+    if expects:
+        # Matched rather than changed: the store is built to these, so the agent connects to us
+        # expecting exactly what it always expected.
+        said.append("  build it to match: " + ", ".join(expects))
+    if store.password_from:
+        said.append(f"  its password comes from {store.password_from} — never recorded here")
+    return "\n".join(said)

@@ -196,6 +196,33 @@ def _command(said: str) -> str:
     return said.split("(")[0].strip()
 
 
+def context_for(source_root: Path | str, runtime: object) -> Path:
+    """What to copy into the image: the repository, not the package inside it.
+
+    Agents compute paths from ``__file__``. One refuses to import unless a web build sits at
+    ``../../web/dist``, so an image built from its package alone moved that to ``/web`` and its
+    tools could not load at all -- which then read as the tools being unreachable rather than
+    the context being too narrow.
+
+    ``runtime.workdir`` already says how deep the code sits: a workdir of
+    ``components/python/src`` means the root is three levels above it. Climbing that far turns
+    the package back into the repository it came from.
+    """
+    root = Path(source_root)
+    workdir = str(getattr(runtime, "workdir", "") or "").strip("./")
+    if not workdir or workdir == ".":
+        return root
+    # Only where the checkout actually ends in that path. A workdir naming somewhere else
+    # entirely is a disagreement to leave alone rather than to climb blindly out of.
+    depth = len(Path(workdir).parts)
+    climbed = root
+    for _ in range(depth):
+        if climbed.name and (climbed.parent / Path(workdir)).is_dir():
+            return climbed.parent
+        climbed = climbed.parent
+    return root
+
+
 def network_for(session: str) -> str:
     """A network for this session, so the agent and the store can see each other by name."""
     name = f"alk-net-{session}"
@@ -212,7 +239,7 @@ def stand_up(session: str, source_root: Path | str, runtime: object, store: obje
     combination that exists nowhere, and nothing errors to say so. One path also means one
     behaviour, rather than a fast path that quietly differs from the slow one.
     """
-    root = Path(source_root)
+    root = context_for(source_root, runtime)
     recipe, _its_own = dockerfile_for(root, runtime)
     tag = f"alk-agent-{session}".lower()
     _docker("build", "-t", tag, "-f", str(recipe), str(root))
