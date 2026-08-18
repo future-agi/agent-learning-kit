@@ -64,19 +64,67 @@ def run_root(destination: Path, run_id: str) -> Path:
 
 
 def every_run(destination: Path) -> list[dict[str, Any]]:
-    """Every run in this session, newest first, as the UI lists them."""
+    """Every run in this session, newest first, finished or not.
+
+    A run that is still going is reported too, from the results already written. `run.json` is
+    written once, at the end, so requiring it meant an hour-long suite showed nothing at all
+    while its results sat on disk: the scenario that finished forty minutes ago was as invisible
+    as the one that had not started. `finished` says which kind each is.
+    """
     root = Path(destination) / RUNS
     if not root.exists():
         return []
     found: list[dict[str, Any]] = []
     for folder in sorted(root.iterdir(), reverse=True):
+        if not folder.is_dir():
+            continue
         kept = folder / RUN
-        if folder.is_dir() and kept.exists():
+        if kept.exists():
             try:
-                found.append(json.loads(kept.read_text(encoding="utf-8")))
+                summary = json.loads(kept.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001 - one unreadable run never hides the rest
                 continue
+            summary["finished"] = True
+            found.append(summary)
+            continue
+        done = _cases_so_far(folder)
+        if done:
+            found.append(
+                {
+                    "run_id": folder.name,
+                    "finished": False,
+                    "scenarios": len(done),
+                    "passed": sum(1 for one in done if one.get("passed")),
+                    "seconds": round(sum(one.get("seconds") or 0 for one in done), 1),
+                    "results": done,
+                }
+            )
     return found
+
+
+def _cases_so_far(folder: Path) -> list[dict[str, Any]]:
+    """The scenarios of an unfinished run that have already been written."""
+    done: list[dict[str, Any]] = []
+    for case in sorted(folder.iterdir()):
+        kept = case / RESULT
+        if not case.is_dir() or not kept.exists():
+            continue
+        try:
+            one = json.loads(kept.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - a result being written this instant is not an error
+            continue
+        done.append(
+            {
+                "scenario": one.get("scenario", case.name),
+                "passed": bool(one.get("passed")),
+                "met": one.get("met"),
+                "of": len(one.get("checkpoints") or []),
+                "seconds": one.get("seconds"),
+                "recording": one.get("recording", ""),
+                "problems": one.get("problems") or [],
+            }
+        )
+    return done
 
 
 def read_run(destination: Path, run_id: str) -> dict[str, Any]:
@@ -87,9 +135,16 @@ def read_run(destination: Path, run_id: str) -> dict[str, Any]:
     """
     root = run_root(destination, run_id)
     kept = root / RUN
-    if not kept.exists():
+    if not root.exists():
         raise FileNotFoundError(f"no run {run_id} in {destination}")
-    summary = json.loads(kept.read_text(encoding="utf-8"))
+    # A run still going has no summary yet, but the scenarios it has finished are readable and
+    # worth reading. Only a folder that is not there at all is an error.
+    summary = (
+        json.loads(kept.read_text(encoding="utf-8"))
+        if kept.exists()
+        else {"run_id": run_id, "finished": False, "passed": 0}
+    )
+    summary.setdefault("finished", kept.exists())
     scenarios: list[dict[str, Any]] = []
     for folder in sorted(root.iterdir()):
         if not folder.is_dir() or not (folder / RESULT).exists():

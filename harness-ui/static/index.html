@@ -1306,13 +1306,35 @@ function normalizeRun(run) {
    over the same scenarios and the same world, so which run a result came from is part of the
    result: the list is the first thing, and any entry opens into what actually happened. */
 
+/* A run still going, listed by the same endpoint as a finished one. `run.json` is written once
+   at the end, so a long suite used to show nothing while its results sat on disk. */
+function liveRun(body, run) {
+  const cases = run.results || [];
+  const top = pane(body, run.run_id, `${run.passed}/${cases.length} finished so far · still running`);
+  for (const one of cases) {
+    const row = el("div", "goal" + (one.passed ? "" : " failed"));
+    row.appendChild(el("span", "cbox" + (one.passed ? "" : " no"), one.passed ? "✓" : "✗"));
+    const text = el("div", "goal-text");
+    text.appendChild(el("span", "goal-name", one.scenario));
+    text.appendChild(el("p", "reason",
+      `${one.met}/${one.of} sub-goals · ${Math.round(one.seconds || 0)}s`));
+    for (const problem of one.problems || []) text.appendChild(el("p", "reason", problem));
+    row.appendChild(text);
+    top.appendChild(row);
+  }
+  top.appendChild(el("p", "muted",
+    "more appear as each scenario finishes; the full run opens here when the suite is done"));
+}
+
 async function tabRuns(body) {
   const listed = await fetch("/api/simulations").then(r => r.json()).catch(() => ({ runs: [] }));
-  const runs = (listed && listed.runs) || [];
-  if (runs.length) {
-    if (openRun) return runDetail(body, openRun);
-    return runList(body, runs);
-  }
+  const all = (listed && listed.runs) || [];
+  const live = all.filter(one => one.finished === false);
+  const done = all.filter(one => one.finished !== false);
+  if (openRun) return runDetail(body, openRun);
+  for (const run of live) liveRun(body, run);
+  if (done.length) return runList(body, done);
+  if (live.length) return;
   return tabRunsLegacy(body);
 }
 
