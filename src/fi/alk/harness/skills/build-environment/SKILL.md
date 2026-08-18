@@ -348,3 +348,22 @@ each scenario for, and the sub-goals with how many are settled by code.
 
 Then say plainly anything you were unsure about, especially where the contract was thin and you
 had to decide.
+
+
+## Never write a tool the agent already has
+
+`adopt_tool` binds the agent's own code. That is the only way a tool gets into this world.
+
+If it fails, **look before concluding anything**. Read the agent's source and find where the
+tool actually lives; a contract that says a tool is unreachable was written before any of this
+existed, and is frequently wrong — one agent's tools were recorded as needing a live database
+to import, and they import fine without one.
+
+If it genuinely cannot be bound, say so with `cannot_reach_tool` and **stop**. Do not write a
+version of it. A stand-in is a different agent: given a tool that validates nothing, a stand-in
+that validates something produces a suite reporting on an agent that does not exist, and the
+report says nothing about it being invented.
+
+An environment that cannot reach a tool is a finding. Tell the person what is missing — the
+entrypoint, the dependency, the setup step — and let them decide. `save_world` refuses while
+any of the agent's tools is still being stood in for.

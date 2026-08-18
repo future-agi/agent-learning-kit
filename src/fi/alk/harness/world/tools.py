@@ -250,6 +250,9 @@ def world_tools(
     kind = for_contract(contract)
     catalogue = load_catalogue(destination)
     scores: list[float] = []
+    # The agent's tools that are running the agent's own code, as opposed to
+    # something written here. Nothing may be saved while those two sets differ.
+    adopted: set[str] = set()
     # The checks that decide whether this world is usable, written here rather than fixed in
     # advance, because what makes a world usable is a judgement about this agent.
     world_checks: dict[str, str] = dict(read_manifest(destination).get("world_checks") or {}) if existing else {}
@@ -373,6 +376,19 @@ def world_tools(
         ),
     )
     async def define_handler(args: dict[str, Any]) -> dict[str, Any]:
+        # A tool the agent ships is never written here. A stand-in is a different agent: given
+        # the sandwich agent, whose add_to_order validates nothing at all, this stage wrote one
+        # that refuses items off the menu -- and a suite built on it would report an agent that
+        # does not exist. If adopt_tool cannot bind it, that is a finding for whoever owns the
+        # agent, not a gap to fill.
+        wanted = str(args.get("tool_name") or "")
+        if source_root and wanted in contract.tool_names() and wanted not in adopted:
+            return _err(
+                f"{wanted} belongs to the agent, so it is not written here. Bind the agent's "
+                f"own with adopt_tool. If that genuinely cannot be done, say so with "
+                f"cannot_reach_tool and stop -- an environment missing a tool is reported, "
+                f"never guessed at."
+            )
         name = str(args["tool_name"])
         if name not in contract.tool_names():
             return _err(
@@ -539,6 +555,7 @@ def world_tools(
                 factory=str(args.get("factory") or ""),
             )
         world.handlers[name] = binding
+        adopted.add(name)
         # Reverted after, because a smoke call against the agent's own code really does what the
         # tool does: cancelling an order to prove the binding works would spend that order, and
         # every scenario after it starts from this same world. Proving a tool works must not cost
@@ -678,10 +695,13 @@ def world_tools(
 
     @tool(
         "cannot_reach_tool",
-        "Record that a tool's own implementation cannot be run here, so the world may implement "
-        "it instead. Only after adopt_tool has genuinely failed: say what stopped it, in one "
-        "line. The reason is written onto the contract permanently, because it is the only "
-        "record that this tool was a stand-in rather than the agent's own code.",
+        "Record that a tool's own implementation cannot be run here. Only after adopt_tool has "
+        "genuinely failed, and only after looking: read the agent's source and try the import. "
+        "Say what stopped it, in one line.\n\n"
+        "This does not license writing the tool yourself. It is a finding, and it is reported "
+        "to whoever owns the agent: an environment that cannot reach a tool tests an agent "
+        "nobody has. save_world will refuse while any tool is still unbound, and that is the "
+        "point -- what is missing gets said out loud rather than filled in.",
         schema({"tool_name": str, "why": str}, ["tool_name", "why"]),
     )
     async def cannot_reach_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -1075,6 +1095,20 @@ def world_tools(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
             )
+        # Nothing is saved while a tool the agent ships is being stood in for. A suite built on
+        # invented tools measures an agent nobody has, and that it was invented is much harder
+        # to notice later than it is to refuse here.
+        if source_root:
+            standing_in = sorted(set(contract.tool_names()) - adopted)
+            if standing_in:
+                return _err(
+                    "Not saved. These are the agent's tools and this world is not running the "
+                    f"agent's own code for them: {', '.join(standing_in)}.\n"
+                    "Bind each with adopt_tool. Where that genuinely cannot be done, record it "
+                    "with cannot_reach_tool and tell whoever owns the agent what is missing -- "
+                    "an environment that cannot reach a tool is a finding to report, not a gap "
+                    "to fill in."
+                )
         if not sequences:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
