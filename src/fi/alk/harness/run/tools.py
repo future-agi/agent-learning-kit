@@ -25,7 +25,7 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from ..environment import load_catalogue
+from ..catalogue import load_catalogue
 from ..scenario_tools import load_scenarios
 from ..tools import schema
 from .call import place_the_call

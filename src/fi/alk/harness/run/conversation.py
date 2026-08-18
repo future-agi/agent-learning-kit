@@ -115,7 +115,7 @@ def customer_prompt(
     each scenario fills its slots. Only the ending convention is added here, because it is how
     this particular loop knows a conversation is over.
     """
-    from ..environment import fill, with_rules
+    from ..simulator import fill
 
     if written:
         filled, _missing = fill(written, scenario.slots())
@@ -126,9 +126,6 @@ def customer_prompt(
             f"You are contacting {contract.agent}, which is: {contract.one_liner}\n\n"
             f"WHAT YOU ARE HERE TO DO:\n{scenario.instruction}"
         )
-    # Either way. Typed, so the speech rules do not apply, but inventing an identifier fails a
-    # lookup here exactly as it does on a call.
-    filled = with_rules(filled)
     return (
         filled
         + "\n\nWhen you have got what you came for, or accepted that you cannot, say the one "
@@ -151,7 +148,7 @@ async def converse(
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened."""
     transcript = Transcript()
-    from ..environment import load_simulator_prompt
+    from ..simulator import load_simulator_prompt
 
     customer = Stage(
         ClaudeAgentOptions(

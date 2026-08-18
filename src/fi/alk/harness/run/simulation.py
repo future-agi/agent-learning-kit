@@ -311,7 +311,7 @@ async def _typed_to(
     The same grading as every other run: the world it is handed is already set up, and what it
     leaves behind is what the checks read.
     """
-    from ..environment import load_catalogue
+    from ..catalogue import load_catalogue
     from . import converse
     from .grade import checkpoints, grade_sub_goals, judge
     from .targets import resolve
@@ -384,7 +384,7 @@ async def _spoken_to(
     import os
     import time
 
-    from ..environment import load_catalogue
+    from ..catalogue import load_catalogue
     from .call import place_the_call
     from .conversation import Exchange, Transcript
     from .grade import checkpoints, grade_sub_goals, judge

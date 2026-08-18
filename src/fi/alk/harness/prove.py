@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .checks import Outcome, run_check
-from .environment import Catalogue
+from .catalogue import Catalogue
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld

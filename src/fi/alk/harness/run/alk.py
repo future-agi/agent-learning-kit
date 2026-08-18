@@ -40,7 +40,7 @@ def as_persona(scenario: Scenario, simulator_prompt: str = "") -> Persona:
     There is no persona payload beyond a label. Who the caller is does not vary between
     scenarios; what varies is what they want and what they know.
     """
-    from ..environment import fill
+    from ..simulator import fill
 
     # Only the circumstance, not the behavioural prompt. ALK composes the opening line as
     # "My name is X. {situation} I want this outcome: {outcome}" and sends it verbatim, so

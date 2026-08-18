@@ -35,7 +35,7 @@ from ..scenario import Scenario
 from ..session import Stage
 from ..tools import qualified
 from ..checks import Outcome, run_check
-from ..environment import Catalogue
+from ..catalogue import Catalogue
 from ..world.runtime import GeneratedWorld
 from .conversation import Transcript
 

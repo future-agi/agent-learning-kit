@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from ..contract import AgentContract
-from ..environment import load_catalogue, load_simulator_prompt
+from ..catalogue import load_catalogue
+from ..simulator import load_simulator_prompt
 from ..scenario import Scenario
 from ..folder import apply_setup, check_ready
 from ..world.snapshot import restore

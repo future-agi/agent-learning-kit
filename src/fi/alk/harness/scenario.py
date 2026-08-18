@@ -20,7 +20,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .environment import Catalogue, variables_in
+from .catalogue import Catalogue
+from .simulator import variables_in
 
 
 class Step(BaseModel):

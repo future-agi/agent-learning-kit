@@ -87,7 +87,7 @@ class Session:
         Asking the folder means the answer survives a restart, and it cannot drift from what is
         really there — which is what makes reopening a session trustworthy.
         """
-        from .environment import load_catalogue
+        from .catalogue import load_catalogue
         from .folder import read_all
         from .world.snapshot import saved as world_saved
 

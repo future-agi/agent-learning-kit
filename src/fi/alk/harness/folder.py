@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .environment import Catalogue
+from .catalogue import Catalogue
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
 
