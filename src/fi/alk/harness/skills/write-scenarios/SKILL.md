@@ -71,6 +71,38 @@ the reference for it, but you will only give it if asked."* The whole point of m
 whether the agent asks. Put that in the instruction and the agent gets it for free;
 leave it out entirely and the scenario cannot be completed.
 
+**Knowing a value and volunteering it are separate choices.** The person must *possess* every
+value the agent could legitimately ask for; whether they offer it unprompted is the scenario's
+decision. Those are different sentences and only the second is optional.
+
+### What this person is known by
+
+Many agents establish who they are dealing with before they will act. Give that its own short
+section at the end of the instruction, and **read every value out of the world with
+`inspect_world` first**. Never invented, never carried over from another scenario: the record has
+to be the one the agent's own lookup will actually find.
+
+Four rules, and each one has cost a whole run:
+
+**Cover every route, not the one you expect.** Where an agent can establish something more than
+one way, which way it takes is not yours to choose. An instruction carrying the values for one
+route is complete right up until that route fails, and then the conversation stops at the front
+door with the person unable to answer a question they plainly should be able to answer.
+Alternatives exist precisely because the first way sometimes does not work.
+
+**Say what each value is for.** Where a scenario involves two values of the same shape in
+different roles, the current one and the replacement, the account's and the order's, give both
+and name the role of each. Handed only one, the person will offer it for the other purpose,
+because it is the only such value they have. That value is real, it appears in the instruction,
+and it still fails, which makes it far harder to diagnose than a missing value: everything on
+screen looks correct.
+
+**Take them all from one record.** Fields from two different records describe somebody who does
+not exist, and no lookup will ever find them.
+
+**Possessing and volunteering are separate.** Whether the person offers a value unprompted is the
+scenario's business. Whether they have it at all is not optional.
+
 **Never write personality, accent or mood** unless the scenario is specifically about handling
 one. A rude customer is a different scenario from a polite one only if the correct outcome
 differs.
@@ -115,6 +147,40 @@ world.
 
 Show that plan to the person and let them redirect it. It costs one turn and it is the difference
 between twenty tests and twenty rewordings of four.
+
+## Write from more than one point of view
+
+A suite written from a single vantage point tests a single vantage point, however many scenarios
+it has. Left alone, anyone writing tests drifts toward the ones they thought of first, which are
+usually the ones the agent was built for.
+
+So work the plan from several stances in turn, and say which one each scenario came from. These
+are the ones that reliably find different things:
+
+- **The engineer who built it**, testing what they know is fragile in their own code: the branch
+  with the most conditions, the operation that cannot be repeated, the value that is validated in
+  one place and not another.
+- **The adversary**, hunting requests that sit exactly on a rule's edge: the thing just barely not
+  permitted, the request that is fine on its own and forbidden in this state, the pressure to skip
+  a step the rules require.
+- **The newcomer**, who does not know the agent's vocabulary and asks in their own words: names
+  the thing wrongly, gives a value in a form nobody expected, does not know which of two things
+  they have.
+- **The operator**, recreating what production traffic actually produces: a record already in an
+  awkward state, a request about something that has already been dealt with, the same thing asked
+  twice.
+- **The product owner**, testing the promises made about this agent one at a time: for each thing
+  it claims to do, a scenario where doing it correctly is the whole question.
+
+Every stance still obeys the bar above: a real person could bring it, a competent agent could
+fail it, and the values are real. A stance chooses *what to look at*, never whether the scenario
+has to be honest.
+
+Two rules keep this from turning into noise. **Each scenario carries one use case, and no two
+scenarios carry the same one** — a duplicate is either the same test twice or one of them is
+mislabelled, and it hides a gap while appearing to fill it. And a stance that produces nothing new
+for a given agent produces nothing: an agent with no rules to bend does not need an adversarial
+scenario invented for it.
 
 ## Organise by use case, then by branch
 

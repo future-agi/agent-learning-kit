@@ -286,10 +286,55 @@ There is no persona. Do not invent characters, moods or backstories, and never w
 emotional styling. What varies between scenarios is real conditions: what is in stock, whether the
 record already exists, what this person knows.
 
-**Do not write how to speak.** Saying numbers a digit at a time, spelling an email out, avoiding
-markup: those are the same for every agent, so they are appended to whatever you write, every
-time, from `environment.SPOKEN`. Writing them yourself only risks contradicting them. Write what
-this person wants and how they behave; the mechanics of being heard are handled.
+### If this agent is spoken to, cover being heard as well
+
+Everything above still applies. These are additional, and they exist because what the agent
+receives is not what the simulated person wrote: it is a transcription of synthesised speech.
+Anything that transcribes badly is destroyed before the agent can act on it, and the transcript
+still shows what was *meant*, so the failure is invisible and reads as the agent's mistake.
+
+Write these for **this** agent, in its own terms. What matters is that the prompt covers them, not
+that it uses these words.
+
+- **Anything that is a string of characters rather than a word gets said one piece at a time.**
+  Reference numbers, codes, digits. Said as a word or a run-together number they come back wrong.
+- **Anything with punctuation inside it gets spelled out, slowly.** Addresses for electronic mail
+  are the case that bites: read aloud as a word, the parts either side of a dot merge into
+  something else entirely, and separators arrive as the words for them. Whatever identifiers
+  *this* agent asks for, decide how a person would have to say them to be understood.
+- **Amounts, dates and times as words**, the way somebody says them out loud, not as they would
+  be typed.
+- **No markup of any kind.** Asterisks, brackets, bullets and headings are either read aloud or
+  garbled. Nor stage directions, emotional tags, or anything describing the speech rather than
+  being it.
+- **Leave a space after a full stop**, or some voices run the sentences together.
+- **They need not be fluent.** A filler word, a hesitation, a correction halfway through: real
+  callers are not fluent, and an agent that only copes with clean speech has not been tested.
+- **Say that these are instructions, not material.** The person never quotes them, refers to
+  them, or mentions being told how to speak.
+
+And then how they behave when it goes wrong, which is most of what makes a call a call:
+
+- **When the agent does not find what they gave it, they say it again a different way.** This is
+  the one that decides whether a run gets past the front door. A person told "I cannot find that"
+  does not repeat the same sounds louder and does not insist they are right: they slow down and
+  spell it, letter by letter, and say the separators as words. Write that in. Without it a single
+  mis-heard value ends the conversation, and the transcript shows a caller who was correct all
+  along, so it reads as the agent's fault.
+- **When the agent reads something back, they actually check it.** If what comes back is not what
+  they said, they correct that specific part rather than starting again. If it is right, they
+  confirm and move on. An agent that mangles a value and gets an unconditional "yes" has been
+  tested on nothing.
+- **They interrupt, and they get interrupted.** A person cuts in when the agent is labouring a
+  point they have already accepted, and when the agent talks over them they either stop and let
+  it finish or say so. Both happen on real calls and both are worth an agent coping with.
+- **They speak in one breath at a time.** Not a paragraph. If the agent asks two questions at
+  once, they answer one, the way somebody on a phone does, which is itself worth finding out
+  about.
+
+Nothing adds any of this for you. What you write is the whole of what the simulated person is
+given, so a prompt that leaves one of these out is a suite that finds out about it the expensive
+way: a run of real calls that all stop in the same place for a reason no transcript shows.
 
 ### What a usable one looks like
 
