@@ -379,26 +379,44 @@ def stand_up(
         "--entrypoint", "sleep", tag, "infinity",
     )
 
-    # The store joins the same network, so the agent reaches it by container name rather than
-    # through the host -- which is what it would do anywhere else it runs.
     named = getattr(store, "container", "")
-    if named:
-        _docker("network", "connect", network, named, check=False)
+    try:
+        # The store joins the same network, so the agent reaches it by container name rather
+        # than through the host -- which is what it would do anywhere else it runs.
+        if named:
+            _docker("network", "connect", network, named, check=False)
 
-    _docker("exec", container, "mkdir", "-p", "/alk")
-    _docker(
-        "exec", "-i", container, "sh", "-c", f"cat > {SERVER_AT}",
-        stdin=SERVER.replace("PORT_HERE", str(PORT)),
-    )
-    # Whichever interpreter has the agent's dependencies. `uv sync` and `poetry install` put
-    # them in a virtualenv inside the checkout rather than on the system python, so the obvious
-    # `python` finds the agent's own code and none of what it imports.
-    _docker(
-        "exec", "--detach", "--env", "PYTHONPATH=/agent:/agent/src", container, "sh", "-c",
-        f'if [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; else P=python; fi; '
-        f'exec "$P" {SERVER_AT} >> {LOG_AT} 2>&1',
-    )
-    _await(container)
+        # Images commonly declare a non-root USER. Preparing the harness-owned directory as that
+        # account fails before any agent code runs (``mkdir: cannot create directory '/alk'``).
+        # Use root only for this filesystem setup, make the directory writable, and then return
+        # to the image's declared user for both the copy and the resident server below.
+        _docker(
+            "exec", "--user", "0", container, "sh", "-c",
+            "mkdir -p /alk && chmod 0777 /alk",
+        )
+        _docker(
+            "exec", "-i", container, "sh", "-c", f"cat > {SERVER_AT}",
+            stdin=SERVER.replace("PORT_HERE", str(PORT)),
+        )
+        # Whichever interpreter has the agent's dependencies. `uv sync` and `poetry install` put
+        # them in a virtualenv inside the checkout rather than on the system python, so the
+        # obvious `python` finds the agent's own code and none of what it imports.
+        _docker(
+            "exec", "--detach", "--env", "PYTHONPATH=/agent:/agent/src", container, "sh", "-c",
+            f'if [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; else P=python; fi; '
+            f'exec "$P" {SERVER_AT} >> {LOG_AT} 2>&1',
+        )
+        _await(container)
+    except BaseException:
+        # A failed bridge injection used to strand both this container and its network. The
+        # GeneratedWorld has not received the container name yet, so its normal close path cannot
+        # discover either resource. Keep the shared store, but detach it before removing the
+        # session network.
+        _docker("rm", "--force", container, check=False)
+        if named:
+            _docker("network", "disconnect", network, named, check=False)
+        _docker("network", "rm", network, check=False)
+        raise
     return container
 
 

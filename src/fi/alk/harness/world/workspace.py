@@ -275,6 +275,38 @@ def _named_project(words: list[str], destination: Path) -> list[str]:
     return [*words[:2], "-p", f"{PROJECT}-{session}", *words[2:]]
 
 
+def tear_down(destination: Path | str) -> None:
+    """Remove every compose resource owned by one generated environment.
+
+    ``docker compose down`` depends on the generated compose file and its interpolation env still
+    being present. A failed or archived build may have neither, so labels are the durable source
+    of ownership. Query exact project labels to avoid touching containers from another session.
+    """
+    from .stores.container import docker
+
+    session = Path(destination).name or "world"
+    project = f"{PROJECT}-{session}"
+    label = f"com.docker.compose.project={project}"
+
+    containers = docker(
+        "ps", "--all", "--quiet", "--filter", f"label={label}", check=False
+    ).split()
+    if containers:
+        docker("rm", "--force", "--volumes", *containers, check=False)
+
+    networks = docker(
+        "network", "ls", "--quiet", "--filter", f"label={label}", check=False
+    ).split()
+    for network in networks:
+        docker("network", "rm", network, check=False)
+
+    volumes = docker(
+        "volume", "ls", "--quiet", "--filter", f"label={label}", check=False
+    ).split()
+    for volume in volumes:
+        docker("volume", "rm", volume, check=False)
+
+
 def strays() -> list[str]:
     """Containers a killed run left behind, both kinds.
 

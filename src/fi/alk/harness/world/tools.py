@@ -272,6 +272,7 @@ def world_tools(
     kind = for_contract(contract)
     catalogue = load_catalogue(destination)
     scores: list[float] = []
+    environment_cleanup_registered = False
     # The agent's tools that are running the agent's own code, as opposed to
     # something written here. Nothing may be saved while those two sets differ.
     adopted: set[str] = set()
@@ -320,8 +321,10 @@ def world_tools(
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            world.connection.executescript(args["sql"])
-            world.connection.commit()
+            # The store owns how schema text is applied. ``executescript`` only exists on the
+            # SQLite connection and made this otherwise generic tool fail immediately for
+            # PostgreSQL-backed agents.
+            world.store.apply(args["sql"])
         except Exception as failed:
             return _err(f"schema rejected: {failed}")
         tables = sorted(world.state())
@@ -997,7 +1000,15 @@ def world_tools(
         schema({"command": str}, ["command"]),
     )
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
-        from .workspace import run
+        nonlocal environment_cleanup_registered
+        from .workspace import run, tear_down
+
+        # Register before running: compose may start some services and then fail, in which case
+        # there is still a project to remove. This is lazy so worlds that never run environment
+        # commands do not touch Docker during interpreter shutdown.
+        if not environment_cleanup_registered:
+            atexit.register(tear_down, destination)
+            environment_cleanup_registered = True
 
         configured = str(
             getattr(getattr(contract, "data_store", None), "configured_by", "") or ""

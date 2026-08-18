@@ -272,6 +272,29 @@ def test_a_dockerfile_the_stage_wrote_wins(tmp_path) -> None:
     assert not generated and "pip install -e ." in plain.read_text()
 
 
+def test_bridge_setup_supports_an_image_with_a_non_root_user(tmp_path, monkeypatch) -> None:
+    """Only directory preparation is privileged; the server keeps the image's own user."""
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\nUSER 10001\n")
+    calls: list[tuple[str, ...]] = []
+
+    def docker(*args: str, **_kwargs) -> tuple[int, str]:
+        calls.append(args)
+        return 0, ""
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    monkeypatch.setattr(sandbox, "_await", lambda _container: None)
+
+    container = sandbox.stand_up("nonroot", tmp_path, Runtime())
+
+    assert container == "alk-agent-nonroot"
+    assert (
+        "exec", "--user", "0", container, "sh", "-c",
+        "mkdir -p /alk && chmod 0777 /alk",
+    ) in calls
+    server_start = next(call for call in calls if "--detach" in call)
+    assert "--user" not in server_start
+
+
 def test_a_setup_command_keeps_its_quoted_arguments(tmp_path) -> None:
     """Split on whitespace, `cp "a file.py" dest/` becomes three arguments and the quotes
     arrive as part of the filename."""
