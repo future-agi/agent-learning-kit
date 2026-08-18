@@ -17,6 +17,7 @@ commands.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -86,11 +87,21 @@ def available() -> str:
     return ""
 
 
-def run(destination: Path, command: str, *, patience: int = PATIENCE) -> tuple[int, str]:
+def run(
+    destination: Path,
+    command: str,
+    *,
+    patience: int = PATIENCE,
+    extra: dict[str, str] | None = None,
+) -> tuple[int, str]:
     """Run one container command from the environment directory.
 
     Returns the exit code and the output, both streams together, because a build failure explains
     itself across the two and reading only one is how the actual cause gets lost.
+
+    ``extra`` carries where the store already is, so the agent's own migration command can be
+    pointed at it. Without that the only way to run a migration is to bring up a second database
+    to run it against, which is a copy of the thing the harness is already holding.
     """
     words = command.split()
     if not words:
@@ -111,6 +122,7 @@ def run(destination: Path, command: str, *, patience: int = PATIENCE) -> tuple[i
             capture_output=True,
             text=True,
             timeout=patience,
+            env={**os.environ, **(extra or {})},
         )
     except subprocess.TimeoutExpired:
         return 1, (

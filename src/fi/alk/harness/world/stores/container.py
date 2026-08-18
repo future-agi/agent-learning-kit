@@ -80,7 +80,11 @@ class ContainerStore(Held):
             self.image = f"{default.split(':')[0]}:{version}"
         else:
             self.image = default
-        self.database = database
+        # ":memory:" is how a world with no file of its own says so, and it travels down here
+        # unchanged. It is a SQLite word: handing it to an engine that names real databases
+        # produces one called ":memory:", which works by accident and reads as a mistake
+        # everywhere it is printed.
+        self.database = "alk" if database in ("", ":memory:") else database
         self.user = user
         self.password = password or secrets.token_hex(16)
         self.container = f"alk-store-{secrets.token_hex(6)}"
@@ -177,8 +181,24 @@ class ContainerStore(Held):
         return {variable: self.dsn()}
 
     def address(self) -> tuple[str, int]:
-        if not self._started or self.port is None:
-            raise StoreError("the store has not been started, so it has no address yet")
+        """Where this store is, standing it up first if nobody has yet.
+
+        Started here rather than by whoever built the world, because nothing else was doing it:
+        a world for a Postgres agent was constructed with a store that never ran, so every
+        address lookup raised and the build stage was left believing it had to bring up a
+        database of its own. It then wrote a compose file binding a fixed host port, collided
+        with whatever was already on 5432, and spent the rest of its turns working around a
+        harness that was in fact waiting to be asked.
+
+        Lazy rather than eager: constructing a world should not cost a container start, and
+        ``start`` is idempotent, so asking twice is free.
+        """
+        if not self._started:
+            self.start()
+        if self.port is None:
+            raise StoreError(
+                f"{self.engine} started but published no port; it cannot be reached"
+            )
         return self.host, self.port
 
 

@@ -892,15 +892,22 @@ def world_tools(
     @tool(
         "run_env_command",
         "Run one docker or docker compose command from the environment directory: build an image, "
-        "bring a store up, run something inside a container. Only container commands run here, so "
-        "anything the environment needs belongs in a file it builds from rather than in a "
-        "command. Returns the exit code and the output.",
+        "run the agent's own migrations, run something inside a container. Only container "
+        "commands run here, so anything the environment needs belongs in a file it builds from "
+        "rather than in a command. Returns the exit code and the output.\n\n"
+        "The store this world already has is passed in as $ALK_STORE_DSN, with its parts as "
+        "$ALK_STORE_HOST, $ALK_STORE_PORT, $ALK_STORE_DATABASE, $ALK_STORE_USER and "
+        "$ALK_STORE_PASSWORD. From inside a container use $ALK_STORE_DSN_IN_CONTAINER, which "
+        "names the host the way a container can reach it. Point the agent's migrations at "
+        "those. Do NOT bring up a database of your own: one already exists, on a port nothing "
+        "else can be using, and a second one only collides with whatever the machine is "
+        "already running.",
         schema({"command": str}, ["command"]),
     )
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
         from .workspace import run
 
-        code, output = run(destination, str(args["command"]))
+        code, output = run(destination, str(args["command"]), extra=_store_env(world))
         shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
         if code != 0:
             return _err(f"exit {code}\n{shown or '(no output)'}")
@@ -1181,3 +1188,38 @@ TOOL_NAMES = (
     "check_world",
     "save_world",
 )
+
+
+def _store_env(world: Any) -> dict[str, str]:
+    """Where this world's store is, for a command that has to reach it.
+
+    The agent's own migration tool is the only thing that can create the agent's schema, and it
+    takes a connection string. Handing it the store the world already has is what stops the
+    build stage standing up a second database to migrate instead -- which is how a fixed host
+    port ends up in a compose file, colliding with whatever the machine already runs.
+
+    Silent when there is nothing to say. A world whose records the agent keeps in memory has no
+    address, and that is not a failure worth interrupting a command over.
+    """
+    store = getattr(world, "store", None)
+    try:
+        dsn = store.dsn() if store is not None else ""
+    except Exception:  # noqa: BLE001 - a store with no address simply has nothing to pass on
+        return {}
+    if not dsn or "://" not in dsn:
+        return {}
+    out = {"ALK_STORE_DSN": dsn}
+    # A container cannot reach the host on 127.0.0.1: that is the container itself. Docker
+    # publishes the host under this name, so the same store needs a second spelling.
+    out["ALK_STORE_DSN_IN_CONTAINER"] = dsn.replace("127.0.0.1", "host.docker.internal").replace(
+        "localhost", "host.docker.internal"
+    )
+    for attribute, name in (
+        ("host", "ALK_STORE_HOST"), ("port", "ALK_STORE_PORT"),
+        ("database", "ALK_STORE_DATABASE"), ("user", "ALK_STORE_USER"),
+        ("password", "ALK_STORE_PASSWORD"),
+    ):
+        value = getattr(store, attribute, None)
+        if value not in (None, ""):
+            out[name] = str(value)
+    return out
