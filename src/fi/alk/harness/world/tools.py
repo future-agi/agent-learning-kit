@@ -166,6 +166,22 @@ def _stores_here(source_root: str) -> str:
     return "The agent's code is at " + str(root) + ", and these look like stores:\n" + "\n".join(seen)
 
 
+def _binding_in_container(
+    *, module: str, called: str, first_arg: str, factory: str
+) -> str:
+    """The handler that calls one of the agent's callables inside the agent's own container.
+
+    Nothing is imported here: that is the point. The agent's code runs where the agent's
+    dependencies are, at the versions the agent ships, and this process only carries the call
+    across. Saved as source like every other handler, so what ran is readable afterwards.
+    """
+    return (
+        "def handle(args, db):\n"
+        f"    return in_agent({module!r}, {called!r}, args,\n"
+        f"                    factory={factory!r}, first_arg={first_arg!r})\n"
+    )
+
+
 def _binding(*, module: str, called: str, style: str, first_arg: str, factory: str) -> str:
     """The handler that calls one of the agent's own callables.
 
@@ -534,19 +550,28 @@ def world_tools(
                 "This agent was given as a specification rather than as code, so its tools have "
                 "to be written with define_handler."
             )
-        # Whether this can be bound is worked out here, now, rather than trusted from the
-        # contract -- which decided it before the store, the path or anything else existed.
+        # The agent's own code runs in the agent's own container, always. Run here it would get
+        # whatever versions this interpreter happens to hold, which is a combination the agent
+        # does not ship and nothing would report.
         module_named = str(args.get("module") or "")
-        if module_named:
-            ok, said = _make_importable(world, source_root, module_named)
-            if not ok:
-                return _err(said)
-            if said:
-                # Found somewhere other than the root we were handed; worth saying, because the
-                # contract will have recorded that as a reason the tool was unreachable.
-                pass
-        else:
-            world.reach(source_root)
+        if not world.container:
+            from .sandbox import SandboxError, stand_up
+
+            try:
+                world.use_container(
+                    stand_up(
+                        destination.name,
+                        source_root,
+                        getattr(contract, "runtime", None),
+                        store=getattr(world, "store", None),
+                    )
+                )
+            except SandboxError as failed:
+                return _err(
+                    f"the agent's own environment could not be stood up, so its tools cannot "
+                    f"be run: {failed}\n"
+                    "Say so with cannot_reach_tool and stop -- the tool is not written by us."
+                )
         # A binding written here wins. The generated shapes cover a plain callable and a method
         # on an object, which is most agents, but no set of shapes covers every framework, and
         # guessing wrong is worse than letting whoever read the code write the two lines.
@@ -559,10 +584,9 @@ def world_tools(
                 + ADOPT_HELP
             )
         else:
-            binding = _binding(
+            binding = _binding_in_container(
                 module=str(args["module"]),
                 called=str(args["callable"]),
-                style=str(args.get("style") or "function"),
                 first_arg=str(args.get("first_arg") or ""),
                 factory=str(args.get("factory") or ""),
             )

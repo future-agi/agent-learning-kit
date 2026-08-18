@@ -165,6 +165,10 @@ class GeneratedWorld(EnvironmentAdapter):
     # The agent's own in-memory state, for tools that take it as an argument instead of
     # connecting to anything. Held opaquely: their code gives it shape.
     state_object: Any = None
+    # The agent's own container, once one has been stood up. Its tools run there rather than in
+    # this interpreter, so what they import is what the agent ships rather than what we happen
+    # to have installed.
+    container: str = ""
     # How this agent says no in a returned value. A tool that answers "Error: no such order" is
     # refusing, and recording that as a success would hide the very behaviour worth testing.
     refusal_signature: str = ""
@@ -243,6 +247,36 @@ class GeneratedWorld(EnvironmentAdapter):
 
     # -- execution -------------------------------------------------------------------
 
+    def _in_agent(
+        self, module: str, called: str, args: dict, *, factory: str = "", first_arg: str = ""
+    ) -> Any:
+        """Run one of the agent's tools in the agent's own container.
+
+        Where the tool takes the world's state as its first argument it mutates the copy the
+        container is holding, so what it left behind is read back here afterwards. That costs
+        one transfer per call rather than two, and only for the tools that work that way.
+        """
+        from .sandbox import ToolRefused, call as ask, get_state
+
+        if not self.container:
+            raise ToolError("no agent container is standing, so its tools cannot be reached")
+        try:
+            value = ask(self.container, module, called, args, factory=factory, first_arg=first_arg)
+        except ToolRefused as refused:
+            # The agent's own tool raised. That is behaviour, not breakage.
+            raise ToolError(str(refused)) from refused
+        if first_arg:
+            self.state_object = get_state(self.container)
+        return value
+
+    def use_container(self, container: str) -> None:
+        """Point this world at a standing agent container, and hand it the state it holds."""
+        from .sandbox import set_state
+
+        self.container = container
+        if self.state_object is not None:
+            set_state(container, self.state_object)
+
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         """Execute one call and record it. Never raises: a failure is an outcome, not an event.
 
@@ -265,7 +299,11 @@ class GeneratedWorld(EnvironmentAdapter):
                 )
             )
 
-        namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+        namespace: dict[str, Any] = {
+            "ToolError": ToolError,
+            "json": json,
+            "in_agent": self._in_agent,
+        }
         try:
             exec(compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace)
             handle = namespace.get("handle")
@@ -535,7 +573,17 @@ class GeneratedWorld(EnvironmentAdapter):
         return "This world holds:\n" + ("\n".join(lines) or "  nothing yet")
 
     def close(self) -> None:
+        """Put down the store and the agent's container together.
+
+        The container outlives the process that started it, so a world closed without this
+        leaves an image-sized thing running that nothing later can attribute to anybody.
+        """
         self.store.close()
+        if self.container:
+            from .sandbox import tear_down
+
+            tear_down(self.container.replace("alk-agent-", "", 1))
+            self.container = ""
 
 
 @dataclass

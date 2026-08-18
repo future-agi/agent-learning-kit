@@ -268,11 +268,18 @@ def strays() -> list[str]:
     from .stores.container import docker
 
     listed = docker(
-        "ps", "--format", '{{.Names}}\t{{.Label "com.docker.compose.project"}}', check=False
+        "ps", "--format",
+        '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "alk.harness.agent"}}',
+        check=False,
     )
     out = []
     for line in listed.splitlines():
-        name, _, project = line.partition("\t")
-        if project.startswith(PROJECT):
-            out.append(name.strip())
+        parts = line.split("\t")
+        name = parts[0].strip()
+        project = parts[1] if len(parts) > 1 else ""
+        agent = parts[2] if len(parts) > 2 else ""
+        # Three kinds leak: compose's, which carry a project name we set; the agent's own
+        # container, which carries our label; and the store's, which container.strays finds.
+        if project.startswith(PROJECT) or agent:
+            out.append(name)
     return out
