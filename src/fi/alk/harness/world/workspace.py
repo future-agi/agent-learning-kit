@@ -18,6 +18,7 @@ commands.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -103,7 +104,16 @@ def run(
     pointed at it. Without that the only way to run a migration is to bring up a second database
     to run it against, which is a copy of the thing the harness is already holding.
     """
-    words = _named_project(command.split(), destination)
+    # shlex, not split(): a command carrying a quoted argument was being torn into fragments,
+    # and one agent spent most of a build fighting "'FROM: 1: Syntax error: Unterminated quoted
+    # string" while trying to pass a Dockerfile through here.
+    try:
+        words = _named_project(shlex.split(command), destination)
+    except ValueError as badly:
+        return 1, (
+            f"that command does not parse: {badly}. Anything with quoting or newlines in it "
+            "belongs in a file -- write it with write_env_file and build from that."
+        )
     if not words:
         return 1, "no command given"
     if words[0] not in ALLOWED:

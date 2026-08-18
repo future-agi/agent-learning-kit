@@ -184,3 +184,37 @@ def test_a_module_that_is_not_there_is_the_sandbox_saying_so(loaded) -> None:
 )
 def test_an_install_command_survives_however_the_contract_explained_it(said, wanted) -> None:
     assert sandbox._command(said) == wanted
+
+
+# --- an import failure is not a tool refusing -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "ModuleNotFoundError: No module named 'langchain'",
+        "ImportError: cannot import name 'Thing' from 'pkg'",
+        # The sandwich agent checks for its web build at module scope and raises if absent.
+        "RuntimeError: Web build not found at /web/dist. Run 'make build-web'",
+    ],
+)
+def test_a_module_that_would_not_load_is_not_a_working_refusal(said) -> None:
+    """It came back as one, so both tools were marked adopted while nothing of them had run,
+    and the world saved with two invented handlers reporting success."""
+    from fi.alk.harness.world.tools import _never_ran
+
+    assert _never_ran(said)
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "Error: order not found",
+        "Error: non-pending order cannot be cancelled",
+        "REFUSED: invoice 1 has already been refunded.",
+    ],
+)
+def test_a_tool_saying_no_still_counts_as_it_working(said) -> None:
+    from fi.alk.harness.world.tools import _never_ran
+
+    assert not _never_ran(said)

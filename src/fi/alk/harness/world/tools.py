@@ -261,6 +261,12 @@ def world_tools(
     world = restore(destination) if existing else GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
     world.refusal_signature = contract.refusal_signature
+    # Whoever builds this world does not hold on to it -- build.py takes the server and drops
+    # the world on the floor -- so nothing was ever in a position to close it, and every agent
+    # in a suite run left its container behind. Registered here, where the world is made.
+    import atexit
+
+    atexit.register(world.close)
     if source_root:
         world.reach(source_root)
     kind = for_contract(contract)
@@ -398,7 +404,12 @@ def world_tools(
         # does not exist. If adopt_tool cannot bind it, that is a finding for whoever owns the
         # agent, not a gap to fill.
         wanted = str(args.get("tool_name") or "")
-        if source_root and wanted in contract.tool_names() and wanted not in adopted:
+        # Not "unless it was adopted once". `adopted` records which tools are running the
+        # agent's code *now*, and writing here is exactly what stops one doing that -- so a
+        # tool that was bound and then overwritten was sailing through both this and the save
+        # gate, which is how a world saved with two invented handlers and reported success.
+        if source_root and wanted in contract.tool_names():
+            adopted.discard(wanted)
             return _err(
                 f"{wanted} belongs to the agent, so it is not written here. Bind the agent's "
                 f"own with adopt_tool. If that genuinely cannot be done, say so with "
@@ -599,6 +610,19 @@ def world_tools(
         held = world.checkpoint()
         call = world.call(name, args.get("smoke_arguments") or {})
         world.revert(held)
+        # A tool refusing is it working. A tool whose module will not even load is not: the
+        # sandwich agent's main.py raises at import unless a web build exists beside it, and
+        # that came back as "its own code answered with a refusal, which is it working" --
+        # so the tool was marked adopted while nothing of it had run at all.
+        broke = str(call.error or "")
+        if call.refused and _never_ran(broke):
+            adopted.discard(name)
+            return _err(
+                f"{name} was not adopted: its module did not load, so none of its code ran.\n"
+                f"{broke}\n"
+                "That is the agent's own setup, not its behaviour. Fix what the container is "
+                "missing, or say so with cannot_reach_tool and stop."
+            )
         if call.refused:
             return _ok(
                 f"{name} adopted. Its own code answered with a refusal, which is it working: "
@@ -1390,3 +1414,24 @@ def _make_importable(world: Any, source_root: str, module: str) -> tuple[bool, s
         "If it genuinely cannot be imported here, say so with cannot_reach_tool and stop: the "
         "tool is not written by us."
     )
+
+
+# What an import failure looks like, as opposed to a tool saying no. Matched on the exception
+# type rather than the wording, because the wording is the agent's and the type is Python's.
+NEVER_RAN = (
+    "ModuleNotFoundError", "ImportError", "SyntaxError", "AttributeError:",
+    "No module named", "cannot import name",
+)
+
+
+def _never_ran(said: str) -> bool:
+    """Whether this is the tool's module failing to load rather than the tool refusing.
+
+    The difference decides whether a tool counts as bound. A module that raises while being
+    imported has run none of the tool's logic, so treating that as a working refusal marks a
+    tool adopted when nothing of it works -- and every check written afterwards is about a tool
+    that never ran.
+    """
+    # A RuntimeError raised at import time is the same thing wearing a different name: the
+    # sandwich agent checks for its web build at module scope and raises if it is absent.
+    return any(mark in said for mark in NEVER_RAN) or "Run 'make" in said

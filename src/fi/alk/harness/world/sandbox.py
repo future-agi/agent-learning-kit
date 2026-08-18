@@ -99,8 +99,14 @@ class Handler(BaseHTTPRequestHandler):
 HTTPServer(("0.0.0.0", PORT_HERE), Handler).serve_forever()
 '''
 
+# A slim base carries no compiler, and a requirements file pinned to versions with no wheel for
+# this platform then fails on whatever has to be built from source -- pyzmq, tiktoken, yarl and
+# pillow all did, on an agent whose own dependencies were otherwise fine.
 DOCKERFILE = """FROM python:{version}-slim
 WORKDIR /agent
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends build-essential git \\
+ && rm -rf /var/lib/apt/lists/*
 COPY . /agent
 RUN pip install --no-cache-dir uv 2>/dev/null || true
 RUN {install}

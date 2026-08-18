@@ -312,7 +312,9 @@ def unreachable(
         encoding="utf-8",
     )
     return True, (
-        f"Recorded: {tool_name} could not be run from the agent's own code here. define_handler "
-        "will now accept one for it, and the contract carries the reason so nobody later reads "
-        "this as the agent's own tool having been tested."
+        f"Recorded: {tool_name} could not be run from the agent's own code here, and the "
+        "contract carries the reason permanently.\n"
+        "This does not open the way to writing one. define_handler still refuses a tool the "
+        "agent ships, and save_world refuses a world standing in for one. Tell whoever owns "
+        "the agent what is missing -- the entrypoint, the dependency, the setup step."
     )
