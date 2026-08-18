@@ -1,0 +1,34 @@
+# Credentials, first and deliberately. Nothing in the Dockerfile copies these today, but the
+# whole context is handed to the daemon, and the day someone adds a broad COPY is the day live
+# keys land in an image layer. Excluded here so that mistake cannot be made.
+.env
+.env.*
+*.pem
+*.key
+*-credentials.json
+service-account*.json
+
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Session artifacts: contracts, worlds, transcripts, recordings. Written at run time into a
+# mounted volume, and large enough to slow every build if they were sent as context.
+artifacts
+sessions
+
+node_modules
+dist
+build
+*.egg-info
+
+docs
+examples
+typescript
+oss
