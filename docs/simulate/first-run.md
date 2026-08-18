@@ -23,6 +23,10 @@ opt_in_lane: false
 > · emits `agent-learning.run.v1` · offline, no credentials.
 > A coding agent can complete this page from the frontmatter alone.
 
+> **New here?** This page is the manifest/CLI front door. To see the same run
+> as the underlying `SimulationSpec` + `SimulationRunner` — the spine every
+> simulation flows through — start with [Spec + Runner](spec-and-runner.md).
+
 ## 1. What you are testing
 
 A simulation run is the kit's atomic unit: one manifest in, one
