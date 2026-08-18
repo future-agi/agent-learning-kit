@@ -567,6 +567,66 @@ async def runs():
     return _runs(current.path if current else None)
 
 
+@app.get("/api/simulations")
+async def simulations():
+    """Every simulation this session has done, newest first.
+
+    A session accumulates runs over the same scenarios and the same world, so which run a result
+    came from is part of the result. One list, and each entry opens.
+    """
+    from fi.alk.harness.run.simulation import every_run
+
+    return {"runs": every_run(current.path) if current else []}
+
+
+@app.get("/api/simulations/{run_id}")
+async def simulation(run_id: str):
+    """One run in full: every scenario's verdict, conversation and tool calls."""
+    from fi.alk.harness.run.simulation import read_run
+
+    if current is None:
+        return JSONResponse({"error": "no session open"}, status_code=404)
+    try:
+        return read_run(current.path, run_id)
+    except FileNotFoundError as missing:
+        return JSONResponse({"error": str(missing)}, status_code=404)
+
+
+@app.get("/api/recording/{run_id}/{scenario}")
+async def recording(run_id: str, scenario: str, track: str = ""):
+    """The audio for one scenario in one run, when there is any.
+
+    Served from the run folder rather than by absolute path, so a recording can only ever be
+    read from inside the session it belongs to.
+    """
+    from fi.alk.harness.run.simulation import run_root
+
+    if current is None:
+        return JSONResponse({"error": "no session open"}, status_code=404)
+    folder = run_root(current.path, run_id) / scenario
+    if not folder.exists():
+        return JSONResponse({"error": "no recording for this run"}, status_code=404)
+    # A named track when one is asked for, and otherwise whichever is best of those that exist.
+    # Several are written and any can be missing, so the fallback is the normal case rather than
+    # the exception: a page that only knew about stereo would show a broken player most days.
+    wanted = (track or "").strip().lower()
+    audio = [
+        one for one in sorted(folder.iterdir())
+        if one.is_file() and one.suffix.lower() in (".wav", ".mp3", ".ogg", ".m4a")
+    ]
+    if wanted:
+        for one in audio:
+            if one.stem.lower() == wanted:
+                return FileResponse(one)
+    for prefer in ("stereo", "combined"):
+        for one in audio:
+            if one.stem.lower().startswith(prefer):
+                return FileResponse(one)
+    if audio:
+        return FileResponse(max(audio, key=lambda one: one.stat().st_size))
+    return JSONResponse({"error": "no recording for this run"}, status_code=404)
+
+
 if __name__ == "__main__":
     import uvicorn
 

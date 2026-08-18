@@ -24,12 +24,34 @@ expensive part — missing credentials, no way to reach a hosted agent. Run it o
 `list_scenarios` shows what can be run, what each one tests, and which of its sub-goals are
 settled by code rather than left to a judge.
 
-## Running one
+## Running the suite
 
-`run_scenario` does all of it: restores the world, applies the scenario's setup, puts the agent
-in front of it, and runs the checks against what is left behind plus every call the agent made.
+**`run_simulation` runs everything, once.** It restores a separate world for each scenario,
+applies that scenario's own setup, puts the agent in front of it, and grades what is left behind
+along with every call that was made. One call from you; the simulation owns the rest.
 
-It blocks until the run is over. Run one at a time and read the result before starting the next.
+That is how a suite is run. Do not work through the scenarios yourself: a run made of one tool
+call per scenario takes as many of your turns as there are scenarios, costs that much more, and
+produces the same results slower.
+
+Its concurrency argument is how many run at once. **Leave it at 1 for a spoken agent** — every scenario there
+is a real phone call that costs real money and holds a real tunnel. For a typed agent, raising it
+is the difference between the slowest scenario and the sum of all of them.
+
+It blocks until the whole suite is done, which is minutes, and says so.
+
+`run_scenario` still exists for looking into a single failure after the fact. It is not how you
+get results.
+
+## Looking into a run
+
+`read_run` with no arguments lists the runs this session has done; given a run id it gives that
+run in full, and given a scenario name as well it gives one case. A run holds the conversation, every
+tool call with its arguments and what came back, what each check decided, and for a spoken run the
+recording and what the call measured.
+
+Runs accumulate. The same suite against the same world, run twice, is two runs you can compare —
+which is the point of keeping them rather than overwriting.
 
 ## Reading a result
 
@@ -60,3 +82,7 @@ it as a finding about the agent.
 
 Judged sub-goals are reported as judged. Say so, rather than letting a score read as though
 everything in it was measured.
+
+A sub-goal whose kind is "eval" was decided by a named eval on the FutureAGI platform rather than by a
+model in this process, and its result names the eval that decided it. Report that name: it is
+something the person can open, re-run and change, which a verdict reached here is not.

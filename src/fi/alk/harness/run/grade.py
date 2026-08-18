@@ -17,6 +17,7 @@ failure invisible; reading both makes it obvious.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,6 +55,8 @@ class Checkpoint:
     kind: str
     passed: bool
     detail: str = ""
+    # The eval that decided it, where one did. Empty for anything settled by code or judged here.
+    by: str = ""
 
     def line(self) -> str:
         return f"  [{'x' if self.passed else ' '}] {self.kind}: {self.name}" + (
@@ -67,6 +70,8 @@ class Judgement:
     kind: str
     holds: bool
     why: str = ""
+    # Which eval decided this, when it was decided by one rather than here.
+    by: str = ""
 
 
 @dataclass
@@ -85,6 +90,23 @@ class Result:
     # Kept alongside the transcript because a run is diagnosed by comparing them: what the
     # agent said it did against what it actually did.
     actions: str = ""
+    # Where this run's audio was left, empty when there is none. A spoken run is diagnosed by
+    # listening to it: a transcript will not tell you the agent talked over the caller, or that
+    # what it heard was not what was said.
+    recording: str = ""
+    seconds: float = 0.0
+    # Every call in full, for the timeline and for anyone asking what one call did. The count is
+    # kept separately in ``calls`` because a summary should not have to load all of them.
+    calls_detail: list[dict] = field(default_factory=list)
+    # What the thing that ran this measured about it: scores, why it ended, what the simulated
+    # caller cost, and what each evidence source can prove. Carried rather than recomputed.
+    measured: dict = field(default_factory=dict)
+    # Every recording of this run that exists, best first, so the page can fall back instead of
+    # showing a player with nothing behind it.
+    tracks: list[dict] = field(default_factory=list)
+    # What stopped this scenario being run at all, as opposed to what the agent got wrong. A
+    # scenario that never ran must not read as a scenario the agent passed.
+    problems: list[str] = field(default_factory=list)
 
     @property
     def conduct_failures(self) -> list[Judgement]:
@@ -93,7 +115,10 @@ class Result:
     @property
     def passed(self) -> bool:
         return (
-            not self.state_failures and not self.conduct_failures and not self.crashes
+            not self.state_failures
+            and not self.conduct_failures
+            and not self.crashes
+            and not self.problems
         )
 
     @property
@@ -176,6 +201,55 @@ def _verdict_tool(collected: list[dict[str, Any]]) -> Any:
     )
 
 
+def _on_platform(
+    claims: list[tuple[str, str]],
+    scenario: Scenario,
+    transcript: Transcript,
+    contract: AgentContract,
+    ending: str,
+) -> list[Judgement] | None:
+    """Every claim judged by its own eval on the platform, or None to judge here instead.
+
+    None rather than an exception, because a suite is worth more than a preference about where
+    its judgements happen. A platform that is unreachable, out of credit or slow is not a reason
+    to lose the run: it falls back, and says so in the reason.
+    """
+    from . import platform_evals
+
+    # The same evidence the judge below is given. An eval handed only what was said cannot settle
+    # whether an answer was right, because the answer's truth is in what the tools returned, and
+    # it says so rather than guessing: the verdict then reads as a failure of the agent when it
+    # was a failure to show the eval the run.
+    record = {
+        "what_the_person_was_asked_to_do": scenario.instruction,
+        "what_the_agent_did": transcript.actions(),
+        "what_was_said": transcript.spoken() or "(nothing was said)",
+        "how_it_ended": transcript.ended,
+        "the_world_afterwards": ending,
+    }
+    verdicts: list[Judgement] = []
+    for claim, name in claims:
+        eval_name = platform_evals.eval_name(contract.agent, name)
+        try:
+            platform_evals.ensure(eval_name, claim, contract.agent, contract.hard_constraints)
+            answered = platform_evals.judge(eval_name, record)
+        except Exception as failed:  # noqa: BLE001 - one unreachable eval, not a lost suite
+            logging.getLogger(__name__).warning(
+                "platform eval %s unavailable, judging locally: %s", eval_name, failed
+            )
+            return None
+        verdicts.append(
+            Judgement(
+                claim=claim,
+                kind=name,
+                holds=bool(answered["held"]),
+                why=answered["why"],
+                by=f"{eval_name} ({answered['model']})",
+            )
+        )
+    return verdicts
+
+
 async def judge(
     scenario: Scenario,
     transcript: Transcript,
@@ -189,6 +263,16 @@ async def judge(
     claims = _claims(scenario, catalogue)
     if not claims:
         return [], 0.0
+
+    from . import platform_evals
+
+    if platform_evals.configured():
+        # The product's own evals, when there is an account to run them on. Each claim is a
+        # named eval created once and reused, so the judgement is versioned and visible in the
+        # platform rather than living only in this run folder.
+        judged = _on_platform(claims, scenario, transcript, contract, ending)
+        if judged is not None:
+            return judged, 0.0
 
     collected: list[dict[str, Any]] = []
     allowed = [qualified(JUDGE_SERVER, "submit_verdict")]
@@ -279,7 +363,15 @@ def checkpoints(settled: list[Outcome], judged: list[Judgement]) -> list[Checkpo
         for one in settled
     ]
     checks.extend(
-        Checkpoint(name=item.kind, kind="judged", passed=item.holds, detail=item.why)
+        Checkpoint(
+            name=item.kind,
+            # Distinguished because they are not the same claim about a result: one was decided
+            # by a named eval that anybody can open, the other by a model in this process.
+            kind="eval" if item.by else "judged",
+            passed=item.holds,
+            detail=item.why,
+            by=item.by,
+        )
         for item in judged
     )
     return checks

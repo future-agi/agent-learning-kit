@@ -3030,3 +3030,133 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     write_scenarios([made[0]], tmp_path, catalogue)
     assert [one.name for one in load_scenarios(tmp_path)] == ["keeper"]
     assert not (tmp_path / "scenarios" / "goner").exists()
+
+
+def test_a_target_refuses_a_model_it_cannot_drive():
+    """Handed a model it cannot speak to, this target does not fail: it produces a session that
+    answers nothing, which arrives as a scenario with no turns, no calls and every check red.
+
+    That reads exactly like an agent that ignored the person, and a whole suite is then wrong in a
+    way nobody would think to question. It cost a full run to find.
+    """
+    from fi.alk.harness.run.targets import _drivable
+
+    # What it runs on.
+    _drivable(None)
+    _drivable("claude-sonnet-4-6")
+    _drivable("anthropic/claude-opus-4-7")
+
+    with pytest.raises(RuntimeError) as refused:
+        _drivable("vertex_ai/gemini-2.5-flash")
+    assert "cannot run" in str(refused.value)
+    # And it says where to go instead, rather than only saying no.
+    assert "endpoint adapters" in str(refused.value)
+
+
+def test_a_run_is_a_folder_that_can_be_read_back(tmp_path):
+    """A session accumulates runs. One simulation over a suite is one run, kept whole, so runs can
+    be compared instead of the next one overwriting the last."""
+    from fi.alk.harness.run.grade import Result
+    from fi.alk.harness.run.simulation import _write_case, every_run, read_run, run_root
+
+    root = run_root(tmp_path, "run-1")
+    folder = root / "a-scenario"
+    folder.mkdir(parents=True)
+    kept = Result(scenario="a-scenario", transcript="user: hi\nagent: hello")
+    kept.calls_detail = [{"name": "look", "arguments": {"q": "x"}, "ok": True, "at": 1.5}]
+    _write_case(folder, kept)
+    (root / "run.json").write_text(
+        json.dumps({"run_id": "run-1", "agent": "x", "scenarios": 1, "passed": 1}),
+        encoding="utf-8",
+    )
+
+    listed = every_run(tmp_path)
+    assert [one["run_id"] for one in listed] == ["run-1"]
+
+    whole = read_run(tmp_path, "run-1")
+    assert whole["scenarios"][0]["scenario"] == "a-scenario"
+    assert "hello" in whole["scenarios"][0]["transcript"]
+    # Down to a single call, which is what the harness is asked about when a run is questioned.
+    assert whole["scenarios"][0]["calls_detail"][0]["name"] == "look"
+
+
+def test_the_closing_line_is_kept():
+    """The sentinel used to be the whole reply, and breaking on it threw the words away.
+
+    Every conversation then ended on the agent's turn with nothing after it: a transcript that
+    reads as cut off rather than finished, and no way to tell a person who left satisfied from
+    one who was still waiting for an answer.
+    """
+    from fi.alk.harness.run.conversation import DONE, STUCK, customer_prompt
+
+    said = "Thanks, that's exactly what I needed.\n[DONE]"
+    closing = said.replace(DONE, "").replace(STUCK, "").strip()
+    assert closing == "Thanks, that's exactly what I needed."
+
+    # And a bare sentinel still ends it, without recording an empty turn.
+    assert not "[DONE]".replace(DONE, "").replace(STUCK, "").strip()
+
+    # The person is asked for that line, and told not to leave while the agent is waiting.
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario import Scenario
+
+    asked = customer_prompt(
+        Scenario(name="s", instruction="you want a thing", sub_goals=[]),
+        AgentContract(agent="x", tools=[{"name": "t", "args": ["a"]}], real_use_cases=["a sentence"]),
+    )
+    assert "the one line you would actually say to end it" in asked
+    assert "not the end of the conversation" in asked
+
+
+def test_a_judged_sub_goal_becomes_a_named_platform_eval():
+    """The sentence a sub-goal already is happens to be exactly what a custom eval wants, so it
+    becomes one: created once, versioned, visible in the product rather than only in a run
+    folder, and reusable against production traffic later without being rewritten."""
+    from fi.alk.harness.run import platform_evals
+
+    name = platform_evals.eval_name("text-to-sql", "refused_dml_clearly")
+    assert name == "text-to-sql-refused_dml_clearly"
+    # The agent is in the name because uniqueness is per organisation: a bare sub-goal name
+    # would collide across every agent anybody tests.
+    assert platform_evals.eval_name("other-agent", "refused_dml_clearly") != name
+    # And the platform only accepts a restricted alphabet.
+    assert platform_evals.eval_name("Drive Thru!", "no DML") == "drive-thru--no-dml"
+
+    written = platform_evals.instructions_for(
+        "the agent explained why it could not", "shop", ["never write to the database"]
+    )
+    # One variable, declared by being written: the platform extracts it from the instructions.
+    assert "{{conversation}}" in written
+    assert "never write to the database" in written
+
+
+def test_a_verdict_is_read_however_it_arrives():
+    """A pass comes back as a word or a number depending on the eval's output type, and reading
+    only one shape would silently fail every eval configured the other way."""
+    from fi.alk.harness.run.platform_evals import _passed
+
+    assert _passed("Pass") and _passed("pass") and _passed("PASSED")
+    assert _passed(True) and _passed(1.0) and _passed(0.5)
+    assert not _passed("Fail") and not _passed(False) and not _passed(0.2)
+    assert not _passed(None)
+
+
+def test_the_platform_is_used_only_when_it_is_configured():
+    """Without keys the harness judges here instead. A suite that cannot run without a platform
+    account is a worse tool than one that degrades."""
+    import os
+
+    from fi.alk.harness.run import platform_evals
+
+    kept = {name: os.environ.pop(name, None) for name in platform_evals.KEYS}
+    try:
+        assert not platform_evals.configured()
+        os.environ["FI_API_KEY"] = "x"
+        assert not platform_evals.configured(), "both keys are needed, not one"
+        os.environ["FI_SECRET_KEY"] = "y"
+        assert platform_evals.configured()
+    finally:
+        for name, value in kept.items():
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value

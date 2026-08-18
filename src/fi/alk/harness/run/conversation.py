@@ -128,9 +128,12 @@ def customer_prompt(
         )
     return (
         filled
-        + f"\n\nWhen you have got what you came for, or accepted that you cannot, reply with "
-        f"{DONE} and nothing else. If the agent is going in circles and you would give up, "
-        f"reply {STUCK} and nothing else."
+        + "\n\nWhen you have got what you came for, or accepted that you cannot, say the one "
+        f"line you would actually say to end it, then {DONE} on a line of its own. If the agent "
+        f"is going in circles and you would give up, do the same with {STUCK}.\n"
+        "Do not end while the agent is waiting on you. A refusal that offers you two "
+        "alternatives, or asks you a question, is not the end of the conversation: answer it, "
+        "and end after that."
     )
 
 
@@ -192,11 +195,15 @@ async def converse(
 
             turn = await customer.say(reply or "(no response)")
             said = turn.text.strip()
-            if DONE in said:
-                transcript.ended = FINISHED
-                break
-            if STUCK in said:
-                transcript.ended = GAVE_UP
+            if DONE in said or STUCK in said:
+                transcript.ended = GAVE_UP if STUCK in said else FINISHED
+                # The closing line comes with the sentinel, and is kept. Breaking on the marker
+                # alone threw it away, so every conversation ended on the agent's turn with
+                # nothing after it: a transcript that reads as cut off rather than finished,
+                # and no way to tell a person who left satisfied from one who was still waiting.
+                closing = said.replace(DONE, "").replace(STUCK, "").strip()
+                if closing:
+                    record("customer", closing)
                 break
             record("customer", said)
         else:

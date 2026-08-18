@@ -195,6 +195,18 @@
   button.tag { border: 0; cursor: pointer; }
   button.tag.off { opacity: 0.45; }
 
+  /* metric bars: one shape for every measure, so the eye compares down a column rather than
+     parsing seventeen numbers. Weakest first, because the point is finding the one that is wrong. */
+  .metric { display: grid; grid-template-columns: 13rem 1fr 3rem; align-items: center; gap: .6rem; margin: .18rem 0; }
+  .metric-name { font-size: .78rem; opacity: .8; }
+  .metric-track { height: .5rem; background: rgba(127,127,127,.18); border-radius: .25rem; overflow: hidden; }
+  .metric-fill { height: 100%; border-radius: .25rem; }
+  .metric-fill.good { background: #3fa66a; }
+  .metric-fill.mid  { background: #c9a227; }
+  .metric-fill.low  { background: #c65b4e; }
+  .metric-value { font-size: .78rem; text-align: right; font-variant-numeric: tabular-nums; opacity: .75; }
+  audio { width: 100%; margin: .4rem 0; }
+
   /* expandable cards (scenarios, world tables, handlers, runs) */
   details.xcard { background: var(--card); border: 1px solid var(--hair); border-radius: 6px; margin-bottom: 0.7rem; }
   details.xcard > summary {
@@ -242,7 +254,12 @@
   .cbox.hmm { color: var(--refuse); }
   .kind { flex: 0 0 auto; color: var(--muted); width: 5.4em; }
   .claim { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-  .claim .why { display: block; color: var(--fail); font-size: 0.95em; padding-top: 0.18rem; font-family: var(--sans); }
+  /* An eval that passed still shows its reasoning, and red there would read as a failure. */
+  .claim .why { display: block; color: var(--muted); font-size: 0.95em; padding-top: 0.18rem; font-family: var(--sans); }
+  li.failed .claim .why { color: var(--fail); }
+  .claim .decided-by { color: var(--muted); font-size: 0.88em; font-family: var(--mono); }
+  p.reason { color: var(--muted); font-size: 0.8rem; margin: 0.1rem 0 0 1.1rem; }
+  p.decided-by { color: var(--muted); font-size: 0.74rem; font-family: var(--mono); margin: 0.1rem 0 0.35rem 1.1rem; opacity: 0.8; }
 
   /* what the agent did on a call */
   ul.calls { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 0.74rem; }
@@ -1069,6 +1086,7 @@ function normalizeRun(run) {
     of: run.of !== undefined ? run.of : (run.checkpoints || []).length,
     checks: (run.checkpoints || []).map(check => ({
       name: check.name, passed: check.passed, why: check.detail, kind: check.kind || "",
+      by: check.by || "",
     })),
     judged: [], calls: [], problems: [],
     transcript: run.transcript || "", actions: run.actions || "",
@@ -1076,7 +1094,179 @@ function normalizeRun(run) {
   };
 }
 
+/* One simulation over the whole suite is one run, kept as a folder. A session accumulates them
+   over the same scenarios and the same world, so which run a result came from is part of the
+   result: the list is the first thing, and any entry opens into what actually happened. */
+let openRun = null;
+
 async function tabRuns(body) {
+  const listed = await fetch("/api/simulations").then(r => r.json()).catch(() => ({ runs: [] }));
+  const runs = (listed && listed.runs) || [];
+  if (runs.length) {
+    if (openRun) return runDetail(body, openRun);
+    return runList(body, runs);
+  }
+  return tabRunsLegacy(body);
+}
+
+async function runList(body, runs) {
+  const top = pane(body, "Simulations", `${runs.length} run${runs.length === 1 ? "" : "s"} of this suite`);
+  for (const run of runs) {
+    const row = el("div", "card");
+    const head = el("div", "card-head");
+    const mark = run.passed === run.scenarios ? "pass" : "fail";
+    head.appendChild(el("span", "tag " + mark, `${run.passed}/${run.scenarios} passed`));
+    head.appendChild(el("span", "spk", run.run_id));
+    head.appendChild(el("span", "muted", `${run.seconds}s · ${run.modality || "chat"} · $${run.spent_usd || 0}`));
+    const open = el("button", "tag soft", "open");
+    open.onclick = () => { openRun = run.run_id; loadTab(); };
+    head.appendChild(open);
+    row.appendChild(head);
+    if (run.models) {
+      row.appendChild(el("p", "muted", `agent ${run.models.agent} · user ${run.models.user} · judge ${run.models.judge}`));
+    }
+    top.appendChild(row);
+  }
+}
+
+/* A metric as a labelled bar. Everything ALK measures is 0..1, so one shape reads for all of
+   them and the eye can compare down a column instead of parsing seventeen numbers. */
+function metricBar(name, value) {
+  const row = el("div", "metric");
+  row.appendChild(el("span", "metric-name", name.replace(/_/g, " ")));
+  const track = el("div", "metric-track");
+  const fill = el("div", "metric-fill " + (value >= 0.8 ? "good" : value >= 0.5 ? "mid" : "low"));
+  fill.style.width = `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+  track.appendChild(fill);
+  row.appendChild(track);
+  row.appendChild(el("span", "metric-value", value.toFixed(2)));
+  return row;
+}
+
+function metricsBlock(into, metrics, title) {
+  const names = Object.keys(metrics || {});
+  if (!names.length) return;
+  const box = el("div", "card-body");
+  box.appendChild(el("p", "spk", title));
+  /* Weakest first: the point of seventeen metrics is to find the one that is wrong. */
+  for (const name of names.sort((a, b) => metrics[a] - metrics[b])) {
+    box.appendChild(metricBar(name, metrics[name]));
+  }
+  into.appendChild(box);
+}
+
+/* Every recording that exists, with the best selected. Several tracks are written and any of
+   them can be missing, so the fallback is the normal case: a page that only knew about stereo
+   would show a dead player most days. */
+function audioBlock(into, runId, one) {
+  const box = el("div", "card-body");
+  const tracks = one.tracks || [];
+  if (!tracks.length) {
+    box.appendChild(el("p", "empty", "no recording for this run"));
+    into.appendChild(box);
+    return;
+  }
+  const player = document.createElement("audio");
+  player.controls = true;
+  player.preload = "none";
+  const play = (label) => {
+    player.src = `/api/recording/${encodeURIComponent(runId)}/${encodeURIComponent(one.scenario)}?track=${encodeURIComponent(label)}`;
+  };
+  play(tracks[0].label);
+  box.appendChild(player);
+  if (tracks.length > 1) {
+    const chips = el("div", "chips-row");
+    for (const track of tracks) {
+      const button = el("button", "tag soft", track.label);
+      button.onclick = () => play(track.label);
+      chips.appendChild(button);
+    }
+    box.appendChild(chips);
+  }
+  into.appendChild(box);
+}
+
+async function runDetail(body, runId) {
+  const run = await fetch(`/api/simulations/${encodeURIComponent(runId)}`).then(r => r.json());
+  const top = pane(body, runId, `${run.passed}/${run.scenarios} passed in ${run.seconds}s`);
+  const back = el("button", "tag soft", "back to all runs");
+  back.onclick = () => { openRun = null; loadTab(); };
+  top.appendChild(back);
+
+  const head = el("div", "card");
+  head.appendChild(el("p", "muted",
+    `${run.modality || "chat"} · concurrency ${run.concurrency} · $${run.spent_usd || 0}` +
+    (run.models ? ` · agent ${run.models.agent} · user ${run.models.user} · judge ${run.models.judge}` : "")));
+  metricsBlock(head, run.metrics, "measured across the suite");
+  top.appendChild(head);
+
+  for (const one of run.scenarios || []) {
+    const card = el("div", "card");
+    const head = el("div", "card-head");
+    head.appendChild(el("span", "tag " + (one.passed ? "pass" : "fail"), one.passed ? "PASS" : "FAIL"));
+    head.appendChild(el("span", "spk", one.scenario));
+    head.appendChild(el("span", "muted", `${one.met}/${(one.checkpoints || []).length} · ${one.turns} turns · ${one.calls} calls`));
+    card.appendChild(head);
+
+    /* How the call itself went, before anything about whether it passed. A run that ended
+       because the caller hung up is a different result from one that ran out of turns. */
+    const m = one.measured || {};
+    if (m.stop_reason || m.score != null || (m.simulator && m.simulator.model)) {
+      const facts = [];
+      if (m.score != null) facts.push(`score ${Number(m.score).toFixed(2)} vs ${m.threshold} → ${m.scored_pass ? "over" : "under"}`);
+      if (m.stop_reason) facts.push(`ended: ${m.stop_reason}`);
+      if (m.provider) facts.push(m.provider);
+      if (m.simulator && m.simulator.model) facts.push(`caller on ${m.simulator.model}`);
+      if (m.call_id) facts.push(m.call_id);
+      card.appendChild(el("p", "muted", facts.join(" · ")));
+    }
+
+    audioBlock(card, runId, one);
+
+    for (const check of one.checkpoints || []) {
+      card.appendChild(el("p", check.passed ? "muted" : "fail",
+        `${check.passed ? "✓" : "✗"} ${check.kind}: ${check.name}${check.detail && !check.passed ? " — " + check.detail : ""}`));
+      /* A sub-goal decided by an eval on the platform names the eval and shows its reasoning
+         whether it passed or failed. Which eval decided it is the part somebody can go and
+         open, and a passing verdict with no reasoning is indistinguishable from an unchecked
+         one. Failures already carry their reason on the line above. */
+      if (check.by) {
+        if (check.passed && check.detail) card.appendChild(el("p", "reason", check.detail));
+        card.appendChild(el("p", "decided-by", `decided by ${check.by}`));
+      }
+    }
+    metricsBlock(card, m.metrics, "what the run measured");
+    if (one.transcript) card.appendChild(transcriptNode(one.transcript));
+
+    /* What each source claims it can prove. Worth showing next to the metrics: a number derived
+       from a source that reports no latency is not a latency measurement, and this says which. */
+    if ((m.evidence || []).length) {
+      const box = el("div", "card-body");
+      box.appendChild(el("p", "spk", "evidence"));
+      for (const source of m.evidence) {
+        box.appendChild(el("p", source.available ? "muted" : "fail",
+          `${source.adapter || source.source}${source.available ? "" : " (unavailable)"} — ${(source.proves || []).join(", ") || "nothing"}`));
+      }
+      card.appendChild(box);
+    }
+
+    /* Every call, in order, with what it was given and what came back. This is the half a
+       transcript cannot tell you: what the agent said it did against what it did. */
+    if ((one.calls_detail || []).length) {
+      const calls = el("div", "card-body");
+      calls.appendChild(el("p", "spk", "what the agent actually did"));
+      for (const call of one.calls_detail) {
+        const state = call.refused ? "fail" : (call.ok ? "muted" : "fail");
+        calls.appendChild(el("p", state,
+          `${call.name}(${JSON.stringify(call.arguments)}) → ${call.refused ? "refused: " + call.error : (call.ok ? String(call.result).slice(0, 160) : "crashed: " + call.error)}`));
+      }
+      card.appendChild(calls);
+    }
+    top.appendChild(card);
+  }
+}
+
+async function tabRunsLegacy(body) {
   const data = await fetch("/api/runs").then(r => r.json());
   if (!data.length) {
     emptyPane(body, "Runs", "Nothing has been run yet. A run restores the world, wires the agent's own tools to it, and grades from what is left behind.",
@@ -1113,12 +1303,15 @@ async function tabRuns(body) {
 
     const checks = el("ul", "checks");
     for (const check of run.checks) {
-      const item = el("li");
+      const item = el("li", check.passed || check.broken ? "" : "failed");
       item.appendChild(el("span", "cbox" + (check.broken ? " hmm" : check.passed ? "" : " no"),
         check.broken ? "!" : check.passed ? "✓" : "✗"));
       if (check.kind) item.appendChild(el("span", "kind", check.kind));
       const claim = el("span", "claim", check.name);
-      if (!check.passed && check.why) claim.appendChild(el("span", "why", check.why));
+      /* A failure needs its reason. So does an eval that passed: the whole point of running the
+         claim through a named eval is that somebody can read what it decided and why. */
+      if (check.why && (!check.passed || check.by)) claim.appendChild(el("span", "why", check.why));
+      if (check.by) claim.appendChild(el("span", "why decided-by", "decided by " + check.by));
       item.appendChild(claim);
       checks.appendChild(item);
     }

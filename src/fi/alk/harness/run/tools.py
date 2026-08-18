@@ -228,6 +228,87 @@ def run_tools(
         return _ok(answer) if result.passed else _err(answer)
 
     @tool(
+        "run_simulation",
+        "Run the whole suite. One call: every scenario, each in its own copy of the world, "
+        "graded, and written out as one run you can come back to.\n\n"
+        "This is how a suite is run. Running scenarios one at a time is for looking into a "
+        "single failure afterwards, not for getting results.\n\n"
+        "`concurrency` is how many run at once. Leave it at 1 for a spoken agent, where every "
+        "scenario is a real call. It takes minutes and blocks until the whole suite is done.",
+        schema({"concurrency": int, "model": str}, []),
+    )
+    async def run_simulation(args: dict[str, Any]) -> dict[str, Any]:
+        from .simulation import simulate
+
+        if contract is None:
+            return _err("no contract is loaded, so there is no agent to run against")
+        if not written:
+            return _err("there are no scenarios to run")
+        summary = await simulate(
+            list(written),
+            contract,
+            world_root,
+            destination=destination,
+            model=str(args.get("model") or "") or None,
+            concurrency=max(1, int(args.get("concurrency") or 1)),
+        )
+        results[:] = load_results(destination)
+        lines = [
+            f"{summary['run_id']}: {summary['passed']}/{summary['scenarios']} passed "
+            f"in {summary['seconds']}s, ${summary['spent_usd']}",
+            "",
+        ]
+        for one in summary["results"]:
+            mark = "PASS" if one["passed"] else "FAIL"
+            note = f"  {one['problems'][0]}" if one["problems"] else ""
+            audio = "  [recording]" if one["recording"] else ""
+            lines.append(
+                f"  {mark}  {one['scenario']}  {one['met']}/{one['of']}{audio}{note}"
+            )
+        lines += [
+            "",
+            "read_run gives any one of these in full: the conversation, every tool call with "
+            "its arguments, and what each check decided.",
+        ]
+        return _ok("\n".join(lines))
+
+    @tool(
+        "read_run",
+        "One run in full, or the list of runs when no id is given. A run holds every scenario's "
+        "conversation, every tool call with its arguments and result, and what each check "
+        "decided — which is what a failure is diagnosed from.",
+        schema({"run_id": str, "scenario": str}, []),
+    )
+    async def read_run(args: dict[str, Any]) -> dict[str, Any]:
+        from .simulation import every_run, read_run as load_run
+
+        run_id = str(args.get("run_id") or "")
+        if not run_id:
+            runs = every_run(destination)
+            if not runs:
+                return _ok("No runs yet. run_simulation makes one.")
+            return _ok(
+                "\n".join(
+                    f"  {one['run_id']}  {one.get('passed', 0)}/{one.get('scenarios', 0)} "
+                    f"passed  {one.get('seconds', 0)}s"
+                    for one in runs
+                )
+            )
+        try:
+            whole = load_run(destination, run_id)
+        except FileNotFoundError as missing:
+            return _err(str(missing))
+        wanted = str(args.get("scenario") or "")
+        cases = [
+            one
+            for one in whole.get("scenarios", [])
+            if not wanted or one.get("scenario") == wanted
+        ]
+        if not cases:
+            return _err(f"{run_id} has no scenario called {wanted!r}")
+        return _ok(json.dumps(cases if wanted else whole, indent=2, default=str)[:6000])
+
+    @tool(
         "run_scenario",
         "Run one scenario against the agent and grade it.\n\n"
         "The world is restored and the scenario's setup applied first. A hosted voice agent is "
@@ -335,7 +416,14 @@ def run_tools(
     server = create_sdk_mcp_server(
         name=RUN_SERVER,
         version="0.1.0",
-        tools=[list_scenarios, preflight, run_scenario, read_results],
+        tools=[
+            list_scenarios,
+            preflight,
+            run_simulation,
+            read_run,
+            run_scenario,
+            read_results,
+        ],
     )
     return server
 
@@ -343,6 +431,45 @@ def run_tools(
 TOOL_NAMES = (
     "list_scenarios",
     "preflight",
+    "run_simulation",
+    "read_run",
     "run_scenario",
     "read_results",
 )
+
+
+# Which of the several recordings a call leaves behind is the one worth keeping. Both sides on
+# one track, because the question asked of a spoken run is nearly always about the interaction:
+# whether the agent talked over the caller, how long it left them waiting, what it heard.
+PREFERRED = ("_stereo.wav", "stereo.wav", "combined.wav")
+
+
+def recording_since(started: float, into: Path) -> str:
+    """Copy the audio from the call that just happened into this run's folder.
+
+    ALK records already and writes several tracks under its own artifacts directory. Rather than
+    tell it where to put them — which it takes from its manifest, not from the environment — the
+    files it wrote are found the same way the transcript is, by being newer than the moment this
+    run began, and the one worth keeping is copied in beside the result.
+    """
+    root = Path("artifacts/simulation-acceptance")
+    if not root.exists():
+        return ""
+    fresh = [
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in (".wav", ".mp3", ".ogg")
+        and path.stat().st_mtime >= started
+    ]
+    if not fresh:
+        return ""
+    chosen = next(
+        (one for mark in PREFERRED for one in fresh if one.name.endswith(mark)),
+        max(fresh, key=lambda one: one.stat().st_size),
+    )
+    into = Path(into)
+    into.mkdir(parents=True, exist_ok=True)
+    landed = into / f"recording{chosen.suffix}"
+    shutil.copyfile(chosen, landed)
+    return str(landed)

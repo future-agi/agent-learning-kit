@@ -42,12 +42,26 @@ def as_persona(scenario: Scenario, simulator_prompt: str = "") -> Persona:
     """
     from ..environment import fill
 
+    # Only the circumstance, not the behavioural prompt. ALK composes the opening line as
+    # "My name is X. {situation} I want this outcome: {outcome}" and sends it verbatim, so
+    # anything put here is read aloud: with the whole simulator prompt in it, the conversation
+    # opened with the person reciting their own instructions, including the rules about what
+    # they are supposed to hold back.
+    #
+    # What that costs is real and worth naming: the behaviours the prompt describes — waiting to
+    # be asked, accepting a refusal once, ending when the answer arrives — are not reaching the
+    # simulator on this path. Carrying them properly means ALK letting a persona have a briefing
+    # separate from its first utterance, which is a change to make there rather than to work
+    # around here.
     filled = fill(simulator_prompt, scenario.slots())[0] if simulator_prompt else ""
     return Persona(
         persona={"name": "customer"},
-        situation=filled or scenario.instruction,
-        outcome=scenario.tests
-        or "complete what you came for, or accept that you cannot",
+        situation=scenario.instruction or filled,
+        # Said in the person's own terms, because it is read aloud with the situation.
+        # ``scenario.tests`` describes what the suite is checking — "agent correctly counts
+        # customers filtered by country" — and a person who opens by announcing what the agent
+        # is being graded on has told it the answer.
+        outcome="get what you came for, or accept that you cannot",
     )
 
 

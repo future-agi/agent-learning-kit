@@ -53,12 +53,18 @@ class LiveRun:
         return f"{mark}  {self.scenario}  {self.met}/{len(self.settled)} sub-goals settled by code"
 
 
-def public_url(port: int, *, wait: float = 20.0) -> tuple[str, subprocess.Popen | None]:
+def public_url(
+    port: int, *, wait: float = 30.0, tries: int = 3
+) -> tuple[str, subprocess.Popen | None]:
     """A publicly reachable address for the webhook, and the process holding it open.
 
     A hosted agent runs on somebody else's infrastructure, so a loopback address is unreachable
     to it. ``cloudflared`` is what the previous runs used; anything giving a public URL works, and
     ``HARNESS_WEBHOOK_URL`` skips this entirely when a tunnel is already running.
+
+    Retried, because a free tunnel is the least reliable thing in the whole path and it fails
+    before anything interesting has happened. One slow handshake should not read as a scenario
+    the agent failed, and on a suite of forty it would not fail once.
     """
     named = os.environ.get("HARNESS_WEBHOOK_URL", "").strip()
     if named:
@@ -68,6 +74,22 @@ def public_url(port: int, *, wait: float = 20.0) -> tuple[str, subprocess.Popen 
             "no way to expose the webhook publicly. Either install cloudflared "
             "(brew install cloudflared) or set HARNESS_WEBHOOK_URL to a tunnel you already have."
         )
+    for attempt in range(max(1, tries)):
+        found, process = _tunnel(port, wait)
+        if found:
+            return found, process
+        if process is not None:
+            process.terminate()
+        if attempt + 1 < tries:
+            time.sleep(2.0)
+    raise RuntimeError(
+        f"cloudflared did not report a public URL in {tries} attempts. The tunnel is the "
+        "flakiest part of this path; set HARNESS_WEBHOOK_URL to one you control to skip it."
+    )
+
+
+def _tunnel(port: int, wait: float) -> tuple[str, subprocess.Popen | None]:
+    """One attempt at a tunnel: the URL if it came up, and the process either way."""
     process = subprocess.Popen(
         ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"],
         stdout=subprocess.PIPE,
@@ -77,12 +99,13 @@ def public_url(port: int, *, wait: float = 20.0) -> tuple[str, subprocess.Popen 
     deadline = time.time() + wait
     while time.time() < deadline:
         line = process.stdout.readline() if process.stdout else ""
+        if not line and process.poll() is not None:
+            return "", process
         if "trycloudflare.com" in line:
             for word in line.split():
                 if word.startswith("https://") and "trycloudflare.com" in word:
                     return word.strip(), process
-    process.terminate()
-    raise RuntimeError("cloudflared did not report a public URL in time")
+    return "", process
 
 
 def prepare(scenario: Scenario, world_root: Path) -> tuple[GeneratedWorld, str]:
@@ -137,11 +160,36 @@ def grade(scenario: Scenario, world: GeneratedWorld, world_root: Path) -> LiveRu
     return run
 
 
-def wire(scenario: Scenario, world_root: Path, *, assistant_id: str = "", api_key: str = ""):
+def instruction_for(scenario: Scenario, world_root: Path) -> str:
+    """What the simulated person is told, from the prompt the environment step wrote."""
+    written = load_simulator_prompt(world_root)
+    if not written:
+        return scenario.instruction
+    filled, missing = fill(written, scenario.slots())
+    if missing:
+        raise RuntimeError(
+            f"the simulator prompt asks for {', '.join(missing)}, which {scenario.name} does "
+            "not supply. An unfilled slot reaches the caller verbatim."
+        )
+    return filled
+
+
+def wire(
+    scenario: Scenario,
+    world_root: Path,
+    *,
+    assistant_id: str = "",
+    api_key: str = "",
+    world: GeneratedWorld | None = None,
+):
     """Everything up to placing the call: world, webhook, tunnel, assistant.
 
     Returns the bound world, the caller's instruction, the webhook and the tunnel, so whoever
     places the call decides how — ALK's voice case, a phone leg, or a web call.
+
+    ``world`` is taken when the caller has already prepared one. The suite runner sets a
+    scenario's world up once and grades what that same world is left holding, so preparing a
+    second one here would answer the agent's calls in a world nobody afterwards looks at.
     """
     assistant_id = assistant_id or os.environ.get("VAPI_ASSISTANT_ID", "")
     api_key = api_key or os.environ.get("VAPI_API_KEY", "")
@@ -151,7 +199,10 @@ def wire(scenario: Scenario, world_root: Path, *, assistant_id: str = "", api_ke
             "with the agent's own tools; the harness only changes where those calls are sent."
         )
 
-    world, instruction = prepare(scenario, world_root)
+    if world is None:
+        world, instruction = prepare(scenario, world_root)
+    else:
+        instruction = instruction_for(scenario, world_root)
     webhook = WorldWebhook().start()
     webhook.bind(world)
     try:

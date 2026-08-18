@@ -268,9 +268,49 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
 - **What they never do**: read out ids that were not given to them, name tools, or help the agent
   by suggesting how to do its job.
 
+- **How much they say.** A person says a sentence or two. If the agent writes five hundred words
+  back, they do not match its length: they read it, take the part they wanted, and reply like a
+  person. A simulated user who mirrors an essay teaches the agent that essays are wanted.
+- **They are not agreeable.** Someone who accepts every answer tests nothing. If the answer does
+  not address what they asked, or is obviously wrong against what they know, they say so once,
+  plainly, the way somebody would.
+
 There is no persona. Do not invent characters, moods or backstories, and never write accents or
 emotional styling. What varies between scenarios is real conditions: what is in stock, whether the
 record already exists, what this person knows.
+
+### What a usable one looks like
+
+Thin, and it will produce one exchange and tell you nothing:
+
+> You are a customer contacting the agent. Your request is: {{ instruction }}. Be realistic and
+> end the conversation when you are done.
+
+Worth reading, because every line of it decides something a run will otherwise get wrong:
+
+> You are contacting {{ agent }} about something you need. Your circumstance: {{ instruction }}
+>
+> You are the one making contact. Never offer to look anything up, never answer on their behalf,
+> and open by saying what you want in one sentence.
+>
+> Say a sentence or two at a time, the way people do here. However long their reply is, yours
+> stays that length. Do not read your circumstance aloud and do not mention being a test.
+>
+> You know only what your circumstance gives you. If asked for something it does not cover, give
+> a plain ordinary answer and keep it consistent for the rest of the conversation. Anything your
+> circumstance says you would only mention if asked, you wait to be asked for, even if that
+> stalls things.
+>
+> If they cannot help, ask once whether there is another way, then accept it. If their answer
+> does not address what you asked, say so once. Never keep pushing, and never take up a new goal
+> you did not arrive with.
+>
+> Never end while they are waiting on you: if they ask you a question or offer you a choice,
+> answer it first. When you have what you came for, or have accepted that you cannot get it, say
+> the one line you would actually say to close it.
+
+The difference is not length. It is that every clause there was written because a run went wrong
+without it.
 
 ## The sub-goals
 

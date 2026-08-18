@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -145,6 +146,10 @@ class Call:
     ok: bool = True
     error: str = ""
     refused: bool = False
+    # When it happened, seconds since the epoch. What lets a recording and a list of calls be
+    # read as one thing: without it the UI can show what the agent did but not when, and "when"
+    # is the whole question for a spoken run.
+    at: float = 0.0
 
 
 class GeneratedWorld(EnvironmentAdapter):
@@ -347,6 +352,9 @@ class GeneratedWorld(EnvironmentAdapter):
         return [one for one in found if one] or [plain.strip()]
 
     def _record(self, call: Call) -> Call:
+        # Stamped here rather than by the caller, so every call is stamped and none of them
+        # depend on whoever made it remembering to.
+        call.at = call.at or time.time()
         self.calls.append(call)
         return call
 

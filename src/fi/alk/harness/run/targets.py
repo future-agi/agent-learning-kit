@@ -154,6 +154,25 @@ class Target(Protocol):
     def spent_usd(self) -> float: ...
 
 
+def _drivable(model: str | None) -> None:
+    """Refuse a model this target cannot actually run, before a suite is graded on it.
+
+    This target runs on the Claude Agent SDK against Vertex, so the only models it can drive are
+    Anthropic's. Handed anything else it does not fail: it produces a session that answers
+    nothing, which arrives as a scenario with no turns and no calls and every check red. That
+    reads exactly like an agent that ignored the person, and the whole suite is wrong in a way
+    nobody would think to question.
+    """
+    named = (model or "").strip().lower()
+    if not named or "claude" in named or named.startswith("anthropic"):
+        return
+    raise RuntimeError(
+        f"this target cannot run {model!r}. It drives the agent through the Claude Agent SDK on "
+        "Vertex, which speaks to Anthropic models only. To run the agent on something else, "
+        "point the spec's target at one of ALK's own endpoint adapters rather than at this one."
+    )
+
+
 class LocalAgent:
     """The agent run here, from its contract, with its tools bound to the world."""
 
@@ -169,6 +188,7 @@ class LocalAgent:
     ) -> None:
         self.contract = contract
         self.world = world
+        _drivable(model)
         allowed = [qualified(AGENT_SERVER, spec.name) for spec in contract.tools]
         options = ClaudeAgentOptions(
             system_prompt=agent_prompt(contract),
