@@ -8,7 +8,8 @@ report data to the Future AGI platform using the ALK ingestion endpoints:
   PATCH /simulate/alk-simulate/call-executions/{call_execution_id}/result/
 
 Configuration is env-driven so local runs stay unaffected when the platform
-target is not set:
+target is not set. Submission accepts either the internal service bearer or
+the external API-key pair:
 
   FI_BASE_URL / FUTURE_AGI_API_URL / AGENT_LEARNING_API_URL — base URL
   FI_API_KEY / FUTURE_AGI_API_KEY / AGENT_LEARNING_API_KEY — x-api-key
@@ -159,6 +160,7 @@ class FutureAGIResultSink:
             api_url=self._api_url,
             api_key=api_key,
             secret_key=secret_key,
+            internal_secret=internal_secret,
             run_test_id=self._run_test_id,
         ):
             return False
@@ -337,6 +339,7 @@ class FutureAGIResultSink:
             api_url=self._api_url,
             api_key=api_key,
             secret_key=secret_key,
+            internal_secret=internal_secret,
             run_test_id=self._run_test_id,
         )
         if missing:
@@ -378,15 +381,17 @@ def _missing_config(
     api_url: str | None,
     api_key: str | None,
     secret_key: str | None,
+    internal_secret: str | None,
     run_test_id: str | None,
 ) -> list[str]:
     missing: list[str] = []
     if not api_url:
         missing.append("api_url")
-    if not api_key:
-        missing.append("api_key")
-    if not secret_key:
-        missing.append("secret_key")
+    if not internal_secret:
+        if not api_key:
+            missing.append("api_key")
+        if not secret_key:
+            missing.append("secret_key")
     if not run_test_id:
         missing.append("run_test_id")
     return missing
@@ -394,8 +399,8 @@ def _missing_config(
 
 def _open_client(
     base_url: str,
-    api_key: str,
-    secret_key: str,
+    api_key: str | None,
+    secret_key: str | None,
     internal_secret: str | None = None,
 ) -> httpx.Client:
     """Build the ALK ingestion HTTP client (shared by batch + streaming paths).
@@ -404,10 +409,9 @@ def _open_client(
     and multipart/form-data (with boundary) for the ``files=`` recording upload.
     A fixed application/json here silently breaks the multipart upload.
     """
-    headers = {
-        "x-api-key": api_key,
-        "x-secret-key": secret_key,
-    }
+    headers: dict[str, str] = {}
+    if api_key and secret_key:
+        headers.update({"x-api-key": api_key, "x-secret-key": secret_key})
     if internal_secret:
         headers["Authorization"] = f"Bearer {internal_secret}"
     return httpx.Client(
@@ -469,8 +473,8 @@ def _submit_via_http(
     *,
     report: SimulationReport,
     base_url: str,
-    api_key: str,
-    secret_key: str,
+    api_key: str | None,
+    secret_key: str | None,
     run_test_id: str,
     internal_secret: str | None = None,
     test_execution_id: str | None = None,

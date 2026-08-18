@@ -115,7 +115,15 @@ def test_child_entrypoint_chat_completes_offline(tmp_path, monkeypatch):
     job_path.write_text(job.model_dump_json(), encoding="utf-8")
 
     # No FI_* creds -> sink records not_configured, run still completes.
-    for var in ("FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_TEST_EXECUTION_ID"):
+    for var in (
+        "FI_API_KEY",
+        "FI_SECRET_KEY",
+        "FI_BASE_URL",
+        "FI_TEST_EXECUTION_ID",
+        "FI_INTERNAL_SUBMIT_SECRET",
+        "ALK_RUNNER_INTERNAL_SECRET",
+        "INTERNAL_API_SECRET",
+    ):
         monkeypatch.delenv(var, raising=False)
 
     rc = child_main([str(job_path), "--status-file", str(tmp_path / "status.jsonl")])
@@ -256,8 +264,9 @@ def test_sink_streams_each_case_and_finalizes_submitted(tmp_path, monkeypatch):
 
     seen = {"create": [], "batch": [], "result": []}
     _mock_streaming_client(monkeypatch, seen)
-    monkeypatch.setenv("FI_API_KEY", "k")
-    monkeypatch.setenv("FI_SECRET_KEY", "s")
+    monkeypatch.delenv("FI_API_KEY", raising=False)
+    monkeypatch.delenv("FI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("INTERNAL_API_SECRET", "internal-service-secret")
 
     # Hosted gate opens; rows allocated up front, create endpoint untouched.
     assert sink.begin_stream(spec) is True
