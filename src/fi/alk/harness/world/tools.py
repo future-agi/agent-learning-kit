@@ -345,14 +345,23 @@ def world_tools(
                 "this runs one UPDATE or DELETE. Use seed to add rows, create_schema to change "
                 "the shape of a table, and inspect_world to look."
             )
+        # Through the store rather than a SQLite connection. save_world refuses a world holding
+        # rows left over from its own testing and tells you to clear them with this -- and on a
+        # Postgres world this reached for a connection that does not exist, so the only repair
+        # the gate offers was the one thing that could not be done. The run got to 27/27 checks
+        # and could not save.
+        before = sum(len(rows) for rows in world.state().values())
         try:
-            changed = world.connection.execute(statement).rowcount
-            world.connection.commit()
+            reported = world.store.execute(statement)
         except Exception as failed:
-            world.connection.rollback()
             return _err(f"rejected: {failed}")
-        counts = ", ".join(f"{n}: {len(r)}" for n, r in sorted(world.state().items()))
-        return _ok(f"{changed} rows changed. The world now holds {counts}")
+        after = world.state()
+        counts = ", ".join(f"{n}: {len(r)}" for n, r in sorted(after.items()))
+        # Not every store hands back a row count; the difference is the honest answer where one
+        # does not, and for an UPDATE neither number moves, which is worth saying plainly.
+        moved = reported or (before - sum(len(rows) for rows in after.values()))
+        said = f"{moved} rows changed" if moved else "done, nothing was removed"
+        return _ok(f"{said}. The world now holds {counts}")
 
     @tool(
         "define_handler",
