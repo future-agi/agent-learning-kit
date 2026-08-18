@@ -28,7 +28,13 @@ TAU = "/Users/rishavhada/Documents/futureagi/oss/tau-bench"
 
 @pytest.mark.parametrize(
     "said, wanted",
-    [(">=3.11", "3.11"), ("3.10+", "3.10"), ("Python 3.12", "3.12"), ("", "3.11"), (None, "3.11")],
+    [
+        (">=3.11", "3.11"),
+        ("3.10+", "3.10"),
+        ("Python 3.12", "3.12"),
+        ("", "3.11"),
+        (None, "3.11"),
+    ],
 )
 def test_a_version_is_read_out_of_however_it_was_phrased(said, wanted) -> None:
     """The contract writes this as prose, and a base image needs two numbers."""
@@ -38,7 +44,9 @@ def test_a_version_is_read_out_of_however_it_was_phrased(said, wanted) -> None:
 def test_the_agents_own_dockerfile_wins(tmp_path) -> None:
     """It is the environment its author says the code runs in. Anything generated is a guess."""
     (tmp_path / "Dockerfile").write_text("FROM python:3.11\n")
-    recipe, its_own = sandbox.dockerfile_for(tmp_path, Runtime(install="pip install -e ."))
+    recipe, its_own = sandbox.dockerfile_for(
+        tmp_path, Runtime(install="pip install -e .")
+    )
     assert its_own and recipe.name == "Dockerfile"
 
 
@@ -76,7 +84,9 @@ def test_the_runner_needs_nothing_the_agents_image_may_lack() -> None:
 
 # --- with docker: the agent's own code, really running -------------------------------------
 
-needs_docker = pytest.mark.skipif(not docker_available(), reason="docker daemon unavailable")
+needs_docker = pytest.mark.skipif(
+    not docker_available(), reason="docker daemon unavailable"
+)
 needs_tau = pytest.mark.skipif(
     not __import__("pathlib").Path(TAU).is_dir(), reason="tau-bench not checked out"
 )
@@ -115,17 +125,27 @@ def test_the_state_is_held_in_the_container(loaded) -> None:
     """Handed over once rather than shipped per call, which is why this is worth a container."""
     held = sandbox.get_state(loaded)
     assert {name: len(rows) for name, rows in held.items()} == {
-        "orders": 1000, "products": 50, "users": 500
+        "orders": 1000,
+        "products": 50,
+        "users": 500,
     }
 
 
 @needs_docker
 @needs_tau
 def test_the_agents_own_tool_runs_and_changes_what_it_holds(loaded) -> None:
-    pending = next(o for o, v in sandbox.get_state(loaded)["orders"].items()
-                   if v["status"] == "pending")
-    sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke",
-                 {"order_id": pending, "reason": "no longer needed"}, first_arg="data")
+    pending = next(
+        o
+        for o, v in sandbox.get_state(loaded)["orders"].items()
+        if v["status"] == "pending"
+    )
+    sandbox.call(
+        loaded,
+        CANCEL,
+        "CancelPendingOrder.invoke",
+        {"order_id": pending, "reason": "no longer needed"},
+        first_arg="data",
+    )
     assert sandbox.get_state(loaded)["orders"][pending]["status"] == "cancelled"
 
 
@@ -133,11 +153,18 @@ def test_the_agents_own_tool_runs_and_changes_what_it_holds(loaded) -> None:
 @needs_tau
 def test_state_carries_across_calls(loaded) -> None:
     """The second call sees what the first did, which is the whole reason it is resident."""
-    pending = next(o for o, v in sandbox.get_state(loaded)["orders"].items()
-                   if v["status"] == "pending")
+    pending = next(
+        o
+        for o, v in sandbox.get_state(loaded)["orders"].items()
+        if v["status"] == "pending"
+    )
     args = {"order_id": pending, "reason": "no longer needed"}
-    first = sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke", args, first_arg="data")
-    again = sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke", args, first_arg="data")
+    first = sandbox.call(
+        loaded, CANCEL, "CancelPendingOrder.invoke", args, first_arg="data"
+    )
+    again = sandbox.call(
+        loaded, CANCEL, "CancelPendingOrder.invoke", args, first_arg="data"
+    )
     # The first succeeds and hands back the order; the second is refused *because* of it.
     assert "Error" not in str(first)
     assert again == "Error: non-pending order cannot be cancelled"
@@ -147,20 +174,32 @@ def test_state_carries_across_calls(loaded) -> None:
 @needs_tau
 def test_a_refusal_comes_back_as_the_agent_wrote_it(loaded) -> None:
     """tau-bench reports a refusal as an ordinary string, so it is an answer and not a raise."""
-    said = sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke",
-                        {"order_id": "#W0", "reason": "no longer needed"}, first_arg="data")
+    said = sandbox.call(
+        loaded,
+        CANCEL,
+        "CancelPendingOrder.invoke",
+        {"order_id": "#W0", "reason": "no longer needed"},
+        first_arg="data",
+    )
     assert said == "Error: order not found"
 
 
 @needs_docker
 @needs_tau
-def test_a_tool_that_raises_is_the_agent_refusing_not_the_sandbox_breaking(loaded) -> None:
+def test_a_tool_that_raises_is_the_agent_refusing_not_the_sandbox_breaking(
+    loaded,
+) -> None:
     """Told apart because one is scored against the agent and the other never is."""
     from fi.alk.harness.world.sandbox import ToolRefused
 
     with pytest.raises(ToolRefused):
-        sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke", {"nonsense": 1},
-                     first_arg="data")
+        sandbox.call(
+            loaded,
+            CANCEL,
+            "CancelPendingOrder.invoke",
+            {"nonsense": 1},
+            first_arg="data",
+        )
 
 
 @needs_docker
@@ -177,14 +216,19 @@ def test_a_module_that_is_not_there_is_the_sandbox_saying_so(loaded) -> None:
     [
         # What one agent's contract actually recorded. A shell reads the bracket as a syntax
         # error, and the image build fails before anything else is tried.
-        ("pip install -e . (from repo root; pyproject.toml present)", "pip install -e ."),
+        (
+            "pip install -e . (from repo root; pyproject.toml present)",
+            "pip install -e .",
+        ),
         ("uv sync --dev", "uv sync --dev"),
         # The trailing "." is the argument, not punctuation.
         ("pip install -e .", "pip install -e ."),
         ("pip install -r requirements.txt", "pip install -r requirements.txt"),
     ],
 )
-def test_an_install_command_survives_however_the_contract_explained_it(said, wanted) -> None:
+def test_an_install_command_survives_however_the_contract_explained_it(
+    said, wanted
+) -> None:
     assert sandbox._command(said) == wanted
 
 
@@ -262,17 +306,25 @@ def test_a_dockerfile_the_stage_wrote_wins(tmp_path) -> None:
     (agent / "pyproject.toml").write_text("[project]\nname='x'\n")
     env = tmp_path / "session" / "env"
     env.mkdir(parents=True)
-    (env / "Dockerfile").write_text("FROM python:3.12-slim\nRUN echo written-by-the-stage\n")
+    (env / "Dockerfile").write_text(
+        "FROM python:3.12-slim\nRUN echo written-by-the-stage\n"
+    )
 
-    recipe, its_own = sandbox.dockerfile_for(agent, Runtime(install="pip install -e ."), env)
+    recipe, its_own = sandbox.dockerfile_for(
+        agent, Runtime(install="pip install -e ."), env
+    )
     assert its_own and "written-by-the-stage" in recipe.read_text()
 
     # and with nothing written, the generated one is still used
-    plain, generated = sandbox.dockerfile_for(agent, Runtime(install="pip install -e ."))
+    plain, generated = sandbox.dockerfile_for(
+        agent, Runtime(install="pip install -e .")
+    )
     assert not generated and "pip install -e ." in plain.read_text()
 
 
-def test_bridge_setup_supports_an_image_with_a_non_root_user(tmp_path, monkeypatch) -> None:
+def test_bridge_setup_supports_an_image_with_a_non_root_user(
+    tmp_path, monkeypatch
+) -> None:
     """Only directory preparation is privileged; the server keeps the image's own user."""
     (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\nUSER 10001\n")
     calls: list[tuple[str, ...]] = []
@@ -288,11 +340,155 @@ def test_bridge_setup_supports_an_image_with_a_non_root_user(tmp_path, monkeypat
 
     assert container == "alk-agent-nonroot"
     assert (
-        "exec", "--user", "0", container, "sh", "-c",
+        "exec",
+        "--user",
+        "0",
+        container,
+        "sh",
+        "-c",
         "mkdir -p /alk && chmod 0777 /alk",
     ) in calls
-    server_start = next(call for call in calls if "--detach" in call)
+    server_start = next(call for call in calls if call[0] == "exec" and "--detach" in call)
     assert "--user" not in server_start
+    assert "PYTHONPATH=.:./src:/agent:/agent/src" in server_start
+    command = server_start[-1]
+    assert "[ -x .venv/bin/python ]" in command
+
+
+def test_a_partial_agent_start_cleans_up_its_container_and_network(
+    tmp_path, monkeypatch
+) -> None:
+    """The world cannot clean resources it was never handed after stand_up raises."""
+    from types import SimpleNamespace
+
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    calls: list[tuple[str, ...]] = []
+
+    def docker(*args: str, **_kwargs) -> tuple[int, str]:
+        calls.append(args)
+        if args[:3] == ("exec", "--user", "0"):
+            raise SandboxError("bridge setup failed")
+        return 0, ""
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+
+    with pytest.raises(SandboxError, match="bridge setup failed"):
+        sandbox.stand_up(
+            "partial",
+            tmp_path,
+            Runtime(),
+            store=SimpleNamespace(container="alk-store-test"),
+        )
+
+    assert ("rm", "--force", "alk-agent-partial") in calls
+    assert ("network", "disconnect", "alk-net-partial", "alk-store-test") in calls
+    assert ("network", "rm", "alk-net-partial") in calls
+
+
+def test_environment_teardown_removes_all_resources_for_its_compose_project(
+    monkeypatch,
+) -> None:
+    from fi.alk.harness.world import workspace
+    from fi.alk.harness.world.stores import container as store_container
+
+    calls: list[tuple[str, ...]] = []
+
+    def docker(*args: str, **_kwargs) -> str:
+        calls.append(args)
+        if args[:2] == ("ps", "--all"):
+            return "container-a\ncontainer-b\n"
+        if args[:2] == ("network", "ls"):
+            return "network-a\n"
+        if args[:2] == ("volume", "ls"):
+            return "volume-a\n"
+        return ""
+
+    monkeypatch.setattr(store_container, "docker", docker)
+    workspace.tear_down("/tmp/sessions/voice")
+
+    label = "label=com.docker.compose.project=alk-env-voice"
+    assert ("ps", "--all", "--quiet", "--filter", label) in calls
+    assert ("rm", "--force", "--volumes", "container-a", "container-b") in calls
+    assert ("network", "rm", "network-a") in calls
+    assert ("volume", "rm", "volume-a") in calls
+
+
+@needs_docker
+def test_postgres_snapshots_preserve_arrays_json_and_schema(tmp_path) -> None:
+    """A snapshot must round-trip two list-shaped SQL types without confusing them."""
+    from fi.alk.harness.world.stores.postgres import PostgresStore
+
+    store = PostgresStore()
+    reopened = PostgresStore()
+    try:
+        store.start()
+        store.apply(
+            "CREATE TABLE mixed ("
+            "id TEXT PRIMARY KEY, tags TEXT[] NOT NULL, payload JSONB NOT NULL)"
+        )
+        store.add("mixed", {"id": "one", "tags": ["a", "b"], "payload": [1, 2]})
+        frozen = store.freeze()
+
+        store.amend(
+            "mixed",
+            "one",
+            {"tags": ["changed"], "payload": {"changed": True}},
+            by="id",
+        )
+        store.restore(frozen)
+
+        assert store.state()["mixed"] == [
+            {"id": "one", "tags": ["a", "b"], "payload": [1, 2]}
+        ]
+
+        store.save_to(tmp_path)
+        reopened.load_from(tmp_path)
+        assert reopened.state()["mixed"] == [
+            {"id": "one", "tags": ["a", "b"], "payload": [1, 2]}
+        ]
+    finally:
+        store.close()
+        reopened.close()
+
+
+@needs_docker
+def test_container_adoption_constructs_instances_and_awaits_async_methods(tmp_path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12-slim\nWORKDIR /agent\nCOPY . /agent\n"
+    )
+    (tmp_path / "worker.py").write_text(
+        "class Worker:\n"
+        "    def __init__(self, label):\n"
+        "        self.label = label\n"
+        "        self.calls = 0\n"
+        "    async def run(self):\n"
+        "        self.calls += 1\n"
+        "        return {'label': self.label, 'calls': self.calls}\n"
+        "    async def locked(self, context):\n"
+        "        context.disallow_interruptions()\n"
+        "        return {'locked': True}\n"
+    )
+    container = sandbox.stand_up("async-factory", tmp_path, Runtime())
+    try:
+        first = sandbox.call(
+            container, "worker", "Worker.run", {}, factory="Worker('ready')"
+        )
+        second = sandbox.call(
+            container, "worker", "Worker.run", {}, factory="Worker('ready')"
+        )
+        locked = sandbox.call(
+            container,
+            "worker",
+            "Worker.locked",
+            {},
+            factory="Worker('ready')",
+            first_arg="context",
+        )
+        assert first == {"label": "ready", "calls": 1}
+        assert second == {"label": "ready", "calls": 2}
+        assert locked == {"locked": True}
+    finally:
+        sandbox.tear_down("async-factory")
 
 
 def test_a_setup_command_keeps_its_quoted_arguments(tmp_path) -> None:
@@ -307,17 +503,33 @@ def test_a_setup_command_keeps_its_quoted_arguments(tmp_path) -> None:
     assert (tmp_path / ".venv" / "a file.txt").exists()
 
 
+def test_a_setup_command_expands_the_store_environment_without_a_shell(tmp_path) -> None:
+    from fi.alk.harness.world.workspace import run_setup
+
+    code, said = run_setup(
+        tmp_path,
+        'test "$ALK_TEST_VALUE" = ready',
+        extra={"ALK_TEST_VALUE": "ready"},
+    )
+    assert code == 0, said
+
+
 @needs_docker
 @needs_tau
 def test_the_container_accounts_for_what_it_was_asked_to_do(loaded) -> None:
     """It said nothing at all before: a container that had run fifty calls and one that had run
     none looked identical from outside, and a failure inside left no trace anywhere."""
-    sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke",
-                 {"order_id": "#W0", "reason": "no longer needed"}, first_arg="data")
+    sandbox.call(
+        loaded,
+        CANCEL,
+        "CancelPendingOrder.invoke",
+        {"order_id": "#W0", "reason": "no longer needed"},
+        first_arg="data",
+    )
     said = sandbox.recent(loaded, 20)
     assert "state set:" in said
     assert "CancelPendingOrder.invoke" in said
-    assert "#W0" in said            # the arguments, not only the name
+    assert "#W0" in said  # the arguments, not only the name
     assert "Error: order not found" in said
 
 
@@ -329,8 +541,13 @@ def test_a_failure_carries_the_containers_own_account(loaded) -> None:
     from fi.alk.harness.world.sandbox import ToolRefused
 
     try:
-        sandbox.call(loaded, CANCEL, "CancelPendingOrder.invoke", {"nonsense": 1},
-                     first_arg="data")
+        sandbox.call(
+            loaded,
+            CANCEL,
+            "CancelPendingOrder.invoke",
+            {"nonsense": 1},
+            first_arg="data",
+        )
     except ToolRefused as refused:
         # The traceback is in the container's log; the exception names the type.
         assert "TypeError" in str(refused)
@@ -354,7 +571,10 @@ def test_dependencies_install_without_the_project_being_installable(tmp_path) ->
     recipe, _ = sandbox.dockerfile_for(tmp_path, Runtime(install="pip install -e ."))
     written = recipe.read_text()
     # the declared requirements, and they must succeed
-    assert "RUN pip install --no-cache-dir 'sqlalchemy>=2.0' 'psycopg[binary]>=3.2'" in written
+    assert (
+        "RUN pip install --no-cache-dir 'sqlalchemy>=2.0' 'psycopg[binary]>=3.2'"
+        in written
+    )
     # the project itself, attempted and allowed to fail
     assert "RUN pip install -e . || true" in written
 
@@ -362,7 +582,9 @@ def test_dependencies_install_without_the_project_being_installable(tmp_path) ->
 def test_a_requirements_file_is_read_and_its_noise_skipped(tmp_path) -> None:
     from fi.alk.harness.contract import Runtime
 
-    (tmp_path / "requirements.txt").write_text("# a note\nrequests==2.31.0\nrich\n-r other.txt\n")
+    (tmp_path / "requirements.txt").write_text(
+        "# a note\nrequests==2.31.0\nrich\n-r other.txt\n"
+    )
     assert sandbox._declared(tmp_path) == ["requests==2.31.0", "rich"]
     recipe, _ = sandbox.dockerfile_for(tmp_path, Runtime())
     assert "requests==2.31.0 rich" in recipe.read_text()

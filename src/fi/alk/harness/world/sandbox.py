@@ -42,10 +42,37 @@ PORT = 8765
 # two megabytes each way, fifty times a scenario, to hand a tool back what it already had.
 # Stdlib only: this has to run in whatever image the agent brought.
 SERVER = '''
-import importlib, json
+import ast, asyncio, importlib, inspect, json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-HELD = {"state": None}
+HELD = {"state": None, "instances": {}}
+
+class Context:
+    """The framework boundary needed by tools that lock their current turn."""
+    def disallow_interruptions(self):
+        pass
+
+def construct(source, names):
+    """Build nested class constructors and literals, never arbitrary Python."""
+    def build(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.List):
+            return [build(one) for one in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(build(one) for one in node.elts)
+        if isinstance(node, ast.Dict):
+            return {build(key): build(value) for key, value in zip(node.keys, node.values)}
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            factory = names.get(node.func.id)
+            if not inspect.isclass(factory):
+                raise TypeError("factory expressions may call imported classes only")
+            return factory(
+                *(build(one) for one in node.args),
+                **{one.arg: build(one.value) for one in node.keywords if one.arg},
+            )
+        raise TypeError("factory expression contains something other than constructors and literals")
+    return build(ast.parse(source, mode="eval").body)
 
 def resolve(ask):
     found = importlib.import_module(ask["module"])
@@ -53,7 +80,10 @@ def resolve(ask):
     for part in ask["callable"].split("."):
         target = getattr(target, part)
     if ask.get("factory"):
-        target = getattr(getattr(found, ask["factory"])(), ask["callable"].split(".")[-1])
+        key = (ask["module"], ask["factory"])
+        if key not in HELD["instances"]:
+            HELD["instances"][key] = construct(ask["factory"], found.__dict__)
+        target = getattr(HELD["instances"][key], ask["callable"].split(".")[-1])
     return target
 
 def note(said):
@@ -96,6 +126,7 @@ class Handler(BaseHTTPRequestHandler):
         ask = json.loads(self.rfile.read(length) or "{}")
         if self.path == "/state":
             HELD["state"] = ask.get("state")
+            HELD["instances"].clear()
             held = HELD["state"]
             note("state set: " + brief(
                 {k: len(v) for k, v in held.items()} if isinstance(held, dict) else type(held).__name__
@@ -108,10 +139,14 @@ class Handler(BaseHTTPRequestHandler):
             target = resolve(ask)
             args = dict(ask.get("args") or {})
             note("call  " + called + " " + brief(args))
-            if ask.get("first_arg"):
+            if ask.get("first_arg") == "context":
+                value = target(Context(), **args)
+            elif ask.get("first_arg"):
                 value = target(HELD["state"], **args)
             else:
                 value = target(**args)
+            if inspect.isawaitable(value):
+                value = asyncio.run(value)
             note("  ok  " + brief(value))
             self._reply({"ok": True, "result": value})
         except Exception as raised:
@@ -155,13 +190,21 @@ class SandboxError(RuntimeError):
     """
 
 
-def _docker(*args: str, check: bool = True, stdin: str | None = None) -> tuple[int, str]:
+def _docker(
+    *args: str, check: bool = True, stdin: str | None = None
+) -> tuple[int, str]:
     try:
         done = subprocess.run(  # nosec B603 — list args, never shell=True
-            ("docker", *args), input=stdin, capture_output=True, text=True, timeout=PATIENCE
+            ("docker", *args),
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=PATIENCE,
         )
     except FileNotFoundError as exc:
-        raise SandboxError("docker is not on PATH, so no agent container can be built") from exc
+        raise SandboxError(
+            "docker is not on PATH, so no agent container can be built"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise SandboxError(f"docker {args[0]} gave up after {PATIENCE}s") from exc
     output = ((done.stdout or "") + (done.stderr or "")).strip()
@@ -215,7 +258,9 @@ def dockerfile_for(
             "that is a finding to report rather than a gap to write around."
         )
     written.write_text(
-        DOCKERFILE.format(version=_version(str(getattr(runtime, "version", ""))), install=steps),
+        DOCKERFILE.format(
+            version=_version(str(getattr(runtime, "version", ""))), install=steps
+        ),
         encoding="utf-8",
     )
     return written, False
@@ -374,9 +419,20 @@ def stand_up(
     container = f"alk-agent-{session}".lower()
     _docker("rm", "--force", container, check=False)
     _docker(
-        "run", "--detach", "--name", container, "--label", f"{LABEL}=1",
-        "--network", network, "--publish", f"127.0.0.1::{PORT}",
-        "--entrypoint", "sleep", tag, "infinity",
+        "run",
+        "--detach",
+        "--name",
+        container,
+        "--label",
+        f"{LABEL}=1",
+        "--network",
+        network,
+        "--publish",
+        f"127.0.0.1::{PORT}",
+        "--entrypoint",
+        "sleep",
+        tag,
+        "infinity",
     )
 
     named = getattr(store, "container", "")
@@ -391,19 +447,40 @@ def stand_up(
         # Use root only for this filesystem setup, make the directory writable, and then return
         # to the image's declared user for both the copy and the resident server below.
         _docker(
-            "exec", "--user", "0", container, "sh", "-c",
+            "exec",
+            "--user",
+            "0",
+            container,
+            "sh",
+            "-c",
             "mkdir -p /alk && chmod 0777 /alk",
         )
         _docker(
-            "exec", "-i", container, "sh", "-c", f"cat > {SERVER_AT}",
+            "exec",
+            "-i",
+            container,
+            "sh",
+            "-c",
+            f"cat > {SERVER_AT}",
             stdin=SERVER.replace("PORT_HERE", str(PORT)),
         )
         # Whichever interpreter has the agent's dependencies. `uv sync` and `poetry install` put
         # them in a virtualenv inside the checkout rather than on the system python, so the
         # obvious `python` finds the agent's own code and none of what it imports.
         _docker(
-            "exec", "--detach", "--env", "PYTHONPATH=/agent:/agent/src", container, "sh", "-c",
-            f'if [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; else P=python; fi; '
+            "exec",
+            "--detach",
+            "--env",
+            # Preserve the image's declared WORKDIR. Agent-owned Dockerfiles commonly copy the
+            # checkout somewhere other than /agent (for example /app), so a bridge hard-coded to
+            # /agent cannot import code that the image itself runs successfully.
+            "PYTHONPATH=.:./src:/agent:/agent/src",
+            container,
+            "sh",
+            "-c",
+            f"if [ -x .venv/bin/python ]; then P=.venv/bin/python; "
+            f"elif [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; "
+            f"else P=python; fi; "
             f'exec "$P" {SERVER_AT} >> {LOG_AT} 2>&1',
         )
         _await(container)
@@ -455,7 +532,8 @@ def _ask(container: str, path: str, body: dict | None = None) -> dict:
 
     raw = json.dumps(body or {}, default=str).encode() if body is not None else None
     request = urllib.request.Request(
-        _address(container) + path, data=raw,
+        _address(container) + path,
+        data=raw,
         headers={"Content-Type": "application/json"},
         method="POST" if raw is not None else "GET",
     )
@@ -463,7 +541,9 @@ def _ask(container: str, path: str, body: dict | None = None) -> dict:
         with urllib.request.urlopen(request, timeout=PATIENCE) as answer:  # nosec B310
             return json.loads(answer.read())
     except Exception as exc:  # noqa: BLE001
-        raise SandboxError(f"the agent's container could not be reached: {exc}") from exc
+        raise SandboxError(
+            f"the agent's container could not be reached: {exc}"
+        ) from exc
 
 
 def set_state(container: str, state: object) -> None:
@@ -490,10 +570,17 @@ def call(
     A tool that refused raises ``ToolRefused``: that is the agent behaving, and the world
     records it as a refusal rather than as the sandbox falling over.
     """
-    answer = _ask(container, "/call", {
-        "module": module, "callable": called, "factory": factory,
-        "args": args, "first_arg": first_arg,
-    })
+    answer = _ask(
+        container,
+        "/call",
+        {
+            "module": module,
+            "callable": called,
+            "factory": factory,
+            "args": args,
+            "first_arg": first_arg,
+        },
+    )
     if answer.get("ok"):
         return answer.get("result")
     if answer.get("raised"):
@@ -501,7 +588,8 @@ def call(
         # for whoever wants to see where inside its package it went.
         raise ToolRefused(str(answer.get("error")))
     raise SandboxError(
-        str(answer.get("error") or "the call failed with no reason given") + recent(container)
+        str(answer.get("error") or "the call failed with no reason given")
+        + recent(container)
     )
 
 
@@ -521,6 +609,11 @@ def recent(container: str, lines: int = 12) -> str:
     # Not `docker logs`: that shows PID 1, and the server is exec'd alongside it, so its
     # output never appears there. It writes to a file inside the container instead.
     _, said = _docker(
-        "exec", container, "sh", "-c", f"tail -n {lines} {LOG_AT} 2>/dev/null", check=False
+        "exec",
+        container,
+        "sh",
+        "-c",
+        f"tail -n {lines} {LOG_AT} 2>/dev/null",
+        check=False,
     )
     return f"\n\nwhat the container last said:\n{said}" if said.strip() else ""

@@ -351,6 +351,19 @@ def test_opening_names_the_agent_and_asks_for_the_contract(tmp_path):
     assert "drive_thru" in text and "submit_contract" in text
 
 
+def test_build_opening_resumes_directly_at_tool_adaptation(tmp_path):
+    from fi.alk.harness.build import opening
+    from fi.alk.harness.world.tools import BUILD_CHECKPOINT
+
+    draft = tmp_path / BUILD_CHECKPOINT
+    draft.mkdir()
+    (draft / "manifest.json").write_text("{}")
+
+    text = opening(_contract(), tmp_path)
+    assert "Do not rebuild or reseed" in text
+    assert "remaining adopt_tool calls" in text
+
+
 # --- state expectations, shared by the gate and the grading --------------------------
 
 
@@ -366,6 +379,51 @@ def _saved_world(tmp_path):
     world, contract = _cart_world()
     save(world, tmp_path, notes="test world")
     return tmp_path, contract
+
+
+def test_an_unfinished_build_restores_its_checkpoint_without_becoming_final(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.world.snapshot import MANIFEST, save
+    from fi.alk.harness.world.tools import BUILD_CHECKPOINT, world_tools
+
+    original, contract = _cart_world()
+    save(original, tmp_path / BUILD_CHECKPOINT, notes="unfinished")
+
+    server, resumed = world_tools(contract, tmp_path)
+
+    assert resumed.state() == original.state()
+    assert set(resumed.handlers) == set(original.handlers)
+    assert not (tmp_path / MANIFEST).exists()
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+
+        instance = server.get("instance") if isinstance(server, dict) else server
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "CallToolRequest":
+                result = await handler(
+                    CallToolRequest(
+                        method="tools/call",
+                        params=CallToolRequestParams(name=name, arguments=payload),
+                    )
+                )
+                return result.root.content[0].text
+
+    refused = asyncio.run(call("seed", {"table": "menu", "rows": [{"id": "new"}]}))
+    assert "checkpoint already restored" in refused
+    refused_run = asyncio.run(
+        call("run_env_command", {"command": "docker run -v /:/host:ro alpine ls /host"})
+    )
+    assert "permits only docker compose" in refused_run
+    assert resumed.state() == original.state()
+
+    from fi.alk.harness.build import open_stage
+
+    stage, _destination = open_stage(contract, out=tmp_path, source_root=str(tmp_path))
+    assert "Read" not in stage._options.allowed_tools
+    assert "Glob" not in stage._options.allowed_tools
+    assert "Grep" not in stage._options.allowed_tools
 
 
 def _scenario(**overrides):
@@ -864,6 +922,46 @@ def test_a_row_put_in_wrong_can_be_taken_out_again(tmp_path):
     assert "UPDATE or DELETE" in refused
 
 
+def test_schema_creation_uses_the_store_interface(tmp_path, monkeypatch):
+    """Schema creation must work for stores, such as Postgres, with no SQLite connection."""
+    import asyncio
+
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    server, world = world_tools.world_tools(contract, tmp_path)
+    applied: list[str] = []
+    original = world.store.apply
+
+    def apply(script: str) -> None:
+        applied.append(script)
+        original(script)
+
+    monkeypatch.setattr(world.store, "apply", apply)
+
+    async def call(payload):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+
+        instance = server.get("instance") if isinstance(server, dict) else server
+        for key, handler in instance.request_handlers.items():
+            if getattr(key, "__name__", "") == "CallToolRequest":
+                result = await handler(
+                    CallToolRequest(
+                        method="tools/call",
+                        params=CallToolRequestParams(
+                            name="create_schema", arguments=payload
+                        ),
+                    )
+                )
+                return result.root.content[0].text
+
+    sql = "CREATE TABLE rides (id TEXT PRIMARY KEY);"
+    said = asyncio.run(call({"sql": sql}))
+
+    assert applied == [sql]
+    assert "rides" in said
+
+
 # --- the environment step: world, simulator prompt, sub-goal catalogue ---------------
 
 
@@ -1056,7 +1154,9 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
 
 
-def test_a_check_that_cannot_fail_without_calls_is_named_even_though_it_is_kept(tmp_path):
+def test_a_check_that_cannot_fail_without_calls_is_named_even_though_it_is_kept(
+    tmp_path,
+):
     """A check comparing calls against rows holds when there are no calls at all, so it reports
     itself as held for an agent that did nothing. The scenario is still graded by its other
     checks, so it is kept, but sub-goals are shared and that one would roll up as a pass."""
@@ -1176,12 +1276,16 @@ def test_a_store_that_is_not_sqlite_needs_nothing_above_it_to_change(tmp_path):
             from pathlib import Path
 
             Path(path).mkdir(parents=True, exist_ok=True)
-            (Path(path) / "ledger.json").write_text(json.dumps(self.held), encoding="utf-8")
+            (Path(path) / "ledger.json").write_text(
+                json.dumps(self.held), encoding="utf-8"
+            )
 
         def load_from(self, path) -> None:
             from pathlib import Path
 
-            self.held = json.loads((Path(path) / "ledger.json").read_text(encoding="utf-8"))
+            self.held = json.loads(
+                (Path(path) / "ledger.json").read_text(encoding="utf-8")
+            )
 
         def start(self) -> None:
             return None
@@ -1261,7 +1365,9 @@ def test_a_world_check_that_cannot_fail_is_named(tmp_path):
         "    return 'added'\n"
     )
 
-    real = "def check(world):\n    return None if world.state()['items'] else 'no items'\n"
+    real = (
+        "def check(world):\n    return None if world.state()['items'] else 'no items'\n"
+    )
     hollow = "def check(world):\n    return None\n"
 
     save(world, tmp_path, sequences=[{"name": "x", "calls": []}])
@@ -1285,9 +1391,13 @@ def test_the_world_keeps_the_checks_that_prove_it(tmp_path):
     from fi.alk.harness.world.snapshot import read_manifest, restore, save
 
     world = GeneratedWorld(":memory:")
-    world.connection.executescript("CREATE TABLE t (id TEXT); INSERT INTO t VALUES ('a');")
+    world.connection.executescript(
+        "CREATE TABLE t (id TEXT); INSERT INTO t VALUES ('a');"
+    )
     world.connection.commit()
-    written = {"holds": "def check(world):\n    return None if world.state()['t'] else 'empty'\n"}
+    written = {
+        "holds": "def check(world):\n    return None if world.state()['t'] else 'empty'\n"
+    }
 
     save(world, tmp_path, sequences=[{"name": "s", "calls": []}], world_checks=written)
     assert list(read_manifest(tmp_path).get("world_checks") or {}) == ["holds"]
@@ -1309,7 +1419,9 @@ def test_a_restored_world_still_knows_how_this_agent_says_no(tmp_path):
 
     world = GeneratedWorld(":memory:")
     world.refusal_signature = 'strings starting with "Error: "'
-    world.handlers = {"look": "def handle(args, db):\n    return 'Error: user not found'\n"}
+    world.handlers = {
+        "look": "def handle(args, db):\n    return 'Error: user not found'\n"
+    }
     assert world.call("look").refused
 
     save(world, tmp_path, sequences=[])
@@ -1620,7 +1732,10 @@ def test_a_run_result_survives_being_written_and_read(tmp_path):
 
     run = LiveRun(
         scenario="orders-a-big-mac",
-        settled=[Outcome("combo_placed", True), Outcome("no_extras", False, "added fries")],
+        settled=[
+            Outcome("combo_placed", True),
+            Outcome("no_extras", False, "added fries"),
+        ],
         judged=["explained_itself"],
         calls=["order(...) -> ok"],
     )
@@ -1665,7 +1780,9 @@ def test_every_stage_gates_with_the_hook_not_only_the_callback():
     for module in (build, reception, scenarios, stage, targets, grade):
         source = inspect.getsource(module)
         if "permission_gate(" in source:
-            assert "gate_hooks(allowed)" in source, f"{module.__name__} has no hook gate"
+            assert "gate_hooks(allowed)" in source, (
+                f"{module.__name__} has no hook gate"
+            )
 
 
 def test_writing_new_results_keeps_the_ones_not_rerun(tmp_path):
@@ -1674,7 +1791,8 @@ def test_writing_new_results_keeps_the_ones_not_rerun(tmp_path):
     from fi.alk.harness.run.tools import load_results, save_results
 
     save_results(
-        [{"scenario": "a", "passed": True}, {"scenario": "b", "passed": False}], tmp_path
+        [{"scenario": "a", "passed": True}, {"scenario": "b", "passed": False}],
+        tmp_path,
     )
     fresh = [r for r in load_results(tmp_path) if r.get("scenario") != "b"]
     fresh.append({"scenario": "b", "passed": True, "transcript": "hello"})
@@ -1740,7 +1858,9 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
             if getattr(key, "__name__", "") == "CallToolRequest":
                 request = CallToolRequest(
                     method="tools/call",
-                    params=CallToolRequestParams(name="submit_contract", arguments=payload),
+                    params=CallToolRequestParams(
+                        name="submit_contract", arguments=payload
+                    ),
                 )
                 answer = await handler(request)
                 return answer.root.content[0].text
@@ -1773,8 +1893,11 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
 
     allowed = ["Read"]
     options = ClaudeAgentOptions(
-        system_prompt="x", allowed_tools=allowed, permission_mode="default",
-        setting_sources=[], max_turns=1,
+        system_prompt="x",
+        allowed_tools=allowed,
+        permission_mode="default",
+        setting_sources=[],
+        max_turns=1,
     )
     options.hooks = gate_hooks(allowed)
     stage = Stage(options, name="t")
@@ -1782,7 +1905,9 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
 
     assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
     refuse = options.hooks["PreToolUse"][0].hooks[0]
-    granted = asyncio.run(refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None))
+    granted = asyncio.run(
+        refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None)
+    )
     assert granted == {}
 
 
@@ -1805,7 +1930,8 @@ def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
                 request = CallToolRequest(
                     method="tools/call",
                     params=CallToolRequestParams(
-                        name="hand_to_next_stage", arguments={"request": "create the world"}
+                        name="hand_to_next_stage",
+                        arguments={"request": "create the world"},
                     ),
                 )
                 answer = await handler(request)
@@ -1896,7 +2022,9 @@ def test_a_stringified_contract_is_parsed_rather_than_refused(tmp_path):
     }
     assert unwrapped({"contract": json.dumps(inner)}) == inner
     assert unwrapped({"payload": json.dumps({"contract": inner})}) == inner
-    assert not accept_contract({"contract": json.dumps(inner)}, tmp_path).get("is_error")
+    assert not accept_contract({"contract": json.dumps(inner)}, tmp_path).get(
+        "is_error"
+    )
 
 
 def test_an_unrecognised_payload_is_told_what_arrived(tmp_path):
@@ -1955,7 +2083,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
             for name in mentioned - tools - ignore
             if name not in {"hand_to_next_stage", "AskUserQuestion"}
         }
-        assert not unknown, f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
+        assert not unknown, (
+            f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
+        )
 
 
 def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
@@ -2015,11 +2145,20 @@ def test_only_a_tool_that_says_it_saved_reports_an_artifact():
         is_error: bool = False
 
     # a read
-    assert _saved_path(Block("     1\timport json\n     2\tfrom pathlib import Path")) == ""
+    assert (
+        _saved_path(Block("     1\timport json\n     2\tfrom pathlib import Path"))
+        == ""
+    )
     assert _saved_path(Block("/some/agent/envs/retail/__init__.py")) == ""
     # a write
-    assert _saved_path(Block("Accepted and saved to out/contract.json.")) == "out/contract.json"
-    assert _saved_path(Block("Saved 3 scenarios to out/scenarios.json.")) == "out/scenarios.json"
+    assert (
+        _saved_path(Block("Accepted and saved to out/contract.json."))
+        == "out/contract.json"
+    )
+    assert (
+        _saved_path(Block("Saved 3 scenarios to out/scenarios.json."))
+        == "out/scenarios.json"
+    )
     # list-shaped content, as the SDK sometimes gives it
     assert (
         _saved_path(Block([{"text": "Saved to artifacts/x/world.sqlite"}]))
@@ -2045,7 +2184,9 @@ def test_a_field_written_under_the_obvious_name_still_lands(written, field, expe
     the more obvious word. Bouncing it produces a loop: the answer to `use_cases` was
     'no-use-cases', which reads as missing rather than misnamed, so the same submission comes
     back with the shape changed and the name untouched."""
-    contract = AgentContract.model_validate({"agent": "x", **written})  # our name already set
+    contract = AgentContract.model_validate(
+        {"agent": "x", **written}
+    )  # our name already set
     assert getattr(contract, field) == expected
 
 
@@ -2128,8 +2269,7 @@ def test_the_setups_own_calls_are_not_credited_to_the_agent(tmp_path):
     scenario = Scenario.model_validate(
         _delta(
             setup_code=(
-                "def setup(world):\n"
-                "    world.call('add', {'item_id': 'big_mac'})\n"
+                "def setup(world):\n    world.call('add', {'item_id': 'big_mac'})\n"
             )
         )
     )
@@ -2146,13 +2286,13 @@ def test_broken_setup_is_ours_and_says_so(tmp_path):
     from fi.alk.harness.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
-    scenario = Scenario.model_validate(_delta(setup_code="def setup(world):\n    world.nope()\n"))
+    scenario = Scenario.model_validate(
+        _delta(setup_code="def setup(world):\n    world.nope()\n")
+    )
     proof = prove(scenario, catalogue, root)
     assert not proof.ready
     assert proof.broken, "a setup that raises is our mistake, not a failing scenario"
     assert "AttributeError" in proof.why_not_ready
-
-
 
 
 def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
@@ -2222,14 +2362,21 @@ def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):
     # The world on disk is the base world, which has an empty cart, so this check should fail —
     # and the point is that it says so rather than erroring.
     assert done.returncode in (0, 1), done.stderr[-400:]
-    assert "held" in done.stdout or "FAILED" in done.stdout, done.stdout + done.stderr[-300:]
+    assert "held" in done.stdout or "FAILED" in done.stdout, (
+        done.stdout + done.stderr[-300:]
+    )
 
 
 def test_every_stage_is_told_what_the_harness_is_for():
     """A stage that knows only its own step does its step well and still gets the point of it
     wrong: it works around a gate instead of fixing what the gate named, or it reports a number
     that quietly skipped half its checks."""
-    for stage in ("understand-agent", "build-environment", "write-scenarios", "run-scenarios"):
+    for stage in (
+        "understand-agent",
+        "build-environment",
+        "write-scenarios",
+        "run-scenarios",
+    ):
         text = load_skill(stage)
         assert text.startswith("# The harness"), stage
         assert "# The stage you are in now" in text, stage
@@ -2252,9 +2399,15 @@ def test_a_session_is_a_folder_that_knows_what_it_holds(tmp_path):
 
     has = one.has()
     assert has == {
-        "contract": False, "world": False, "simulator_prompt": False,
-        "sub_goals": 0, "scenarios": 0, "validated": None,
-        "runs": 0, "runs_passed": 0, "messages": 0,
+        "contract": False,
+        "world": False,
+        "simulator_prompt": False,
+        "sub_goals": 0,
+        "scenarios": 0,
+        "validated": None,
+        "runs": 0,
+        "runs_passed": 0,
+        "messages": 0,
     }
 
     again = sessions.load(one.id, tmp_path)
@@ -2276,11 +2429,15 @@ def test_the_conversation_is_kept_in_the_session_folder(tmp_path):
     from fi.alk.harness import sessions
 
     one = sessions.create(agent="talky", base=tmp_path)
-    sessions.remember(one.path, sessions.Message(role="you", text="hello", stage="reception"))
+    sessions.remember(
+        one.path, sessions.Message(role="you", text="hello", stage="reception")
+    )
     sessions.remember(
         one.path,
         sessions.Message(
-            role="harness", text="hi", stage="reception",
+            role="harness",
+            text="hi",
+            stage="reception",
             tools=[{"label": "point at agent", "said": ["Pointed at talky"]}],
         ),
     )
@@ -2385,7 +2542,9 @@ def test_the_turn_that_finds_the_agent_also_opens_the_next_stage(tmp_path, monke
 
     found: dict = {}
     monkeypatch.setattr(
-        chat_module.reception_stage, "open_stage", lambda **_: (Stage("reception"), found)
+        chat_module.reception_stage,
+        "open_stage",
+        lambda **_: (Stage("reception"), found),
     )
     monkeypatch.setattr(chat_module.reception_stage, "opening", lambda: "which agent")
     monkeypatch.setattr(
@@ -2393,7 +2552,9 @@ def test_the_turn_that_finds_the_agent_also_opens_the_next_stage(tmp_path, monke
         "open_stage",
         lambda *_, **__: (Stage("understand"), {}),
     )
-    monkeypatch.setattr(chat_module.understand_stage, "opening", lambda _: "read the agent")
+    monkeypatch.setattr(
+        chat_module.understand_stage, "opening", lambda _: "read the agent"
+    )
 
     conversation = Conversation(out=tmp_path, workspace=tmp_path)
 
@@ -2421,7 +2582,8 @@ def test_the_build_skill_documents_every_method_a_handler_can_call():
 
     skill = load_skill("build-environment")
     methods = [
-        name for name, _ in inspect.getmembers(Db, inspect.isfunction)
+        name
+        for name, _ in inspect.getmembers(Db, inspect.isfunction)
         if not name.startswith("_")
     ]
     assert methods, "Db should have methods to document"
@@ -2459,10 +2621,9 @@ def test_a_crashed_handler_is_told_what_a_handler_actually_has(tmp_path):
                 return answer.root.content[0].text
 
     # the mistake a model actually makes: sqlite's cursor API
-    said = asyncio.run(define(
-        "def handle(args, db):\n"
-        "    return db.execute('SELECT 1').fetchone()\n"
-    ))
+    said = asyncio.run(
+        define("def handle(args, db):\n    return db.execute('SELECT 1').fetchone()\n")
+    )
     assert "crashed on its smoke call" in said
     assert "db.query(" in said and "db.one(" in said and "db.execute(" in said
     assert "fetchone" in said
@@ -2491,7 +2652,9 @@ def test_a_reset_that_forgets_its_counters_is_caught_without_naming_one(tmp_path
         return store
 
     insert = "INSERT INTO orders (who) VALUES ('new')"
-    assert not [one for one in prove_store(stood_up(), insert).results if not one.passed]
+    assert not [
+        one for one in prove_store(stood_up(), insert).results if not one.passed
+    ]
 
     # And with the counter deliberately left where it was, which is the bug itself.
     forgetful = stood_up()
@@ -2529,7 +2692,9 @@ def test_a_written_store_has_to_say_how_a_scenario_changes_it():
         "def restore(db, rows, counters): pass\n"
     )
     with pytest.raises(StoreError) as refused:
-        register_written(engine="ledgerdb", image="x:1", container_port=1, code=readable)
+        register_written(
+            engine="ledgerdb", image="x:1", container_port=1, code=readable
+        )
     said = str(refused.value)
     assert "add" in said and "amend" in said and "remove" in said
 
@@ -2572,7 +2737,9 @@ def test_emptying_a_store_is_something_restore_can_reproduce():
     represent an empty store would make that gate impossible to run."""
     from fi.alk.harness.world.stores import Snapshot, resolve
 
-    store = resolve("in_process", loader=lambda: {"orders": {"o1": {"status": "pending"}}})
+    store = resolve(
+        "in_process", loader=lambda: {"orders": {"o1": {"status": "pending"}}}
+    )
     store.start()
     store.restore(Snapshot())
     assert store.state() == {"orders": []}
@@ -2594,7 +2761,9 @@ def test_saving_a_world_that_already_lives_in_the_saved_file_does_not_hang(tmp_p
     from fi.alk.harness.world.snapshot import restore, save
 
     world = GeneratedWorld(tmp_path / "world.sqlite")
-    world.store.apply("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t (v) VALUES ('a');")
+    world.store.apply(
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t (v) VALUES ('a');"
+    )
 
     done = threading.Event()
 
@@ -2675,7 +2844,12 @@ def test_a_tool_that_cannot_be_reached_has_a_way_out_that_is_recorded(tmp_path):
         tools=[{"name": "look", "args": ["q"]}],
         real_use_cases=["a plain sentence"],
         tool_entrypoints=[
-            {"tool": "look", "mode": "construct", "module": "vendor.tools", "callable": "Look._run"}
+            {
+                "tool": "look",
+                "mode": "construct",
+                "module": "vendor.tools",
+                "callable": "Look._run",
+            }
         ],
     )
     assert contract.adoptable("look")
@@ -2685,7 +2859,10 @@ def test_a_tool_that_cannot_be_reached_has_a_way_out_that_is_recorded(tmp_path):
     assert not held and "say why" in said
 
     held, said = unreachable(
-        contract, tmp_path, tool_name="look", why="built by a framework that needs a live client"
+        contract,
+        tmp_path,
+        tool_name="look",
+        why="built by a framework that needs a live client",
     )
     assert held
     # Recorded, not licensed: the tool is still the agent's, and still not written here.
@@ -2753,7 +2930,13 @@ def test_emptying_a_world_survives_foreign_keys(tmp_path):
 def test_a_mutation_that_does_not_land_accuses_nobody():
     """The gate accuses a check of verifying nothing when it stays green through damage. That is
     only fair if the damage happened."""
-    from fi.alk.harness.world.mutate import EMPTIED, SILENCED, UNDAMAGED, blind, unnoticed
+    from fi.alk.harness.world.mutate import (
+        EMPTIED,
+        SILENCED,
+        UNDAMAGED,
+        blind,
+        unnoticed,
+    )
     from fi.alk.harness.world.runtime import GeneratedWorld
 
     class Stubborn(GeneratedWorld):
@@ -2771,7 +2954,9 @@ def test_a_mutation_that_does_not_land_accuses_nobody():
         restore=lambda _root: Stubborn(),
     )
 
-    assert survived[EMPTIED] == [], "nothing can be concluded from damage that did not happen"
+    assert survived[EMPTIED] == [], (
+        "nothing can be concluded from damage that did not happen"
+    )
     assert survived[UNDAMAGED] and "would not empty" in survived[UNDAMAGED][0]
     # The check stayed green through silencing, but that alone is not blindness.
     assert survived[SILENCED] == ["reads_the_world"]
@@ -2787,8 +2972,12 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
     """
     from fi.alk.harness.run.conversation import OPENING, _answered_as_the_agent
 
-    assert _answered_as_the_agent("Sure! Let me find the database and make that update for you.")
-    assert _answered_as_the_agent("I'd be happy to look that up! Let me check the database.")
+    assert _answered_as_the_agent(
+        "Sure! Let me find the database and make that update for you."
+    )
+    assert _answered_as_the_agent(
+        "I'd be happy to look that up! Let me check the database."
+    )
     assert _answered_as_the_agent("What would you like to know about the database?")
 
     # What a person actually says, which must survive untouched.
@@ -2796,7 +2985,9 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
     assert not _answered_as_the_agent(
         "I want all track prices changed to 0.99 for the promotion, can you update them?"
     )
-    assert not _answered_as_the_agent("Which genre has the highest average listener rating?")
+    assert not _answered_as_the_agent(
+        "Which genre has the highest average listener rating?"
+    )
 
     # And the instruction that produces the opening says which part to play.
     assert "you speak first" in OPENING
@@ -2816,8 +3007,16 @@ def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said
 
     catalogue = Catalogue(
         sub_goals=[
-            SubGoal(name="no_dml_attempted", what="nothing was written", check="def check(w,c):\n    return None\n"),
-            SubGoal(name="refused_clearly", what="it explained the refusal", judged="needs the reply read"),
+            SubGoal(
+                name="no_dml_attempted",
+                what="nothing was written",
+                check="def check(w,c):\n    return None\n",
+            ),
+            SubGoal(
+                name="refused_clearly",
+                what="it explained the refusal",
+                judged="needs the reply read",
+            ),
         ]
     )
     assert catalogue.named("no_dml_attempted").deterministic()
@@ -2847,13 +3046,18 @@ def test_a_setup_or_ready_that_says_nothing_is_not_a_complaint():
     from fi.alk.harness.folder import _run
 
     for returning in ("''", "'   '", "None", "True"):
-        outcome = _run(f"def ready(world):\n    return {returning}\n", "s/ready.py", "ready", None)
+        outcome = _run(
+            f"def ready(world):\n    return {returning}\n", "s/ready.py", "ready", None
+        )
         assert outcome.ok, f"returning {returning} should read as holding"
         assert outcome.said == ""
 
     # A real complaint survives untouched.
     complained = _run(
-        "def ready(world):\n    return 'no pending orders'\n", "s/ready.py", "ready", None
+        "def ready(world):\n    return 'no pending orders'\n",
+        "s/ready.py",
+        "ready",
+        None,
     )
     assert not complained.ok and complained.said == "no pending orders"
 
@@ -2941,9 +3145,7 @@ def test_a_handler_can_read_a_world_that_has_no_query_language():
     assert world.call("search", {"query": "nothing"}).refused
 
     # The collection names are reachable too, without knowing what kind of store this is.
-    assert world.call(
-        "search", {"query": "wind"}
-    ).ok
+    assert world.call("search", {"query": "wind"}).ok
 
 
 def test_a_world_with_no_database_can_still_be_reverted():
@@ -2963,7 +3165,9 @@ def test_a_world_with_no_database_can_still_be_reverted():
     assert [one["title"] for one in world.state()["reports"]] == ["first"]
 
     # And defining a handler, which is what actually stalled: it checkpoints around the smoke call.
-    world.handlers = {"look": "def handle(args, db):\n    return len(db.records('reports'))\n"}
+    world.handlers = {
+        "look": "def handle(args, db):\n    return len(db.records('reports'))\n"
+    }
     assert world.call("look", {}).result == 1
 
 
@@ -2982,7 +3186,9 @@ def test_a_world_with_no_database_still_counts_as_built(tmp_path):
     world.put("reports", {"title": "first"})
     save(world, tmp_path, sequences=[])
 
-    assert not (tmp_path / "world.sqlite").exists(), "this world has no database, by construction"
+    assert not (tmp_path / "world.sqlite").exists(), (
+        "this world has no database, by construction"
+    )
     assert Conversation(out=tmp_path).world_built
 
     # And a world that does have one is still built, which is the case that already worked.
@@ -3010,7 +3216,9 @@ def test_a_storeless_world_comes_back_on_the_right_side_of_the_seam(tmp_path):
 
     again = restore(tmp_path)
     assert again.store.state()["reports"], "the records belong to the store"
-    assert again.state_object is None, "and not to the agent's own state, which it never had"
+    assert again.state_object is None, (
+        "and not to the agent's own state, which it never had"
+    )
     assert len(again.state()["reports"]) == 2
 
     # Which is what lets the gate actually break this world.
@@ -3027,7 +3235,11 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
 
     catalogue = Catalogue(
-        sub_goals=[SubGoal(name="held", what="it held", check="def check(w,c):\n    return None\n")]
+        sub_goals=[
+            SubGoal(
+                name="held", what="it held", check="def check(w,c):\n    return None\n"
+            )
+        ]
     )
     made = [
         Scenario(name="keeper", instruction="a thing happens", sub_goals=["held"]),

@@ -161,7 +161,7 @@ class Conversation:
                 # than rewritten. Empty for an agent given as a specification.
                 source_root=str(getattr(self.source, "root", "") or ""),
             )
-            opening = build_stage.opening(contract)
+            opening = build_stage.opening(contract, self.out)
         elif stage_name == RUN:
             if not self.scenarios_written:
                 raise RuntimeError("cannot run anything before there are scenarios")

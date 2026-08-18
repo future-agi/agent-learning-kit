@@ -28,7 +28,7 @@ from .contract import AgentContract
 from .world.snapshot import saved as world_saved
 from .session import Stage
 from .tools import qualified
-from .world.tools import TOOL_NAMES, WORLD_SERVER, world_tools
+from .world.tools import BUILD_CHECKPOINT, TOOL_NAMES, WORLD_SERVER, world_tools
 
 def _artifacts_root(destination: Path) -> Path:
     return destination.parent if destination.parent.exists() else Path.cwd()
@@ -63,13 +63,17 @@ def open_stage(
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
     server, _world = world_tools(contract, destination, source_root=source_root)
+    resuming = (destination / BUILD_CHECKPOINT / "manifest.json").exists()
     # Read-only access to the agent, where there is an agent to read. adopt_tool and
     # adopt_store are asked for a path into somebody else's repository, and this stage had no
     # way to look: pointed at an agent whose tools it was told to reuse, it tried Read, was
     # refused, said it would work from the contract alone, and wrote its own versions of two
     # tools -- inventing menu validation the real agent does not have. Read, Glob and Grep and
     # nothing else: no Write, no Edit, no shell, so the agent is still never modified.
-    reading = ["Read", "Glob", "Grep"] if source_root else []
+    # A checkpoint also preserves the formal source understanding and binding metadata. Removing
+    # repository readers on resume makes "continue at adaptation" enforceable instead of merely
+    # a suggestion the model can ignore by exploring the whole tree again.
+    reading = ["Read", "Glob", "Grep"] if source_root and not resuming else []
     allowed = [
         "AskUserQuestion",
         *reading,
@@ -106,7 +110,17 @@ def open_stage(
     return Stage(options, name=SKILL), destination
 
 
-def opening(contract: AgentContract) -> str:
+def opening(contract: AgentContract, destination: Path | None = None) -> str:
+    resumed = bool(destination) and (Path(destination) / BUILD_CHECKPOINT / "manifest.json").exists()
+    if resumed:
+        return (
+            f"Resume the unfinished world build for {contract.agent!r}. The repository "
+            "understanding, schema, seed data, generated environment, and any previously adopted "
+            "tools are already restored from the build checkpoint. Do not rebuild or reseed them. "
+            "Restart any generated environment services with run_env_command, inspect_world, then "
+            "continue directly with the remaining adopt_tool calls. Finish with the checks, "
+            "sequences, catalogue, and save_world."
+        )
     return (
         f"Build the world for {contract.agent!r}.\n\n"
         "Design the schema, seed it from the contract's real data, and write one handler per "
@@ -128,7 +142,7 @@ async def build(
     """Run the stage start to finish. Returns where the world was written, or None."""
     stage, destination = open_stage(contract, out=out, ask=ask, max_turns=max_turns)
     async with stage:
-        await stage.say(opening(contract), on_event=on_event)
+        await stage.say(opening(contract, destination), on_event=on_event)
         for follow_up in follow_ups or []:
             await stage.say(follow_up, on_event=on_event)
     return destination if world_saved(destination) else None

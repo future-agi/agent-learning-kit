@@ -18,6 +18,7 @@ commands.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -84,7 +85,9 @@ def available() -> str:
         timeout=30,
     )
     if done.returncode != 0:
-        return f"docker is installed but not running: {(done.stderr or '').strip()[:200]}"
+        return (
+            f"docker is installed but not running: {(done.stderr or '').strip()[:200]}"
+        )
     return ""
 
 
@@ -146,7 +149,15 @@ def run(
 
 # Directories whose contents change as a side effect of running anything, and say nothing about
 # whether the agent's own source was touched.
-NOISE = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache", ".mypy_cache"}
+NOISE = {
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".pytest_cache",
+    ".mypy_cache",
+}
 
 
 def _fingerprint(root: Path) -> dict[str, tuple[int, int]]:
@@ -201,6 +212,16 @@ def run_setup(
     if not words:
         return 1, "no command given"
 
+    environment = _with_tools_on_path(extra, root)
+    # There is deliberately no shell here, but the tool documents the store through environment
+    # variables and commands conventionally quote those variables. Expand only $NAME/${NAME}; do
+    # not interpret pipes, redirects, substitutions, or any other shell syntax.
+    variable = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+    words = [
+        variable.sub(lambda match: environment.get(match.group(1) or match.group(2), ""), word)
+        for word in words
+    ]
+
     before = _fingerprint(root)
     try:
         done = subprocess.run(  # nosec B603 — list args, never shell=True
@@ -209,7 +230,7 @@ def run_setup(
             capture_output=True,
             text=True,
             timeout=patience,
-            env=_with_tools_on_path(extra, root),
+            env=environment,
         )
     except FileNotFoundError:
         return 1, (
@@ -250,7 +271,9 @@ def _with_tools_on_path(extra: dict[str, str] | None, root: Path) -> dict[str, s
     # And the agent's own code importable by its own tooling: an alembic env.py imports the
     # models it migrates, so a migration run from anywhere but an installed checkout fails on
     # its first import rather than on anything to do with the database.
-    environment["PYTHONPATH"] = str(root) + os.pathsep + environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = (
+        str(root) + os.pathsep + environment.get("PYTHONPATH", "")
+    )
     return environment
 
 
@@ -315,7 +338,8 @@ def strays() -> list[str]:
     from .stores.container import docker
 
     listed = docker(
-        "ps", "--format",
+        "ps",
+        "--format",
         '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "alk.harness.agent"}}',
         check=False,
     )

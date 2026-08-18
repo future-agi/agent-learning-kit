@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ from .snapshot import MANIFEST, read_manifest, restore, save
 from .stores.written import API as OPS_API
 
 WORLD_SERVER = "world"
+BUILD_CHECKPOINT = ".build-checkpoint"
 
 # What a handler is actually given. Said again here, and not only in the skill, because this is
 # where the mistake surfaces: a handler that crashed has a model reading *this* message, and an
@@ -54,7 +56,7 @@ DB_API = (
     "Works on every world, database or not:\n"
     '    db.records("orders")              -> every record in a collection, as dicts\n'
     '    db.find("orders", status="new")   -> the ones whose fields all match\n'
-    '    db.collections()                  -> the collection names\n'
+    "    db.collections()                  -> the collection names\n"
     '    db.add("orders", {"id": "o1"})    -> put one record in\n\n'
     "Only where this world has a query language, which not every agent does:\n"
     '    db.query("SELECT * FROM t WHERE id = ?", [x])   -> list of dicts, [] if none\n'
@@ -94,6 +96,7 @@ WORLD_CHECK_HELP = (
 def _shapes(world: Any) -> str:
     """What this world's collections are. Asked of the world, so every gate says the same thing."""
     return world.shapes()
+
 
 # What to read when a binding to the agent's own code will not run. The failure is nearly always
 # the shape of the call rather than the code being unreachable, so the answer says what the
@@ -163,7 +166,12 @@ def _stores_here(source_root: str) -> str:
             f"The agent's code is at {root}, and nothing under it looks like a store. If it "
             "builds or downloads one on first run, say so and ask rather than inventing data."
         )
-    return "The agent's code is at " + str(root) + ", and these look like stores:\n" + "\n".join(seen)
+    return (
+        "The agent's code is at "
+        + str(root)
+        + ", and these look like stores:\n"
+        + "\n".join(seen)
+    )
 
 
 def _binding_in_container(
@@ -182,7 +190,9 @@ def _binding_in_container(
     )
 
 
-def _binding(*, module: str, called: str, style: str, first_arg: str, factory: str) -> str:
+def _binding(
+    *, module: str, called: str, style: str, first_arg: str, factory: str
+) -> str:
     """The handler that calls one of the agent's own callables.
 
     Written as source rather than held as a closure, so it is saved with the world, readable by
@@ -254,11 +264,18 @@ def world_tools(
     # once it has been built once, and starting empty every time would mean rebuilding a
     # catalogue from scratch to add a single item to it.
     existing = (destination / MANIFEST).exists()
+    checkpoint = destination / BUILD_CHECKPOINT
+    resuming = not existing and (checkpoint / MANIFEST).exists()
     # The store comes from what the contract found, not from a default. An agent whose tools keep
     # their own state has no database, and opening one for it would be carrying something unused
     # and describing the world as something it is not.
     named = str(getattr(getattr(contract, "data_store", None), "kind", "") or "")
-    world = restore(destination) if existing else GeneratedWorld(":memory:", kind=named)
+    if existing:
+        world = restore(destination)
+    elif resuming:
+        world = restore(checkpoint)
+    else:
+        world = GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
     world.refusal_signature = contract.refusal_signature
     # Whoever builds this world does not hold on to it -- build.py takes the server and drops
@@ -275,16 +292,48 @@ def world_tools(
     environment_cleanup_registered = False
     # The agent's tools that are running the agent's own code, as opposed to
     # something written here. Nothing may be saved while those two sets differ.
-    adopted: set[str] = set()
+    adopted: set[str] = (
+        set(world.handlers) & set(contract.tool_names()) if resuming else set()
+    )
     # The checks that decide whether this world is usable, written here rather than fixed in
     # advance, because what makes a world usable is a judgement about this agent.
-    world_checks: dict[str, str] = dict(read_manifest(destination).get("world_checks") or {}) if existing else {}
+    world_checks: dict[str, str] = (
+        dict(read_manifest(destination if existing else checkpoint).get("world_checks") or {})
+        if existing or resuming
+        else {}
+    )
     # How many times each tool has been attempted, so a binding that cannot be made to work
     # is told to stop rather than tried indefinitely.
     tried: dict[str, int] = {}
     sequences: list[dict[str, Any]] = (
-        list(read_manifest(destination).get("sequences") or []) if existing else []
+        list(read_manifest(destination if existing else checkpoint).get("sequences") or [])
+        if existing or resuming
+        else []
     )
+
+    def _save_build_checkpoint() -> None:
+        """Persist unfinished build work separately from the validated final world."""
+        world.tools = [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": {
+                    arg: {
+                        "type": spec.arg_types.get(arg, "str"),
+                        "values": spec.arg_values.get(arg),
+                    }
+                    for arg in spec.args
+                },
+            }
+            for spec in contract.tools
+        ]
+        save(
+            world,
+            checkpoint,
+            notes="Automatic checkpoint of an unfinished build.",
+            sequences=sequences,
+            world_checks=world_checks,
+        )
 
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
         """How the world's own checks fare, and which of them cannot fail.
@@ -320,6 +369,11 @@ def world_tools(
         {"sql": str},
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
+        if resuming:
+            return _err(
+                "schema refused: the build checkpoint already restored it. Continue directly "
+                "with service restart, inspection, and adopt_tool."
+            )
         try:
             # The store owns how schema text is applied. ``executescript`` only exists on the
             # SQLite connection and made this otherwise generic tool fail immediately for
@@ -327,6 +381,7 @@ def world_tools(
             world.store.apply(args["sql"])
         except Exception as failed:
             return _err(f"schema rejected: {failed}")
+        _save_build_checkpoint()
         tables = sorted(world.state())
         return _ok(f"{len(tables)} tables: {', '.join(tables) or 'none'}")
 
@@ -338,6 +393,11 @@ def world_tools(
         {"table": str, "rows": list},
     )
     async def seed(args: dict[str, Any]) -> dict[str, Any]:
+        if resuming:
+            return _err(
+                "seed refused: the build checkpoint already restored the seeded records. "
+                "Continue directly with adopt_tool."
+            )
         table, rows = str(args["table"]), args.get("rows") or []
         written = 0
         for row in rows:
@@ -350,11 +410,15 @@ def world_tools(
                 world.put(table, row)
                 written += 1
             except Exception as failed:
+                if written:
+                    _save_build_checkpoint()
                 return _err(
                     f"{written} records written, then {table} rejected one: {failed}\n"
                     f"{_shapes(world)}"
                 )
         total = len(world.state().get(table, []))
+        if written:
+            _save_build_checkpoint()
         return _ok(f"{written} records put into {table}; {total} there now")
 
     @tool(
@@ -389,6 +453,7 @@ def world_tools(
         # does not, and for an UPDATE neither number moves, which is worth saying plainly.
         moved = reported or (before - sum(len(rows) for rows in after.values()))
         said = f"{moved} rows changed" if moved else "done, nothing was removed"
+        _save_build_checkpoint()
         return _ok(f"{said}. The world now holds {counts}")
 
     @tool(
@@ -481,7 +546,9 @@ def world_tools(
             if isinstance(world.state_object, dict)
             else type(world.state_object).__name__
         )
-        return _ok(f"state loaded from {module}.{called}: {json.dumps(summary, default=str)}")
+        return _ok(
+            f"state loaded from {module}.{called}: {json.dumps(summary, default=str)}"
+        )
 
     @tool(
         "adopt_store",
@@ -504,9 +571,7 @@ def world_tools(
             if under.exists():
                 found = under
         if not found.exists():
-            return _err(
-                f"nothing at {found}.\n{_stores_here(source_root)}"
-            )
+            return _err(f"nothing at {found}.\n{_stores_here(source_root)}")
         if found.is_file() and found.stat().st_size == 0:
             return _err(
                 f"{found} is empty, so there is nothing to adopt. If the agent builds or "
@@ -524,7 +589,12 @@ def world_tools(
         state = world.state()
         return _ok(
             f"adopted {found.name}: "
-            + (", ".join(f"{name}: {len(rows)}" for name, rows in sorted(state.items())) or "nothing")
+            + (
+                ", ".join(
+                    f"{name}: {len(rows)}" for name, rows in sorted(state.items())
+                )
+                or "nothing"
+            )
         )
 
     @tool(
@@ -564,10 +634,13 @@ def world_tools(
                 "This agent was given as a specification rather than as code, so its tools have "
                 "to be written with define_handler."
             )
+        # This is the boundary between preparing the world and adapting tools. Save it before
+        # starting a container or making a smoke call, so a crash from here onward resumes with
+        # the schema, seed data and environment rather than re-reading the repository.
+        _save_build_checkpoint()
         # The agent's own code runs in the agent's own container, always. Run here it would get
         # whatever versions this interpreter happens to hold, which is a combination the agent
         # does not ship and nothing would report.
-        module_named = str(args.get("module") or "")
         if not world.container:
             from .sandbox import SandboxError, stand_up
 
@@ -629,6 +702,7 @@ def world_tools(
                 "missing, or say so with cannot_reach_tool and stop."
             )
         if call.refused:
+            _save_build_checkpoint()
             return _ok(
                 f"{name} adopted. Its own code answered with a refusal, which is it working: "
                 f"{call.error}"
@@ -651,6 +725,7 @@ def world_tools(
                     "leaves no trace."
                 )
             return _err(f"{said}\n\n{ADOPT_HELP}")
+        _save_build_checkpoint()
         return _ok(
             f"{name} adopted and ran, its own code. Returned {_brief(call.result)}"
         )
@@ -807,7 +882,9 @@ def world_tools(
         table = str(args.get("table") or "")
         if not table:
             return _ok(
-                "\n".join(f"{name}: {_size(held)}" for name, held in sorted(state.items()))
+                "\n".join(
+                    f"{name}: {_size(held)}" for name, held in sorted(state.items())
+                )
                 or "nothing in the world yet"
             )
         if table not in state:
@@ -818,8 +895,12 @@ def world_tools(
         # A collection is a list of rows from a table, or a mapping the agent's own code keeps.
         # Slicing the second one raises, so the shape is handled rather than assumed.
         if isinstance(held, dict):
-            found = [{"_key": key, **value} if isinstance(value, dict) else {"_key": key, "value": value}
-                     for key, value in held.items()]
+            found = [
+                {"_key": key, **value}
+                if isinstance(value, dict)
+                else {"_key": key, "value": value}
+                for key, value in held.items()
+            ]
         elif isinstance(held, list):
             found = list(held)
         else:
@@ -945,7 +1026,9 @@ def world_tools(
         # is not a check, and accepting one now means every scenario that names it is refused later
         # for a reason that looks like the scenario's fault rather than this one's.
         if sub_goal.deterministic():
-            outcome = run_check(sub_goal.check, world, list(world.calls), name=sub_goal.name)
+            outcome = run_check(
+                sub_goal.check, world, list(world.calls), name=sub_goal.name
+            )
             if outcome.broken:
                 return _err(
                     f"Not added. {sub_goal.name} is not a working check: {outcome.said}\n\n"
@@ -1001,7 +1084,22 @@ def world_tools(
     )
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
         nonlocal environment_cleanup_registered
+        import shlex
+
         from .workspace import run, tear_down
+
+        command = str(args["command"])
+        if resuming:
+            try:
+                words = shlex.split(command)
+            except ValueError as failed:
+                return _err(f"resume command does not parse: {failed}")
+            if words[:2] != ["docker", "compose"]:
+                return _err(
+                    "checkpoint resume permits only docker compose service commands here. The "
+                    "source understanding and data are already restored; restart the generated "
+                    "services, inspect_world, and continue with adopt_tool."
+                )
 
         # Register before running: compose may start some services and then fail, in which case
         # there is still a project to remove. This is lazy so worlds that never run environment
@@ -1020,8 +1118,12 @@ def world_tools(
         # bringing up a second Postgres beside the one it already had. A compose file can read
         # this with `env_file:`, which is how the address gets inside.
         _write_store_env(destination, held)
-        code, output = run(destination, str(args["command"]), extra=held)
-        shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
+        code, output = run(destination, command, extra=held)
+        shown = (
+            output
+            if len(output) <= 2500
+            else output[:1200] + "\n...\n" + output[-1200:]
+        )
         if code != 0:
             return _err(f"exit {code}\n{shown or '(no output)'}")
         return _ok(f"ok\n{shown or '(no output)'}")
@@ -1054,7 +1156,9 @@ def world_tools(
                 engine=str(args["engine"]),
                 image=str(args["image"]),
                 container_port=int(args["container_port"]),
-                boot_env={str(k): str(v) for k, v in (args.get("boot_env") or {}).items()},
+                boot_env={
+                    str(k): str(v) for k, v in (args.get("boot_env") or {}).items()
+                },
                 dsn_template=str(args.get("dsn_template") or ""),
                 code=str(args["code"]),
             )
@@ -1106,6 +1210,11 @@ def world_tools(
     async def run_setup_command(args: dict[str, Any]) -> dict[str, Any]:
         from .workspace import run_setup
 
+        if resuming:
+            return _err(
+                "setup refused: schema and seed state came from the build checkpoint. Restart "
+                "generated services with run_env_command, then continue with adopt_tool."
+            )
         if not source_root:
             return _err(
                 "there is no agent source to run it in; this world was built from a contract "
@@ -1117,7 +1226,11 @@ def world_tools(
         code, output = run_setup(
             source_root, str(args["command"]), extra=_store_env(world, configured)
         )
-        shown = output if len(output) <= 2500 else output[:1200] + "\n...\n" + output[-1200:]
+        shown = (
+            output
+            if len(output) <= 2500
+            else output[:1200] + "\n...\n" + output[-1200:]
+        )
         # Echoed back, because without it a failure cannot be read afterwards: one build died on
         # "cp: ok is not a directory" and the command that produced it appears nowhere in the log,
         # so what went wrong is unknowable from the record.
@@ -1286,6 +1399,8 @@ def world_tools(
             # without them would have to have them rewritten before it could be saved again.
             world_checks=world_checks,
         )
+        if checkpoint.exists():
+            shutil.rmtree(checkpoint)
         tables = world.state()
         return _ok(
             f"Saved to {path}.\n"
@@ -1385,12 +1500,14 @@ def _store_env(world: Any, configured_by: str = "") -> dict[str, str]:
         out[named.group(1)] = dsn
     # A container cannot reach the host on 127.0.0.1: that is the container itself. Docker
     # publishes the host under this name, so the same store needs a second spelling.
-    out["ALK_STORE_DSN_IN_CONTAINER"] = dsn.replace("127.0.0.1", "host.docker.internal").replace(
-        "localhost", "host.docker.internal"
-    )
+    out["ALK_STORE_DSN_IN_CONTAINER"] = dsn.replace(
+        "127.0.0.1", "host.docker.internal"
+    ).replace("localhost", "host.docker.internal")
     for attribute, name in (
-        ("host", "ALK_STORE_HOST"), ("port", "ALK_STORE_PORT"),
-        ("database", "ALK_STORE_DATABASE"), ("user", "ALK_STORE_USER"),
+        ("host", "ALK_STORE_HOST"),
+        ("port", "ALK_STORE_PORT"),
+        ("database", "ALK_STORE_DATABASE"),
+        ("user", "ALK_STORE_USER"),
         ("password", "ALK_STORE_PASSWORD"),
     ):
         value = getattr(store, attribute, None)
@@ -1430,7 +1547,10 @@ def _make_importable(world: Any, source_root: str, module: str) -> tuple[bool, s
             if not str(found).endswith(str(target)):
                 continue
             base = str(found)[: -len(str(target))].rstrip("/")
-            if any(part in {".venv", "venv", "node_modules", ".git"} for part in found.parts):
+            if any(
+                part in {".venv", "venv", "node_modules", ".git"}
+                for part in found.parts
+            ):
                 continue
             world.reach(base)
             try:
@@ -1449,8 +1569,12 @@ def _make_importable(world: Any, source_root: str, module: str) -> tuple[bool, s
 # What an import failure looks like, as opposed to a tool saying no. Matched on the exception
 # type rather than the wording, because the wording is the agent's and the type is Python's.
 NEVER_RAN = (
-    "ModuleNotFoundError", "ImportError", "SyntaxError", "AttributeError:",
-    "No module named", "cannot import name",
+    "ModuleNotFoundError",
+    "ImportError",
+    "SyntaxError",
+    "AttributeError:",
+    "No module named",
+    "cannot import name",
 )
 
 
@@ -1486,5 +1610,6 @@ def _write_store_env(destination: Path, held: dict[str, str]) -> None:
         lines["ALK_STORE_DSN"] = inside
         lines["ALK_STORE_HOST"] = "host.docker.internal"
     (env_root(destination) / "store.env").write_text(
-        "".join(f"{name}={value}\n" for name, value in sorted(lines.items())), encoding="utf-8"
+        "".join(f"{name}={value}\n" for name, value in sorted(lines.items())),
+        encoding="utf-8",
     )
