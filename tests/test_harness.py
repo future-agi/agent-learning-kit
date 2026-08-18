@@ -743,6 +743,35 @@ def test_a_rule_the_source_never_stated_can_be_added_and_is_recorded(tmp_path):
     assert not unexplained and "say why" in said
 
 
+def test_a_collection_is_read_and_written_in_the_same_place():
+    """A world can hold records in two places at once: a store the harness stood up, and the
+    state the agent's own code keeps, adopted whole. `state()` merges them and lets the store win
+    a name clash. The write path has to resolve a name the same way, or a scenario's setup
+    changes one copy while its checks read the other, and every run is graded against a world
+    that was never set up. Nothing else would show it: both copies exist and both look right."""
+    from fi.alk.harness.world.runtime import GeneratedWorld
+    from fi.alk.harness.world.stores import open_store
+
+    store = open_store("in_process")
+    store.start()
+    store.start_collection("orders", keyed=True)
+    store.add("orders", {"_id": "A1", "status": "pending", "who": "store"})
+
+    world = GeneratedWorld(store=store)
+    # The same collection name, in the agent's own state. Contrived, but this is exactly the
+    # shape an adopted agent with a container store beside it produces.
+    world.state_object = {"orders": {"A1": {"status": "pending", "who": "agent"}}}
+
+    # The store wins the read...
+    assert world.state()["orders"][0]["who"] == "store"
+    # ...so it must win the write too.
+    world.change("orders", "A1", {"status": "cancelled"}, by="_id")
+    assert world.state()["orders"][0]["status"] == "cancelled"
+    # and the agent's own copy is untouched, rather than half the world moving.
+    assert world.state_object["orders"]["A1"]["status"] == "pending"
+    world.close()
+
+
 def test_every_simulated_person_gets_the_rules_whatever_was_written_for_them():
     """The rules that decide whether a run reaches the agent at all cannot be left to whatever
     the build stage remembered to write. Inventing an identifier ends a run at verification, and

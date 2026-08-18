@@ -253,7 +253,18 @@ class InProcessStore:
             raise KeyError(
                 f"{collection} is a list, so changing a record needs the field it is keyed on"
             )
-        found = group.values() if isinstance(group, dict) else group
+        if isinstance(group, dict):
+            # A keyed group stores the key as the mapping's key, because `add` pops ``_id`` out
+            # of the record to put it there. So asking to match on ``_id`` finds nothing, changes
+            # nothing, and returns zero, which a scenario's setup does not look at: the run is
+            # then graded against a world that was never set up. The key is answered here as
+            # though it were still a field, which is what whoever wrote it meant.
+            if by == ID and key in group:
+                row = group[key]
+                return [row] if isinstance(row, dict) else []
+            found: Any = group.values()
+        else:
+            found = group
         return [row for row in found if isinstance(row, dict) and _reads(row, by) == key]
 
     # -- going back ------------------------------------------------------------------
