@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .contract import AgentContract, validate_contract
+from .contract import AgentContract, ToolEntry, validate_contract
 
 CONTRACT = "contract.json"
 
@@ -291,10 +291,20 @@ def unreachable(
             "having tried, and this is the one record that it was a stand-in at all."
         )
     entry = contract.entry_for(tool_name)
-    if entry is None or entry.mode == "generate":
-        return False, (
-            f"{tool_name} has no implementation recorded, so nothing is blocking a handler for "
-            "it. Write one with define_handler."
+    if entry is None:
+        # No entrypoint was ever recorded for it, which is itself the finding: nobody worked
+        # out where this tool lives. Recorded rather than refused, because the alternative was
+        # sending the stage to define_handler, which refuses it right back.
+        entry = ToolEntry(tool=tool_name, mode="generate")
+        contract.tool_entrypoints.append(entry)
+    if entry.mode == "generate" and "unreachable here:" in (entry.notes or ""):
+        # Already recorded. Saying so is not an error -- a stage that asks twice is a stage
+        # making sure, and answering with a refusal it cannot act on is how one ends up
+        # ping-ponging between two tools that each point at the other.
+        return True, (
+            f"{tool_name} is already recorded as unreachable: {entry.notes}\n"
+            "Nothing more is needed for it. save_world will still refuse while it is unbound, "
+            "which is the point -- report what is missing rather than filling it in."
         )
 
     was = entry.mode

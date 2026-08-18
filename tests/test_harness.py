@@ -2661,7 +2661,12 @@ def test_a_missing_store_names_the_root_and_what_is_under_it(tmp_path):
 def test_a_tool_that_cannot_be_reached_has_a_way_out_that_is_recorded(tmp_path):
     """Without one there is no legitimate exit at all: define_handler refuses because the tool has
     an implementation, adopt_tool fails because that implementation needs something this
-    environment does not have, and the only moves left are to give up or to lie."""
+    environment does not have, and the only moves left are to give up or to lie.
+
+    The exit records the tool as unreachable. It does NOT license writing one -- a stand-in is a
+    different agent, and a suite built on it reports behaviour nobody ships. So the way out is to
+    say what is missing and stop, and save_world refuses while any tool is still unbound.
+    """
     from fi.alk.harness.amend import unreachable
     from fi.alk.harness.contract import AgentContract
 
@@ -2683,7 +2688,7 @@ def test_a_tool_that_cannot_be_reached_has_a_way_out_that_is_recorded(tmp_path):
         contract, tmp_path, tool_name="look", why="built by a framework that needs a live client"
     )
     assert held
-    # The refusal is lifted, so a handler can be written.
+    # Recorded, not licensed: the tool is still the agent's, and still not written here.
     assert not contract.adoptable("look")
     # And the reason survives, on the contract, where a reader will find it.
     assert any("could not be reached" in one for one in contract.amendments)
@@ -2692,9 +2697,13 @@ def test_a_tool_that_cannot_be_reached_has_a_way_out_that_is_recorded(tmp_path):
     kept = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
     assert kept["tool_entrypoints"][0]["mode"] == "generate"
 
-    # And a tool that never had an implementation was never blocked, so there is nothing to record.
+    # Asked again, it says so plainly rather than refusing. Answering "nothing is blocking a
+    # handler for it, write one with define_handler" sent the stage to a tool that refuses it
+    # right back, and one build spent most of its turns ping-ponging between the two before
+    # reporting the harness as being in a contradictory state. It was.
     again, said = unreachable(contract, tmp_path, tool_name="look", why="same reason")
-    assert not again and "nothing is blocking" in said
+    assert again and "already recorded as unreachable" in said
+    assert "save_world will still refuse" in said
 
 
 def test_a_refusal_convention_written_with_escaped_quotes_still_matches():
