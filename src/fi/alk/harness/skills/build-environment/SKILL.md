@@ -258,7 +258,13 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
   stay consistent with it for the rest of the conversation.
 - **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
   circumstance. Never keep pushing forever, and never invent a new goal.
+- **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
+  look it up instead?" is not the end of the conversation, and stopping there is the commonest
+  way a run tests one turn and nothing else: the agent refused, offered two alternatives, and
+  the suite recorded a pass without ever finding out whether either of them works. If the agent
+  is waiting on an answer, give it, and only then let the conversation end.
 - **When it is over.** What ends this conversation, so a run does not idle to its turn limit.
+  "The agent said it cannot" is not by itself an ending, for the reason just above.
 - **What they never do**: read out ids that were not given to them, name tools, or help the agent
   by suggesting how to do its job.
 

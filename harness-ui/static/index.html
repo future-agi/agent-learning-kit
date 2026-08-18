@@ -705,7 +705,9 @@ function transcriptNode(spoken) {
     if (match) {
       const speaker = /^(assistant|agent)$/i.test(match[1]) ? "agent" : "caller";
       current = el("div", "line " + speaker);
-      current.appendChild(el("span", "spk", speaker === "agent" ? "agent under test" : "simulated caller"));
+      // "user", not "caller": most agents tested here are typed to, not phoned, and a voice
+      // caller is a simulated user too. One accurate word beats a vivid wrong one.
+      current.appendChild(el("span", "spk", speaker === "agent" ? "agent under test" : "simulated user"));
       current.appendChild(document.createTextNode(match[2]));
       talk.appendChild(current);
     } else if (current && line.trim()) {
