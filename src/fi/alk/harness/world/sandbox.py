@@ -31,34 +31,72 @@ from pathlib import Path
 PATIENCE = 1800
 
 LABEL = "alk.harness.agent"
-RUNNER_AT = "/alk/_call.py"
+SERVER_AT = "/alk/_serve.py"
+PORT = 8765
 
-# Runs inside the agent's container. One call in on stdin, one answer out on stdout.
-RUNNER = '''
-import importlib, json, sys
+# Runs inside the agent's container for the life of the session, holding the world's state.
+#
+# Resident rather than one call per process because the agent's tools take that state as their
+# first argument and mutate it in place. Shipping it across the boundary per call would mean
+# two megabytes each way, fifty times a scenario, to hand a tool back what it already had.
+# Stdlib only: this has to run in whatever image the agent brought.
+SERVER = '''
+import importlib, json
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-def main():
-    ask = json.loads(sys.stdin.read())
+HELD = {"state": None}
+
+def resolve(ask):
     found = importlib.import_module(ask["module"])
     target = found
     for part in ask["callable"].split("."):
         target = getattr(target, part)
     if ask.get("factory"):
         target = getattr(getattr(found, ask["factory"])(), ask["callable"].split(".")[-1])
-    args = dict(ask.get("args") or {})
-    first, state = ask.get("first_arg"), ask.get("state")
-    value = target(state, **args) if first else target(**args)
-    answer = {"ok": True, "result": value}
-    # A tool handed the world's own structure mutates it in place, so what it looks like
-    # afterwards is part of the answer.
-    if first:
-        answer["state"] = state
-    json.dump(answer, sys.stdout, default=str)
+    return target
 
-try:
-    main()
-except Exception as raised:
-    json.dump({"ok": False, "error": f"{type(raised).__name__}: {raised}"}, sys.stdout)
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def _reply(self, body, code=200):
+        raw = json.dumps(body, default=str).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        if self.path == "/health":
+            return self._reply({"ok": True})
+        if self.path == "/state":
+            return self._reply({"ok": True, "state": HELD["state"]})
+        self._reply({"ok": False, "error": "no such path"}, 404)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        ask = json.loads(self.rfile.read(length) or "{}")
+        if self.path == "/state":
+            HELD["state"] = ask.get("state")
+            return self._reply({"ok": True})
+        if self.path != "/call":
+            return self._reply({"ok": False, "error": "no such path"}, 404)
+        try:
+            target = resolve(ask)
+            args = dict(ask.get("args") or {})
+            if ask.get("first_arg"):
+                value = target(HELD["state"], **args)
+            else:
+                value = target(**args)
+            self._reply({"ok": True, "result": value})
+        except Exception as raised:
+            # The tool refusing is an answer; the sandbox breaking is not. Both come back, and
+            # the caller decides which it is from `raised`.
+            self._reply({"ok": False, "raised": True,
+                         "error": type(raised).__name__ + ": " + str(raised)})
+
+HTTPServer(("0.0.0.0", PORT_HERE), Handler).serve_forever()
 '''
 
 DOCKERFILE = """FROM python:{version}-slim
@@ -67,6 +105,10 @@ COPY . /agent
 RUN pip install --no-cache-dir uv 2>/dev/null || true
 RUN {install}
 """
+
+
+class ToolRefused(Exception):
+    """The agent's own tool raised. Its behaviour, not ours, and recorded as a refusal."""
 
 
 class SandboxError(RuntimeError):
@@ -145,11 +187,14 @@ def network_for(session: str) -> str:
 def stand_up(session: str, source_root: Path | str, runtime: object, store: object = None) -> str:
     """Build the agent's image, start it, and put it where the store is. Returns the container.
 
-    Kept alive doing nothing, because a container that exits cannot be exec'd into and starting
-    one per call would cost more than the call.
+    Everything runs this way, not only agents that fail to import here. When the agent's code
+    runs in the harness's own interpreter it gets the harness's installed versions: an agent
+    shipping one release of a library and tested against another is being measured on a
+    combination that exists nowhere, and nothing errors to say so. One path also means one
+    behaviour, rather than a fast path that quietly differs from the slow one.
     """
     root = Path(source_root)
-    recipe, its_own = dockerfile_for(root, runtime)
+    recipe, _its_own = dockerfile_for(root, runtime)
     tag = f"alk-agent-{session}".lower()
     _docker("build", "-t", tag, "-f", str(recipe), str(root))
 
@@ -158,7 +203,8 @@ def stand_up(session: str, source_root: Path | str, runtime: object, store: obje
     _docker("rm", "--force", container, check=False)
     _docker(
         "run", "--detach", "--name", container, "--label", f"{LABEL}=1",
-        "--network", network, "--entrypoint", "sleep", tag, "infinity",
+        "--network", network, "--publish", f"127.0.0.1::{PORT}",
+        "--entrypoint", "sleep", tag, "infinity",
     )
 
     # The store joins the same network, so the agent reaches it by container name rather than
@@ -168,8 +214,76 @@ def stand_up(session: str, source_root: Path | str, runtime: object, store: obje
         _docker("network", "connect", network, named, check=False)
 
     _docker("exec", container, "mkdir", "-p", "/alk")
-    _docker("exec", "-i", container, "sh", "-c", f"cat > {RUNNER_AT}", stdin=RUNNER)
+    _docker(
+        "exec", "-i", container, "sh", "-c", f"cat > {SERVER_AT}",
+        stdin=SERVER.replace("PORT_HERE", str(PORT)),
+    )
+    # Whichever interpreter has the agent's dependencies. `uv sync` and `poetry install` put
+    # them in a virtualenv inside the checkout rather than on the system python, so the obvious
+    # `python` finds the agent's own code and none of what it imports.
+    _docker(
+        "exec", "--detach", "--env", "PYTHONPATH=/agent:/agent/src", container, "sh", "-c",
+        f'if [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; else P=python; fi; '
+        f'exec "$P" {SERVER_AT}',
+    )
+    _await(container)
     return container
+
+
+def _address(container: str) -> str:
+    _, mapping = _docker("port", container, f"{PORT}/tcp")
+    if not mapping:
+        raise SandboxError(f"{container} published no port for {PORT}")
+    return "http://127.0.0.1:" + mapping.splitlines()[0].rsplit(":", 1)[1]
+
+
+def _await(container: str, patience: float = 60.0) -> None:
+    """Block until the agent's container answers, and say what its logs held if it never does."""
+    import time
+    import urllib.error
+    import urllib.request
+
+    where = _address(container) + "/health"
+    deadline = time.monotonic() + patience
+    last: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(where, timeout=2) as answer:  # nosec B310 — loopback
+                if answer.status == 200:
+                    return
+        except Exception as exc:  # noqa: BLE001 - anything means not ready yet
+            last = exc
+            time.sleep(0.25)
+    _, logs = _docker("logs", "--tail", "20", container, check=False)
+    raise SandboxError(
+        f"the agent's container never answered: {last}\nits last output:\n{logs}"
+    )
+
+
+def _ask(container: str, path: str, body: dict | None = None) -> dict:
+    import urllib.request
+
+    raw = json.dumps(body or {}, default=str).encode() if body is not None else None
+    request = urllib.request.Request(
+        _address(container) + path, data=raw,
+        headers={"Content-Type": "application/json"},
+        method="POST" if raw is not None else "GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=PATIENCE) as answer:  # nosec B310
+            return json.loads(answer.read())
+    except Exception as exc:  # noqa: BLE001
+        raise SandboxError(f"the agent's container could not be reached: {exc}") from exc
+
+
+def set_state(container: str, state: object) -> None:
+    """Hand the world's state to the container, which holds it for the scenario."""
+    _ask(container, "/state", {"state": state})
+
+
+def get_state(container: str) -> object:
+    """What the state looks like now, after whatever the agent's tools did to it."""
+    return _ask(container, "/state").get("state")
 
 
 def call(
@@ -180,39 +294,21 @@ def call(
     *,
     factory: str = "",
     first_arg: str = "",
-    state: object = None,
-    workdir: str = "",
-) -> tuple[object, object]:
-    """Run one tool call inside the agent's container. Returns its answer and the state after.
+) -> object:
+    """Run one tool call inside the agent's container, against the state it is holding.
 
-    Raises only where the sandbox itself failed. A tool that refused is an answer and comes back
-    as one, because a refusal is the agent behaving, not the harness breaking.
+    A tool that refused raises ``ToolRefused``: that is the agent behaving, and the world
+    records it as a refusal rather than as the sandbox falling over.
     """
-    ask = {
+    answer = _ask(container, "/call", {
         "module": module, "callable": called, "factory": factory,
-        "args": args, "first_arg": first_arg, "state": state,
-    }
-    where = ["--workdir", f"/agent/{workdir}".rstrip("/")] if workdir and workdir != "." else []
-    # Whichever interpreter has the agent's dependencies. `uv sync` and `poetry install` put
-    # them in a virtualenv inside the checkout rather than on the system python, so running the
-    # obvious `python` finds the agent's own code and none of what it imports.
-    picked = (
-        f'if [ -x /agent/.venv/bin/python ]; then P=/agent/.venv/bin/python; '
-        f'else P=python; fi; exec "$P" {RUNNER_AT}'
-    )
-    code, output = _docker(
-        "exec", "-i", *where, "--env", "PYTHONPATH=/agent:/agent/src",
-        container, "sh", "-c", picked,
-        check=False, stdin=json.dumps(ask, default=str),
-    )
-    if code != 0 or not output.strip():
-        raise SandboxError(
-            f"the agent's container could not run {module}.{called}: {output[-800:] or 'no output'}"
-        )
-    answer = json.loads(output[output.index("{"):])
-    if not answer.get("ok"):
-        raise SandboxError(answer.get("error") or "the call failed with no reason given")
-    return answer.get("result"), answer.get("state")
+        "args": args, "first_arg": first_arg,
+    })
+    if answer.get("ok"):
+        return answer.get("result")
+    if answer.get("raised"):
+        raise ToolRefused(str(answer.get("error")))
+    raise SandboxError(str(answer.get("error") or "the call failed with no reason given"))
 
 
 def tear_down(session: str) -> None:
