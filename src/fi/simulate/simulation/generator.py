@@ -3,15 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-try:
-    from livekit.agents.llm.chat_context import ChatContext
-except ImportError as exc:
-    raise ImportError(
-        "LiveKit scenario generation requires the 'livekit' optional dependency"
-    ) from exc
-
 from fi.simulate.agent.definition import AgentDefinition, LLMConfig
-from fi.simulate.simulation.livekit_models import build_livekit_llm
 from fi.simulate.simulation.models import Persona
 
 
@@ -24,12 +16,24 @@ class ScenarioGenerator:
         *,
         llm_config: LLMConfig,
     ) -> None:
+        # Imported at construction, not module level, so `import fi.simulate`
+        # works without the optional 'livekit' extra — building the simulator LLM
+        # is where livekit is genuinely first required.
+        try:
+            from livekit.agents.llm.chat_context import ChatContext
+
+            from fi.simulate.simulation.livekit_models import build_livekit_llm
+        except ImportError as exc:
+            raise ImportError(
+                "LiveKit scenario generation requires the 'livekit' optional dependency"
+            ) from exc
+        self._chat_context_cls = ChatContext
         self._agent_definition = agent_definition
         self._llm = build_livekit_llm(llm_config)
 
     async def generate(self, topic: str, num_personas: int) -> list[Persona]:
         prompt = self._create_generation_prompt(topic, num_personas)
-        chat_ctx = ChatContext.empty()
+        chat_ctx = self._chat_context_cls.empty()
         chat_ctx.add_message(role="user", content=prompt)
         stream = self._llm.chat(chat_ctx=chat_ctx)
         text = ""
