@@ -743,6 +743,58 @@ def test_a_rule_the_source_never_stated_can_be_added_and_is_recorded(tmp_path):
     assert not unexplained and "say why" in said
 
 
+def test_every_simulated_person_gets_the_rules_whatever_was_written_for_them():
+    """The rules that decide whether a run reaches the agent at all cannot be left to whatever
+    the build stage remembered to write. Inventing an identifier ends a run at verification, and
+    speaking an email as a word destroys it in transcription, so both are appended to every
+    prompt rather than asked for once in a skill."""
+    from fi.alk.harness.environment import ALWAYS, SPOKEN, with_rules
+
+    typed = with_rules("You want to cancel an order.")
+    assert "Never invent one" in typed
+    # A typed caller is not speaking, and telling them to spell things aloud is noise.
+    assert SPOKEN not in typed
+
+    spoken = with_rules("You want to cancel an order.", spoken=True)
+    assert ALWAYS in spoken and SPOKEN in spoken
+    assert "Spell anything containing punctuation" in spoken
+
+    # What the agent was written to do still comes first; the rules are added, never substituted.
+    assert spoken.startswith("You want to cancel an order.")
+
+
+def test_the_modality_can_be_corrected_when_the_source_reads_the_other_way(tmp_path):
+    """Modality picks the world, the simulated person and the transport, so a wrong one runs a
+    different test rather than a weaker one. It is also the field a source settles worst: an
+    agent's code reads the same answering a chat window or a phone call, so a repository that
+    looks like a text benchmark reads as text even when the operator has deployed it to a phone
+    number. Without this there was no correction short of running the whole stage again, which
+    reads the same source and reaches the same answer."""
+    from fi.alk.harness.amend import set_modality
+
+    contract = _written_contract(tmp_path)
+    contract.modality = "chat"
+
+    done, said = set_modality(
+        contract, tmp_path, modality="voice", why="deployed on Vapi, customers phone in"
+    )
+    assert done and "voice" in said
+    reloaded = load(tmp_path)
+    assert reloaded.modality == "voice"
+    # Recorded as ours, like every other amendment, so the source and the correction stay apart.
+    assert any("modality chat -> voice" in one for one in reloaded.amendments)
+
+    same, said = set_modality(contract, tmp_path, modality="voice", why="again")
+    assert not same and "already says voice" in said
+
+    unknown, said = set_modality(contract, tmp_path, modality="telepathy", why="why not")
+    assert not unknown and "is not a modality" in said
+
+    unexplained, said = set_modality(contract, tmp_path, modality="chat", why=" ")
+    assert not unexplained and "say why" in said
+    assert load(tmp_path).modality == "voice"
+
+
 def test_a_rule_the_agent_does_not_have_can_be_taken_away(tmp_path):
     """A rule nobody has is worse than a missing one: the agent is told to obey it and the
     judge fails it for not doing something it was never supposed to do."""
@@ -1368,6 +1420,45 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         }
     )
     assert not missing, f"submit_contract never mentions: {missing}"
+
+
+def test_an_agent_inside_a_package_is_importable_from_its_package_root(tmp_path):
+    """Pointing at the part under test is the normal way to point at a packaged agent, and its
+    own imports resolve from the repository above it. Adding only the directory named makes every
+    such import fail as "No module named <package>", which reads as the package being absent
+    rather than as us having pointed at the middle of it, and blocks adoption entirely."""
+    import sys
+
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    root = tmp_path / "repo"
+    inner = root / "agentpkg" / "envs" / "retail"
+    inner.mkdir(parents=True)
+    for package in (root / "agentpkg", root / "agentpkg" / "envs", inner):
+        (package / "__init__.py").write_text("", encoding="utf-8")
+    (inner / "data.py").write_text("def load():\n    return {'orders': []}\n", encoding="utf-8")
+
+    roots = GeneratedWorld._import_roots(str(inner))
+    assert str(inner) in roots, "where it sits stays importable, for a flat agent"
+    assert str(root) in roots, "and the package root, or its own imports cannot resolve"
+    # Stops at the first directory that is not itself a package, the way Python does.
+    assert str(root.parent) not in roots
+
+    kept = list(sys.path)
+    try:
+        GeneratedWorld(":memory:").reach(str(inner))
+        loaded = __import__("agentpkg.envs.retail.data", fromlist=["load"])
+        assert loaded.load() == {"orders": []}
+    finally:
+        sys.path[:] = kept
+        for name in [one for one in sys.modules if one.startswith("agentpkg")]:
+            del sys.modules[name]
+
+    # An agent that is not in a package is unchanged: one directory, the one named.
+    plain = tmp_path / "flat"
+    plain.mkdir()
+    assert GeneratedWorld._import_roots(str(plain)) == [str(plain)]
+    assert GeneratedWorld._import_roots("") == []
 
 
 def test_the_adoption_fields_survive_the_write_path(tmp_path):

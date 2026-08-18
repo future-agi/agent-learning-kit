@@ -74,6 +74,42 @@ def tracks_in(case: dict[str, Any]) -> list[dict[str, str]]:
     return found
 
 
+def metrics_in(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every metric ALK computed, with why it came out that way.
+
+    The averages alone were a trap. A metric with nothing to measure scores 1.0 and says so in
+    its reason: "No required browser trace keys provided", "No expected multi-agent coordination
+    checks provided". Twenty-four of thirty-eight are that, so a page reading only the numbers
+    showed a wall of perfect greens for browser safety and multi-agent coordination on a phone
+    call that had neither. That is the same vacuity the harness refuses to tolerate in its own
+    checks, and it has no business in the report either.
+
+    ALK already separates them with ``applicable``. Carrying the reason as well is what lets a
+    reader tell "scanned three steps and found nothing" from "there was nothing to scan".
+    """
+    found = report.get("metrics")
+    if isinstance(found, list) and found:
+        return [
+            {
+                "name": one.get("name"),
+                "score": one.get("score"),
+                "reason": one.get("reason") or "",
+                # Absent means applicable: an older report that never carried the flag was
+                # measuring something, or it would not have been asked for.
+                "applicable": bool(one.get("applicable", True)),
+            }
+            for one in found
+            if isinstance(one, dict) and one.get("name")
+        ]
+    # A report shaped before metrics carried their reasons. Averages are all there is, and every
+    # one is treated as applicable rather than silently dropped.
+    averages = (report.get("summary") or {}).get("metric_averages") or {}
+    return [
+        {"name": name, "score": score, "reason": "", "applicable": True}
+        for name, score in averages.items()
+    ]
+
+
 def measured(case: dict[str, Any]) -> dict[str, Any]:
     """What ALK measured about this call, in the shape the page reads.
 
@@ -84,14 +120,13 @@ def measured(case: dict[str, Any]) -> dict[str, Any]:
     report = (case.get("evaluation") or {}).get("agent_report") or metadata.get(
         "agent_report_summary"
     ) or {}
-    summary = report.get("summary") or {}
     usage = metadata.get("simulator_model_usage") or []
     first = usage[0] if isinstance(usage, list) and usage else {}
     return {
         "score": report.get("score"),
         "threshold": report.get("threshold"),
         "scored_pass": report.get("passed"),
-        "metrics": summary.get("metric_averages") or {},
+        "metrics": metrics_in(report),
         "stop_reason": metadata.get("stop_reason"),
         "status": metadata.get("status"),
         "room": metadata.get("room_name"),

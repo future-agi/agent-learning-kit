@@ -498,15 +498,37 @@ def _keep_tracks(found: list[dict[str, str]], folder: Path) -> list[dict[str, st
     return kept
 
 
-def _averaged(measured: list[dict[str, Any]]) -> dict[str, float]:
-    """Each metric's mean over the runs that reported it."""
+def _averaged(measured: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each metric's mean over the scenarios that reported it, carrying whether it applied.
+
+    A metric that had nothing to measure scores 1.0, so averaging the lot produces a suite
+    summary in which two thirds of the numbers are perfect and none of them mean anything. The
+    applicability travels with the average instead of being flattened away, so a reader is never
+    shown "browser action safety 1.00" for a suite of phone calls without also being told there
+    were no browser actions.
+    """
     gathered: dict[str, list[float]] = {}
+    applies: dict[str, bool] = {}
+    reasons: dict[str, str] = {}
     for one in measured:
-        for name, value in ((one or {}).get("metrics") or {}).items():
-            if isinstance(value, (int, float)):
-                gathered.setdefault(name, []).append(float(value))
-    return {
-        name: round(sum(values) / len(values), 4)
+        for metric in (one or {}).get("metrics") or []:
+            name, value = metric.get("name"), metric.get("score")
+            if not name or not isinstance(value, (int, float)):
+                continue
+            gathered.setdefault(name, []).append(float(value))
+            # Applicable anywhere is applicable: one scenario exercising a capability is enough
+            # to make the number worth reading across the suite.
+            applies[name] = applies.get(name, False) or bool(metric.get("applicable", True))
+            if metric.get("reason") and name not in reasons:
+                reasons[name] = str(metric["reason"])
+    return [
+        {
+            "name": name,
+            "score": round(sum(values) / len(values), 4),
+            "applicable": applies.get(name, True),
+            "reason": reasons.get(name, ""),
+            "cases": len(values),
+        }
         for name, values in sorted(gathered.items())
         if values
-    }
+    ]

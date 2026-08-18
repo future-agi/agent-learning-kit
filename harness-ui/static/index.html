@@ -205,6 +205,75 @@
   .metric-fill.mid  { background: #c9a227; }
   .metric-fill.low  { background: #c65b4e; }
   .metric-value { font-size: .78rem; text-align: right; font-variant-numeric: tabular-nums; opacity: .75; }
+  .metric-note { font-size: .74rem; color: var(--muted); margin: .12rem 0 .12rem .5rem; font-family: var(--mono); }
+
+  /* one scenario, read top to bottom */
+  /* A card is a thing on its own, not a paragraph in a wall. Without this every scenario ran
+     into the next and the page read as one long document. */
+  .card { background: var(--card); border: 1px solid var(--hair); border-radius: 8px;
+          padding: .75rem .9rem; margin-bottom: .75rem; }
+  .card > .card-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .card-body { margin-top: .5rem; }
+
+  /* One run in the list, clickable across its whole surface. */
+  .card.run { cursor: pointer; transition: border-color .12s, transform .12s; }
+  .card.run:hover { border-color: var(--muted); transform: translateY(-1px); }
+  .card.run:focus-visible { outline: 2px solid var(--world); outline-offset: 2px; }
+  .card.run .chev { color: var(--muted); font-size: .9rem; }
+
+  .card.scenario { margin-bottom: 1rem; border-left: 3px solid var(--hair); }
+  .card.scenario.failed { border-left-color: var(--fail); }
+  .card.scenario.ok { border-left-color: var(--world); }
+  .card.scenario .card-head { display: flex; align-items: center; gap: .5rem; }
+  .card.scenario .title { font-weight: 600; font-size: .88rem; font-family: var(--mono); }
+  .card.scenario .spacer { flex: 1 1 auto; }
+
+  /* The recording is the artifact a spoken run exists to produce. It does not get folded. */
+  .rec { margin: .55rem 0 .3rem; padding: .5rem .6rem; border-radius: 6px;
+         background: rgba(127,127,127,.06); border: 1px solid var(--hair-soft); }
+  .rec audio { width: 100%; height: 34px; display: block; }
+  .rec-head { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--muted); margin: 0 0 .35rem; }
+  .rec .chips-row { margin-top: .4rem; }
+  .rec .tag { cursor: pointer; }
+  .rec .tag.on { border-color: var(--world); color: var(--world); }
+
+  .backbar { margin-bottom: .8rem; }
+  .tests { font-size: .82rem; color: var(--muted); margin: .3rem 0 .1rem; }
+  .facts { font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; margin: .25rem 0 .5rem; }
+
+  .goal-group { margin: .35rem 0 .5rem; }
+  .goal-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 .25rem; }
+  .goal { display: flex; gap: .55rem; align-items: flex-start; padding: .3rem 0; border-bottom: 1px solid var(--hair-soft); }
+  .goal:last-child { border-bottom: 0; }
+  .goal-text { min-width: 0; flex: 1 1 auto; }
+  .goal-name { font-family: var(--mono); font-size: .8rem; }
+  .goal .reason { display: block; font-size: .78rem; color: var(--muted); margin: .15rem 0 0; }
+  .goal.failed .reason { color: var(--fail); }
+  .goal .decided-by { display: block; font-size: .72rem; font-family: var(--mono); color: var(--muted); opacity: .8; margin: .1rem 0 0; }
+
+  /* what the agent did, in order */
+  .timeline { display: flex; flex-direction: column; gap: .3rem; }
+  .tl { display: flex; gap: .5rem; align-items: flex-start; padding: .35rem .5rem; border-radius: 5px;
+        border-left: 2px solid var(--hair); background: rgba(127,127,127,.05); }
+  .tl.refused { border-left-color: #c9a227; }
+  .tl.crashed { border-left-color: var(--fail); }
+  .tl-mark { flex: 0 0 3.6rem; font-size: .66rem; text-transform: uppercase; letter-spacing: .05em;
+             color: var(--muted); padding-top: .15rem; }
+  .tl.refused .tl-mark { color: #c9a227; }
+  .tl.crashed .tl-mark { color: var(--fail); }
+  .tl-body { min-width: 0; flex: 1 1 auto; }
+  .tl-name { font-family: var(--mono); font-size: .8rem; font-weight: 600; }
+  .tl-args { font-family: var(--mono); font-size: .73rem; color: var(--muted); margin-left: .35rem;
+             word-break: break-all; }
+  .tl-result { font-size: .75rem; color: var(--muted); margin: .2rem 0 0; word-break: break-word; }
+
+  details.fold { margin: .25rem 0; }
+  details.fold > summary { cursor: pointer; font-size: .78rem; color: var(--muted); padding: .28rem 0;
+                           list-style: revert; }
+  details.fold > summary:hover { color: var(--ink); }
+  details.fold[open] > summary { font-weight: 600; }
+  details.section { border-top: 1px solid var(--hair-soft); }
   audio { width: 100%; margin: .4rem 0; }
 
   /* expandable cards (scenarios, world tables, handlers, runs) */
@@ -358,6 +427,8 @@ const el = (tag, cls, text) => {
 
 let status = { stage: "", agent: null, have: {} };
 let activeTab = localStorage.getItem("harness.tab") || "contract";
+// Which run is open, if any. Declared here because the hash routing above reads it.
+let openRun = null;
 let runsFilter = "all";
 let sending = false;
 
@@ -534,7 +605,23 @@ function renderChips() {
 function setTab(key) {
   activeTab = key;
   localStorage.setItem("harness.tab", key);
+  syncHash();
   renderTabs(); loadTab();
+}
+
+/* The address bar says which tab and which run is open, so a result can be linked to. A demo
+   that can only reach a run by clicking through from the top is one wrong click from lost. */
+function syncHash() {
+  const want = openRun ? `#runs/${openRun}` : `#${activeTab}`;
+  if (location.hash !== want) history.replaceState(null, "", want);
+}
+
+function readHash() {
+  const parts = decodeURIComponent(location.hash.replace(/^#/, "")).split("/");
+  if (!parts[0]) return false;
+  activeTab = parts[0];
+  openRun = parts[0] === "runs" && parts[1] ? parts[1] : null;
+  return true;
 }
 
 function renderAll() { renderHeader(); renderRoadmap(); renderChips(); renderTabs(); loadTab(); renderPicker(); }
@@ -1097,7 +1184,6 @@ function normalizeRun(run) {
 /* One simulation over the whole suite is one run, kept as a folder. A session accumulates them
    over the same scenarios and the same world, so which run a result came from is part of the
    result: the list is the first thing, and any entry opens into what actually happened. */
-let openRun = null;
 
 async function tabRuns(body) {
   const listed = await fetch("/api/simulations").then(r => r.json()).catch(() => ({ runs: [] }));
@@ -1112,16 +1198,35 @@ async function tabRuns(body) {
 async function runList(body, runs) {
   const top = pane(body, "Simulations", `${runs.length} run${runs.length === 1 ? "" : "s"} of this suite`);
   for (const run of runs) {
-    const row = el("div", "card");
+    /* The whole card opens the run. A lone "open" button meant the obvious gesture, clicking the
+       thing you want, did nothing. */
+    const row = el("div", "card run");
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    const open = () => { openRun = run.run_id; syncHash(); loadTab(); };
+    row.onclick = open;
+    row.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+    };
+
     const head = el("div", "card-head");
     const mark = run.passed === run.scenarios ? "pass" : "fail";
     head.appendChild(el("span", "tag " + mark, `${run.passed}/${run.scenarios} passed`));
-    head.appendChild(el("span", "spk", run.run_id));
+    head.appendChild(el("span", "title", run.run_id));
+    head.appendChild(el("span", "spacer"));
     head.appendChild(el("span", "muted", `${run.seconds}s · ${run.modality || "chat"} · $${run.spent_usd || 0}`));
-    const open = el("button", "tag soft", "open");
-    open.onclick = () => { openRun = run.run_id; loadTab(); };
-    head.appendChild(open);
+    head.appendChild(el("span", "chev", "›"));
     row.appendChild(head);
+
+    /* Which scenarios, at a glance, so the list answers "what changed between runs" without
+       opening each one. */
+    if ((run.results || []).length) {
+      const chips = el("div", "chips-row");
+      for (const one of run.results) {
+        chips.appendChild(el("span", "tag " + (one.passed ? "pass" : "fail"), one.scenario));
+      }
+      row.appendChild(chips);
+    }
     if (run.models) {
       row.appendChild(el("p", "muted", `agent ${run.models.agent} · user ${run.models.user} · judge ${run.models.judge}`));
     }
@@ -1130,27 +1235,71 @@ async function runList(body, runs) {
 }
 
 /* A metric as a labelled bar. Everything ALK measures is 0..1, so one shape reads for all of
-   them and the eye can compare down a column instead of parsing seventeen numbers. */
-function metricBar(name, value) {
+   them and the eye can compare down a column instead of parsing numbers. */
+function metricBar(metric) {
+  const value = Number(metric.score) || 0;
   const row = el("div", "metric");
-  row.appendChild(el("span", "metric-name", name.replace(/_/g, " ")));
+  row.appendChild(el("span", "metric-name", String(metric.name).replace(/_/g, " ")));
   const track = el("div", "metric-track");
   const fill = el("div", "metric-fill " + (value >= 0.8 ? "good" : value >= 0.5 ? "mid" : "low"));
   fill.style.width = `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
   track.appendChild(fill);
   row.appendChild(track);
   row.appendChild(el("span", "metric-value", value.toFixed(2)));
+  if (metric.reason) row.title = metric.reason;
   return row;
 }
 
+/* Which of ALK's metrics actually measured this run.
+
+   Three groups, because they are three different claims and showing them as one wall of bars
+   was actively misleading. Twenty-four of thirty-eight score 1.00 because there was nothing to
+   measure — "No required browser trace keys provided" — and a green bar reading "browser action
+   safety 1.00" on a phone call is a lie the page was telling on ALK's behalf. ALK marks those
+   itself; this only stops hiding it. */
+function splitMetrics(metrics) {
+  const all = Array.isArray(metrics) ? metrics
+    : Object.entries(metrics || {}).map(([name, score]) => ({ name, score, applicable: true, reason: "" }));
+  const applicable = all.filter(m => m.applicable !== false);
+  return {
+    /* Anything that moved off 1.00 is a real result and leads. */
+    measured: applicable.filter(m => Number(m.score) < 1).sort((a, b) => a.score - b.score),
+    /* Ran, found nothing wrong. Worth counting, not worth a bar each. */
+    clean: applicable.filter(m => Number(m.score) >= 1),
+    /* Nothing to measure. Never a score. */
+    absent: all.filter(m => m.applicable === false),
+  };
+}
+
 function metricsBlock(into, metrics, title) {
-  const names = Object.keys(metrics || {});
-  if (!names.length) return;
+  const { measured, clean, absent } = splitMetrics(metrics);
+  if (!measured.length && !clean.length && !absent.length) return;
   const box = el("div", "card-body");
   box.appendChild(el("p", "spk", title));
-  /* Weakest first: the point of seventeen metrics is to find the one that is wrong. */
-  for (const name of names.sort((a, b) => metrics[a] - metrics[b])) {
-    box.appendChild(metricBar(name, metrics[name]));
+
+  if (measured.length) {
+    /* Weakest first: the point of many metrics is to find the one that is wrong. */
+    for (const metric of measured) box.appendChild(metricBar(metric));
+  } else if (clean.length) {
+    box.appendChild(el("p", "muted", "nothing scored below 1.00"));
+  }
+
+  if (clean.length) {
+    const fold = el("details", "fold");
+    fold.appendChild(el("summary", "", `${clean.length} checks ran and found nothing`));
+    for (const metric of clean) {
+      fold.appendChild(el("p", "metric-note", `${String(metric.name).replace(/_/g, " ")} — ${metric.reason || "clean"}`));
+    }
+    box.appendChild(fold);
+  }
+  if (absent.length) {
+    const fold = el("details", "fold");
+    fold.appendChild(el("summary", "", `${absent.length} did not apply to this run`));
+    fold.appendChild(el("p", "muted", "These score 1.00 because there was nothing to measure, so they are not results."));
+    for (const metric of absent) {
+      fold.appendChild(el("p", "metric-note", `${String(metric.name).replace(/_/g, " ")} — ${metric.reason || "not applicable"}`));
+    }
+    box.appendChild(fold);
   }
   into.appendChild(box);
 }
@@ -1159,39 +1308,51 @@ function metricsBlock(into, metrics, title) {
    them can be missing, so the fallback is the normal case: a page that only knew about stereo
    would show a dead player most days. */
 function audioBlock(into, runId, one) {
-  const box = el("div", "card-body");
+  const box = el("div", "rec");
   const tracks = one.tracks || [];
   if (!tracks.length) {
     box.appendChild(el("p", "empty", "no recording for this run"));
     into.appendChild(box);
     return;
   }
+  box.appendChild(el("p", "rec-head", `recording · ${tracks.length} tracks`));
   const player = document.createElement("audio");
   player.controls = true;
   player.preload = "none";
-  const play = (label) => {
-    player.src = `/api/recording/${encodeURIComponent(runId)}/${encodeURIComponent(one.scenario)}?track=${encodeURIComponent(label)}`;
-  };
-  play(tracks[0].label);
   box.appendChild(player);
-  if (tracks.length > 1) {
-    const chips = el("div", "chips-row");
-    for (const track of tracks) {
-      const button = el("button", "tag soft", track.label);
-      button.onclick = () => play(track.label);
-      chips.appendChild(button);
-    }
-    box.appendChild(chips);
+
+  const chips = el("div", "chips-row");
+  const buttons = [];
+  const play = (track, button) => {
+    player.src = `/api/recording/${encodeURIComponent(runId)}/${encodeURIComponent(one.scenario)}?track=${encodeURIComponent(track.label)}`;
+    /* Which track you are listening to is the whole question when there are eight of them:
+       the room's mix, the caller alone, the agent alone, and the provider's own copy of each. */
+    for (const other of buttons) other.classList.toggle("on", other === button);
+  };
+  for (const track of tracks) {
+    const button = el("button", "tag soft", track.label);
+    buttons.push(button);
+    button.onclick = () => play(track, button);
+    chips.appendChild(button);
   }
+  play(tracks[0], buttons[0]);
+  box.appendChild(chips);
   into.appendChild(box);
 }
 
 async function runDetail(body, runId) {
   const run = await fetch(`/api/simulations/${encodeURIComponent(runId)}`).then(r => r.json());
-  const top = pane(body, runId, `${run.passed}/${run.scenarios} passed in ${run.seconds}s`);
-  const back = el("button", "tag soft", "back to all runs");
-  back.onclick = () => { openRun = null; loadTab(); };
-  top.appendChild(back);
+  /* Reading one run replaces the scenario count with the scenarios themselves, so the count has
+     to come from the list here. The summary endpoint still carries a number. */
+  const cases = run.scenarios || [];
+  /* Back first, above everything. Coming out of a run is the commonest thing anybody does here
+     and it was a small chip below the title. It stays inside the Runs tab. */
+  const bar = el("div", "backbar");
+  const back = el("button", "ghost", "‹ all runs");
+  back.onclick = () => { openRun = null; syncHash(); loadTab(); };
+  bar.appendChild(back);
+  body.appendChild(bar);
+  const top = pane(body, runId, `${run.passed}/${cases.length} passed in ${run.seconds}s`);
 
   const head = el("div", "card");
   head.appendChild(el("p", "muted",
@@ -1200,70 +1361,133 @@ async function runDetail(body, runId) {
   metricsBlock(head, run.metrics, "measured across the suite");
   top.appendChild(head);
 
-  for (const one of run.scenarios || []) {
-    const card = el("div", "card");
-    const head = el("div", "card-head");
-    head.appendChild(el("span", "tag " + (one.passed ? "pass" : "fail"), one.passed ? "PASS" : "FAIL"));
-    head.appendChild(el("span", "spk", one.scenario));
-    head.appendChild(el("span", "muted", `${one.met}/${(one.checkpoints || []).length} · ${one.turns} turns · ${one.calls} calls`));
-    card.appendChild(head);
+  for (const one of cases) top.appendChild(scenarioCard(runId, one));
+}
 
-    /* How the call itself went, before anything about whether it passed. A run that ended
-       because the caller hung up is a different result from one that ran out of turns. */
-    const m = one.measured || {};
-    if (m.stop_reason || m.score != null || (m.simulator && m.simulator.model)) {
-      const facts = [];
-      if (m.score != null) facts.push(`score ${Number(m.score).toFixed(2)} vs ${m.threshold} → ${m.scored_pass ? "over" : "under"}`);
-      if (m.stop_reason) facts.push(`ended: ${m.stop_reason}`);
-      if (m.provider) facts.push(m.provider);
-      if (m.simulator && m.simulator.model) facts.push(`caller on ${m.simulator.model}`);
-      if (m.call_id) facts.push(m.call_id);
-      card.appendChild(el("p", "muted", facts.join(" · ")));
-    }
+/* One scenario, as something you read rather than scroll past.
 
-    audioBlock(card, runId, one);
+   The order is the order the questions get asked in: did it pass, what was it testing, how did
+   the call go, which sub-goals held and who decided each, and only then the evidence. Everything
+   below the verdict folds away, because four scenarios of transcript and tool calls unfolded at
+   once is the wall this replaced. */
+function scenarioCard(runId, one) {
+  const card = el("div", "card scenario " + (one.passed ? "ok" : "failed"));
+  const checks = one.checkpoints || [];
+  const m = one.measured || {};
 
-    for (const check of one.checkpoints || []) {
-      card.appendChild(el("p", check.passed ? "muted" : "fail",
-        `${check.passed ? "✓" : "✗"} ${check.kind}: ${check.name}${check.detail && !check.passed ? " — " + check.detail : ""}`));
-      /* A sub-goal decided by an eval on the platform names the eval and shows its reasoning
-         whether it passed or failed. Which eval decided it is the part somebody can go and
-         open, and a passing verdict with no reasoning is indistinguishable from an unchecked
-         one. Failures already carry their reason on the line above. */
-      if (check.by) {
-        if (check.passed && check.detail) card.appendChild(el("p", "reason", check.detail));
-        card.appendChild(el("p", "decided-by", `decided by ${check.by}`));
-      }
-    }
-    metricsBlock(card, m.metrics, "what the run measured");
-    if (one.transcript) card.appendChild(transcriptNode(one.transcript));
+  const head = el("div", "card-head");
+  head.appendChild(el("span", "tag " + (one.passed ? "pass" : "fail"), one.passed ? "PASS" : "FAIL"));
+  head.appendChild(el("span", "title", one.scenario));
+  head.appendChild(el("span", "spacer"));
+  head.appendChild(el("span", "muted", `${one.met}/${checks.length} sub-goals`));
+  card.appendChild(head);
 
-    /* What each source claims it can prove. Worth showing next to the metrics: a number derived
-       from a source that reports no latency is not a latency measurement, and this says which. */
-    if ((m.evidence || []).length) {
-      const box = el("div", "card-body");
-      box.appendChild(el("p", "spk", "evidence"));
-      for (const source of m.evidence) {
-        box.appendChild(el("p", source.available ? "muted" : "fail",
-          `${source.adapter || source.source}${source.available ? "" : " (unavailable)"} — ${(source.proves || []).join(", ") || "nothing"}`));
-      }
-      card.appendChild(box);
-    }
+  if (one.tests) card.appendChild(el("p", "tests", one.tests));
 
-    /* Every call, in order, with what it was given and what came back. This is the half a
-       transcript cannot tell you: what the agent said it did against what it did. */
-    if ((one.calls_detail || []).length) {
-      const calls = el("div", "card-body");
-      calls.appendChild(el("p", "spk", "what the agent actually did"));
-      for (const call of one.calls_detail) {
-        const state = call.refused ? "fail" : (call.ok ? "muted" : "fail");
-        calls.appendChild(el("p", state,
-          `${call.name}(${JSON.stringify(call.arguments)}) → ${call.refused ? "refused: " + call.error : (call.ok ? String(call.result).slice(0, 160) : "crashed: " + call.error)}`));
-      }
-      card.appendChild(calls);
-    }
-    top.appendChild(card);
+  /* How the call went, before anything about whether it passed. A run that ended because the
+     caller hung up is a different result from one that ran out of turns. */
+  const facts = [];
+  if (one.turns) facts.push(`${one.turns} turns`);
+  const refused = (one.calls_detail || []).filter(c => c.refused).length;
+  if (one.calls != null) facts.push(`${one.calls} tool calls${refused ? `, ${refused} refused` : ""}`);
+  if (one.seconds) facts.push(`${Math.round(one.seconds)}s`);
+  if (m.stop_reason) facts.push(`ended: ${String(m.stop_reason).replace(/_/g, " ")}`);
+  if (m.score != null) facts.push(`ALK score ${Number(m.score).toFixed(2)}${m.threshold != null ? ` vs ${m.threshold}` : ""}`);
+  if (m.simulator && m.simulator.model) facts.push(`caller on ${m.simulator.model}`);
+  if (facts.length) card.appendChild(el("p", "facts", facts.join("  ·  ")));
+
+  for (const problem of one.problems || []) card.appendChild(el("div", "problem", problem));
+
+  /* Sub-goals, split by who decided them. Code and an eval are not the same kind of claim about
+     a result, and a reader deciding whether to trust a verdict needs to know which it is. */
+  const byCode = checks.filter(c => c.kind !== "eval" && c.kind !== "judged");
+  const byEval = checks.filter(c => c.kind === "eval" || c.kind === "judged");
+  const goals = el("div", "card-body");
+  goals.appendChild(el("p", "spk", "sub-goals"));
+  if (byCode.length) goals.appendChild(goalGroup("settled by code", byCode));
+  if (byEval.length) goals.appendChild(goalGroup("decided by an eval", byEval));
+  card.appendChild(goals);
+
+  /* The recording sits on the card, not behind a fold. It is the thing a spoken run exists to
+     produce, and the fastest way to understand a failure is to listen to it. */
+  if ((one.tracks || []).length) audioBlock(card, runId, one);
+
+  if (one.transcript) {
+    card.appendChild(fold(`the conversation${one.turns ? ` (${one.turns} turns)` : ""}`, () => transcriptNode(one.transcript)));
   }
+  if ((one.calls_detail || []).length) {
+    card.appendChild(fold(`what the agent actually did (${one.calls_detail.length})`, () => callsTimeline(one.calls_detail)));
+  }
+  const { measured, clean, absent } = splitMetrics(m.metrics);
+  if (measured.length || clean.length || absent.length) {
+    card.appendChild(fold(
+      `what the run measured (${measured.length} scored, ${clean.length} clean, ${absent.length} n/a)`,
+      () => { const box = el("div"); metricsBlock(box, m.metrics, ""); return box; }));
+  }
+  if ((m.evidence || []).length) {
+    /* What each source claims it can prove. A number derived from a source that reports no
+       latency is not a latency measurement, and this says which is which. */
+    card.appendChild(fold(`evidence (${m.evidence.length} sources)`, () => {
+      const box = el("div");
+      for (const source of m.evidence) {
+        box.appendChild(el("p", source.available ? "metric-note" : "fail",
+          `${source.adapter || source.source}${source.available ? "" : " (unavailable)"} — proves ${(source.proves || []).join(", ") || "nothing"}`));
+      }
+      return box;
+    }));
+  }
+  return card;
+}
+
+function goalGroup(label, checks) {
+  const group = el("div", "goal-group");
+  group.appendChild(el("p", "goal-label", label));
+  for (const check of checks) {
+    const row = el("div", "goal" + (check.passed ? "" : " failed"));
+    row.appendChild(el("span", "cbox" + (check.passed ? "" : " no"), check.passed ? "✓" : "✗"));
+    const text = el("div", "goal-text");
+    text.appendChild(el("span", "goal-name", check.name));
+    /* An eval that passed still shows its reasoning: the whole point of routing a claim through
+       a named eval is that somebody can read what it decided and why. */
+    if (check.detail) text.appendChild(el("p", "reason", check.detail));
+    if (check.by) text.appendChild(el("p", "decided-by", check.by));
+    row.appendChild(text);
+    group.appendChild(row);
+  }
+  return group;
+}
+
+/* Every call in order, with what it was given and what came back. This is the half a transcript
+   cannot tell you: what the agent said it did, against what it did. */
+function callsTimeline(calls) {
+  const list = el("div", "timeline");
+  for (const call of calls) {
+    const state = call.refused ? "refused" : (call.ok ? "ok" : "crashed");
+    const row = el("div", "tl " + state);
+    row.appendChild(el("span", "tl-mark", call.refused ? "refused" : (call.ok ? "ok" : "crash")));
+    const bodyText = el("div", "tl-body");
+    bodyText.appendChild(el("span", "tl-name", call.name));
+    const args = call.arguments && Object.keys(call.arguments).length
+      ? JSON.stringify(call.arguments) : "()";
+    bodyText.appendChild(el("code", "tl-args", args));
+    const answer = call.refused ? call.error : (call.ok ? String(call.result ?? "") : call.error);
+    if (answer) bodyText.appendChild(el("p", "tl-result", String(answer).slice(0, 400)));
+    row.appendChild(bodyText);
+    list.appendChild(row);
+  }
+  return list;
+}
+
+/* A collapsed section. Four scenarios of transcripts and tool calls unfolded at once is the wall
+   this replaced, but the content is built now rather than on first open: the audio player is the
+   only expensive part and it already loads nothing until played, so deferring the rest bought
+   nothing and meant a broken section stayed invisible until somebody clicked it in front of an
+   audience. */
+function fold(label, build) {
+  const box = el("details", "fold section");
+  box.appendChild(el("summary", "", label));
+  box.appendChild(build());
+  return box;
 }
 
 async function tabRunsLegacy(body) {
@@ -1560,10 +1784,14 @@ async function waitWhileBusy() {
 
 (async function boot() {
   status = await fetch("/api/status").then(r => r.json());
+  // A link to a run opens that run. Read before the first render, so arriving at one does not
+  // flash the last tab this browser happened to be on.
+  readHash();
   // The conversation is read back from the session's folder, so refreshing shows what was
   // already said rather than an empty page with a half-filled workspace beside it.
   await restore();
   renderAll();
+  window.addEventListener("hashchange", () => { if (readHash()) { renderTabs(); loadTab(); } });
   if (status.busy) { await waitWhileBusy(); return; }
   // Nothing is sent on load. Reloading must not advance a stage nobody asked to advance, and
   // must not spend a model call to be greeted.
