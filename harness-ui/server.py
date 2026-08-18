@@ -23,6 +23,7 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -90,6 +91,28 @@ def _runs(path) -> list:
 
 class Said(BaseModel):
     text: str = ""
+
+
+# How much of a tool's arguments to keep in the conversation. Generous, because a submitted
+# contract or a written handler is the thing somebody reopens a session to read, and stingy
+# enough that a session folder does not become a copy of every artifact it produced.
+ARGUMENT_LIMIT = 4000
+
+
+def _shortened(arguments: Any) -> Any:
+    """The arguments a tool was called with, cut only when they are enormous."""
+    if arguments in (None, "", {}, []):
+        return None
+    try:
+        written = json.dumps(arguments, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        written = str(arguments)
+    if len(written) <= ARGUMENT_LIMIT:
+        return arguments
+    return {
+        "_truncated": f"{len(written)} characters, showing the first {ARGUMENT_LIMIT}",
+        "_head": written[:ARGUMENT_LIMIT],
+    }
 
 
 def _payload(event) -> str:
@@ -334,14 +357,22 @@ async def say(said: Said):
             if event.kind == "text":
                 spoken.append(event.text)
             elif event.kind == "tool":
+                detail = event.detail or {}
                 tools.append(
                     {
-                        "label": (event.detail or {}).get("label") or event.tool,
-                        "target": (event.detail or {}).get("target", ""),
+                        "label": detail.get("label") or event.tool,
+                        "target": detail.get("target", ""),
+                        # What it was actually called with. Kept because reopening a session
+                        # showed the tool's name and nothing else, so the one thing worth going
+                        # back for, what was submitted, was the one thing that had been thrown
+                        # away. Live it streamed and was gone.
+                        "arguments": _shortened(detail.get("arguments")),
                     }
                 )
             elif event.kind == "result" and tools:
-                tools[-1]["said"] = (event.text or "").splitlines()[:1]
+                # More than the first line. A gate's refusal says what is wrong on the lines
+                # after it, and one line of "problems:" is no use to anyone reading it later.
+                tools[-1]["said"] = (event.text or "").splitlines()[:12]
                 tools[-1]["failed"] = bool((event.detail or {}).get("is_error"))
             on_event(event)
 

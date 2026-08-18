@@ -103,6 +103,16 @@
   .msg .prose.md ul, .msg .prose.md ol { margin: 0; padding-left: 1.3rem; }
   .msg .prose.md li { margin: 0.12rem 0; }
   .msg .prose.md code, .exchange code { font-family: var(--mono); font-size: 0.85em; background: var(--hair-soft); border-radius: 3px; padding: 0.05em 0.3em; }
+  .msg .prose.md em { font-style: italic; }
+  .msg .prose.md hr { border: 0; border-top: 1px solid var(--hair); width: 100%; margin: 0.35rem 0; }
+  .msg .prose.md blockquote { margin: 0; border-left: 3px solid var(--hair); padding: 0.1rem 0 0.1rem 0.7rem; color: var(--muted); }
+  /* Tables are how every stage summarises a run, so they have to read at a glance. */
+  .msg .prose.md .md-table { border-collapse: collapse; font-size: 0.82rem; width: 100%; }
+  .msg .prose.md .md-table th, .msg .prose.md .md-table td {
+    border: 1px solid var(--hair); padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+  .msg .prose.md .md-table th { background: var(--hair-soft); font-weight: 600; white-space: nowrap; }
+  .msg .prose.md .md-table td code { background: none; padding: 0; }
+  .msg .prose.md pre { margin: 0; }
   .msg.you .bubble { background: var(--hair-soft); border-radius: 10px 10px 10px 3px; padding: 0.6rem 0.8rem; align-self: flex-start; max-width: 92%; white-space: pre-wrap; }
 
   .work { border-left: 2px solid var(--hair); padding-left: 0.75rem; display: flex; flex-direction: column; gap: 0.28rem; margin: 0.2rem 0; }
@@ -503,6 +513,21 @@ async function restore() {
         const said = (one.said || [])[0] || one.target || "";
         if (said) row.appendChild(el("span", "said", String(said).slice(0, 150)));
         work.appendChild(row);
+        /* What it was called with, and everything it answered. Folded, because a restored
+           conversation should read as a conversation, but present: this is what somebody
+           reopens a session to look at, and it used to be gone. */
+        const more = [];
+        if (one.arguments != null) more.push(["called with", JSON.stringify(one.arguments, null, 2)]);
+        if ((one.said || []).length > 1) more.push(["answered", one.said.join("\n")]);
+        if (more.length) {
+          const box = el("details", "fold");
+          box.appendChild(el("summary", "", more.map(([label]) => label).join(" · ")));
+          for (const [label, body] of more) {
+            box.appendChild(el("p", "goal-label", label));
+            box.appendChild(codeBlock(body, { wrap: true }));
+          }
+          work.appendChild(box);
+        }
       }
       msg.appendChild(work);
     }
@@ -632,18 +657,36 @@ function renderAll() { renderHeader(); renderRoadmap(); renderChips(); renderTab
 
 function inlineMd(text) {
   const fragment = document.createDocumentFragment();
-  const parts = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  /* Code first so its contents are never re-read as emphasis: `a * b * c` is code, not italics. */
+  const parts = String(text).split(/(`[^`]+`|\*\*[^*]+\*\*|(?<![*\w])\*[^*\n]+\*(?!\w)|(?<![_\w])_[^_\n]+_(?!\w))/g);
   for (const part of parts) {
-    if (/^\*\*[^*]+\*\*$/.test(part)) {
-      const bold = el("strong", "", part.slice(2, -2));
-      fragment.appendChild(bold);
-    } else if (/^`[^`]+`$/.test(part)) {
+    if (!part) continue;
+    if (/^`[^`]+`$/.test(part)) {
       fragment.appendChild(el("code", "", part.slice(1, -1)));
-    } else if (part) {
+    } else if (/^\*\*[^*]+\*\*$/.test(part)) {
+      fragment.appendChild(el("strong", "", part.slice(2, -2)));
+    } else if (/^\*[^*]+\*$/.test(part) || /^_[^_]+_$/.test(part)) {
+      fragment.appendChild(el("em", "", part.slice(1, -1)));
+    } else {
       fragment.appendChild(document.createTextNode(part));
     }
   }
   return fragment;
+}
+
+/* A markdown table, which the stages emit constantly: every summary of a run is one. Without
+   this they arrived as paragraphs of pipes, which is how a result meant to be read at a glance
+   became the least readable thing on the page. */
+function mdRow(line) {
+  let cells = String(line).trim();
+  if (cells.startsWith("|")) cells = cells.slice(1);
+  if (cells.endsWith("|")) cells = cells.slice(0, -1);
+  // Split on pipes that are not escaped, so a cell may contain one.
+  return cells.split(/(?<!\\)\|/).map(cell => cell.replace(/\\\|/g, "|").trim());
+}
+
+function isDivider(line) {
+  return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line) && line.includes("-");
 }
 
 function renderMd(raw) {
@@ -658,15 +701,71 @@ function renderMd(raw) {
     paragraph = [];
   };
   const flushList = () => { list = null; };
-  for (const line of String(raw).split("\n")) {
+  const lines = String(raw).split("\n");
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    /* A fenced block is taken verbatim to its closing fence, or to the end if the turn is still
+       streaming and the fence has not arrived yet. */
+    const fence = line.match(/^\s*```+\s*([\w+-]*)\s*$/);
+    if (fence) {
+      flushParagraph(); flushList();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^\s*```+\s*$/.test(lines[i])) body.push(lines[i++]);
+      out.appendChild(codeBlock(body.join("\n"), { wrap: false }));
+      continue;
+    }
+
+    /* A table: a header row, a divider, then rows until something stops looking like one. */
+    if (line.includes("|") && isDivider(lines[i + 1] || "")) {
+      flushParagraph(); flushList();
+      const heads = mdRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(mdRow(lines[i++]));
+      i--;
+      const wrap = el("div", "scroll-x");
+      const table = el("table", "md-table");
+      const thead = el("thead"); const hrow = el("tr");
+      for (const head of heads) { const th = el("th"); th.appendChild(inlineMd(head)); hrow.appendChild(th); }
+      thead.appendChild(hrow); table.appendChild(thead);
+      const tbody = el("tbody");
+      for (const row of rows) {
+        const tr = el("tr");
+        for (let c = 0; c < heads.length; c++) {
+          const td = el("td");
+          td.appendChild(inlineMd(row[c] ?? ""));
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody); wrap.appendChild(table); out.appendChild(wrap);
+      continue;
+    }
+
     const heading = line.match(/^#{1,4}\s+(.*)$/);
     const bullet = line.match(/^\s*[-*]\s+(.*)$/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (heading) {
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    // A rule, not a bullet: three or more dashes alone on a line. The stages separate sections
+    // with these, and read as bullets they became a row of empty list items.
+    const rule = /^\s*([-*_])\s*(\1\s*){2,}$/.test(line);
+
+    if (rule) {
+      flushParagraph(); flushList();
+      out.appendChild(el("hr"));
+    } else if (heading) {
       flushParagraph(); flushList();
       const h = el("div", "h");
       h.appendChild(inlineMd(heading[1]));
       out.appendChild(h);
+    } else if (quote) {
+      flushParagraph(); flushList();
+      const block = el("blockquote");
+      block.appendChild(inlineMd(quote[1]));
+      out.appendChild(block);
     } else if (bullet || numbered) {
       flushParagraph();
       const want = bullet ? "ul" : "ol";
