@@ -162,6 +162,113 @@ def _simulator_turn_handling(
     }
 
 
+def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, bool]:
+    """Return the next literal customer reply for a transactional voice test."""
+    text = heard.lower()
+    if "transferring you" in text or "transfer you" in text:
+        return "Thanks, goodbye.", True
+    if any(
+        word in text
+        for word in (
+            "ride is canceled",
+            "ride is cancelled",
+            "cancellation is complete",
+        )
+    ):
+        return "Thanks, goodbye.", True
+    booked = any(
+        phrase in text
+        for phrase in ("ride is booked", "ride has been booked", "booked your ride")
+    ) or (
+        "driver" in text and any(word in text for word in ("plate", "vehicle", "car"))
+    )
+    if booked:
+        if policy.get("cancel_after_booking"):
+            return "Please cancel that ride.", False
+        return "Thanks, goodbye.", True
+    if (
+        policy.get("end_after_options")
+        and "uberx" in text
+        and any(word in text for word in ("fare", "dollar", "minutes away"))
+    ):
+        return "Thanks, goodbye.", True
+    if "verification code" in text or "otp" in text or "read the code" in text:
+        return "One two three four five six.", False
+    if "cancellation fee" in text or ("cancel" in text and "confirm" in text):
+        return "Yes, cancel it.", False
+    if "should i book" in text or "confirm the booking" in text:
+        return "Yes, book it.", False
+    if "los angeles" in text and "san francisco" in text:
+        return "The San Francisco one.", False
+    if any(
+        phrase in text
+        for phrase in (
+            "spell",
+            "cross street",
+            "can't find",
+            "cannot find",
+            "could not find",
+        )
+    ):
+        return str(policy.get("dropoff") or "Ferry Building."), False
+    if any(
+        phrase in text
+        for phrase in (
+            "which ride",
+            "which one",
+            "ride option",
+            "car type",
+            "uberx or",
+            "or uberx",
+            "would you prefer",
+            "would you like uberx",
+        )
+    ):
+        return "I choose Uber X.", False
+    if (
+        "payment" in text
+        or "how would you like to pay" in text
+        or ("visa" in text and "correct" in text)
+        or ("uber cash" in text and "visa" in text)
+    ):
+        return str(policy.get("payment") or "Visa."), False
+    if "name" in text and any(word in text for word in ("what", "which", "use")):
+        return str(policy.get("name") or "Jordan."), False
+    if any(
+        phrase in text
+        for phrase in (
+            "is that right",
+            "is that correct",
+            "all correct",
+            "does that sound right",
+        )
+    ):
+        return "Yes, those addresses are correct.", False
+    if any(
+        phrase in text
+        for phrase in (
+            "where should",
+            "pick you up",
+            "picked up",
+            "pickup address",
+            "where is your pickup",
+        )
+    ):
+        return str(policy.get("pickup") or "Hilton Union Square."), False
+    if any(
+        phrase in text
+        for phrase in (
+            "where are you headed",
+            "destination",
+            "where to",
+            "where can i take you",
+            "where would you like to go",
+        )
+    ):
+        return str(policy.get("dropoff") or "Ferry Building."), False
+    return str(policy.get("fallback") or "Yes."), False
+
+
 class _TestRunnerAgent(Agent):
     def __init__(
         self,
@@ -176,11 +283,41 @@ class _TestRunnerAgent(Agent):
         )
         super().__init__(**kwargs)
         self._persona = persona
+        scripted = persona.persona.get("scripted_caller")
+        self._scripted_caller = scripted if isinstance(scripted, dict) else None
         self._min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
         self._usage_collector = metrics.ModelUsageCollector()
+
+    def llm_node(self, chat_ctx, tools, model_settings):
+        if self._scripted_caller is None:
+            return super().llm_node(chat_ctx, tools, model_settings)
+        messages = _session_messages(self._session) if self._session is not None else []
+        heard = next(
+            (one["content"] for one in reversed(messages) if one["role"] == "user"),
+            "",
+        )
+        reply, terminal = _scripted_caller_reply(heard, self._scripted_caller)
+
+        async def respond() -> str:
+            # The target transcript can finish slightly before its audio. A
+            # natural pause prevents the scripted caller from being discarded
+            # as an interruption while the target's last phoneme is playing.
+            await asyncio.sleep(
+                float(self._scripted_caller.get("response_delay", 1.25))
+            )
+            if terminal:
+
+                async def end_after_closing() -> None:
+                    await asyncio.sleep(3.0)
+                    self._end_requested.set()
+
+                asyncio.create_task(end_after_closing())
+            return reply
+
+        return respond()
 
     @function_tool(
         name="endCall",
@@ -801,7 +938,11 @@ class LiveKitEngine(BaseEngine):
                 timeout=connect_timeout,
             )
             room_connected = True
-            if conversation_direction == "agent_first" and profile.uses_external_room:
+            if (
+                conversation_direction == "agent_first"
+                and profile.uses_external_room
+                and hasattr(room, "register_text_stream_handler")
+            ):
                 # Buffer any target greeting that arrives before readiness; the
                 # LiveKit client drops a text-stream header with no handler.
                 room.register_text_stream_handler(
@@ -1082,10 +1223,11 @@ class LiveKitEngine(BaseEngine):
                 target_transcription_tasks.add(task)
                 task.add_done_callback(target_transcription_tasks.discard)
 
-            room.register_text_stream_handler(
-                TOPIC_TRANSCRIPTION, on_target_transcription
-            )
-            target_transcription_handler_registered = True
+            if hasattr(room, "register_text_stream_handler"):
+                room.register_text_stream_handler(
+                    TOPIC_TRANSCRIPTION, on_target_transcription
+                )
+                target_transcription_handler_registered = True
 
             # Drain greeting streams buffered before readiness through the
             # authoritative handler (it re-applies the strict track/identity
@@ -1192,7 +1334,9 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
-            if target_transcription_handler_registered:
+            if target_transcription_handler_registered and hasattr(
+                room, "unregister_text_stream_handler"
+            ):
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
             pending_target_transcriptions.clear()
             pending_transcriptions = list(target_transcription_tasks)
@@ -1406,9 +1550,7 @@ class LiveKitEngine(BaseEngine):
                     else None
                 ),
                 "retell_call_id": (
-                    provider_call_id
-                    if profile.evidence_provider == "retell"
-                    else None
+                    provider_call_id if profile.evidence_provider == "retell" else None
                 ),
                 "simulator_model_usage": (
                     customer_agent.model_usage
@@ -1822,14 +1964,11 @@ def _session_messages(session: AgentSession) -> list[dict[str, Any]]:
                     or current["stopped_speaking_at"]
                 )
             elif previous.get("interrupted") or interrupted:
-                previous["content"] = (
-                    f"{previous_text} {current['content']}".strip()
-                )
+                previous["content"] = f"{previous_text} {current['content']}".strip()
                 previous["interrupted"] = interrupted
-                previous["stopped_speaking_at"] = (
-                    current["stopped_speaking_at"]
-                    or previous.get("stopped_speaking_at")
-                )
+                previous["stopped_speaking_at"] = current[
+                    "stopped_speaking_at"
+                ] or previous.get("stopped_speaking_at")
             else:
                 messages.append(current)
             continue

@@ -55,6 +55,33 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 8000) -> None
         wav_file.writeframes(samples.astype(np.int16).tobytes())
 
 
+@pytest.mark.parametrize(
+    ("heard", "policy", "expected"),
+    [
+        ("Your ride is booked.", {}, ("Thanks, goodbye.", True)),
+        (
+            "Your ride is booked.",
+            {"cancel_after_booking": True},
+            ("Please cancel that ride.", False),
+        ),
+        (
+            "Where should I pick you up?",
+            {"pickup": "S F O International Terminal."},
+            ("S F O International Terminal.", False),
+        ),
+        (
+            "How would you like to pay?",
+            {"payment": "Please use Uber Cash."},
+            ("Please use Uber Cash.", False),
+        ),
+        ("Could you repeat that?", {"fallback": "Certainly."}, ("Certainly.", False)),
+        ("Your cancellation is complete.", {}, ("Thanks, goodbye.", True)),
+    ],
+)
+def test_scripted_caller_uses_literal_transaction_policy(heard, policy, expected):
+    assert livekit._scripted_caller_reply(heard, policy) == expected
+
+
 def test_managed_room_names_are_unique_per_run_and_case() -> None:
     agent = _agent(room_mode="managed", agent_name="support-agent")
 
@@ -635,11 +662,9 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
     assert result.metadata["target_participant_identity"] == "target-agent"
     dispatch = next(call for call in calls if call[0] == "dispatch")
     assert dispatch[1:3] == ("registered-agent", room_name)
-    dispatch_metadata = json.loads(dispatch[3])
-    assert dispatch_metadata["target_instructions"] == "Help the caller."
-    assert dispatch_metadata["simulator_participant_identity"] == (
-        "fagi-simulator-" + result.metadata["test_case_id"][-12:]
-    )
+    # LiveKit-template targets treat any non-empty metadata as an outbound job
+    # and suppress their greeting. Managed WebRTC dispatch is empty by default.
+    assert dispatch[3] == ""
     assert ("delete_room", room_name) in calls
     assert ("open",) in calls
 
@@ -1898,9 +1923,7 @@ def test_case_crash_yields_dense_failed_result_without_shifting_order(
     statuses = [r.metadata["status"] for r in report.results]
     assert statuses[2] == CaseStatus.FAILED.value
     assert report.results[2].metadata["failure"]["code"] == "case_execution_error"
-    assert all(
-        statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4)
-    )
+    assert all(statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4))
 
 
 def test_on_case_complete_streams_every_index_including_failed_slot(
@@ -1969,7 +1992,9 @@ def test_dispatch_metadata_empty_by_default():
     # A real target agent flips to outbound/no-greet on any dispatch metadata,
     # so the default must be an empty string (not our simulation context).
     assert livekit._dispatch_metadata_json(_agent()) == ""
-    assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    assert (
+        livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    )
     assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata={})) == ""
 
 
