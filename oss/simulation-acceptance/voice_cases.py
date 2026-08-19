@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import warnings
 from dataclasses import dataclass
@@ -207,11 +208,20 @@ def _harness_scenario() -> "simulate.Scenario | None":
     instruction = os.environ.get("HARNESS_INSTRUCTION", "").strip()
     if not instruction:
         return None
+    scripted = os.environ.get("HARNESS_SCRIPTED_CALLER", "").strip()
+    scripted_caller = json.loads(scripted) if scripted else None
     return simulate.Scenario(
         name=os.environ.get("HARNESS_SCENARIO", "harness"),
         dataset=[
             simulate.Persona(
-                persona={"name": "customer"},
+                persona={
+                    "name": "customer",
+                    "role": "customer",
+                    "initial_message": os.environ.get(
+                        "HARNESS_INITIAL_MESSAGE", ""
+                    ).strip(),
+                    "scripted_caller": scripted_caller,
+                },
                 situation=instruction,
                 outcome=os.environ.get("HARNESS_OUTCOME", "")
                 or "Do what you came to do, or accept that you cannot.",
@@ -249,6 +259,7 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
         llm={
             "provider": llm_provider,
             "model": _model("llm", llm_provider),
+            "temperature": float(os.environ.get("SIMULATOR_LLM_TEMPERATURE", "0.2")),
         },
         stt={
             "provider": stt_provider,
@@ -264,6 +275,9 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
             "voice": os.environ.get("SIMULATOR_TTS_VOICE")
             or _TTS_VOICE_DEFAULTS.get(tts_provider.lower(), "alloy"),
         },
+        instructions=os.environ.get("HARNESS_SIMULATOR_INSTRUCTIONS") or None,
+        allow_interruptions=os.environ.get("SIMULATOR_ALLOW_INTERRUPTION", "1").lower()
+        not in {"0", "false", "no"},
     )
     agent = _build_agent(case_id)
     return VoiceInputs(
@@ -271,8 +285,11 @@ def build_inputs(case_id: str, run_id: str) -> VoiceInputs:
         livekit_runtime=runtime,
         scenario=scenario,
         simulator=simulator,
-        conversation_direction=case.conversation_direction,
-        max_seconds=(
+        conversation_direction=os.environ.get(
+            "HARNESS_CONVERSATION_DIRECTION", case.conversation_direction
+        ),
+        max_seconds=float(os.environ.get("VOICE_MAX_SECONDS", "0"))
+        or (
             210.0
             if {stt_provider.lower(), tts_provider.lower()} & _GOOGLE_PROVIDERS
             else 150.0
