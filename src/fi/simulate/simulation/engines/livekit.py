@@ -165,6 +165,15 @@ def _simulator_turn_handling(
 def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, bool]:
     """Return the next literal customer reply for a transactional voice test."""
     text = heard.lower()
+    if any(
+        phrase in text
+        for phrase in (
+            "sent the details",
+            "confirmation text has been sent",
+            "confirmation sms has been sent",
+        )
+    ):
+        return "Thanks, goodbye.", True
     if "transferring you" in text or "transfer you" in text:
         return "Thanks, goodbye.", True
     if any(
@@ -172,6 +181,8 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
         for word in (
             "ride is canceled",
             "ride is cancelled",
+            "ride has been canceled",
+            "ride has been cancelled",
             "cancellation is complete",
         )
     ):
@@ -181,10 +192,22 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
         for phrase in ("ride is booked", "ride has been booked", "booked your ride")
     ) or (
         "driver" in text and any(word in text for word in ("plate", "vehicle", "car"))
+    ) or (
+        "license plate" in text and "confirmed" in text
     )
     if booked:
         if policy.get("cancel_after_booking"):
             return "Please cancel that ride.", False
+        if any(
+            phrase in text
+            for phrase in (
+                "would you like me to text",
+                "would you like me to send",
+                "text you the details",
+                "send the trip details",
+            )
+        ):
+            return "Yes, please text me the details.", False
         return "Thanks, goodbye.", True
     if (
         policy.get("end_after_options")
@@ -193,7 +216,7 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
     ):
         return "Thanks, goodbye.", True
     if "verification code" in text or "otp" in text or "read the code" in text:
-        return "One two three four five six.", False
+        return str(policy.get("otp") or "One two three four five six."), False
     if "cancellation fee" in text or ("cancel" in text and "confirm" in text):
         return "Yes, cancel it.", False
     if "should i book" in text or "confirm the booking" in text:
@@ -211,11 +234,29 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
         )
     ):
         return str(policy.get("dropoff") or "Ferry Building."), False
+    if (
+        any(word in text for word in ("complete", "completed", "done", "finished"))
+        and "link" in text
+    ):
+        return str(
+            policy.get("payment_complete")
+            or policy.get("fallback")
+            or "I've completed the payment link on my phone."
+        ), False
+    if (
+        "payment" in text
+        or "how would you like to pay" in text
+        or ("visa" in text and "correct" in text)
+        or ("uber cash" in text and "visa" in text)
+        or ("uber cash" in text and any(cue in text for cue in ("would you", "use")))
+    ):
+        return str(policy.get("payment") or "Visa."), False
     if any(
         phrase in text
         for phrase in (
             "which ride",
             "which one",
+            "which would you like",
             "ride option",
             "car type",
             "uberx or",
@@ -225,15 +266,13 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
         )
     ):
         return "I choose Uber X.", False
-    if (
-        "payment" in text
-        or "how would you like to pay" in text
-        or ("visa" in text and "correct" in text)
-        or ("uber cash" in text and "visa" in text)
-    ):
-        return str(policy.get("payment") or "Visa."), False
     if "name" in text and any(word in text for word in ("what", "which", "use")):
         return str(policy.get("name") or "Jordan."), False
+    if (
+        any(kind in text for kind in ("pickup", "destination", "dropoff"))
+        and any(cue in text for cue in ("correct", "right", "confirm"))
+    ):
+        return "Yes, that's right.", False
     if any(
         phrase in text
         for phrase in (
@@ -259,6 +298,7 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
         phrase in text
         for phrase in (
             "where are you headed",
+            "where are you going",
             "destination",
             "where to",
             "where can i take you",
@@ -266,6 +306,13 @@ def _scripted_caller_reply(heard: str, policy: dict[str, object]) -> tuple[str, 
         )
     ):
         return str(policy.get("dropoff") or "Ferry Building."), False
+    # Never manufacture consent from a fragment or declarative statement. A
+    # target can publish transcript text before its TTS has finished; replying
+    # "yes" to that fragment can be mistaken for final booking confirmation.
+    if "?" not in heard and not any(
+        cue in text for cue in ("would you", "do you", "can you", "please tell")
+    ):
+        return "Could you finish that?", False
     return str(policy.get("fallback") or "Yes."), False
 
 
@@ -288,17 +335,27 @@ class _TestRunnerAgent(Agent):
         self._min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
+        self._scripted_heard: str | None = None
         self._end_requested = asyncio.Event()
         self._usage_collector = metrics.ModelUsageCollector()
 
     def llm_node(self, chat_ctx, tools, model_settings):
         if self._scripted_caller is None:
             return super().llm_node(chat_ctx, tools, model_settings)
-        messages = _session_messages(self._session) if self._session is not None else []
-        heard = next(
-            (one["content"] for one in reversed(messages) if one["role"] == "user"),
-            "",
-        )
+        # A message added to session.history is not always visible by the time
+        # generate_reply enters this node. Prefer the literal target utterance
+        # supplied by the transcription handler so scripted replies cannot lag
+        # one turn behind the conversation.
+        heard = self._scripted_heard
+        self._scripted_heard = None
+        if heard is None:
+            messages = (
+                _session_messages(self._session) if self._session is not None else []
+            )
+            heard = next(
+                (one["content"] for one in reversed(messages) if one["role"] == "user"),
+                "",
+            )
         reply, terminal = _scripted_caller_reply(heard, self._scripted_caller)
 
         async def respond() -> str:
@@ -318,6 +375,11 @@ class _TestRunnerAgent(Agent):
             return reply
 
         return respond()
+
+    def set_scripted_heard(self, transcript: str) -> None:
+        """Pin the target utterance used by the next scripted reply."""
+        if self._scripted_caller is not None:
+            self._scripted_heard = transcript
 
     @function_tool(
         name="endCall",
@@ -461,6 +523,7 @@ class LiveKitEngine(BaseEngine):
         on_case_complete: Callable[[int, TestCaseResult], Awaitable[None]]
         | None = None,
         on_case_start: Callable[[int], Awaitable[None]] | None = None,
+        on_exchange: Callable[[int, dict[str, Any]], Awaitable[None]] | None = None,
         **kwargs,
     ) -> TestReport:
         if agent_definition is None:
@@ -597,6 +660,10 @@ class LiveKitEngine(BaseEngine):
                         cleanup_timeout=cleanup_timeout,
                         conversation_direction=conversation_direction,
                         agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                        on_exchange=(
+                            (lambda turn: on_exchange(index, turn))
+                            if on_exchange else None
+                        ),
                     )
                 except asyncio.CancelledError:
                     raise
@@ -723,6 +790,7 @@ class LiveKitEngine(BaseEngine):
         cleanup_timeout: float,
         conversation_direction: str,
         agent_first_silence_timeout_seconds: float,
+        on_exchange: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> _CaseOutcome:
         api_key = os.environ.get(runtime.api_key_env)
         api_secret = os.environ.get(runtime.api_secret_env)
@@ -733,7 +801,18 @@ class LiveKitEngine(BaseEngine):
                 "livekit_credentials_missing",
                 f"{runtime.api_key_env} and {runtime.api_secret_env} are required",
             )
-        simulator_identity = f"fagi-simulator-{test_case_id[-12:]}"
+        persona_metadata = persona.persona.get("metadata")
+        caller_phone = (
+            persona_metadata.get("caller_phone")
+            if isinstance(persona_metadata, dict)
+            else None
+        )
+        phone_identity = re.sub(r"\D", "", str(caller_phone or ""))
+        simulator_identity = (
+            f"fagi-simulator-phone-{phone_identity}-{test_case_id[-12:]}"
+            if phone_identity
+            else f"fagi-simulator-{test_case_id[-12:]}"
+        )
         recorder_identity = f"fagi-recorder-{test_case_id[-12:]}"
         room = rtc.Room()
         models: LiveKitModels | None = None
@@ -927,12 +1006,26 @@ class LiveKitEngine(BaseEngine):
                         )
             if outcome is not None:
                 return outcome
-            token = (
+            token_builder = (
                 AccessToken(api_key, api_secret)
                 .with_identity(simulator_identity)
                 .with_grants(VideoGrants(room_join=True, room=room_name))
-                .to_jwt()
             )
+            if caller_phone:
+                caller_metadata = json.dumps(
+                    {"caller_phone": str(caller_phone)}, separators=(",", ":")
+                )
+                token_builder.with_attributes(
+                    {
+                        "harness.callerPhone": str(caller_phone),
+                        "sip.phoneNumber": str(caller_phone),
+                    }
+                )
+                # Participant attributes can arrive just after the participant-joined
+                # event in some LiveKit deployments. Metadata is part of the initial
+                # participant info, so send the harness identity through both channels.
+                token_builder.with_metadata(caller_metadata)
+            token = token_builder.to_jwt()
             await asyncio.wait_for(
                 room.connect(str(runtime.url), token),
                 timeout=connect_timeout,
@@ -1009,6 +1102,21 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+            if on_exchange is not None:
+                emitted: set[tuple[str, str]] = set()
+
+                def stream_exchange(*_args: Any, **_kwargs: Any) -> None:
+                    messages = _session_messages(session)
+                    if not messages:
+                        return
+                    message = messages[-1]
+                    key = (str(message.get("role", "")), str(message.get("content", "")))
+                    if not key[1] or key in emitted:
+                        return
+                    emitted.add(key)
+                    asyncio.create_task(on_exchange(dict(message)))
+
+                session.on("conversation_item_added", stream_exchange)
             if target_dispatch_deferred:
                 # Session + early buffer handler are live; now dispatch the target
                 # so its greeting stream is captured, not dropped.
@@ -1216,6 +1324,7 @@ class LiveKitEngine(BaseEngine):
                     _forward_target_transcription(
                         reader,
                         session,
+                        simulator_agent=customer_agent,
                         conversation_ended=conversation_ended,
                         captured_target_turns=captured_target_turns,
                     )
@@ -1688,6 +1797,7 @@ async def _forward_target_transcription(
     reader: "rtc.TextStreamReader",
     session: "AgentSession",
     *,
+    simulator_agent: "_TestRunnerAgent | None" = None,
     conversation_ended: "asyncio.Event | None" = None,
     captured_target_turns: list[str] | None = None,
 ) -> None:
@@ -1713,6 +1823,8 @@ async def _forward_target_transcription(
         # silent.
         if conversation_ended is None or not conversation_ended.is_set():
             try:
+                if simulator_agent is not None:
+                    simulator_agent.set_scripted_heard(transcript)
                 session.generate_reply()
             except RuntimeError:
                 # Session is already closing; the turn is captured above.

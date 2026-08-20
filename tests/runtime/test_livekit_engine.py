@@ -70,11 +70,63 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 8000) -> None
             ("S F O International Terminal.", False),
         ),
         (
+            "Great. And where are you going today?",
+            {"dropoff": "S F O International Terminal."},
+            ("S F O International Terminal.", False),
+        ),
+        (
+            "UberX is fifty dollars and Comfort is sixty. Which would you like?",
+            {},
+            ("I choose Uber X.", False),
+        ),
+        (
             "How would you like to pay?",
             {"payment": "Please use Uber Cash."},
             ("Please use Uber Cash.", False),
         ),
+        (
+            "Please read the verification code.",
+            {"otp": "Eight zero four two seven one."},
+            ("Eight zero four two seven one.", False),
+        ),
         ("Could you repeat that?", {"fallback": "Certainly."}, ("Certainly.", False)),
+        ("Great. I've selected", {"fallback": "Yes."}, ("Could you finish that?", False)),
+        (
+            "Is your destination SFO International Terminal correct?",
+            {"dropoff": "S F O International Terminal."},
+            ("Yes, that's right.", False),
+        ),
+        (
+            "Your UberX with Alex M. is confirmed, license plate 7ABC123.",
+            {},
+            ("Thanks, goodbye.", True),
+        ),
+        ("I've sent the details to your phone.", {}, ("Thanks, goodbye.", True)),
+        (
+            "Your ride is booked. Would you like me to text you the details?",
+            {},
+            ("Yes, please text me the details.", False),
+        ),
+        (
+            "Your ride has been cancelled.",
+            {},
+            ("Thanks, goodbye.", True),
+        ),
+        (
+            "You have Visa and Uber Cash. Which would you like to use for payment?",
+            {"payment": "Please use Uber Cash."},
+            ("Please use Uber Cash.", False),
+        ),
+        (
+            "Your Uber Cash balance covers the fare. Would you like to use it?",
+            {"payment": "That card is expired; please send a payment link."},
+            ("That card is expired; please send a payment link.", False),
+        ),
+        (
+            "Please complete the payment link and let me know when you're done.",
+            {"fallback": "I've completed the link. You can check it now."},
+            ("I've completed the link. You can check it now.", False),
+        ),
         ("Your cancellation is complete.", {}, ("Thanks, goodbye.", True)),
     ],
 )
