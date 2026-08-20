@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -671,7 +672,7 @@ class LiveKitEngine(BaseEngine):
         # target closing delivered after the simulator is done never reaches the
         # chat context. These are merged into the report so the trailing target
         # turn is never lost.
-        captured_target_turns: list[str] = []
+        captured_target_turns: list[dict[str, Any]] = []
         # agent_first (target greets first): the target can publish its greeting
         # transcription before the main handler is registered post-readiness, and
         # the LiveKit client DROPS a text-stream header that arrives with no
@@ -1669,10 +1670,17 @@ async def _forward_target_transcription(
     session: "AgentSession",
     *,
     conversation_ended: "asyncio.Event | None" = None,
-    captured_target_turns: list[str] | None = None,
+    captured_target_turns: list[dict[str, Any]] | None = None,
 ) -> None:
+    # Receiver-side wall clock — same clock domain as the simulator's
+    # ChatMessage.metrics, and the target's transcript IO is playback-synced
+    # (TranscriptSynchronizer), so stream-open ~= speech start and read_all()
+    # completion ~= speech end. Timestamps embedded in the stream are the
+    # sender's (laptop) clock; skew there would corrupt the derived latencies.
+    started_at = time.time()
     try:
         transcript = (await reader.read_all()).strip()
+        stopped_at = time.time()
         if not transcript:
             return
         # Capture the target's turn independently of the simulator session FIRST.
@@ -1681,7 +1689,13 @@ async def _forward_target_transcription(
         # reaches the chat context. This list is merged into the report so the
         # trailing target turn survives regardless of session state.
         if captured_target_turns is not None:
-            captured_target_turns.append(transcript)
+            captured_target_turns.append(
+                {
+                    "content": transcript,
+                    "started_speaking_at": started_at,
+                    "stopped_speaking_at": stopped_at,
+                }
+            )
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent. The turn MUST travel through ``generate_reply(user_input=...)``:
@@ -2084,22 +2098,68 @@ def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
 
 def _merge_captured_target_turns(
     messages: list[dict[str, Any]],
-    captured_target_turns: list[str] | None,
+    captured_target_turns: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Append target turns captured off the transcription stream that never
+    """Restore native target-turn timing, and append any target turn that never
     reached the session history.
 
-    The target's closing is often delivered after the simulator session has
-    started draining (it rejects new input with "speech scheduling is paused"),
-    so it is recorded in ``captured_target_turns`` but missing from the report.
-    Each captured turn is the target (``assistant`` in the report perspective).
-    Deduped against existing content — including partial/extended emissions of
-    the same turn — so nothing already recorded is doubled. Appended after the
-    existing turns (they are trailing utterances) with a synthetic timing just
-    past the last message so downstream ms-offset ordering keeps them last.
+    Native target turns are fed to the simulator via ``generate_reply(
+    user_input=text)`` — a text input with no audio metrics — so their report
+    entries carry a start but no ``stopped_speaking_at``: zero-duration turns
+    that leave bot WPM, latency, and talk-ratio unpopulated. Each captured turn
+    carries receiver-side wall-clock timing (see ``_forward_target_transcription``);
+    here we (a) patch it onto the matching ``assistant`` turns missing a real
+    stop, and (b) append the trailing turn delivered after the simulator drained
+    ("speech scheduling is paused"). One turn can arrive as several partial or
+    extended emissions, so match by containment and aggregate min-start/max-stop.
+    Only populated by the native transcription handler — VAPI/Retell are untouched.
     """
     if not captured_target_turns:
         return messages
+
+    def _matching(text: str) -> list[dict[str, Any]]:
+        result = []
+        for captured in captured_target_turns:
+            cap_text = (captured.get("content") or "").strip()
+            if cap_text and (text in cap_text or cap_text in text):
+                result.append(captured)
+        return result
+
+    # (a) Fill timing onto existing assistant turns that lack a real stop; never
+    #     override genuine audio metrics if livekit-agents ever populates them.
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        text = (message.get("content") or "").strip()
+        if not text:
+            continue
+        started = message.get("started_speaking_at")
+        stopped = message.get("stopped_speaking_at")
+        if (
+            isinstance(started, (int, float))
+            and isinstance(stopped, (int, float))
+            and stopped > started
+        ):
+            continue
+        matched = _matching(text)
+        starts = [
+            c["started_speaking_at"]
+            for c in matched
+            if isinstance(c.get("started_speaking_at"), (int, float))
+        ]
+        stops = [
+            c["stopped_speaking_at"]
+            for c in matched
+            if isinstance(c.get("stopped_speaking_at"), (int, float))
+        ]
+        if starts:
+            message["started_speaking_at"] = min(starts)
+            if not isinstance(message.get("created_at"), (int, float)):
+                message["created_at"] = min(starts)
+        if stops:
+            message["stopped_speaking_at"] = max(stops)
+
+    # (b) Append target turns that never reached the report at all.
     assistant_texts = [
         (m.get("content") or "").strip()
         for m in messages
@@ -2117,18 +2177,23 @@ def _merge_captured_target_turns(
                 last_ts = value
 
     merged = list(messages)
-    for offset, raw in enumerate(captured_target_turns, start=1):
-        text = (raw or "").strip()
+    for offset, captured in enumerate(captured_target_turns, start=1):
+        text = (captured.get("content") or "").strip()
         if not text or _already_present(text):
             continue
-        ts = (last_ts + offset) if last_ts else None
+        started = captured.get("started_speaking_at")
+        if not isinstance(started, (int, float)):
+            started = (last_ts + offset) if last_ts else None
+        stopped = captured.get("stopped_speaking_at")
+        if not isinstance(stopped, (int, float)):
+            stopped = started
         merged.append(
             {
                 "role": "assistant",
                 "content": text,
-                "created_at": ts,
-                "started_speaking_at": ts,
-                "stopped_speaking_at": ts,
+                "created_at": started,
+                "started_speaking_at": started,
+                "stopped_speaking_at": stopped,
                 "interrupted": False,
                 "e2e_latency": None,
             }

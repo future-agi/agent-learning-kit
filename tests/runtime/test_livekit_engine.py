@@ -2184,7 +2184,7 @@ def test_target_transcription_feeds_simulator_llm_context() -> None:
     # reads the AGENT's chat context, so the simulator LLM never saw a single
     # target turn and answered every one with "I can't hear you".
     session = _FakeReplySession()
-    captured: list[str] = []
+    captured: list[dict] = []
 
     asyncio.run(
         livekit._forward_target_transcription(
@@ -2199,14 +2199,16 @@ def test_target_transcription_feeds_simulator_llm_context() -> None:
     # The pipeline persists the turn into both contexts itself; a manual
     # history add here would double the transcript entry.
     assert session.history_adds == []
-    assert captured == ["How can I help you today?"]
+    assert len(captured) == 1
+    assert captured[0]["content"] == "How can I help you today?"
+    assert captured[0]["started_speaking_at"] <= captured[0]["stopped_speaking_at"]
 
 
 def test_target_transcription_after_end_records_without_reply() -> None:
     session = _FakeReplySession()
     ended = asyncio.Event()
     ended.set()
-    captured: list[str] = []
+    captured: list[dict] = []
 
     asyncio.run(
         livekit._forward_target_transcription(
@@ -2219,12 +2221,12 @@ def test_target_transcription_after_end_records_without_reply() -> None:
 
     assert session.reply_inputs == []
     assert session.history_adds == [("user", "Goodbye!")]
-    assert captured == ["Goodbye!"]
+    assert [c["content"] for c in captured] == ["Goodbye!"]
 
 
 def test_target_transcription_falls_back_to_history_when_session_closing() -> None:
     session = _FakeReplySession(reply_error=RuntimeError("scheduling is paused"))
-    captured: list[str] = []
+    captured: list[dict] = []
 
     asyncio.run(
         livekit._forward_target_transcription(
@@ -2236,7 +2238,68 @@ def test_target_transcription_falls_back_to_history_when_session_closing() -> No
     )
 
     assert session.history_adds == [("user", "One last thing.")]
-    assert captured == ["One last thing."]
+    assert [c["content"] for c in captured] == ["One last thing."]
+
+
+def test_merge_patches_target_turn_missing_stop_timing() -> None:
+    # Native target turns reach history via generate_reply(user_input=) with no
+    # audio metrics, so stop == start (zero duration) -> bot WPM/latency dead.
+    messages = [
+        {"role": "user", "content": "hi", "started_speaking_at": 1.0,
+         "stopped_speaking_at": 2.0},
+        {"role": "assistant", "content": "hello there how can i help",
+         "started_speaking_at": 3.0, "stopped_speaking_at": 3.0},
+    ]
+    captured = [{"content": "hello there how can i help",
+                 "started_speaking_at": 2.5, "stopped_speaking_at": 5.0}]
+    merged = livekit._merge_captured_target_turns(messages, captured)
+    assert len(merged) == 2  # patched in place, not appended
+    agent = next(m for m in merged if m["role"] == "assistant")
+    assert agent["started_speaking_at"] == 2.5
+    assert agent["stopped_speaking_at"] == 5.0
+
+
+def test_merge_aggregates_partial_target_emissions() -> None:
+    # One turn arrives as several partial/extended emissions -> min-start/max-stop.
+    messages = [
+        {"role": "assistant", "content": "can we look at options for that",
+         "started_speaking_at": 10.0, "stopped_speaking_at": 10.0},
+    ]
+    captured = [
+        {"content": "can we look", "started_speaking_at": 9.0,
+         "stopped_speaking_at": 9.5},
+        {"content": "can we look at options for that",
+         "started_speaking_at": 9.2, "stopped_speaking_at": 12.0},
+    ]
+    merged = livekit._merge_captured_target_turns(messages, captured)
+    assert merged[0]["started_speaking_at"] == 9.0
+    assert merged[0]["stopped_speaking_at"] == 12.0
+
+
+def test_merge_does_not_override_real_target_timing() -> None:
+    messages = [
+        {"role": "assistant", "content": "genuine turn",
+         "started_speaking_at": 4.0, "stopped_speaking_at": 6.0},
+    ]
+    captured = [{"content": "genuine turn", "started_speaking_at": 1.0,
+                 "stopped_speaking_at": 99.0}]
+    merged = livekit._merge_captured_target_turns(messages, captured)
+    assert merged[0]["started_speaking_at"] == 4.0
+    assert merged[0]["stopped_speaking_at"] == 6.0
+
+
+def test_merge_appends_trailing_target_turn_with_real_timing() -> None:
+    messages = [{"role": "user", "content": "bye", "started_speaking_at": 5.0,
+                 "stopped_speaking_at": 6.0}]
+    captured = [{"content": "take care now", "started_speaking_at": 7.0,
+                 "stopped_speaking_at": 8.0}]
+    merged = livekit._merge_captured_target_turns(messages, captured)
+    assert len(merged) == 2
+    trailing = merged[-1]
+    assert trailing["role"] == "assistant"
+    assert trailing["content"] == "take care now"
+    assert trailing["started_speaking_at"] == 7.0
+    assert trailing["stopped_speaking_at"] == 8.0
 
 
 class _FakeEventRoom:
