@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -37,6 +38,22 @@ if TYPE_CHECKING:
     from fi.simulate.runtime.spec import SimulationSpec
 
 _HEARTBEAT_INTERVAL_SECONDS = 10.0
+_CANCEL_GRACE_SECONDS = 30.0
+
+logger = logging.getLogger("fi.simulate.hosted.runner")
+
+
+def _job_log_fields(job: StartRunnerJob) -> dict[str, Any]:
+    fields: dict[str, Any] = {"job_id": job.job_id, "mode": job.mode.value}
+    if job.voice is not None:
+        target = dict(job.voice.agent_definition or {}).get("target") or {}
+        fields["provider"] = target.get("provider")
+        dataset = dict(job.voice.scenario or {}).get("dataset") or []
+        fields["cases"] = len(dataset)
+    if job.sink is not None:
+        fields["run_test_id"] = job.sink.run_test_id
+        fields["test_execution_id"] = job.sink.test_execution_id
+    return fields
 
 
 class _StatusReporter:
@@ -157,6 +174,7 @@ async def _heartbeat(reporter: _StatusReporter) -> None:
 
 async def _execute(job: StartRunnerJob, reporter: _StatusReporter) -> int:
     reporter.emit(RunnerJobPhase.PREPARING)
+    logger.info("hosted job start", extra=_job_log_fields(job))
     sink = _build_sink(job)
 
     if job.mode is RunnerMode.CHAT:
@@ -174,6 +192,17 @@ async def _execute(job: StartRunnerJob, reporter: _StatusReporter) -> int:
         report: SimulationReport = await run_task
     except asyncio.CancelledError:
         reporter.emit(RunnerJobPhase.CANCELED, detail="cancelled")
+        logger.warning("hosted job cancelled", extra={"job_id": job.job_id})
+        # Cancelling this coroutine does not cancel ``run_task``; without an
+        # explicit cancel ``asyncio.run`` shutdown waits on it forever and the
+        # child leaks past SIGTERM.
+        run_task.cancel()
+        try:
+            await asyncio.wait({run_task}, timeout=_CANCEL_GRACE_SECONDS)
+        except asyncio.CancelledError:
+            pass
+        if not run_task.done():
+            os._exit(2)
         raise
     finally:
         heartbeat_task.cancel()
@@ -193,6 +222,17 @@ async def _execute(job: StartRunnerJob, reporter: _StatusReporter) -> int:
         detail = report.failure.code if report.failure else "run_failed"
     else:
         detail = f"submission_{submission_status or 'missing'}"
+    outcome_fields = {
+        **_job_log_fields(job),
+        "run_status": getattr(report.status, "value", str(report.status)),
+        "submission_status": submission_status,
+        "report_hash": report.report_hash,
+        "detail": detail,
+    }
+    if completed:
+        logger.info("hosted job completed", extra=outcome_fields)
+    else:
+        logger.error("hosted job failed", extra=outcome_fields)
     reporter.emit(
         RunnerJobPhase.COMPLETED if completed else RunnerJobPhase.FAILED,
         detail=detail,
@@ -228,7 +268,21 @@ async def _main_async(job: StartRunnerJob, reporter: _StatusReporter) -> int:
         return 2
 
 
+def _configure_logging() -> None:
+    """The child runs with no logging config, so INFO seams (job start/outcome,
+    engine dispatch/join/stop_reason) were silently dropped by the WARNING-level
+    lastResort handler and never reached the runner's log capture."""
+    root = logging.getLogger()
+    if not root.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        root.addHandler(handler)
+        root.setLevel(logging.WARNING)
+    logging.getLogger("fi.simulate").setLevel(logging.INFO)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser(prog="fi.simulate.hosted.child_entrypoint")
     parser.add_argument("job", help="path to the StartRunnerJob JSON file")
     parser.add_argument("--status-file", default=None)
@@ -241,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(_main_async(job, reporter))
     except Exception as exc:  # noqa: BLE001
+        logger.exception("hosted job crashed", extra={"job_id": job.job_id})
         reporter.emit(
             RunnerJobPhase.FAILED, detail=f"{type(exc).__name__}: {exc}"
         )

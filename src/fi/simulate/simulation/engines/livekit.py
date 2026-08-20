@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -88,6 +89,39 @@ _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
 # finishes playing), then delete the room so neither side keeps talking into a
 # call the other has already left.
 _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
+# The hosted platform inflates ``cleanup_timeout`` to carry the whole run
+# budget (observed 1470s); as a per-step cleanup bound it must stay capped.
+_MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
+_NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
+# Each web case drives a full voice pipeline (STT/LLM/TTS + LiveKit conns) in one
+# child; too many starve the pod's CPU. This is an OPS CEILING on the
+# config-driven ``max_parallel_cases`` (not a replacement for it) — tune
+# ``ALK_VOICE_MAX_CASE_CONCURRENCY`` to the pod's cores. Caps web cases only.
+_VOICE_MAX_CASE_CONCURRENCY_DEFAULT = 4
+
+
+def _voice_max_case_concurrency() -> int:
+    raw = os.environ.get("ALK_VOICE_MAX_CASE_CONCURRENCY", "").strip()
+    if not raw:
+        return _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
+    return value if value >= 1 else _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
+
+_silero_vad: Any | None = None
+_silero_vad_guard = threading.Lock()
+
+
+def _load_silero_vad_sync() -> Any:
+    """One shared VAD per process; per-case ``VAD.load()`` ran a synchronous
+    model load on the event loop for every concurrent case."""
+    global _silero_vad
+    with _silero_vad_guard:
+        if _silero_vad is None:
+            _silero_vad = silero.VAD.load()
+    return _silero_vad
 
 
 @dataclass(frozen=True)
@@ -394,6 +428,7 @@ class LiveKitEngine(BaseEngine):
                 "sip_inbound_room_template_required: multi-case inbound runs "
                 "need {run_id} or {test_case_id} in room_name"
             )
+        cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
         current_run_id = run_id or new_run_id()
         if recording_case_directory is not None and len(scenario.dataset) != 1:
             raise ValueError(
@@ -409,7 +444,14 @@ class LiveKitEngine(BaseEngine):
         case_concurrency = (
             1
             if profile.is_sip
-            else max(1, min(int(max_concurrency or 1), len(scenario.dataset)))
+            else max(
+                1,
+                min(
+                    int(max_concurrency or 1),
+                    _voice_max_case_concurrency(),
+                    len(scenario.dataset),
+                ),
+            )
         )
         case_semaphore = asyncio.Semaphore(case_concurrency)
 
@@ -740,24 +782,13 @@ class LiveKitEngine(BaseEngine):
                             ),
                         )
                 if outcome is None and profile.uses_external_room:
-                    # agent_first: defer the target dispatch until AFTER the early
-                    # buffer handler is registered (post room.connect), so the
-                    # target's greeting transcription is never dropped for lack of
-                    # a handler. simulator_first dispatches now, unchanged.
-                    if conversation_direction == "agent_first":
-                        target_dispatch_deferred = True
-                    else:
-                        await asyncio.wait_for(
-                            api_client.agent_dispatch.create_dispatch(
-                                api.CreateAgentDispatchRequest(
-                                    agent_name=agent_definition.agent_name
-                                    or agent_definition.name,
-                                    room=room_name,
-                                    metadata=_dispatch_metadata_json(agent_definition),
-                                )
-                            ),
-                            timeout=connect_timeout,
-                        )
+                    # Defer the target dispatch until AFTER the early buffer
+                    # handler is registered and the session is live (both
+                    # directions): a native target may greet the moment it
+                    # joins even when the simulator is meant to open, and the
+                    # LiveKit client drops a text-stream header that arrives
+                    # with no handler — the greeting would be lost.
+                    target_dispatch_deferred = True
                 elif outcome is None and profile.receives_inbound_call:
                     try:
                         (
@@ -811,7 +842,7 @@ class LiveKitEngine(BaseEngine):
                 timeout=connect_timeout,
             )
             room_connected = True
-            if conversation_direction == "agent_first" and profile.uses_external_room:
+            if profile.uses_external_room:
                 # Buffer any target greeting that arrives before readiness; the
                 # LiveKit client drops a text-stream header with no handler.
                 room.register_text_stream_handler(
@@ -882,16 +913,55 @@ class LiveKitEngine(BaseEngine):
                 # Session + early buffer handler are live; now dispatch the target
                 # so its greeting stream is captured, not dropped.
                 assert api_client is not None
-                await asyncio.wait_for(
-                    api_client.agent_dispatch.create_dispatch(
-                        api.CreateAgentDispatchRequest(
-                            agent_name=agent_definition.agent_name
-                            or agent_definition.name,
-                            room=room_name,
-                            metadata=_dispatch_metadata_json(agent_definition),
-                        )
-                    ),
-                    timeout=connect_timeout,
+                dispatch_agent_name = (
+                    agent_definition.agent_name or agent_definition.name
+                )
+                try:
+                    await asyncio.wait_for(
+                        api_client.agent_dispatch.create_dispatch(
+                            api.CreateAgentDispatchRequest(
+                                agent_name=dispatch_agent_name,
+                                room=room_name,
+                                metadata=_dispatch_metadata_json(agent_definition),
+                            )
+                        ),
+                        timeout=connect_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    outcome = _failure_outcome(
+                        TestCaseStatus.TIMED_OUT,
+                        FailureStage.PREPARING,
+                        "livekit_dispatch_timeout",
+                        "Target agent dispatch exceeded its deadline",
+                        retryable=True,
+                    )
+                    return outcome
+                except Exception as exc:
+                    logger.warning(
+                        "LiveKit target dispatch failed",
+                        exc_info=redacted_exc_info(exc),
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                        },
+                    )
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "livekit_dispatch_failed",
+                        "Failed to dispatch the target agent",
+                        details=_safe_provider_error_details(
+                            exc, operation="agent_dispatch"
+                        ),
+                    )
+                    return outcome
+                logger.info(
+                    "livekit_target_dispatched agent=%s room=%s run=%s case=%s",
+                    dispatch_agent_name,
+                    room_name,
+                    run_id,
+                    test_case_id,
                 )
             if profile.uses_web_audio_bridge:
                 try:
@@ -1044,6 +1114,14 @@ class LiveKitEngine(BaseEngine):
                 target_identity=effective_target_identity,
                 timeout=effective_readiness_timeout,
             )
+            logger.info(
+                "livekit_target_joined identity=%s sid=%s track=%s run=%s case=%s",
+                target.identity,
+                target.sid,
+                target.audio_track_sid,
+                run_id,
+                test_case_id,
+            )
             # RoomIO auto-links to the first participant that joined — the
             # recorder, which publishes no audio — so the simulator's STT never
             # hears the target. Re-point it at the target readiness selected.
@@ -1116,6 +1194,12 @@ class LiveKitEngine(BaseEngine):
                 conversation_direction=conversation_direction,
                 agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
                 provider_task=bridge_task,
+            )
+            logger.info(
+                "livekit_conversation_ended stop_reason=%s run=%s case=%s",
+                stop_reason,
+                run_id,
+                test_case_id,
             )
             # End the call cleanly. First let the party that just spoke commit its
             # own final turn — a LiveKit turn only lands in history once its TTS
@@ -1448,6 +1532,14 @@ class LiveKitEngine(BaseEngine):
                 ),
             }
         )
+        logger.info(
+            "livekit_case_outcome status=%s stop_reason=%s failure=%s run=%s case=%s",
+            outcome.status.value,
+            outcome.metadata.get("stop_reason"),
+            outcome.failure.code if outcome.failure is not None else None,
+            run_id,
+            test_case_id,
+        )
         return outcome
 
     async def _create_customer_agent(
@@ -1517,7 +1609,7 @@ class LiveKitEngine(BaseEngine):
             stt_config=stt_config,
             tts_config=tts_config,
         )
-        vad = silero.VAD.load()
+        vad = await asyncio.to_thread(_load_silero_vad_sync)
         agent = _TestRunnerAgent(
             persona=persona,
             min_turn_messages=min_turn_messages,
@@ -1590,21 +1682,27 @@ async def _forward_target_transcription(
         # trailing target turn survives regardless of session state.
         if captured_target_turns is not None:
             captured_target_turns.append(transcript)
-        # Best-effort commit onto the chat context too (keeps the live
-        # conversation coherent while the session is still running).
+        # Only elicit a simulator response while the conversation is live; once
+        # it has ended the target's turn is recorded but the simulator stays
+        # silent. The turn MUST travel through ``generate_reply(user_input=...)``:
+        # the reply pipeline reads the agent's own chat context, not
+        # ``session.history``, so a turn only added to the history is invisible
+        # to the simulator LLM (it answers as if it heard nothing). The pipeline
+        # then persists the message into both contexts once the reply schedules.
+        if conversation_ended is None or not conversation_ended.is_set():
+            try:
+                session.generate_reply(user_input=transcript)
+            except RuntimeError:
+                # Session is already closing; the turn is captured above.
+                pass
+            else:
+                return
+        # Conversation over (or the session rejected the reply): record the
+        # turn on the transcript without eliciting a response.
         try:
             session.history.add_message(role="user", content=transcript)
         except Exception:  # noqa: BLE001
             pass
-        # Only elicit a simulator response while the conversation is live; once
-        # it has ended the target's turn is recorded but the simulator stays
-        # silent.
-        if conversation_ended is None or not conversation_ended.is_set():
-            try:
-                session.generate_reply()
-            except RuntimeError:
-                # Session is already closing; the turn is captured above.
-                pass
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Failed to consume target transcription stream",
@@ -1673,6 +1771,7 @@ async def _wait_for_conversation_end(
 ) -> str:
     closed = asyncio.Event()
     target_disconnected = asyncio.Event()
+    room_disconnected = asyncio.Event()
 
     def on_close(_event) -> None:
         closed.set()
@@ -1681,14 +1780,37 @@ async def _wait_for_conversation_end(
         if str(participant.identity) == target_identity:
             target_disconnected.set()
 
+    def on_room_disconnected(*_args) -> None:
+        room_disconnected.set()
+
     session.on("close", on_close)
     room.on("participant_disconnected", on_participant_disconnected)
+    # A native target commonly hangs up by DELETING the room (the LiveKit
+    # hangup recipe); the simulator then sees a room disconnect, not a
+    # participant_disconnected, and without this watcher the case idled
+    # through the silence backstop before ending.
+    room.on("disconnected", on_room_disconnected)
+    # The target may have left in the gap between readiness and this
+    # registration — the event is gone, so recheck presence once.
+    remote_participants = getattr(room, "remote_participants", None)
+    if isinstance(remote_participants, dict) and not any(
+        str(participant.identity) == target_identity
+        for participant in remote_participants.values()
+    ):
+        target_disconnected.set()
     tasks = {
         "closed": asyncio.create_task(closed.wait()),
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
+        "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
         "conversation_settled": asyncio.create_task(
             _wait_for_conversation_silence(session)
+        ),
+        "no_conversation": asyncio.create_task(
+            _wait_for_conversation_never_started(
+                session,
+                timeout_seconds=_NO_CONVERSATION_TIMEOUT_SECONDS,
+            )
         ),
     }
     if conversation_direction == "agent_first":
@@ -1717,17 +1839,40 @@ async def _wait_for_conversation_end(
             await asyncio.gather(*owned_pending, return_exceptions=True)
         if not done:
             return "timeout"
+        # A crashed monitor is also "done"; it must not count as its condition.
+        completed: set[str] = set()
+        monitor_failures: dict[str, BaseException] = {}
+        for name, task in tasks.items():
+            if task not in done or task.cancelled():
+                continue
+            exc = task.exception()
+            if exc is None:
+                completed.add(name)
+            else:
+                monitor_failures[name] = exc
+        for name, exc in monitor_failures.items():
+            logger.warning(
+                "conversation end monitor failed",
+                exc_info=redacted_exc_info(exc),
+                extra={"monitor": name, "target_identity": target_identity},
+            )
+        # A bridge task error is still a real provider-side disconnect.
+        if "provider_disconnected" in monitor_failures:
+            completed.add("provider_disconnected")
         for reason in (
             "simulator_end_call",
             "target_disconnected",
+            "room_disconnected",
+            "no_conversation",
             "conversation_silence_timeout",
             "conversation_settled",
             "provider_disconnected",
             "closed",
         ):
-            task = tasks.get(reason)
-            if task is not None and task in done:
+            if reason in completed:
                 return "session_closed" if reason == "closed" else reason
+        if monitor_failures:
+            return "monitor_failed"
         return "session_closed"
     finally:
         _remove_room_listener(
@@ -1735,6 +1880,7 @@ async def _wait_for_conversation_end(
             "participant_disconnected",
             on_participant_disconnected,
         )
+        _remove_room_listener(room, "disconnected", on_room_disconnected)
 
 
 async def _wait_for_conversation_silence(
@@ -1750,6 +1896,10 @@ async def _wait_for_conversation_silence(
     message count — a run is never cut off at a floor, it runs as long as turns
     keep flowing. The timer resets on every new message and while either side is
     speaking, so only a real ``quiet_seconds`` gap of nothing ends the call.
+
+    Parks until the first non-empty turn: a call where nobody ever spoke is the
+    ``no_conversation`` monitor's condition, and this backstop firing first
+    mislabeled dead calls as merely settled.
     """
     last_signature: tuple[tuple[str, str], ...] | None = None
     stable_since: float | None = None
@@ -1757,6 +1907,11 @@ async def _wait_for_conversation_silence(
     while True:
         messages = _session_messages(session)
         signature = tuple((message["role"], message["content"]) for message in messages)
+        if not any(message["content"] for message in messages):
+            last_signature = signature
+            stable_since = None
+            await asyncio.sleep(0.1)
+            continue
         participant_speaking = (
             getattr(session, "agent_state", None) == "speaking"
             or getattr(session, "user_state", None) == "speaking"
@@ -1771,6 +1926,21 @@ async def _wait_for_conversation_silence(
         await asyncio.sleep(0.1)
 
 
+async def _wait_for_conversation_never_started(
+    session: AgentSession,
+    *,
+    timeout_seconds: float,
+) -> None:
+    """Completes only when no non-empty turn has ever been committed; parks
+    forever (until cancelled) once the conversation has actually started."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        if any(message["content"] for message in _session_messages(session)):
+            await asyncio.Event().wait()
+        await asyncio.sleep(0.5)
+
+
 async def _wait_for_agent_first_silence(
     session: AgentSession,
     *,
@@ -1781,7 +1951,13 @@ async def _wait_for_agent_first_silence(
     while True:
         messages = _session_messages(session)
         signature = tuple((message["role"], message["content"]) for message in messages)
-        if signature != last_signature:
+        participant_speaking = (
+            getattr(session, "agent_state", None) == "speaking"
+            or getattr(session, "user_state", None) == "speaking"
+        )
+        # A turn lands in history only after its TTS finishes, so an in-flight
+        # utterance longer than the timeout must count as activity.
+        if signature != last_signature or participant_speaking:
             last_signature = signature
             last_change = asyncio.get_running_loop().time()
         roles = {message["role"] for message in messages if message["content"]}
@@ -1985,13 +2161,29 @@ def _conversation_outcome(
             messages=messages,
             retryable=True,
         )
-    if stop_reason in {"conversation_silence_timeout", "session_closed"}:
+    if stop_reason in {
+        "conversation_silence_timeout",
+        "session_closed",
+        "no_conversation",
+        "monitor_failed",
+    }:
         code = stop_reason
-        message = (
-            "Agent-first conversation stalled after it began"
-            if stop_reason == "conversation_silence_timeout"
-            else "Conversation session closed before a natural end condition"
-        )
+        message = {
+            "conversation_silence_timeout": (
+                "Agent-first conversation stalled after it began"
+            ),
+            "session_closed": (
+                "Conversation session closed before a natural end condition"
+            ),
+            "no_conversation": (
+                "No conversation turns were committed before the inactivity "
+                "deadline"
+            ),
+            "monitor_failed": (
+                "Conversation end monitoring failed before a natural end "
+                "condition"
+            ),
+        }[stop_reason]
         return _failure_outcome(
             TestCaseStatus.FAILED,
             FailureStage.RUNNING,
@@ -2003,8 +2195,8 @@ def _conversation_outcome(
         )
     if len(messages) < min_turn_messages or not _has_role_alternation(messages):
         code = (
-            "target_disconnected"
-            if stop_reason == "target_disconnected"
+            stop_reason
+            if stop_reason in {"target_disconnected", "room_disconnected"}
             else "insufficient_conversation"
         )
         return _failure_outcome(
@@ -2014,7 +2206,8 @@ def _conversation_outcome(
             "Conversation ended before the required alternating turns completed",
             transcript=transcript,
             messages=messages,
-            retryable=stop_reason in {"target_disconnected", "session_closed"},
+            retryable=stop_reason
+            in {"target_disconnected", "room_disconnected", "session_closed"},
             details={
                 "stop_reason": stop_reason,
                 "turn_count": str(len(messages)),

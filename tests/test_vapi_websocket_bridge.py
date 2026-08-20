@@ -140,3 +140,62 @@ def test_vapi_websocket_connector_requires_credentials(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="VAPI_API_KEY, VAPI_ASSISTANT_ID"):
         VapiWebSocketConnector.from_env()
+
+
+def test_call_end_text_event_is_recognized() -> None:
+    import json
+
+    is_end = VapiWebSocketConnector._is_call_end_event
+    assert is_end(json.dumps({"type": "hangup"}))
+    assert is_end(json.dumps({"type": "call-ended"}))
+    assert is_end(json.dumps({"type": "end-of-call-report"}))
+    assert is_end(json.dumps({"type": "status-update", "status": "ended"}))
+    assert not is_end(json.dumps({"type": "status-update", "status": "in-progress"}))
+    assert not is_end(json.dumps({"type": "transcript", "text": "hi"}))
+    assert not is_end("not json")
+    assert not is_end(json.dumps(["hangup"]))
+
+
+def test_recv_audio_stops_on_call_end_text_event() -> None:
+    import json
+
+    connector = VapiWebSocketConnector(
+        ConnectorConfig(api_key="k", assistant_id="a", api_url="https://api/call")
+    )
+
+    class _EndedWS:
+        closed = False
+
+        def __aiter__(self):
+            self._messages = iter(
+                [
+                    SimpleNamespace(
+                        type=vapi.aiohttp.WSMsgType.BINARY, data=b"audio"
+                    ),
+                    SimpleNamespace(
+                        type=vapi.aiohttp.WSMsgType.TEXT,
+                        data=json.dumps({"type": "hangup"}),
+                    ),
+                    SimpleNamespace(
+                        type=vapi.aiohttp.WSMsgType.BINARY, data=b"late"
+                    ),
+                ]
+            )
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    connector._ws = _EndedWS()
+    connector._connected = True
+
+    async def collect():
+        return [chunk async for chunk in connector.recv_audio()]
+
+    chunks = asyncio.run(collect())
+
+    assert chunks == [(b"audio", vapi.VAPI_SAMPLE_RATE)]
+    assert connector.is_connected is False

@@ -17,7 +17,10 @@ from fi.simulate.recording.room_recorder import mix_recordings, mix_recordings_s
 from fi.simulate.runtime import TestCaseStatus as CaseStatus
 from fi.simulate.simulation import bridge as _bridge
 from fi.simulate.simulation.engines import livekit
-from fi.simulate.simulation.engines.livekit import LiveKitEngine
+from fi.simulate.simulation.engines.livekit import (
+    LiveKitEngine,
+    _voice_max_case_concurrency,
+)
 from fi.simulate.simulation import livekit_models
 from fi.simulate.simulation.models import Persona, Scenario
 
@@ -464,6 +467,34 @@ def test_stereo_mix_leaves_missing_side_silent(tmp_path: Path) -> None:
             dtype=np.int16,
         )
     assert samples.tolist() == [0, 2000, 0, 2000]
+
+
+def test_room_recorder_token_is_hidden_subscribe_only() -> None:
+    import jwt
+
+    from fi.simulate.recording.room_recorder import RoomRecorder
+
+    recorder = RoomRecorder(
+        url="wss://livekit.example.com",
+        api_key="key",
+        api_secret="secret-0123456789abcdef0123456789abcdef",
+        room_name="room-1",
+        identity="fagi-recorder-abc123",
+    )
+    claims = jwt.decode(
+        recorder._build_token(),
+        "secret-0123456789abcdef0123456789abcdef",
+        algorithms=["HS256"],
+    )
+    video = claims["video"]
+    assert video["room"] == "room-1"
+    assert video["roomJoin"] is True
+    assert video["hidden"] is True
+    assert video["recorder"] is True
+    assert video["canPublish"] is False
+    assert video["canPublishData"] is False
+    assert video["canUpdateOwnMetadata"] is False
+    assert video.get("canSubscribe", True) is True
 
 
 def test_stereo_mix_returns_none_when_both_sides_empty(tmp_path: Path) -> None:
@@ -1852,8 +1883,9 @@ def test_cases_run_concurrently_and_preserve_dataset_order(monkeypatch) -> None:
         )
     )
 
-    # Actual overlap happened, capped at the ceiling.
-    assert state["max_in_flight"] == 5
+    # Web cases overlap but are clamped to the voice ceiling even though the
+    # platform requested 5 — one 4-CPU child cannot drive more pipelines.
+    assert state["max_in_flight"] == _voice_max_case_concurrency()
     # Despite inverted completion order, results stay in dataset order.
     order = [r.persona.persona["name"] for r in report.results]
     assert order == [f"Caller {i}" for i in range(6)]
@@ -2005,3 +2037,497 @@ def test_dispatch_metadata_forwarded_when_set():
         SimpleNamespace(dispatch_metadata={"b": 2, "a": 1})
     )
     assert out == json.dumps({"a": 1, "b": 2}, sort_keys=True)
+
+
+def test_crashed_monitor_is_not_mistaken_for_its_condition(monkeypatch) -> None:
+    # Regression: a watcher that raised counted as "done" and was mapped to
+    # conversation_silence_timeout, reporting a dead call as merely "stalled".
+    class FakeRoom:
+        def on(self, _event, _callback):
+            return None
+
+        def off(self, _event, _callback):
+            return None
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+                SimpleNamespace(type="message", role="user", text_content="Hello"),
+            ]
+        )
+
+        def on(self, _event, _callback):
+            return None
+
+    async def _crash(session, **kwargs):
+        raise RuntimeError("engine is closed")
+
+    async def _park(session, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(livekit, "_wait_for_agent_first_silence", _crash)
+    monkeypatch.setattr(livekit, "_wait_for_conversation_silence", _park)
+
+    async def run() -> str:
+        return await livekit._wait_for_conversation_end(
+            FakeRoom(),
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            timeout=1,
+            conversation_direction="agent_first",
+            agent_first_silence_timeout_seconds=30,
+        )
+
+    reason = asyncio.run(run())
+
+    assert reason == "monitor_failed"
+    outcome = livekit._conversation_outcome(reason, [], min_turn_messages=4)
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure.code == "monitor_failed"
+
+
+def test_dead_call_with_no_turns_ends_as_no_conversation(monkeypatch) -> None:
+    # Regression: a target that greets then hangs up unseen (VAPI
+    # silence-timed-out) left the case running for the full talk budget with an
+    # empty transcript.
+    class FakeRoom:
+        def on(self, _event, _callback):
+            return None
+
+        def off(self, _event, _callback):
+            return None
+
+    class FakeSession:
+        history = SimpleNamespace(items=[])
+
+        def on(self, _event, _callback):
+            return None
+
+    monkeypatch.setattr(livekit, "_NO_CONVERSATION_TIMEOUT_SECONDS", 0.05)
+
+    async def run() -> str:
+        return await livekit._wait_for_conversation_end(
+            FakeRoom(),
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            timeout=5,
+            conversation_direction="agent_first",
+            agent_first_silence_timeout_seconds=30,
+        )
+
+    reason = asyncio.run(run())
+
+    assert reason == "no_conversation"
+    outcome = livekit._conversation_outcome(reason, [], min_turn_messages=4)
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure.code == "no_conversation"
+
+
+def test_no_conversation_guard_parks_once_turns_exist() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="user", text_content="Hi"),
+            ]
+        )
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_never_started(
+                session,
+                timeout_seconds=0.05,
+            )
+        )
+        done, _pending = await asyncio.wait({task}, timeout=0.3)
+        assert not done
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+class _FakeTranscriptionReader:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.info = SimpleNamespace(attributes={})
+
+    async def read_all(self) -> str:
+        return self._text
+
+
+class _FakeReplySession:
+    def __init__(self, *, reply_error: Exception | None = None) -> None:
+        self.reply_inputs: list[object] = []
+        self.history_adds: list[tuple[str, str]] = []
+        self._reply_error = reply_error
+        session = self
+
+        class _History:
+            def add_message(self, *, role: str, content: str) -> None:
+                session.history_adds.append((role, content))
+
+        self.history = _History()
+
+    def generate_reply(self, *, user_input=None):
+        if self._reply_error is not None:
+            raise self._reply_error
+        self.reply_inputs.append(user_input)
+
+
+def test_target_transcription_feeds_simulator_llm_context() -> None:
+    # Regression: the target's turns were added to session.history (the
+    # transcript context) with a bare generate_reply(); the reply pipeline
+    # reads the AGENT's chat context, so the simulator LLM never saw a single
+    # target turn and answered every one with "I can't hear you".
+    session = _FakeReplySession()
+    captured: list[str] = []
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("  How can I help you today? "),
+            session,
+            conversation_ended=asyncio.Event(),
+            captured_target_turns=captured,
+        )
+    )
+
+    assert session.reply_inputs == ["How can I help you today?"]
+    # The pipeline persists the turn into both contexts itself; a manual
+    # history add here would double the transcript entry.
+    assert session.history_adds == []
+    assert captured == ["How can I help you today?"]
+
+
+def test_target_transcription_after_end_records_without_reply() -> None:
+    session = _FakeReplySession()
+    ended = asyncio.Event()
+    ended.set()
+    captured: list[str] = []
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("Goodbye!"),
+            session,
+            conversation_ended=ended,
+            captured_target_turns=captured,
+        )
+    )
+
+    assert session.reply_inputs == []
+    assert session.history_adds == [("user", "Goodbye!")]
+    assert captured == ["Goodbye!"]
+
+
+def test_target_transcription_falls_back_to_history_when_session_closing() -> None:
+    session = _FakeReplySession(reply_error=RuntimeError("scheduling is paused"))
+    captured: list[str] = []
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("One last thing."),
+            session,
+            conversation_ended=asyncio.Event(),
+            captured_target_turns=captured,
+        )
+    )
+
+    assert session.history_adds == [("user", "One last thing.")]
+    assert captured == ["One last thing."]
+
+
+class _FakeEventRoom:
+    def __init__(self, participants: dict | None = None) -> None:
+        self.listeners: dict[str, list] = {}
+        if participants is not None:
+            self.remote_participants = participants
+
+    def on(self, event, callback=None):
+        self.listeners.setdefault(event, []).append(callback)
+        return callback
+
+    def off(self, event, callback):
+        self.listeners.get(event, []).remove(callback)
+
+    def fire(self, event, *args) -> None:
+        for callback in list(self.listeners.get(event, [])):
+            callback(*args)
+
+
+_BALANCED_HISTORY = SimpleNamespace(
+    items=[
+        SimpleNamespace(type="message", role="assistant", text_content="One"),
+        SimpleNamespace(type="message", role="user", text_content="Two"),
+        SimpleNamespace(type="message", role="assistant", text_content="Three"),
+        SimpleNamespace(type="message", role="user", text_content="Four"),
+        SimpleNamespace(type="message", role="assistant", text_content="Five"),
+        SimpleNamespace(type="message", role="user", text_content="Six"),
+    ]
+)
+
+
+def test_room_disconnect_ends_conversation() -> None:
+    # A native target commonly hangs up by deleting the room; the simulator
+    # sees a room disconnect, not a participant_disconnected, and the case
+    # idled through the silence backstop before ending.
+    room = _FakeEventRoom(
+        participants={"t": SimpleNamespace(identity="target-agent")}
+    )
+
+    class FakeSession:
+        history = _BALANCED_HISTORY
+
+        def on(self, _event, _callback):
+            return None
+
+    async def run() -> str:
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, room.fire, "disconnected", "ROOM_DELETED")
+        return await livekit._wait_for_conversation_end(
+            room,
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            timeout=5,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
+        )
+
+    reason = asyncio.run(run())
+
+    assert reason == "room_disconnected"
+    assert room.listeners["disconnected"] == []
+    completed = livekit._conversation_outcome(
+        reason,
+        livekit._session_messages(SimpleNamespace(history=_BALANCED_HISTORY)),
+        min_turn_messages=6,
+    )
+    assert completed.status == CaseStatus.COMPLETED
+    failed = livekit._conversation_outcome(reason, [], min_turn_messages=4)
+    assert failed.status == CaseStatus.FAILED
+    assert failed.failure.code == "room_disconnected"
+    assert failed.failure.retryable is True
+
+
+def test_target_absent_at_watch_start_counts_as_disconnected() -> None:
+    # The target can leave between readiness and listener registration; the
+    # event is gone by then, so presence is rechecked once.
+    room = _FakeEventRoom(participants={})
+
+    class FakeSession:
+        history = _BALANCED_HISTORY
+
+        def on(self, _event, _callback):
+            return None
+
+    async def run() -> str:
+        return await livekit._wait_for_conversation_end(
+            room,
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            timeout=5,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
+        )
+
+    assert asyncio.run(run()) == "target_disconnected"
+
+
+def test_silence_backstop_parks_until_first_turn() -> None:
+    # A call where nobody ever spoke belongs to the no_conversation monitor;
+    # the backstop firing first mislabeled dead calls as merely settled.
+    session = SimpleNamespace(history=SimpleNamespace(items=[]))
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(session, quiet_seconds=0.01)
+        )
+        done, _pending = await asyncio.wait({task}, timeout=0.3)
+        assert not done
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_agent_first_silence_ignores_inflight_speech() -> None:
+    # A turn lands in history only after its TTS finishes, so a long in-flight
+    # utterance used to trip the agent-first stall watcher mid-speech.
+    session = SimpleNamespace(
+        agent_state="speaking",
+        user_state="listening",
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+                SimpleNamespace(type="message", role="user", text_content="Hello"),
+            ]
+        ),
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            livekit._wait_for_agent_first_silence(session, timeout_seconds=0.05)
+        )
+        await asyncio.sleep(0.2)
+        assert not task.done()
+        session.agent_state = "listening"
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run())
+
+
+def _order_probe_engine(monkeypatch, calls, *, dispatch_error=None):
+    audio_kind = livekit.rtc.TrackKind.KIND_AUDIO
+
+    class FakeRoom:
+        def __init__(self):
+            self.remote_participants = {
+                "target": SimpleNamespace(
+                    identity="target-agent",
+                    sid="participant-target",
+                    track_publications={
+                        "track-target": SimpleNamespace(
+                            sid="track-target", kind=audio_kind
+                        )
+                    },
+                )
+            }
+            self.listeners = {}
+
+        async def connect(self, url, token):
+            calls.append("connect")
+
+        async def disconnect(self):
+            calls.append("disconnect")
+
+        def on(self, event, callback=None):
+            self.listeners.setdefault(event, []).append(callback)
+            return callback
+
+        def off(self, event, callback):
+            self.listeners.get(event, []).remove(callback)
+
+        def register_text_stream_handler(self, topic, handler=None):
+            calls.append("register_text_handler")
+            return handler
+
+        def unregister_text_stream_handler(self, topic):
+            pass
+
+    class _Rooms:
+        async def create_room(self, request):
+            calls.append("create_room")
+
+        async def delete_room(self, request):
+            calls.append("delete_room")
+
+    class _Dispatch:
+        async def create_dispatch(self, request):
+            if dispatch_error is not None:
+                raise dispatch_error
+            calls.append("dispatch")
+
+    class _Api:
+        def __init__(self):
+            self.room = _Rooms()
+            self.agent_dispatch = _Dispatch()
+
+        async def aclose(self):
+            pass
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="user", text_content="hi"),
+                SimpleNamespace(type="message", role="assistant", text_content="ok"),
+            ]
+        )
+
+        def on(self, event, callback):
+            return None
+
+        def shutdown(self, *, drain=True):
+            pass
+
+    class FakeCustomerAgent:
+        def __init__(self):
+            self.end_requested = asyncio.Event()
+            self.end_requested.set()
+
+        async def start_session(self, _room, **_kwargs):
+            calls.append("start_session")
+            return FakeSession()
+
+        def open_conversation(self):
+            calls.append("open")
+
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret")
+    monkeypatch.setattr(livekit.rtc, "Room", lambda: FakeRoom())
+    monkeypatch.setattr(livekit.api, "LiveKitAPI", lambda *_a: _Api())
+    monkeypatch.setattr(livekit, "AccessToken", _fake_access_token())
+    engine = LiveKitEngine()
+
+    async def _fake_create(_p, _s, **_kwargs):
+        return FakeCustomerAgent(), None
+
+    monkeypatch.setattr(engine, "_create_customer_agent", _fake_create)
+    return engine
+
+
+def test_managed_dispatch_waits_for_session_and_buffer_handler(monkeypatch) -> None:
+    # Dispatching before the session + buffer handler are live loses a native
+    # target's greeting for BOTH directions: the LiveKit client drops a
+    # text-stream header that arrives with no registered handler.
+    calls: list = []
+    engine = _order_probe_engine(monkeypatch, calls)
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=_agent(
+                room_mode="managed",
+                agent_name="registered-agent",
+                target_participant_identity="target-agent",
+            ),
+            scenario=_scenario(),
+            run_id="run_dispatch_order",
+            min_turn_messages=2,
+        )
+    )
+
+    assert report.results[0].metadata["status"] == CaseStatus.COMPLETED.value
+    assert calls.index("connect") < calls.index("register_text_handler")
+    assert calls.index("register_text_handler") < calls.index("dispatch")
+    assert calls.index("start_session") < calls.index("dispatch")
+
+
+def test_dispatch_failure_is_typed_preparing_failure(monkeypatch) -> None:
+    calls: list = []
+    engine = _order_probe_engine(
+        monkeypatch,
+        calls,
+        dispatch_error=RuntimeError("twirp: agent not registered"),
+    )
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=_agent(
+                room_mode="managed",
+                agent_name="registered-agent",
+                target_participant_identity="target-agent",
+            ),
+            scenario=_scenario(),
+            run_id="run_dispatch_fail",
+            min_turn_messages=2,
+        )
+    )
+
+    metadata = report.results[0].metadata
+    assert metadata["status"] == CaseStatus.FAILED.value
+    assert metadata["failure"]["code"] == "livekit_dispatch_failed"
+    assert metadata["failure"]["stage"] == "preparing"
+    assert "delete_room" in calls
