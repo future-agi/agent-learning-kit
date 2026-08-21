@@ -502,3 +502,46 @@ def _import(ref: str):
 
     module_name, _, attr = ref.partition(":")
     return getattr(importlib.import_module(module_name), attr)
+
+
+def test_child_cancel_propagates_to_run_task(tmp_path, monkeypatch):
+    # Regression: cancelling _execute left run_task alive, so asyncio.run's
+    # shutdown waited on the engine forever and the child leaked past SIGTERM.
+    from fi.simulate.hosted import child_entrypoint as ce
+
+    spec = _chat_spec("callable", {"target": "mod:fn"})
+    job = StartRunnerJob(
+        job_id="job-cancel",
+        mode=RunnerMode.CHAT,
+        spec=spec,
+        sink={"root_directory": str(tmp_path / "runs")},
+    )
+    reporter = ce._StatusReporter("job-cancel", tmp_path / "status.jsonl")
+    state: dict[str, bool] = {}
+
+    class _ParkedRunner:
+        async def run(self, *args, **kwargs):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                state["run_task_cancelled"] = True
+                raise
+
+    monkeypatch.setattr(ce, "SimulationRunner", _ParkedRunner)
+    monkeypatch.setattr(ce, "resolve_chat_target", lambda _spec: object())
+
+    async def scenario() -> None:
+        task = asyncio.create_task(ce._execute(job, reporter))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assert state.get("run_task_cancelled") is True
+    statuses = [
+        json.loads(line)
+        for line in (tmp_path / "status.jsonl").read_text().splitlines()
+    ]
+    assert statuses[-1]["phase"] == "canceled"

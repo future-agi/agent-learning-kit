@@ -16,6 +16,8 @@ ROOM_CHANNELS = 1
 TRACK_TIMEOUT_SECONDS = 30.0
 WATCHDOG_TIMEOUT_SECONDS = 60.0
 PROVIDER_READY_BUFFER_FRAMES = 3000
+PROVIDER_AUDIO_TIMEOUT_SECONDS = 120.0
+PROVIDER_QUEUE_MAX_CHUNKS = 200
 
 
 class LiveKitAudioBridge:
@@ -42,6 +44,7 @@ class LiveKitAudioBridge:
         self._closed = False
         self._close_lock = asyncio.Lock()
         self._last_audio_at = time.monotonic()
+        self._last_provider_audio_at = time.monotonic()
 
     @property
     def call_id(self) -> str | None:
@@ -172,27 +175,56 @@ class LiveKitAudioBridge:
     async def _provider_to_room(self) -> None:
         if self._audio_source is None:
             raise RuntimeError("bridge_not_connected")
+        # The websocket reader must never block on room playback: a stalled
+        # ``capture_frame`` would stop close/hangup frames from being seen and
+        # keep a dead provider call alive. Live audio, so drop oldest when full.
+        queue: asyncio.Queue[tuple[bytes, int] | None] = asyncio.Queue(
+            maxsize=PROVIDER_QUEUE_MAX_CHUNKS
+        )
+
+        async def _pump() -> None:
+            try:
+                async for chunk in self._connector.recv_audio():
+                    now = time.monotonic()
+                    self._last_audio_at = now
+                    self._last_provider_audio_at = now
+                    if queue.full():
+                        queue.get_nowait()
+                    queue.put_nowait(chunk)
+            finally:
+                if queue.full():
+                    queue.get_nowait()
+                queue.put_nowait(None)
+
+        pump = asyncio.create_task(_pump())
         resamplers: dict[int, PCMResampler] = {}
-        async for pcm, sample_rate in self._connector.recv_audio():
-            self._last_audio_at = time.monotonic()
-            if sample_rate != ROOM_SAMPLE_RATE:
-                resampler = resamplers.setdefault(
-                    sample_rate,
-                    PCMResampler(
-                        from_rate=sample_rate,
-                        to_rate=ROOM_SAMPLE_RATE,
-                        channels=ROOM_CHANNELS,
-                    ),
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                pcm, sample_rate = chunk
+                if sample_rate != ROOM_SAMPLE_RATE:
+                    resampler = resamplers.setdefault(
+                        sample_rate,
+                        PCMResampler(
+                            from_rate=sample_rate,
+                            to_rate=ROOM_SAMPLE_RATE,
+                            channels=ROOM_CHANNELS,
+                        ),
+                    )
+                    pcm = resampler.convert(pcm)
+                await self._audio_source.capture_frame(
+                    rtc.AudioFrame(
+                        data=pcm,
+                        sample_rate=ROOM_SAMPLE_RATE,
+                        num_channels=ROOM_CHANNELS,
+                        samples_per_channel=len(pcm) // 2,
+                    )
                 )
-                pcm = resampler.convert(pcm)
-            await self._audio_source.capture_frame(
-                rtc.AudioFrame(
-                    data=pcm,
-                    sample_rate=ROOM_SAMPLE_RATE,
-                    num_channels=ROOM_CHANNELS,
-                    samples_per_channel=len(pcm) // 2,
-                )
-            )
+        finally:
+            pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
 
     async def _send_silence_until_track(self) -> None:
         frame = b"\x00" * int(16000 * 0.02 * 2)
@@ -201,10 +233,18 @@ class LiveKitAudioBridge:
             await asyncio.sleep(0.02)
 
     async def _watchdog(self) -> None:
+        # ``_last_audio_at`` refreshes on simulator silence frames too, so it is
+        # blind to a dead provider; track provider-received audio separately.
         while True:
             await asyncio.sleep(5.0)
-            if time.monotonic() - self._last_audio_at > WATCHDOG_TIMEOUT_SECONDS:
+            now = time.monotonic()
+            if now - self._last_audio_at > WATCHDOG_TIMEOUT_SECONDS:
                 raise RuntimeError("bridge_audio_watchdog_timeout")
+            if (
+                now - self._last_provider_audio_at
+                > PROVIDER_AUDIO_TIMEOUT_SECONDS
+            ):
+                raise RuntimeError("provider_audio_timeout")
 
     async def _wait_for_room_disconnect(self) -> None:
         if self._room_disconnected is None:

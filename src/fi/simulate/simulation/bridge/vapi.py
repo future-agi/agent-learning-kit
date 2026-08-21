@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -129,13 +130,36 @@ class VapiWebSocketConnector(ProviderConnector):
         async for message in self._ws:
             if message.type == aiohttp.WSMsgType.BINARY:
                 yield message.data, VAPI_SAMPLE_RATE
+            elif message.type == aiohttp.WSMsgType.TEXT:
+                if self._is_call_end_event(message.data):
+                    logger.info(
+                        "vapi_websocket_call_ended",
+                        extra={"call_id": self._call_id},
+                    )
+                    break
             elif message.type in {
                 aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.ERROR,
             }:
                 break
         self._connected = False
+
+    @staticmethod
+    def _is_call_end_event(payload: str) -> bool:
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            return False
+        if not isinstance(data, dict):
+            return False
+        event_type = str(data.get("type") or "").lower()
+        if event_type in {"hangup", "call-ended", "end-of-call-report"}:
+            return True
+        return event_type == "status-update" and str(
+            data.get("status") or ""
+        ).lower() in {"ended", "ending"}
 
     async def disconnect(self) -> None:
         self._connected = False

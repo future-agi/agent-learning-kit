@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -83,17 +84,25 @@ class RoomRecorder:
             raise ImportError("LiveKit recording requires the 'livekit' extra")
         self._running = True
         await asyncio.sleep(max(0.0, self._join_delay_s))
-        token = (
-            AccessToken(self._api_key, self._api_secret)
-            .with_identity(self._identity)
-            .with_grants(VideoGrants(room_join=True, room=self._room_name))
-            .to_jwt()
-        )
+        token = self._build_token()
         room = rtc.Room()
-        await room.connect(self._url, token)
+        try:
+            await room.connect(
+                self._url,
+                token,
+                options=rtc.RoomOptions(auto_subscribe=False),
+            )
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await room.disconnect()
+            raise
         self._room = room
         self._recording_started_at = time.time()
         self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        @room.on("track_published")
+        def _on_track_published(publication, participant) -> None:
+            self._subscribe_audio(publication)
 
         @room.on("track_subscribed")
         def _on_track_subscribed(track, publication, participant) -> None:
@@ -101,9 +110,30 @@ class RoomRecorder:
 
         for participant in tuple(room.remote_participants.values()):
             for publication in tuple(participant.track_publications.values()):
-                track = getattr(publication, "track", None)
-                if track is not None:
-                    self._start_recording(track, publication, participant)
+                self._subscribe_audio(publication)
+
+    def _build_token(self) -> str:
+        return (
+            AccessToken(self._api_key, self._api_secret)
+            .with_identity(self._identity)
+            .with_grants(
+                VideoGrants(
+                    room_join=True,
+                    room=self._room_name,
+                    hidden=True,
+                    recorder=True,
+                    can_publish=False,
+                    can_publish_data=False,
+                    can_update_own_metadata=False,
+                )
+            )
+            .to_jwt()
+        )
+
+    def _subscribe_audio(self, publication: Any) -> None:
+        if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
+            return
+        publication.set_subscribed(True)
 
     def paths_for_participant(
         self,

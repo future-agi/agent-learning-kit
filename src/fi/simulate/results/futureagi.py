@@ -25,6 +25,7 @@ in ``submission.json`` and returns cleanly — no HTTP is attempted.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,8 @@ from fi.simulate.runtime import (
 )
 
 from .filesystem import LocalFilesystemResultSink
+
+logger = logging.getLogger("fi.simulate.results.futureagi")
 
 _STATUS_MAP = {
     "completed": "completed",
@@ -223,6 +226,14 @@ class FutureAGIResultSink:
                     "status_code": resp.status_code,
                     "body": _safe_body(resp),
                 }
+                logger.warning(
+                    "case submission http error",
+                    extra={
+                        "case_index": index,
+                        "call_execution_id": call_id,
+                        "status_code": resp.status_code,
+                    },
+                )
                 return
             self._streamed_indices.add(index)
             self._stream_failures.pop(index, None)
@@ -232,6 +243,14 @@ class FutureAGIResultSink:
                 "call_execution_id": call_id,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            logger.warning(
+                "case submission failed",
+                extra={
+                    "case_index": index,
+                    "call_execution_id": call_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
 
     def case_started(self, index: int) -> None:
         """PATCH a pre-allocated CallExecution row to ONGOING the moment its case
@@ -345,6 +364,9 @@ class FutureAGIResultSink:
         if missing:
             submission["status"] = "not_configured"
             submission["reason"] = "missing_config: " + ",".join(missing)
+            logger.warning(
+                "submission not configured", extra={"missing": ",".join(missing)}
+            )
             _write_submission(run_directory, submission)
             return submission
 
@@ -360,9 +382,24 @@ class FutureAGIResultSink:
             )
             submission.update(outcome)
             submission["status"] = "submitted"
+            logger.info(
+                "submission ok",
+                extra={
+                    "run_test_id": self._run_test_id,
+                    "test_execution_id": self._test_execution_id,
+                },
+            )
         except Exception as exc:
             submission["status"] = "failed"
             submission["reason"] = f"submission_error: {exc.__class__.__name__}: {exc}"
+            logger.error(
+                "submission failed",
+                extra={
+                    "run_test_id": self._run_test_id,
+                    "test_execution_id": self._test_execution_id,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                },
+            )
 
         _write_submission(run_directory, submission)
         return submission
