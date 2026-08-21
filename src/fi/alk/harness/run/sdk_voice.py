@@ -175,7 +175,15 @@ def build_spec(run_id: str) -> SimulationSpec:
         target=AgentEndpointSpec(adapter="webrtc"),
         simulator=SimulatorPolicySpec(adapter="livekit_simulator"),
         scenario=_scenario(),
-        execution=ExecutionPolicy(timeout=TimeoutPolicy(run_seconds=run_seconds)),
+        # Keep the canonical execution policy and the voice engine parameters
+        # aligned. Dev's typed runner exposes direction at the spec level even
+        # though the voice adapter currently hydrates the engine from params;
+        # disagreement here makes planners and future adapters see the opposite
+        # call direction from the engine that actually runs.
+        execution=ExecutionPolicy(
+            direction=direction,
+            timeout=TimeoutPolicy(run_seconds=run_seconds),
+        ),
     )
 
 

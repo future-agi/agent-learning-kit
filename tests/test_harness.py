@@ -2594,6 +2594,21 @@ def test_source_livekit_calls_follow_the_workers_agent_first_greeting(
     assert os.environ["HARNESS_CONVERSATION_DIRECTION"] == "agent_first"
 
 
+def test_sdk_voice_spec_keeps_canonical_and_engine_direction_aligned(monkeypatch):
+    from fi.alk.harness.run.sdk_voice import build_spec
+
+    monkeypatch.setenv("HARNESS_INSTRUCTION", "Book a test ride.")
+    monkeypatch.setenv("LIVEKIT_TARGET_AGENT_NAME", "ride-agent")
+    monkeypatch.setenv("LIVEKIT_TARGET_SYSTEM_PROMPT", "Assist with rides.")
+    monkeypatch.setenv("LIVEKIT_URL", "wss://example.livekit.cloud")
+    monkeypatch.setenv("HARNESS_CONVERSATION_DIRECTION", "agent_first")
+
+    spec = build_spec("run_direction")
+
+    assert spec.execution.direction.value == "agent_first"
+    assert spec.environment.config["params"]["conversation_direction"] == "agent_first"
+
+
 def test_each_source_worker_lifetime_gets_a_unique_dispatch_name():
     from fi.alk.harness.run.live import scoped_agent_name
 
