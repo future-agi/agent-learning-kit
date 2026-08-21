@@ -14,7 +14,11 @@ RUN apt-get update \
 WORKDIR /opt/alk
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN python3 -m pip install --no-cache-dir \
+ENV PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=10 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
       '.[livekit,harness-ui,harness-stores]' \
       'livekit-agents==1.5.17' \
       'livekit-plugins-cartesia==1.5.17' \

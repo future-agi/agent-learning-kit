@@ -163,7 +163,9 @@ class LocalSandbox:
                             else HarnessStage.FAILED.value,
                         ),
                         detail=result.get("detail")
-                        or (None if return_code == 0 else f"worker exited {return_code}"),
+                        or (
+                            None if return_code == 0 else f"worker exited {return_code}"
+                        ),
                         completed_scenarios=result.get("completed_scenarios", 0),
                         updated_at=_now(),
                     )
@@ -188,15 +190,32 @@ class LocalSandbox:
         job = HarnessJob.model_validate(_read_json(directory / "job.json"))
         raw_state = _read_json(directory / "state.json")
         events = _events(self.artifacts_root / job.run_id / "harness-events.jsonl")
-        stage = _stage_from_events(events) or raw_state.get("stage", "queued")
+        event_stage = _stage_from_events(events)
+        stage = event_stage or raw_state.get("stage", "queued")
+        updated_at = raw_state.get("updated_at", _now())
+        detail = raw_state.get("detail")
+        if event_stage and events:
+            # While the worker is alive, state.json is intentionally written only
+            # at process boundaries.  The canonical event stream is the live
+            # source of truth, so expose its timestamp and stage instead of making
+            # a healthy long-running job look stale in the platform UI.
+            updated_at = events[-1].get("wall_time") or updated_at
+            detail = {
+                HarnessStage.UNDERSTANDING_AGENT.value: "understanding agent source",
+                HarnessStage.GENERATING_ENVIRONMENT.value: "provisioning and validating environment",
+                HarnessStage.GENERATING_SCENARIOS.value: "generating and validating scenarios",
+                HarnessStage.RUNNING.value: "running scenarios",
+            }.get(event_stage, detail)
         if raw_state.get("stage") in _TERMINAL_STAGES:
             stage = raw_state["stage"]
+            updated_at = raw_state.get("updated_at", updated_at)
+            detail = raw_state.get("detail")
         status_value = HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
             stage=stage,
-            updated_at=raw_state.get("updated_at", _now()),
-            detail=raw_state.get("detail"),
+            updated_at=updated_at,
+            detail=detail,
             completed_scenarios=raw_state.get("completed_scenarios", 0),
             total_scenarios=raw_state.get("total_scenarios", job.scenario_count),
         )
@@ -210,7 +229,9 @@ class LocalSandbox:
     def list(self) -> list[SandboxJobResponse]:
         responses = []
         for directory in sorted(
-            self.jobs_root.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True
+            self.jobs_root.iterdir(),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
         ):
             if directory.is_dir():
                 responses.append(self.get(directory.name))
@@ -253,20 +274,30 @@ def _allowed_source(raw: str) -> Path:
         if "=" not in mapping:
             continue
         external, internal = mapping.split("=", 1)
-        if source_text == external or source_text.startswith(external.rstrip("/") + "/"):
-            source_text = internal.rstrip("/") + source_text[len(external.rstrip("/")) :]
+        if source_text == external or source_text.startswith(
+            external.rstrip("/") + "/"
+        ):
+            source_text = (
+                internal.rstrip("/") + source_text[len(external.rstrip("/")) :]
+            )
             break
     source = Path(source_text).expanduser().resolve()
     if not source.is_dir():
-        raise HTTPException(status_code=400, detail="source_path must be an existing directory")
+        raise HTTPException(
+            status_code=400, detail="source_path must be an existing directory"
+        )
     configured = os.getenv("ALK_SANDBOX_SOURCE_ROOTS")
     roots = [
         Path(item).expanduser().resolve()
-        for item in (configured.split(os.pathsep) if configured else [str(Path.cwd().parent)])
+        for item in (
+            configured.split(os.pathsep) if configured else [str(Path.cwd().parent)]
+        )
         if item
     ]
     if not any(source == root or root in source.parents for root in roots):
-        raise HTTPException(status_code=403, detail="source_path is outside allowed roots")
+        raise HTTPException(
+            status_code=403, detail="source_path is outside allowed roots"
+        )
     return source
 
 
@@ -293,7 +324,9 @@ def _stage_from_events(events: list[dict[str, Any]]) -> str | None:
                 "run": HarnessStage.RUNNING.value,
                 "calls": HarnessStage.RUNNING.value,
             }
-            return aliases.get(stage, stage if stage in HarnessStage._value2member_map_ else None)
+            return aliases.get(
+                stage, stage if stage in HarnessStage._value2member_map_ else None
+            )
     return None
 
 
@@ -306,7 +339,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8"
+    )
     temporary.replace(path)
 
 
@@ -324,7 +359,9 @@ _TERMINAL_STAGES = {
 def _authorize(authorization: str | None = Header(default=None)) -> None:
     expected = os.getenv("ALK_SANDBOX_TOKEN")
     if expected and authorization != f"Bearer {expected}":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+        )
 
 
 def create_app(root: Path | None = None) -> FastAPI:
@@ -338,22 +375,38 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "provider": "local-process"}
 
-    @app.post("/v1/jobs", response_model=SandboxJobResponse, dependencies=[Depends(_authorize)])
+    @app.post(
+        "/v1/jobs",
+        response_model=SandboxJobResponse,
+        dependencies=[Depends(_authorize)],
+    )
     async def submit(request: LocalSandboxRequest) -> SandboxJobResponse:
         return sandbox.submit(request)
 
-    @app.get("/v1/jobs", response_model=list[SandboxJobResponse], dependencies=[Depends(_authorize)])
+    @app.get(
+        "/v1/jobs",
+        response_model=list[SandboxJobResponse],
+        dependencies=[Depends(_authorize)],
+    )
     async def list_jobs() -> list[SandboxJobResponse]:
         return sandbox.list()
 
-    @app.get("/v1/jobs/{job_id}", response_model=SandboxJobResponse, dependencies=[Depends(_authorize)])
+    @app.get(
+        "/v1/jobs/{job_id}",
+        response_model=SandboxJobResponse,
+        dependencies=[Depends(_authorize)],
+    )
     async def get_job(job_id: str) -> SandboxJobResponse:
         try:
             return sandbox.get(job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="job not found") from exc
 
-    @app.post("/v1/jobs/{job_id}/cancel", response_model=SandboxJobResponse, dependencies=[Depends(_authorize)])
+    @app.post(
+        "/v1/jobs/{job_id}/cancel",
+        response_model=SandboxJobResponse,
+        dependencies=[Depends(_authorize)],
+    )
     async def cancel_job(job_id: str) -> SandboxJobResponse:
         try:
             return await sandbox.cancel(job_id)
