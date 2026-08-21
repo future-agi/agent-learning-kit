@@ -164,6 +164,31 @@ class TestStepEfficiency:
         result = metric.compute_one(input_data)
         assert result["details"]["redundant_steps"] >= 3
 
+    def test_redundant_calls_within_single_step(self):
+        """Multiple redundant calls in one step must not push the score below 0."""
+        metric = StepEfficiency()
+        step = AgentStep(
+            step_number=1,
+            thought="Repeating the same call",
+            tool_calls=[
+                ToolCall(
+                    name="search",
+                    arguments={"query": "test"},
+                    result="result",
+                    success=True,
+                )
+                for _ in range(5)
+            ],
+            is_final=True,
+        )
+        input_data = AgentTrajectoryInput(
+            trajectory=[step],
+            task=TaskDefinition(description="Search for something")
+        )
+        result = metric.compute_one(input_data)
+        assert 0.0 <= result["output"] <= 1.0
+        assert result["details"]["redundant_steps"] == 4
+
     def test_failed_tool_calls(self):
         """Test trajectory with failed tool calls."""
         metric = StepEfficiency()

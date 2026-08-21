@@ -249,7 +249,8 @@ class StepEfficiency(BaseMetric[AgentTrajectoryInput]):
                 else:
                     seen_signatures.add(call_sig)
 
-        redundancy_ratio = 1.0 - (redundant_count / total_steps) if total_steps > 0 else 1.0
+        total_calls = sum(len(step.tool_calls) for step in inputs.trajectory)
+        redundancy_ratio = 1.0 - (redundant_count / total_calls) if total_calls > 0 else 1.0
         redundancy_score = redundancy_ratio * self.redundancy_weight
         details["redundant_steps"] = redundant_count
 
@@ -259,7 +260,6 @@ class StepEfficiency(BaseMetric[AgentTrajectoryInput]):
             for tc in step.tool_calls
             if not tc.success
         )
-        total_calls = sum(len(step.tool_calls) for step in inputs.trajectory)
         failure_ratio = 1.0 - (failed_calls / total_calls) if total_calls > 0 else 1.0
         failure_score = failure_ratio * self.failure_weight
         details["failed_calls"] = failed_calls
