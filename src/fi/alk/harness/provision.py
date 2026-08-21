@@ -19,6 +19,7 @@ import secrets
 import socket
 import subprocess
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,9 @@ class ProvisionedEnvironment:
     internal_overrides: dict[str, str] = field(default_factory=dict)
     runtime_services: list[str] = field(default_factory=list)
     runtime_container: str = ""
+    runtime_trace_volume: str = ""
+    runtime_trace_path: str = ""
+    runner_network: str = ""
     running: bool = False
     source_fingerprint: str = ""
     provision_seconds: float = 0.0
@@ -312,7 +316,7 @@ def _overrides(
             continue
         service, target, _ = match
         live_port = _published_port(environment, service, target)
-        answers[variable] = f"{parsed.scheme}://127.0.0.1:{live_port}"
+        answers[variable] = f"{parsed.scheme}://{_published_host()}:{live_port}"
     return answers
 
 
@@ -384,8 +388,19 @@ def postgres_dsn(destination: str | Path) -> str:
     port = _published_port(environment, name, 5432)
     return (
         f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}"
-        f"@127.0.0.1:{port}/{quote(database, safe='')}"
+        f"@{_published_host()}:{port}/{quote(database, safe='')}"
     )
+
+
+def _published_host() -> str:
+    """Host through which this process reaches ports published by Docker.
+
+    A host CLI reaches published ports on loopback. A sandbox talking to a
+    remote daemon reaches the same ports through that daemon's gateway.
+    Deployment owns the address; provisioning only applies it consistently to
+    HTTP services and attached stores.
+    """
+    return os.environ.get("ALK_DOCKER_PUBLISHED_HOST", "").strip() or "127.0.0.1"
 
 
 def attached_postgres_store(destination: str | Path):
@@ -762,13 +777,24 @@ def start_runtime(
         "--name",
         container,
     ]
+    trace_volume = ""
+    trace_destination = ""
     if trace_path is not None:
         trace = Path(trace_path).expanduser().resolve()
         trace.parent.mkdir(parents=True, exist_ok=True)
+        # The submitted runtime commonly runs as a non-root UID that is unrelated to the
+        # sandbox runner's UID. Mounting a root-owned result directory and asking that worker to
+        # create the trace file makes otherwise-successful tools fail with PermissionError in
+        # agents that trace synchronously. Pre-create only the job-owned file and make that file
+        # writable across the container boundary; the surrounding artifact tree stays private.
+        trace.touch(exist_ok=True)
+        trace.chmod(0o666)
         # Mount only this scenario's result folder. Agents that support the generic harness trace
         # seam write semantic/model-facing tool events here; agents that do not simply ignore the
         # variable and the backend proxy remains the fallback evidence source.
-        arguments.extend(("--volume", f"{trace.parent}:/run/harness-trace"))
+        trace_arguments, trace_volume = _runtime_trace_mount(trace)
+        arguments.extend(trace_arguments)
+        trace_destination = str(trace)
         container_trace = f"/run/harness-trace/{trace.name}"
         # HARNESS_AGENT_TOOL_TRACE is the runtime-level contract. Keep the shorter historical
         # name as a compatibility alias for submitted agents that already adopted it; both point
@@ -832,8 +858,140 @@ def start_runtime(
             f"submitted runtime {service!r} did not become ready within 60s"
         )
     environment.runtime_container = container
+    environment.runtime_trace_volume = trace_volume
+    environment.runtime_trace_path = trace_destination
     environment.save(destination)
     return environment
+
+
+def _runtime_trace_mount(trace: Path) -> tuple[list[str], str]:
+    """Give a sibling runtime one writable trace target without exposing other jobs.
+
+    Docker resolves bind sources on the daemon host, not inside the runner container. A path
+    such as ``/var/lib/alk-sandbox`` can therefore name a Docker volume in the runner while
+    accidentally naming an unrelated host directory for ``docker run --volume``. Resolve bind
+    mounts to their host source; for named-volume runners, use a one-call exchange volume that is
+    copied back on cleanup so a submitted runtime cannot inspect artifacts from another job.
+    """
+    configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
+    if not configured:
+        return ["--volume", f"{trace.parent}:/run/harness-trace"], ""
+    runner = socket.gethostname() if configured == "self" else configured
+    mounts = json.loads(
+        _docker(
+            "inspect",
+            "--format",
+            "{{json .Mounts}}",
+            runner,
+            timeout=30,
+        )
+        or "[]"
+    )
+    for mount in mounts:
+        destination = Path(str(mount.get("Destination") or ""))
+        if not destination.is_absolute():
+            continue
+        try:
+            relative = trace.parent.relative_to(destination)
+        except ValueError:
+            continue
+        kind = str(mount.get("Type") or "")
+        if kind == "volume" and mount.get("Name"):
+            # ``docker compose run`` does not accept ``--mount`` and ``--volume`` cannot select
+            # a subdirectory of another volume. Use a one-call exchange volume instead: the
+            # runtime writes there, then stop_runtime copies the one file back into the runner's
+            # job volume before deleting the exchange volume.
+            exchange = f"alk-trace-{uuid.uuid4().hex[:12]}"
+            _docker("volume", "create", exchange, timeout=30)
+            _docker(
+                "run",
+                "--rm",
+                "--volume",
+                f"{exchange}:/trace",
+                "--entrypoint",
+                "touch",
+                "docker:27-cli",
+                f"/trace/{trace.name}",
+                timeout=30,
+            )
+            _docker(
+                "run",
+                "--rm",
+                "--volume",
+                f"{exchange}:/trace",
+                "--entrypoint",
+                "chmod",
+                "docker:27-cli",
+                "0666",
+                f"/trace/{trace.name}",
+                timeout=30,
+            )
+            return ["--volume", f"{exchange}:/run/harness-trace"], exchange
+        if kind == "bind" and mount.get("Source"):
+            source = Path(str(mount["Source"])) / relative
+            return ["--volume", f"{source}:/run/harness-trace"], ""
+    # Local Docker execution has no outer runner mount to translate.
+    return ["--volume", f"{trace.parent}:/run/harness-trace"], ""
+
+
+def connect_runner_network(
+    destination: str | Path, *, alias: str = "alk-harness-runner"
+) -> str:
+    """Join this runner to the submitted environment's private network.
+
+    A per-call webhook lives in the runner process. The submitted agent runs in
+    the repository's Compose network, so a hosted/containerized runner must
+    join that network explicitly; host loopback and host-published ports are
+    neither private nor reliably reachable from sibling containers.
+    """
+    destination = Path(destination)
+    environment = ProvisionedEnvironment.load(destination)
+    if environment is None or not environment.running or not environment.services:
+        raise ProvisionError(f"no running environment recorded at {destination}")
+    configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
+    if not configured:
+        return ""
+    runner = socket.gethostname() if configured == "self" else configured
+    service_container = _run(
+        environment,
+        "ps",
+        "--quiet",
+        environment.services[0],
+        timeout=30,
+    ).strip()
+    if not service_container:
+        raise ProvisionError("could not identify a container in the source environment")
+    networks = json.loads(
+        _docker(
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            service_container,
+            timeout=30,
+        )
+        or "{}"
+    )
+    if len(networks) != 1:
+        raise ProvisionError(
+            "expected the source environment on one private network, found "
+            + (", ".join(networks) or "none")
+        )
+    network = next(iter(networks))
+    runner_networks = json.loads(
+        _docker(
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            runner,
+            timeout=30,
+        )
+        or "{}"
+    )
+    if network not in runner_networks:
+        _docker("network", "connect", "--alias", alias, network, runner, timeout=30)
+    environment.runner_network = network
+    environment.save(destination)
+    return alias
 
 
 def runtime_environment(destination: str | Path) -> dict[str, str]:
@@ -918,8 +1076,34 @@ def stop_runtime(destination: str | Path) -> bool:
     environment = ProvisionedEnvironment.load(destination)
     if environment is None or not environment.runtime_container:
         return False
+    if environment.runtime_trace_volume and environment.runtime_trace_path:
+        trace = Path(environment.runtime_trace_path)
+        trace.parent.mkdir(parents=True, exist_ok=True)
+        _docker(
+            "cp",
+            f"{environment.runtime_container}:/run/harness-trace/{trace.name}",
+            str(trace),
+            check=False,
+        )
     _docker("rm", "--force", environment.runtime_container, check=False)
+    if environment.runtime_trace_volume:
+        _docker(
+            "volume", "rm", environment.runtime_trace_volume, check=False, timeout=30
+        )
     environment.runtime_container = ""
+    environment.runtime_trace_volume = ""
+    environment.runtime_trace_path = ""
+    configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
+    if configured and environment.runner_network:
+        runner = socket.gethostname() if configured == "self" else configured
+        _docker(
+            "network",
+            "disconnect",
+            environment.runner_network,
+            runner,
+            check=False,
+        )
+        environment.runner_network = ""
     environment.save(destination)
     return True
 

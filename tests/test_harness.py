@@ -187,6 +187,93 @@ services:
     assert "agent" not in up
 
 
+def test_source_environment_uses_configured_docker_gateway(tmp_path, monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    monkeypatch.setenv("ALK_DOCKER_PUBLISHED_HOST", "host.docker.internal")
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="remote-daemon",
+        services=["tools-api"],
+    )
+    (tmp_path / "compose.yml").write_text(
+        'services:\n  tools-api:\n    ports: ["18090:8080"]\n', encoding="utf-8"
+    )
+    (tmp_path / "agent.py").write_text(
+        'url = os.environ.get("TOOLS_API_URL", "http://localhost:18090")\n',
+        encoding="utf-8",
+    )
+    config = {
+        "services": {"tools-api": {"ports": [{"target": 8080, "published": "18090"}]}}
+    }
+    monkeypatch.setattr(provisioning, "_published_port", lambda *_args: 42123)
+
+    assert provisioning._overrides(environment, config) == {
+        "TOOLS_API_URL": "http://host.docker.internal:42123"
+    }
+
+
+def test_runtime_trace_uses_job_scoped_exchange_volume(monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    monkeypatch.setenv("ALK_RUNNER_CONTAINER", "runner")
+    monkeypatch.setattr(
+        provisioning.uuid,
+        "uuid4",
+        lambda: type("FixedUUID", (), {"hex": "abc123def4567890"})(),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *_args, **_kwargs: json.dumps(
+            [
+                {
+                    "Type": "volume",
+                    "Name": "harness-artifacts",
+                    "Destination": "/var/lib/alk-sandbox",
+                }
+            ]
+        ),
+    )
+
+    assert provisioning._runtime_trace_mount(
+        Path("/var/lib/alk-sandbox/artifacts/job/runs/run/case/agent-tool-calls.jsonl")
+    ) == (
+        ["--volume", "alk-trace-abc123def456:/run/harness-trace"],
+        "alk-trace-abc123def456",
+    )
+
+
+def test_runtime_trace_translates_runner_bind_to_daemon_host(monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    monkeypatch.setenv("ALK_RUNNER_CONTAINER", "runner")
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *_args, **_kwargs: json.dumps(
+            [
+                {
+                    "Type": "bind",
+                    "Source": "/srv/harness-data",
+                    "Destination": "/var/lib/alk-sandbox",
+                }
+            ]
+        ),
+    )
+
+    assert provisioning._runtime_trace_mount(
+        Path("/var/lib/alk-sandbox/artifacts/job/runs/run/case/agent-tool-calls.jsonl")
+    ) == (
+        [
+            "--volume",
+            "/srv/harness-data/artifacts/job/runs/run/case:/run/harness-trace",
+        ],
+        "",
+    )
+
+
 def test_source_environment_is_reused_instead_of_rebuilt(tmp_path, monkeypatch):
     from fi.alk.harness import provision as provisioning
 
@@ -1006,7 +1093,9 @@ def _request_handler(instance, method):
 
     from mcp.types import CallToolRequest, ListToolsRequest
 
-    request_type = {"tools/list": ListToolsRequest, "tools/call": CallToolRequest}[method]
+    request_type = {"tools/list": ListToolsRequest, "tools/call": CallToolRequest}[
+        method
+    ]
     callback = instance.request_handlers[request_type]
 
     class Handler:
@@ -3425,7 +3514,9 @@ def test_voice_scenario_phone_is_bound_from_nested_fixture():
 
 
 def test_voice_simulator_makes_payment_and_otp_facts_non_negotiable(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     monkeypatch.setenv(
@@ -3446,7 +3537,9 @@ def test_voice_simulator_makes_payment_and_otp_facts_non_negotiable(monkeypatch)
 
 
 def test_voice_simulator_derives_literal_transaction_facts(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     policy = voice_cases._derived_scripted_caller(
@@ -3478,7 +3571,9 @@ def test_voice_simulator_derives_literal_transaction_facts(monkeypatch):
 def test_scripted_caller_repeats_the_missing_destination_before_choosing_a_car(
     monkeypatch,
 ):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     called = False
@@ -3499,7 +3594,9 @@ def test_scripted_caller_repeats_the_missing_destination_before_choosing_a_car(
 
 
 def test_scripted_caller_answers_direct_name_and_destination_questions(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     policy = {
@@ -3519,7 +3616,9 @@ def test_scripted_caller_answers_direct_name_and_destination_questions(monkeypat
 
 
 def test_scripted_caller_stops_after_repeating_the_same_fact_three_times(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     policy = {"payment": "saved Visa ending 6187."}
@@ -3542,7 +3641,9 @@ def test_scripted_caller_stops_after_repeating_the_same_fact_three_times(monkeyp
 
 
 def test_scripted_caller_allows_yes_at_distinct_confirmation_stages(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     policy = {}
@@ -3563,7 +3664,9 @@ def test_scripted_caller_allows_yes_at_distinct_confirmation_stages(monkeypatch)
 
 
 def test_scripted_caller_ends_a_reworded_address_recovery_loop(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     policy = {}
@@ -3588,7 +3691,9 @@ def test_scripted_caller_ends_a_reworded_address_recovery_loop(monkeypatch):
 
 
 def test_scripted_caller_answers_payment_confirmation_instead_of_advancing(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     fallback_called = False
@@ -3609,7 +3714,9 @@ def test_scripted_caller_answers_payment_confirmation_instead_of_advancing(monke
 
 
 def test_scripted_caller_confirms_a_route_phrased_as_is_it(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     reply = voice_cases.recover_scripted_reply(
@@ -3622,7 +3729,9 @@ def test_scripted_caller_confirms_a_route_phrased_as_is_it(monkeypatch):
 
 
 def test_scripted_caller_ends_naturally_when_the_agent_closes(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     reply = voice_cases.recover_scripted_reply(
@@ -3635,7 +3744,9 @@ def test_scripted_caller_ends_naturally_when_the_agent_closes(monkeypatch):
 
 
 def test_scripted_caller_expands_home_to_the_pickup_address(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     reply = voice_cases.recover_scripted_reply(
@@ -3657,7 +3768,9 @@ def test_scripted_caller_expands_home_to_the_pickup_address(monkeypatch):
 
 
 def test_target_greeting_consumes_the_pending_opening_exactly_once(monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "oss" / "simulation-acceptance")
+    )
     import voice_cases
 
     policy = {
@@ -4667,7 +4780,14 @@ def test_judged_scenario_check_cannot_pass_vacuously_without_actions():
 def test_nested_voice_fixtures_are_spoken_as_people_not_python_objects():
     import runpy
 
-    loaded = runpy.run_path(str(Path(__file__).parents[1] / "oss" / "simulation-acceptance" / "voice_cases.py"))
+    loaded = runpy.run_path(
+        str(
+            Path(__file__).parents[1]
+            / "oss"
+            / "simulation-acceptance"
+            / "voice_cases.py"
+        )
+    )
     _derived_scripted_caller = loaded["_derived_scripted_caller"]
     _fixture_reply = loaded["_fixture_reply"]
 

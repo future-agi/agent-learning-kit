@@ -114,21 +114,6 @@ class WorldWebhook:
         # world without adding a call that scenario grading would mistake for an
         # agent action.
         if name == "lookup_rider_by_phone":
-            forward = getattr(world, "forward", None)
-            if callable(forward):
-                hydrated = forward(
-                    name,
-                    arguments,
-                    record=False,
-                    session_id=session_id,
-                )
-                if hydrated.ok:
-                    return (
-                        hydrated.result
-                        if isinstance(hydrated.result, str)
-                        else json.dumps(hydrated.result, default=str)
-                    )
-                return hydrated.error
             phone = str(arguments.get("phone") or "")
             state = world.observe().state
             user = next(
@@ -139,6 +124,40 @@ class WorldWebhook:
                 ),
                 None,
             )
+
+            def active_booking_ref() -> Any:
+                if user is None:
+                    return None
+                active = [
+                    row
+                    for row in state.get("bookings", [])
+                    if row.get("rider_id") == user.get("rider_id")
+                    and str(row.get("status") or "").lower()
+                    not in {"cancelled", "canceled", "completed"}
+                ]
+                active.sort(
+                    key=lambda row: str(row.get("created_at") or ""), reverse=True
+                )
+                return active[0].get("booking_ref") if active else None
+
+            forward = getattr(world, "forward", None)
+            if callable(forward):
+                hydrated = forward(
+                    name,
+                    arguments,
+                    record=False,
+                    session_id=session_id,
+                )
+                if hydrated.ok:
+                    result = hydrated.result
+                    if isinstance(result, dict):
+                        result = {**result, "booking_ref": active_booking_ref()}
+                    return (
+                        result
+                        if isinstance(result, str)
+                        else json.dumps(result, default=str)
+                    )
+                return hydrated.error
             if user is None:
                 return json.dumps({"rider_id": None, "phone": phone})
             market = next(
@@ -149,11 +168,17 @@ class WorldWebhook:
                 ),
                 {},
             )
+            # A caller asking about or cancelling an existing ride does not know an internal
+            # booking reference. Real agent backends hydrate the active trip alongside ANI
+            # identity; expose the same seeded relationship from the generated world so the
+            # shipped agent can invoke its own reference-based tools without fixture leakage in
+            # the conversation.
             return json.dumps(
                 {
                     **user,
                     "cash_supported_in_market": bool(market.get("cash_supported")),
                     "accessibility_needs": [],
+                    "booking_ref": active_booking_ref(),
                 },
                 default=str,
             )

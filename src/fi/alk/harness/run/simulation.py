@@ -589,11 +589,14 @@ async def _spoken_to(
         # Every attempt owns its trace. A stale line from a failed attempt must not turn a later
         # worker-join failure into something that looks like agent evidence.
         trace_path.unlink(missing_ok=True)
+        # The webhook is the transport-level evidence fallback. Clear calls from a failed voice
+        # attempt before retrying so only the attempt whose transcript is graded can contribute.
+        world.calls = []
         code, case = await asyncio.to_thread(placed_once)
         attempt_calls = _semantic_calls(trace_path)
         if (
             not _voice_attempt_should_retry(
-                code, case, has_agent_calls=bool(attempt_calls)
+                code, case, has_agent_calls=bool(attempt_calls or world.calls)
             )
             or attempt + 1 >= attempts
         ):
@@ -605,10 +608,14 @@ async def _spoken_to(
             attempts,
         )
     semantic = _semantic_calls(trace_path)
-    # The worker trace is authoritative for model-facing actions even when it is empty. Runtime
-    # readiness probes and scenario setup can touch the backend; retaining those calls when the
-    # worker never joined used to award or fail checkpoints on work the agent did not perform.
-    world.calls = semantic
+    # A worker trace includes semantic/local actions that never cross HTTP and is preferred when
+    # available. In a hosted Docker runner, however, the job artifacts can live in a named volume
+    # whose container path cannot be bind-mounted by the host daemon into the submitted runtime.
+    # In that case the bound world is still exact evidence: setup calls were cleared in prepare,
+    # caller hydration uses record=False, and every remaining call arrived through this call's
+    # private webhook. Do not erase that evidence merely because the optional trace is absent.
+    if semantic:
+        world.calls = semantic
     spoken = str(case.get("transcript") or "")
     # Every track that exists, copied in beside the result so a run is self-contained and the
     # page can fall back when the preferred one is missing.

@@ -252,13 +252,20 @@ def wire(
     webhook.bind(world)
     try:
         if source_environment:
-            from ..provision import infer_livekit_agent_name, start_runtime
+            from ..provision import (
+                connect_runner_network,
+                infer_livekit_agent_name,
+                start_runtime,
+            )
 
             # The submitted worker runs in Docker while the webhook runs in this harness
             # process. The host-gateway name is injected by start_runtime and keeps the source
             # network private; only this one URL is substituted.
+            private_host = connect_runner_network(world_root)
             url = os.environ.get("HARNESS_RUNTIME_WEBHOOK_URL", "").strip() or (
-                f"http://host.docker.internal:{webhook.port}"
+                f"http://{private_host}:{webhook.port}"
+                if private_host
+                else f"http://host.docker.internal:{webhook.port}"
             )
             # Reusing a registered LiveKit agent name across rapid container restarts lets a new
             # room dispatch to the just-removed worker during server-side deregistration grace.
