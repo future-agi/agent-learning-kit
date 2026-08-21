@@ -17,10 +17,15 @@ the guess.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
-from . import Snapshot, StoreError
-from .container import ContainerStore
+from . import Held, Snapshot, StoreError
+from .container import ContainerStore, docker
+
+SCHEMA = "schema.sql"
 
 
 def _psycopg() -> Any:
@@ -49,6 +54,9 @@ class PostgresStore(ContainerStore):
     # -- how to reach it -------------------------------------------------------------
 
     def dsn(self) -> str:
+        external = os.environ.get("ALK_POSTGRES_DSN", "").strip()
+        if external:
+            return external
         host, port = self.address()
         return f"postgresql://{self.user}:{self.password}@{host}:{port}/{self.database}"
 
@@ -74,6 +82,16 @@ class PostgresStore(ContainerStore):
             return
         with self._connect() as connection:
             connection.execute(script)
+        # Remembered because the snapshot holds rows, not DDL. A restore into a fresh
+        # container finds no tables, and restoring rows into a schema that is not there
+        # quietly restores nothing.
+        self.applied.append(script)
+
+    def execute(self, statement: str, params: Sequence[Any] = ()) -> int:
+        """Run one mutation and report the rows it actually changed."""
+        with self._connect() as connection:
+            cursor = connection.execute(statement, tuple(params))
+            return max(0, int(cursor.rowcount or 0))
 
     def _tables(self, connection: Any) -> list[str]:
         rows = connection.execute(
@@ -95,6 +113,18 @@ class PostgresStore(ContainerStore):
         ).fetchall()
         return [row[0] for row in rows]
 
+    def _column_types(self, connection: Any, table: str) -> dict[str, str]:
+        """Return declared column types so arrays are not coerced into JSON."""
+        rows = connection.execute(
+            """
+            SELECT column_name, data_type
+              FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = %s
+            """,
+            (table,),
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
     def state(self) -> dict[str, list[dict[str, Any]]]:
         """Every table and its rows, in the shape the checks already expect.
 
@@ -107,11 +137,15 @@ class PostgresStore(ContainerStore):
             for table in self._tables(connection):
                 key = self._primary_key(connection, table)
                 order = (
-                    " ORDER BY " + ", ".join(f'"{column}"' for column in key) if key else ""
+                    " ORDER BY " + ", ".join(f'"{column}"' for column in key)
+                    if key
+                    else ""
                 )
                 cursor = connection.execute(f'SELECT * FROM "{table}"{order}')
                 columns = [description[0] for description in cursor.description or []]
-                out[table] = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                out[table] = [
+                    dict(zip(columns, row, strict=True)) for row in cursor.fetchall()
+                ]
             return out
 
     # -- how to put it back ----------------------------------------------------------
@@ -152,14 +186,20 @@ class PostgresStore(ContainerStore):
                     if not rows or table not in tables:
                         continue
                     columns = list(rows[0])
+                    types = self._column_types(connection, table)
                     quoted = ", ".join(f'"{column}"' for column in columns)
                     placeholders = ", ".join(["%s"] * len(columns))
-                    statement = f'INSERT INTO "{table}" ({quoted}) VALUES ({placeholders})'
+                    statement = (
+                        f'INSERT INTO "{table}" ({quoted}) VALUES ({placeholders})'
+                    )
                     with connection.cursor() as cursor:
                         cursor.executemany(
                             statement,
                             [
-                                tuple(_adapt(row.get(column)) for column in columns)
+                                tuple(
+                                    _adapt(row.get(column), types.get(column, ""))
+                                    for column in columns
+                                )
                                 for row in rows
                             ],
                         )
@@ -171,14 +211,131 @@ class PostgresStore(ContainerStore):
                     "SELECT setval(%s, %s, true)", (f'public."{sequence}"', value)
                 )
 
+    def save_to(self, path: str | Path) -> None:
+        """Save both the records and the DDL a fresh Postgres store needs."""
+        Held.save_to(self, path)
+        root = Path(path)
+        schema = docker(
+            "exec",
+            self.container,
+            "pg_dump",
+            "--schema-only",
+            "--no-owner",
+            "--no-privileges",
+            "--username",
+            self.user,
+            "--dbname",
+            self.database,
+        )
+        # pg_dump can emit psql-only safety commands. The snapshot is replayed through psycopg,
+        # so keep SQL and discard client meta-commands.
+        schema = "\n".join(
+            line for line in schema.splitlines() if not line.startswith("\\")
+        )
+        (root / SCHEMA).write_text(schema, encoding="utf-8")
 
-def _adapt(value: Any) -> Any:
+    def load_from(self, path: str | Path) -> None:
+        root = Path(path)
+        schema = root / SCHEMA
+        if not schema.exists():
+            raise StoreError(f"no saved Postgres schema at {schema}")
+        self.apply(schema.read_text(encoding="utf-8"))
+        Held.load_from(self, root)
+
+    # -- what a scenario changes -----------------------------------------------------
+
+    def add(self, collection: str, record: Any) -> int:
+        columns = list(record)
+        quoted = ", ".join(f'"{column}"' for column in columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        with self._connect() as connection:
+            types = self._column_types(connection, collection)
+            cursor = connection.execute(
+                f'INSERT INTO "{collection}" ({quoted}) VALUES ({placeholders})',
+                tuple(
+                    _adapt(record[column], types.get(column, "")) for column in columns
+                ),
+            )
+            return cursor.rowcount
+
+    def amend(self, collection: str, key: str, changes: Any, *, by: str = "") -> int:
+        if not by:
+            raise StoreError(
+                f"{collection} is a table, so changing a record needs the column it is keyed on"
+            )
+        sets = ", ".join(f'"{column}" = %s' for column in changes)
+        with self._connect() as connection:
+            types = self._column_types(connection, collection)
+            cursor = connection.execute(
+                f'UPDATE "{collection}" SET {sets} WHERE "{by}" = %s',
+                (
+                    *(
+                        _adapt(value, types.get(column, ""))
+                        for column, value in changes.items()
+                    ),
+                    key,
+                ),
+            )
+            return cursor.rowcount
+
+    def remove(self, collection: str, key: str = "", *, by: str = "") -> int:
+        if key and not by:
+            raise StoreError(
+                f"{collection} is a table, so removing one record needs the column it is keyed on"
+            )
+        statement = f'DELETE FROM "{collection}"' + (
+            f' WHERE "{by}" = %s' if key else ""
+        )
+        with self._connect() as connection:
+            cursor = connection.execute(statement, (key,) if key else ())
+            return cursor.rowcount
+
+
+class AttachedPostgresStore(PostgresStore):
+    """A Postgres store already started by the submitted repository's Compose project.
+
+    The record and snapshot operations are exactly the same as ``PostgresStore``. Only ownership
+    differs: the harness may inspect and reset this database, but the Compose provisioner owns
+    its process and lifecycle, so closing one scenario must never remove the shared container.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._external_dsn = dsn
+        self.applied: list[str] = []
+        self._started = True
+
+    def dsn(self) -> str:
+        return self._external_dsn
+
+    def start(self) -> None:
+        self.probe()
+
+    def stop(self) -> None:
+        return
+
+    def save_to(self, path: str | Path) -> None:
+        # Compose owns the schema and reruns the repository's migrations/initialisers whenever
+        # the project is recreated. The harness snapshot therefore owns only mutable rows and
+        # counters, avoiding a second generated schema that can drift from the submitted code.
+        from . import Held
+
+        Held.save_to(self, path)
+
+    def load_from(self, path: str | Path) -> None:
+        from . import Held
+
+        Held.load_from(self, path)
+
+
+def _adapt(value: Any, data_type: str = "") -> Any:
     """Hand back a value in the form psycopg will write.
 
-    Only json needs saying: a ``jsonb`` column reads back as a dict or a list, and handing
-    either straight to an INSERT makes psycopg guess at a composite type instead.
+    A list in a JSON column must be wrapped, while a list in an ARRAY column must remain a list
+    so psycopg emits a native Postgres array.
     """
-    if isinstance(value, (dict, list)):
+    if isinstance(value, dict) or (
+        isinstance(value, list) and data_type in ("json", "jsonb")
+    ):
         from psycopg.types.json import Jsonb
 
         return Jsonb(value)

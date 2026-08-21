@@ -13,12 +13,13 @@ on, the caller's instruction, and the grading afterwards.
 Run it:
 
     set -a; . ./.env.acceptance; set +a
-    .venv/bin/python -m fi.alk.harness.run.call --name drive_thru --scenario orders_a_big_mac
+    uv run python -m harness.run.call --name drive_thru --scenario orders_a_big_mac
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -31,22 +32,55 @@ from .live import grade, wire
 CASE = os.environ.get("HARNESS_VOICE_CASE", "2.1.2")
 
 
-def place_the_call(case: str, dry_run: bool = False) -> int:
+# The default runner is part of the harness package and uses ALK's public
+# SimulationSpec/SimulationRunner API. It is overridable only for provider
+# acceptance work; normal customer runs need no second checkout or script.
+VOICE_RUNNER = Path(__file__).with_name("sdk_voice.py")
+
+
+LIVE_EVENT = "HARNESS_EXCHANGE "
+
+
+def place_the_call(case: str, dry_run: bool = False, on_exchange=None) -> int:
     """Hand over to ALK's voice case, which owns everything about placing a call."""
-    runner = Path("oss/simulation-acceptance/run_voice_case.py")
+    named = os.environ.get("HARNESS_VOICE_RUNNER", "").strip()
+    runner = Path(named) if named else VOICE_RUNNER
     if not runner.exists():
-        raise RuntimeError(f"no voice runner at {runner}; run from the repo root")
+        raise RuntimeError(
+            f"no voice runner at {runner}. It ships in the harness package; set "
+            "HARNESS_VOICE_RUNNER if it lives somewhere else."
+        )
     command = [sys.executable, str(runner), case] + (["--dry-run"] if dry_run else [])
-    return subprocess.call(command)
+    if on_exchange is None:
+        return subprocess.call(command)
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    for line in process.stdout:
+        if line.startswith(LIVE_EVENT):
+            try:
+                on_exchange(json.loads(line[len(LIVE_EVENT) :]))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        else:
+            print(line, end="", flush=True)
+    return process.wait()
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="fi.alk.harness.run.call", description=__doc__)
+    parser = argparse.ArgumentParser(prog="agent-harness-call", description=__doc__)
     parser.add_argument("--name", required=True, help="which agent")
     parser.add_argument("--scenario", required=True, help="which scenario, by name")
     parser.add_argument("--case", default=CASE, help="ALK voice case id")
     parser.add_argument(
-        "--dry-run", action="store_true", help="wire everything up but do not place the call"
+        "--dry-run",
+        action="store_true",
+        help="wire everything up but do not place the call",
     )
     args = parser.parse_args(argv)
 
@@ -74,6 +108,23 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["HARNESS_INSTRUCTION"] = instruction
         os.environ["HARNESS_SCENARIO"] = scenario.name
         os.environ["HARNESS_OUTCOME"] = scenario.tests
+        os.environ["HARNESS_PERSONA"] = json.dumps(
+            scenario.persona.model_dump(exclude_none=True)
+            if scenario.persona is not None
+            else {"name": "customer"}
+        )
+        os.environ["HARNESS_INITIAL_MESSAGE"] = (
+            scenario.persona.initial_message if scenario.persona is not None else ""
+        )
+        os.environ["HARNESS_FIXTURE"] = json.dumps(
+            scenario.fixture, ensure_ascii=False, default=str
+        )
+        os.environ["HARNESS_SCRIPTED_CALLER"] = json.dumps(
+            scenario.persona.scripted_caller
+            if scenario.persona is not None
+            and scenario.persona.scripted_caller is not None
+            else {}
+        )
 
         code = place_the_call(args.case, dry_run=args.dry_run)
         if args.dry_run:
@@ -95,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
         webhook.stop()
         if tunnel is not None:
             tunnel.terminate()
+        if (root / "environment.json").exists():
+            from ..provision import stop_runtime
+
+            stop_runtime(root)
         world.close()
 
 

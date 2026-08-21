@@ -20,23 +20,29 @@ from typing import Any, Callable
 from . import Snapshot, StoreError, register_store
 from .container import ContainerStore
 
-# The five functions a written store defines. Fewer would not be enough for an arbitrary
-# engine, and more would be us guessing at what engines have in common.
-REQUIRED = ("connect", "apply", "state", "freeze", "restore")
+# The functions a written store defines. Fewer would not be enough for an arbitrary engine, and
+# more would be us guessing at what engines have in common. The last three are what a scenario's
+# own setup lands on: without them the environment can be stood up and read, but nothing can
+# change a little of it, so every scenario would run against the same base.
+REQUIRED = ("connect", "apply", "state", "freeze", "restore", "add", "amend", "remove")
 
 API = (
-    "Your code defines exactly these five functions:\n"
+    "Your code defines exactly these functions:\n"
     "    def connect(dsn)                      -> a live client, already connected\n"
     "    def apply(db, script)                 -> run statements: migrations, or a seed\n"
     "    def state(db)                         -> {group: [row, ...]} for everything it holds\n"
     "    def freeze(db)                        -> (rows, counters)\n"
     "    def restore(db, rows, counters)       -> put both back exactly\n"
+    "    def add(db, group, record)            -> insert one record, return how many landed\n"
+    "    def amend(db, group, key, changes, by)-> update records where `by` equals `key`\n"
+    "    def remove(db, group, key, by)        -> delete those records; no key means all of them\n"
     "Import whatever driver this engine needs at the top of the file; if it is not installed "
     "you will be told which one is missing. `counters` is anything that keeps counting after "
     "the rows are gone -- a sequence, an auto-increment. Restoring rows without it gives the "
     "next scenario ids continuing from the last one. Engines that hand out nothing of the sort "
     "return {}. Read state in a stable order, or a check comparing the first row is reading a "
-    "coin toss."
+    "coin toss. `add`, `amend` and `remove` are what a scenario's setup calls, so they are the "
+    "difference between a suite of scenarios and one base world tested many times."
 )
 
 
@@ -146,6 +152,22 @@ def register_written(
     def restore(self: ContainerStore, snapshot: Snapshot) -> None:
         self._with("restore", snapshot.rows, snapshot.counters)  # type: ignore[attr-defined]
 
+    def add(self: ContainerStore, collection: str, record: Any) -> int:
+        return int(self._with("add", collection, dict(record)) or 0)  # type: ignore[attr-defined]
+
+    def amend(
+        self: ContainerStore, collection: str, key: str, changes: Any, *, by: str = ""
+    ) -> int:
+        return int(self._with("amend", collection, key, dict(changes), by) or 0)  # type: ignore[attr-defined]
+
+    def remove(
+        self: ContainerStore, collection: str, key: str = "", *, by: str = ""
+    ) -> int:
+        return int(self._with("remove", collection, key, by) or 0)  # type: ignore[attr-defined]
+
+    WrittenStore.add = add  # type: ignore[assignment]
+    WrittenStore.amend = amend  # type: ignore[assignment]
+    WrittenStore.remove = remove  # type: ignore[assignment]
     WrittenStore.dsn = dsn  # type: ignore[assignment]
     WrittenStore._client = _client  # type: ignore[attr-defined]
     WrittenStore._with = _with  # type: ignore[attr-defined]

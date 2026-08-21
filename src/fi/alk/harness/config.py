@@ -19,6 +19,8 @@ from claude_agent_sdk import ClaudeAgentOptions
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 SKILLS_ROOT = Path(__file__).parent / "skills"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
 
 _READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 
@@ -51,14 +53,11 @@ def chosen_model(model: str | None = None) -> str:
 
 
 def provisioning(enabled: bool | None = None) -> bool:
-    """Whether the build stage provisions the agent's own engine instead of replicating it.
+    """Compatibility switch for callers selecting the legacy provisioning surface.
 
-    Off by default, because the two build stages prove different things and cannot both be
-    live: the old one saves a world of handlers it wrote, the new one saves an environment the
-    agent's unmodified code connects to. Until the new path has been run end to end against a
-    real datastore-backed agent, the shipped behaviour stays the shipped behaviour.
-
-    Set ``ALK_HARNESS_PROVISION=1`` to take the new path.
+    The autonomous workflow now discovers and provisions source infrastructure automatically;
+    explicit stage consumers can still select the older engine-provisioning tool surface while
+    they migrate.
     """
     if enabled is not None:
         return enabled
@@ -131,7 +130,15 @@ def read_only_session(
 # them at the gate works and is the backstop, but a denial still costs the turn that discovered
 # it — and these get reached for in almost every stage. Naming them as disallowed keeps them out
 # of the tool list the model is shown, so the turn is never spent.
-UNWANTED = ("ToolSearch", "Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch")
+UNWANTED = (
+    "ToolSearch",
+    "Bash",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+)
 
 
 def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
@@ -150,7 +157,9 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
 
     permitted = {*granted, "AskUserQuestion"}
 
-    async def refuse(payload: dict[str, Any], _tool_use_id: Any, _context: Any) -> dict[str, Any]:
+    async def refuse(
+        payload: dict[str, Any], _tool_use_id: Any, _context: Any
+    ) -> dict[str, Any]:
         name = str(payload.get("tool_name") or "")
         if not name or name in permitted:
             return {}
@@ -206,7 +215,7 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
     One conversation, one directory. Everything about testing one agent lives together, which is
     what makes a session something you can close, reopen, hand over or delete as one thing.
     """
-    base = Path(root) if root else Path("artifacts/sessions")
+    base = Path(root) if root else ARTIFACTS_ROOT / "sessions"
     return base / agent
 
 

@@ -18,19 +18,25 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .amend import add_rule, drop_rule, fix_tool, widen
-from .contract import AgentContract
-from .environment import (
+from .catalogue import (
     Catalogue,
     SubGoal,
     load_catalogue,
-    load_simulator_prompt,
     save_catalogue,
     validate_sub_goal,
 )
-from .folder import apply_setup, read_all, write_folder, write_index
-from .prove import prepared, prove
-from .scenario import Scenario, validate_scenario
-from .tools import schema
+from .contract import AgentContract
+from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
+from .prove import play_reference_step, prepared, prove
+from .scenario import (
+    Scenario,
+    Step,
+    contract_sequence_problems,
+    suite_diversity_problems,
+    validate_scenario,
+)
+from .simulator import load_simulator_prompt
+from .tools import brief, schema
 from .world.snapshot import restore
 
 SCENARIO_SERVER = "scenarios"
@@ -51,7 +57,26 @@ def write_scenarios(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     for one in scenarios:
         write_folder(one, catalogue, destination)
+    _forget_dropped(scenarios, destination)
     return write_index(scenarios, destination)
+
+
+def _forget_dropped(scenarios: list[Scenario], destination: Path) -> None:
+    """Remove the folders of scenarios that are no longer in the suite.
+
+    The folders are the truth, and they are what gets read back. Writing the survivors without
+    taking the others away means a dropped scenario returns on the next load, still failing, and
+    dropping it appears to do nothing at all.
+    """
+    import shutil
+
+    root = Path(destination) / SCENARIOS
+    if not root.exists():
+        return
+    keeping = {one.name for one in scenarios}
+    for folder in root.iterdir():
+        if folder.is_dir() and folder.name not in keeping:
+            shutil.rmtree(folder)
 
 
 def load_scenarios(destination: Path) -> list[Scenario]:
@@ -70,6 +95,7 @@ def accept_scenario(
     catalogue: Catalogue,
     kept: list[Scenario],
     simulator_prompt: str = "",
+    hard_constraints: list[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable."""
     try:
@@ -81,33 +107,43 @@ def accept_scenario(
     # a check reads is not reported as referring to something that does not exist.
     trial, _applied, _ready = prepared(scenario, world_root)
     try:
-        problems = validate_scenario(scenario, catalogue, trial.state(), simulator_prompt)
+        problems = validate_scenario(
+            scenario, catalogue, trial.state(), simulator_prompt
+        )
+        problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
     finally:
         trial.close()
 
     if problems:
-        return _err("Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems))
+        return _err(
+            "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
+        )
 
     proof = prove(scenario, catalogue, world_root)
     if not proof.holds:
-        return _err(f"Not kept. {proof.why()}")
+        said = f"Not kept. {proof.why()}"
+        # Code written against the wrong collection shape is the commonest way setup, ready and a
+        # check fail here, and the exception alone does not say which collections are mappings and
+        # which are lists. The world is asked, so the answer names them.
+        if "attribute" in said.lower() or "not subscriptable" in said.lower():
+            world = restore(world_root)
+            try:
+                said += f"\n\n{world.shapes()}"
+            finally:
+                world.close()
+        return _err(said)
 
     replaced = any(one.name == scenario.name for one in kept)
     kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
-    weak = (
-        "\nWorth tightening: "
-        + ", ".join(proof.weak)
-        + " still held with nothing done. The scenario is graded by its other checks, so it was "
-        "kept, but those sub-goals will report themselves as held for an agent that did nothing. "
-        "A check that asserts the attempt, not only the state it leaves, cannot do that."
-        if proof.weak
-        else ""
-    )
+    # A proved scenario is already valuable work. Persist it immediately so a stopped model,
+    # browser refresh, process restart, or later scenario failure cannot make the UI say none
+    # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
+    write_scenarios(kept, world_root, catalogue)
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
-        f"nothing is done.{weak}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"nothing is done.\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 
@@ -116,16 +152,35 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
     problems: list[str] = []
     if len(kept) < wanted:
         problems.append(
-            f"{len(kept)} of {wanted} scenarios so far. Keep writing; the ones that find "
-            f"something are usually the awkward ones. If nobody asked for {wanted}, record the "
-            "number you were actually given with aim_for first, not the number you happen to "
-            "have reached."
+            f"{len(kept)} of the {wanted} asked for. The ones that find something are usually "
+            "the awkward ones, so this is worth finishing rather than stopping here. If nobody "
+            f"asked for {wanted}, record what they did ask for with aim_for."
         )
     elif len(kept) > wanted:
         problems.append(
-            f"{len(kept)} scenarios but {wanted} were asked for. Drop the ones that add least "
-            "with drop_scenario. The number came from the person who asked."
+            f"{len(kept)} scenarios against a target of {wanted}. If they asked for more, "
+            "aim_for records the new size; reopening a suite starts with the target set to what "
+            "is already there, so adding to one always reads like this. If you wrote extra "
+            "nobody asked for, drop_scenario takes them off."
         )
+    # Two scenarios claiming the same use case are either the same test twice, or one of them is
+    # mislabelled. Both happened in the same suite: a delivered-order refusal was filed under
+    # "cancel a pending order", which is neither what it tests nor distinguishable afterwards
+    # from the scenario that really does test that. A use case is how coverage is counted, so a
+    # duplicate quietly overstates it.
+    claimed: dict[str, list[str]] = {}
+    for one in kept:
+        case = (one.use_case or "").strip().lower()
+        if case:
+            claimed.setdefault(case, []).append(one.name)
+    for case, names in claimed.items():
+        if len(names) > 1:
+            problems.append(
+                f"{' and '.join(names)} both claim the use case {case!r}. Give each the use case "
+                "it actually exercises, or drop the one that duplicates the other. Coverage is "
+                "counted by use case, so two scenarios sharing one hides a gap."
+            )
+
     # Sub-goals are shared so results roll up. A suite where every scenario invents its own is a
     # suite whose results cannot be added together.
     used = [name for one in kept for name in one.sub_goals]
@@ -145,6 +200,11 @@ def scenario_tools(
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    exploration = {"since_submit": 0}
+
+    scenario_required = ["name", "instruction", "solution", "sub_goals"]
+    if contract.conversational:
+        scenario_required.append("persona")
 
     @tool(
         "inspect_world",
@@ -165,12 +225,16 @@ def scenario_tools(
                     )
                 return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
-                return _err(f"no table {table!r}; this world has {', '.join(sorted(state))}")
+                return _err(
+                    f"no table {table!r}; this world has {', '.join(sorted(state))}"
+                )
             rows = state[table]
             matching = str(args.get("matching") or "").strip()
             if matching:
                 needle = matching.lower()
-                found = [r for r in rows if needle in json.dumps(r, default=str).lower()]
+                found = [
+                    r for r in rows if needle in json.dumps(r, default=str).lower()
+                ]
                 if not found:
                     return _ok(
                         f"nothing in {table} contains {matching!r}, but it holds {len(rows)} rows."
@@ -185,6 +249,23 @@ def scenario_tools(
             world.close()
 
     @tool(
+        "inspect_scenario",
+        "Read one already-kept scenario in full before replacing it. This is the source of "
+        "truth for incremental edits after a restart; do not reconstruct a saved scenario from "
+        "memory or from its one-line suite summary.",
+        schema({"name": str}, ["name"]),
+    )
+    async def inspect_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args.get("name") or "")
+        found = next((one for one in kept if one.name == name), None)
+        if found is None:
+            return _err(
+                f"no scenario called {name!r}; available: "
+                + (", ".join(one.name for one in kept) or "none")
+            )
+        return _ok(found.model_dump_json(indent=2))
+
+    @tool(
         "try_calls",
         "Run calls against a throwaway copy of the world and see the state they leave. Use it to "
         "work out a scenario's solution and what its checks should assert.\n\n"
@@ -194,6 +275,13 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
+        if exploration["since_submit"] >= 4:
+            return _err(
+                "Four throwaway probes have run since the last saved scenario. Submit and prove "
+                "one scenario now; if its gate identifies a concrete problem, use the next "
+                "probe to correct that problem. Do not map the whole suite before saving work."
+            )
+        exploration["since_submit"] += 1
         world = restore(world_root)
         try:
             world.reset()
@@ -206,15 +294,17 @@ def scenario_tools(
             for step in args.get("calls") or []:
                 if not isinstance(step, dict):
                     return _err("each call must be an object with a tool and arguments")
-                call = world.call(str(step.get("tool") or ""), step.get("arguments") or {})
+                try:
+                    reference_step = Step.model_validate(step)
+                except Exception as invalid:
+                    return _err(f"invalid reference call: {invalid}"[:600])
+                call = play_reference_step(world, reference_step)
                 if call.refused:
                     lines.append(f"{call.name}: refused — {call.error}")
                 elif not call.ok:
                     lines.append(f"{call.name}: CRASHED — {call.error}")
                 else:
-                    lines.append(
-                        f"{call.name}: ok — {json.dumps(call.result, default=str)[:200]}"
-                    )
+                    lines.append(f"{call.name}: ok — {brief(call.result)}")
             state = world.state()
             lines.append(
                 "state afterwards: "
@@ -222,7 +312,7 @@ def scenario_tools(
             )
             for name, rows in sorted(state.items()):
                 if rows and len(rows) <= 6:
-                    lines.append(f"{name}: " + json.dumps(rows, default=str)[:700])
+                    lines.append(f"{name}: " + brief(rows, limit=1200))
             return _ok("\n".join(lines) or "no calls were made")
         finally:
             world.close()
@@ -236,7 +326,9 @@ def scenario_tools(
         "call happened with the right arguments, not merely that it happened.\n\n"
         "Use `judged` only where nothing observable settles it, saying what a model must decide "
         "and why code cannot.",
-        schema({"name": str, "what": str, "check": str, "judged": str}, ["name", "what"]),
+        schema(
+            {"name": str, "what": str, "check": str, "judged": str}, ["name", "what"]
+        ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
         sub_goal = SubGoal(
@@ -248,7 +340,9 @@ def scenario_tools(
         problems = validate_sub_goal(sub_goal)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
-        catalogue.sub_goals = [one for one in catalogue.sub_goals if one.name != sub_goal.name]
+        catalogue.sub_goals = [
+            one for one in catalogue.sub_goals if one.name != sub_goal.name
+        ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
         return _ok(
@@ -288,16 +382,58 @@ def scenario_tools(
                     "description": "The task, written to the person the agent is serving. For a "
                     "conversational agent this fills the simulator prompt's slot.",
                 },
+                "persona": {
+                    "type": "object",
+                    "description": "Who the simulated person is, separate from the task. Use "
+                    "the established voice-scenario shape and only grounded, test-relevant "
+                    "details. This fills the simulator prompt's persona slot.",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "gender": {"type": "string"},
+                        "age_group": {"type": "string"},
+                        "occupation": {"type": "string"},
+                        "location": {"type": "string"},
+                        "personality": {"type": "string"},
+                        "communication_style": {"type": "string"},
+                        "initial_message": {
+                            "type": "string",
+                            "description": "The caller's natural opening request, specific to "
+                            "this scenario. Do not use a generic greeting.",
+                        },
+                        "keywords": {"type": "array", "items": {"type": "string"}},
+                        "languages": {"type": "array", "items": {"type": "string"}},
+                        "accent": {"type": "string"},
+                        "multilingual": {"type": "boolean"},
+                        "metadata": {"type": "object"},
+                    },
+                    "required": [
+                        "name",
+                        "personality",
+                        "communication_style",
+                        "initial_message",
+                        "languages",
+                        "accent",
+                        "keywords",
+                    ],
+                },
                 "variables": {
                     "type": "object",
-                    "description": "Any other slot the simulator prompt asks for, by name.",
+                    "description": "Any other slot the simulator prompt asks for, by name. Do "
+                    "not put persona here; use the structured persona field.",
+                },
+                "fixture": {
+                    "type": "object",
+                    "description": "Readable manifest of the concrete data behind this test. "
+                    "Include origin (seed/generated/mixed) and the identity, credentials, "
+                    "location, account state or other facts the instruction/setup depends on. "
+                    "Never put hidden pass/fail checks here.",
                 },
                 "setup_code": {
                     "type": "string",
                     "description": "Python defining setup(world): the changes this scenario "
                     "makes to the environment before the run. Leave empty to run on the base "
                     "world unchanged. Use world.call(tool, args) to act through the agent's own "
-                    "tools, or world.connection for direct SQL. This is code and not a list of "
+                    "tools, or world.put, world.change and world.drop for what no tool can produce. This is code and not a list of "
                     "rows because a scenario may need more than a table changed.",
                 },
                 "ready_code": {
@@ -317,8 +453,23 @@ def scenario_tools(
                         "type": "object",
                         "properties": {
                             "tool": {"type": "string"},
-                            "arguments": {"type": "object"},
+                            "arguments": {
+                                "type": "object",
+                                "description": "Exactly the model-facing arguments defined by "
+                                "the agent's tool schema. Never include hidden session state.",
+                            },
+                            "environment_arguments": {
+                                "type": "object",
+                                "description": "Only for a source-provisioned tool whose raw "
+                                "dependency needs fields the worker injects: the complete raw "
+                                "dependency payload used to prove the real state effect. This "
+                                "is never shown to or credited to the agent. Omit for local "
+                                "tools and when the two payloads are identical. A value like "
+                                "`$call.book_ride.booking_ref` resolves that field from the "
+                                "most recent successful earlier reference call.",
+                            },
                         },
+                        "required": ["tool", "arguments"],
                     },
                 },
                 "sub_goals": {
@@ -329,17 +480,21 @@ def scenario_tools(
                 },
                 "max_turns": {"type": "integer"},
             },
-            ["name", "instruction", "solution", "sub_goals"],
+            scenario_required,
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
-        return accept_scenario(
+        result = accept_scenario(
             args,
             world_root=world_root,
             catalogue=catalogue,
             kept=kept,
             simulator_prompt=simulator_prompt,
+            hard_constraints=contract.hard_constraints,
         )
+        if not result.get("is_error"):
+            exploration["since_submit"] = 0
+        return result
 
     @tool(
         "amend_contract",
@@ -369,7 +524,10 @@ def scenario_tools(
     )
     async def add_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = add_rule(
-            contract, world_root, rule=str(args.get("rule") or ""), why=str(args.get("why") or "")
+            contract,
+            world_root,
+            rule=str(args.get("rule") or ""),
+            why=str(args.get("why") or ""),
         )
         return _ok(said) if done else _err(said)
 
@@ -380,7 +538,10 @@ def scenario_tools(
     )
     async def drop_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = drop_rule(
-            contract, world_root, rule=str(args.get("rule") or ""), why=str(args.get("why") or "")
+            contract,
+            world_root,
+            rule=str(args.get("rule") or ""),
+            why=str(args.get("why") or ""),
         )
         return _ok(said) if done else _err(said)
 
@@ -407,7 +568,9 @@ def scenario_tools(
             tool_name=str(args.get("tool_name") or ""),
             why=str(args.get("why") or ""),
             args=[str(a) for a in args["args"]] if args.get("args") else None,
-            arg_types={str(k): str(v) for k, v in (args.get("arg_types") or {}).items()},
+            arg_types={
+                str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
+            },
             description=str(args.get("description") or ""),
             remove=bool(args.get("remove")),
         )
@@ -415,8 +578,13 @@ def scenario_tools(
 
     @tool(
         "aim_for",
-        "Set how many scenarios are wanted. Only when the person you are talking to says a "
-        "number, never to get past a refusal about having written too many.",
+        "Set how many scenarios are wanted. Call it whenever the person changes what they are "
+        "asking for: a number outright, or asking for more without naming one, in which case the "
+        "count is the size of the suite once you have written them. Adding to an existing suite "
+        "always needs this, because reopening one starts with the target set to what is already "
+        "there.\n\n"
+        "What it is not for is saving a suite nobody asked for. Writing extra and then raising "
+        "the target to match is how a request for four becomes thirteen that nobody reviews.",
         schema({"count": int}, ["count"]),
     )
     async def aim_for(args: dict[str, Any]) -> dict[str, Any]:
@@ -435,26 +603,36 @@ def scenario_tools(
         name = str(args.get("name") or "")
         if name == "*":
             kept.clear()
+            write_scenarios(kept, destination, catalogue)
             return _ok("all scenarios dropped")
         before = len(kept)
         kept[:] = [one for one in kept if one.name != name]
         if len(kept) == before:
             return _err(f"no scenario called {name!r}")
+        write_scenarios(kept, destination, catalogue)
         return _ok(f"{name} dropped. {len(kept)} left")
 
-    @tool("save_scenarios", "Write the kept scenarios out.", schema({}, []))
+    @tool(
+        "save_scenarios",
+        "Write the kept scenarios out. Every one has already been proved by submit_scenario, so "
+        "this always saves; anything else worth knowing comes back alongside.",
+        schema({}, []),
+    )
     async def save_scenarios(_args: dict[str, Any]) -> dict[str, Any]:
-        problems = not_ready(kept, target["count"], catalogue)
-        if problems:
-            return _err("Not saved. " + "\n  - ".join(problems))
+        # Always written. Each of these already cleared all three gates on its way in, so this is
+        # persistence and not a second opinion: refusing here left proved work in memory only,
+        # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
+        # What is off about the suite is said, not enforced.
+        noted = not_ready(kept, target["count"], catalogue)
         path = write_scenarios(kept, destination, catalogue)
+        diversity = suite_diversity_problems(kept)
         judged = sum(
             1
             for one in kept
             for name in one.sub_goals
             if (found := catalogue.named(name)) and not found.deterministic()
         )
-        return _ok(
+        said = (
             f"Saved {len(kept)} scenarios. Each has its own folder under "
             f"{destination / 'scenarios'} holding scenario.json, setup.py, ready.py and one "
             f"runnable file per check; {path.name} indexes them.\n"
@@ -462,12 +640,27 @@ def scenario_tools(
             "solution passes its checks, and those checks fail when nothing is done.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
+        if noted:
+            said += (
+                "\n\nWorth looking at, none of it stopping the save:\n  - "
+                + "\n  - ".join(noted)
+            )
+        if diversity:
+            return _err(
+                said
+                + "\n\nSaved as a checkpoint, but the suite is not ready to run because its "
+                "fixtures/personas are repetitive:\n  - "
+                + "\n  - ".join(diversity)
+                + "\nReplace the repeated scenarios, then save again."
+            )
+        return _ok(said)
 
     server = create_sdk_mcp_server(
         name=SCENARIO_SERVER,
         version="0.1.0",
         tools=[
             inspect_world,
+            inspect_scenario,
             try_calls,
             add_sub_goal,
             submit_scenario,
@@ -485,6 +678,7 @@ def scenario_tools(
 
 TOOL_NAMES = (
     "inspect_world",
+    "inspect_scenario",
     "try_calls",
     "add_sub_goal",
     "submit_scenario",
@@ -506,8 +700,12 @@ def world_summary(world_root: Path) -> str:
         lines = [f"  {name}: {len(rows)} rows" for name, rows in sorted(state.items())]
         catalogue = load_catalogue(world_root)
         if catalogue.sub_goals:
-            lines.append("\nSUB-GOALS already defined (reuse these, do not restate them):")
+            lines.append(
+                "\nSUB-GOALS already defined (reuse these, do not restate them):"
+            )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
-        return "THE BUILT WORLD (restored fresh for every scenario):\n" + "\n".join(lines)
+        return "THE BUILT WORLD (restored fresh for every scenario):\n" + "\n".join(
+            lines
+        )
     finally:
         world.close()

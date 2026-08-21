@@ -194,7 +194,9 @@ class Stage:
         # take shows up only on the invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
 
-    def grant(self, server_name: str, server: Any, tool_names: list[str], ask: Any = None) -> None:
+    def grant(
+        self, server_name: str, server: Any, tool_names: list[str], ask: Any = None
+    ) -> None:
         """Give this stage one more tool server, before it opens.
 
         The permission gate and the PreToolUse hook both close over the granted list when the
@@ -203,11 +205,16 @@ class Stage:
         why it lives here rather than being three edits every caller must remember.
         """
         if self._client is not None:
-            raise RuntimeError("grant before the stage opens; the session is already running")
+            raise RuntimeError(
+                "grant before the stage opens; the session is already running"
+            )
         from .config import gate_hooks, permission_gate
 
         added = [f"mcp__{server_name}__{name}" for name in tool_names]
-        self._options.mcp_servers = {**(self._options.mcp_servers or {}), server_name: server}
+        self._options.mcp_servers = {
+            **(self._options.mcp_servers or {}),
+            server_name: server,
+        }
         self._options.allowed_tools = [*(self._options.allowed_tools or []), *added]
         self._options.hooks = gate_hooks(self._options.allowed_tools)
         self._options.can_use_tool = permission_gate(ask, self._options.allowed_tools)

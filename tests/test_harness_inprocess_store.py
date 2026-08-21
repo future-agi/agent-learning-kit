@@ -37,7 +37,8 @@ def store() -> InProcessStore:
 
 
 def test_it_is_registered_as_an_engine() -> None:
-    assert resolve("inprocess").engine == "inprocess"
+    # Manifests normalize the legacy spelling to the canonical engine identifier.
+    assert resolve("inprocess").engine == "in_process"
 
 
 def test_the_agents_loader_is_what_fills_it(store: InProcessStore) -> None:

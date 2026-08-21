@@ -76,7 +76,7 @@ def test_the_surface_provisions_rather_than_replicating() -> None:
 
 # --- teaching the harness an engine at build time ------------------------------------------
 
-WORKING_OPS = '''
+WORKING_OPS = """
 import psycopg
 
 def connect(dsn):
@@ -124,7 +124,32 @@ def restore(db, rows, counters):
             )
     db.execute("SET session_replication_role = DEFAULT")
     COUNTERS
-'''
+
+def add(db, group, record):
+    cols = list(record)
+    names = ", ".join('"%s"' % c for c in cols)
+    values = ", ".join(["%s"] * len(cols))
+    db.execute(
+        'INSERT INTO "%s" (%s) VALUES (%s)' % (group, names, values),
+        tuple(record[c] for c in cols),
+    )
+    return 1
+
+def amend(db, group, key, changes, by):
+    cols = list(changes)
+    sets = ", ".join('"%s" = %%s' % c for c in cols)
+    return db.execute(
+        'UPDATE "%s" SET %s WHERE "%s" = %%s' % (group, sets, by),
+        (*[changes[c] for c in cols], key),
+    ).rowcount
+
+def remove(db, group, key, by):
+    if not key:
+        return db.execute('DELETE FROM "%s"' % group).rowcount
+    return db.execute(
+        'DELETE FROM "%s" WHERE "%s" = %%s' % (group, by), (key,)
+    ).rowcount
+"""
 
 RESTORES_COUNTERS = """
     for s, v in counters.items():
@@ -171,7 +196,10 @@ def test_ops_missing_a_function_are_told_which_one() -> None:
 def test_ops_importing_something_missing_say_so() -> None:
     with pytest.raises(StoreError, match="not installed"):
         register_written(
-            engine="absent", image="x:1", container_port=1, code="import nope_not_real\n"
+            engine="absent",
+            image="x:1",
+            container_port=1,
+            code="import nope_not_real\n",
         )
 
 
@@ -190,9 +218,7 @@ def test_registering_makes_the_engine_resolvable() -> None:
 
 # --- and the gate judges it, having never heard of it ---------------------------------------
 
-SCHEMA = (
-    "CREATE TABLE orders (id serial PRIMARY KEY, item text NOT NULL, quantity int NOT NULL)"
-)
+SCHEMA = "CREATE TABLE orders (id serial PRIMARY KEY, item text NOT NULL, quantity int NOT NULL)"
 SEED = "INSERT INTO orders (item, quantity) VALUES ('turkey', 2)"
 MUTATION = "INSERT INTO orders (item, quantity) VALUES ('ham', 1)"
 

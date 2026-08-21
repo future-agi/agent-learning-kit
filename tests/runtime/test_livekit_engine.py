@@ -1035,6 +1035,21 @@ def test_conversation_silence_backstop_ends_after_quiet_grace() -> None:
     )
 
 
+def test_live_exchange_cursor_emits_every_unseen_message_including_duplicates() -> None:
+    messages = [
+        {"role": "user", "content": "Where are you going?"},
+        {"role": "assistant", "content": "To the airport."},
+        {"role": "assistant", "content": "To the airport."},
+    ]
+
+    cursor, first = livekit._unseen_messages(messages[:2], 0)
+    cursor, second = livekit._unseen_messages(messages, cursor)
+
+    assert first == messages[:2]
+    assert second == messages[2:]
+    assert cursor == 3
+
+
 def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
     # The old behaviour ended the call the moment it hit the floor + a short lull.
     # Now a floor-length exchange with a sub-backstop lull keeps running.

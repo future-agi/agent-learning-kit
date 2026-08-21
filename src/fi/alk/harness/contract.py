@@ -98,51 +98,111 @@ class ToolSpec(BaseModel):
     description: str = ""
 
 
-class Reached(BaseModel):
-    """How the agent gets to a dependency, so the harness can be there instead of it.
+class ToolEntry(BaseModel):
+    """How to reach the agent's own implementation of one tool.
 
-    Nothing recorded here is a change to the agent. It is what the agent **already expects**,
-    written down so the environment can be built to match: the same host name, the same port,
-    the same database, the same user. Where the agent reads a value from configuration we set
-    that configuration; where it hardcodes one we shape our own store to it, which is why the
-    hardcoded values are worth recording rather than treated as a dead end.
-
-    That inversion is the whole point. The alternative -- editing the agent so it points at us
-    -- means testing something other than what ships.
+    Recorded rather than assumed, because there is no shape every agent shares. A benchmark
+    writes static methods on a class; a framework agent writes closures inside ``__init__`` that
+    cannot be imported at all. What the environment does about a tool is decided from ``mode``,
+    so a tool nobody can reach is visible here rather than quietly reimplemented.
     """
 
-    # The single easiest seam, and the one most agents have: one variable or config key holding
-    # the whole connection string. Set it at launch and nothing else matters.
-    dsn_env: str = ""
-    # Where a config file holds it instead, as a dotted path: "database.url". The file is
-    # mounted by us at the path the agent already reads.
+    tool: str
+    # import: a module-level callable. construct: a method needing an instance built first.
+    # service: reachable over HTTP. unreachable: no runnable seam was found and building stops.
+    # The harness never generates agent behavior.
+    mode: str = "unreachable"
+    module: str = ""
+    callable: str = ""
+    # An expression that builds the object a `construct` tool hangs off.
+    factory: str = ""
+    # What the agent's own state is passed as, where a tool takes it as an argument.
+    first_arg: str = ""
+    # For a service-backed tool, the submitted service and HTTP path its implementation calls.
+    # The path is recorded separately from the semantic tool name because production APIs often
+    # use a different route name (for example check_status -> /get_status).
+    service: str = ""
+    endpoint: str = ""
+    method: str = "POST"
+    notes: str = ""
+
+
+class DataStore(BaseModel):
+    """What the agent's tools read and write, and how to be there instead of it.
+
+    Nothing recorded here is a change to the agent. It is what the agent **already expects**,
+    written down so the environment can be built to match: the same host, the same port, the same
+    database, the same user. Where it reads a value from configuration we set that configuration;
+    where it hardcodes one we shape our own store to it, which is why a hardcoded value is worth
+    recording rather than treated as a dead end.
+
+    That inversion is the point. The alternative, editing the agent until it points at us, means
+    testing something other than what ships.
+    """
+
+    # Read off the agent, never chosen for it. Postgres and ClickHouse disagree about dialect,
+    # types and what a transaction even means, so an agent tested against the wrong one is graded
+    # on queries it never runs. Free text because the next agent will be on an engine nobody has
+    # written down yet.
+    kind: str = ""
+    version: str = ""
+
+    # The easiest seam, and the one most agents have: one variable or config key holding the whole
+    # connection string. Set it at launch and nothing else matters.
+    configured_by: str = ""
     config_key: str = ""
 
-    # What the agent expects to find, whether it reads these from config or has them written
-    # into its source. A hardcoded host is not an obstacle: a network alias makes that name
-    # resolve to our container, and the agent connects to us believing nothing changed.
+    # What the agent expects to find, whether it reads these from config or has them written into
+    # its source. A hardcoded host is not an obstacle: a network alias makes that name resolve to
+    # our container, and the agent connects to us believing nothing changed.
     host: str = ""
     port: int | None = None
     database: str = ""
     user: str = ""
-    # Deliberately never the password itself. A contract is written to disk and read by people,
-    # so a secret in it outlives the run that needed it. What is recorded is where the value
-    # comes from; if it is genuinely needed it is read at provision time and not persisted.
+    # Deliberately never the password itself. A contract is written to disk and read by people, so
+    # a secret in it outlives the run that needed it. What is recorded is where the value comes
+    # from; if it is genuinely needed it is read at build time and not persisted.
     password_from: str = ""
 
-    # An agent that holds its data in memory is reached by calling the function that loads it,
-    # not by connecting to anything. Recorded so the environment can call the agent's own
-    # loader rather than reading its files and rebuilding the structure itself — which would be
-    # a second implementation of the one thing this path exists to stop reimplementing.
+    # An agent that holds its data in memory is reached by calling the function that loads it, not
+    # by connecting to anything. Recorded so the environment can call the agent's own loader
+    # rather than reading its files and rebuilding the structure itself, which would be a second
+    # implementation of the one thing this path exists to stop reimplementing.
+    schema_from: str = ""
+    loaded_by: str = ""
     loader_module: str = ""
-    loader_function: str = ""
 
     def has_seam(self) -> bool:
         """Whether there is any way to point this agent at our store.
 
-        An agent with no seam at all is a finding, not a thing to work around: it cannot be
-        tested without one, and saying so is more useful than editing it until it can.
+        An agent with no seam at all is a finding, not a thing to work around: it cannot be tested
+        without one, and saying so is more useful than editing it until it can.
         """
+        return bool(
+            self.configured_by
+            or self.config_key
+            or self.host
+            or self.port
+            or self.database
+            or self.loader_module
+            or self.loaded_by
+        )
+
+
+class Reached(BaseModel):
+    """How an existing agent reaches a dependency, without storing its secret values."""
+
+    dsn_env: str = ""
+    config_key: str = ""
+    host: str = ""
+    port: int | None = None
+    database: str = ""
+    user: str = ""
+    password_from: str = ""
+    loader_module: str = ""
+    loader_function: str = ""
+
+    def has_seam(self) -> bool:
         return bool(
             self.dsn_env
             or self.config_key
@@ -153,12 +213,23 @@ class Reached(BaseModel):
         )
 
 
+class Runtime(BaseModel):
+    """What it takes to run the agent's code."""
+
+    language: str = "python"
+    version: str = ""
+    install: str = ""
+    workdir: str = ""
+    dockerfile: str = ""
+
+
 class Dependency(BaseModel):
     """Something the agent reaches for that has to exist before it can work.
 
-    This is what tells the environment stage what to stand up, rather than leaving it to notice
-    halfway through that a tool has nothing to answer it. The world is a sandbox: whatever is
-    named here gets built inside it, and the agent's own call goes to it unchanged.
+    This is what tells the environment stage there is a service to stand up, rather than leaving
+    it to notice halfway through that a tool has nothing to answer it. The world is a sandbox:
+    whatever is named here gets built inside it, so the agent's call goes to something real that
+    happens to be ours.
     """
 
     name: str
@@ -168,28 +239,15 @@ class Dependency(BaseModel):
     what: str = ""
     # The tools that cannot work without it. An unreferenced dependency is usually a mistake.
     used_by: list[str] = Field(default_factory=list)
-
-    # What to stand up. Read off the agent, never chosen for it: Postgres and ClickHouse
-    # disagree about dialect, types and what a transaction even means, so an agent tested
-    # against the wrong one is graded on queries it never runs. Left as free text because the
-    # next agent will be on an engine nobody has written down yet.
     engine: str = ""
     version: str = ""
     reached: Reached = Field(default_factory=Reached)
 
     def provisionable(self) -> bool:
-        """Whether the environment stage has enough here to stand something up."""
         return bool(self.engine) and self.reached.has_seam()
 
 
-def _reached(one: "Dependency") -> str:
-    """What the environment stage needs in order to be where this dependency was.
-
-    Said in the same breath as the dependency itself, because "Postgres 16" and "reached by
-    DATABASE_URL" are useless apart: the first says what to run, the second says how to be the
-    thing it connects to. A dependency carrying neither is called out rather than left to fail
-    quietly later, when the reason is much harder to see.
-    """
+def _reached(one: Dependency) -> str:
     if not one.engine and not one.reached.has_seam():
         return ""
     said: list[str] = []
@@ -197,15 +255,8 @@ def _reached(one: "Dependency") -> str:
         said.append(f"stand up {one.engine}{' ' + one.version if one.version else ''}")
     where = one.reached
     if where.loader_module or where.loader_function:
-        # Said first and said plainly, because "stand up inprocess" on its own reads as an
-        # instruction to find something to stand up — and a stage told that, with no loader
-        # named, reached for a server the agent has never used.
-        #
-        # Rendered when either half is present, not only when the module is. Half a seam is
-        # worth showing: a function with no module to import it from is a gap the next stage
-        # can ask about, where silence is a gap it will fill with a guess.
         said.append(
-            f"call the agent's own "
+            "call the agent's own "
             f"{where.loader_module or 'MODULE NOT RECORDED'}."
             f"{where.loader_function or 'load_data'} for it; nothing is connected to and no "
             "server is involved"
@@ -214,7 +265,7 @@ def _reached(one: "Dependency") -> str:
         said.append(f"point it there with ${where.dsn_env}")
     elif where.config_key:
         said.append(f"point it there with {where.config_key} in its config")
-    expects = [
+    expected = [
         f"{label} {value}"
         for label, value in (
             ("host", where.host),
@@ -224,16 +275,11 @@ def _reached(one: "Dependency") -> str:
         )
         if value
     ]
-    if expects:
-        # Matched rather than changed: the store is built to these, so the agent connects to
-        # us expecting exactly what it always expected.
-        said.append("build it to match " + ", ".join(expects))
+    if expected:
+        said.append("build it to match " + ", ".join(expected))
     if one.engine and not where.has_seam():
-        said.append(
-            "NO CONFIGURATION SEAM RECORDED — without one this agent cannot be pointed at "
-            "anything, and that is a finding to report rather than something to edit around"
-        )
-    return "\n      " + "; ".join(said) if said else ""
+        said.append("NO CONFIGURATION SEAM RECORDED")
+    return "; ".join(said)
 
 
 class AgentContract(BaseModel):
@@ -292,6 +338,15 @@ class AgentContract(BaseModel):
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
     dependencies: list[Dependency] = Field(default_factory=list)
+    # Whether the agent ships code for its tools: present, absent, or partial. Missing code is a
+    # build blocker: the harness never supplies replacement agent behavior.
+    implementation: str = ""
+    tool_entrypoints: list[ToolEntry] = Field(default_factory=list)
+    # How this agent's tools say no in a value they return, rather than by raising. Without it a
+    # refusal cannot be told from a success once the agent's own code is answering the call.
+    refusal_signature: str = ""
+    data_store: DataStore | None = None
+    runtime: Runtime | None = None
     real_use_cases: list[str] = Field(default_factory=list)
     # Free-form. The fields above are the fixed core because code consumes them; this is where
     # the reader records whatever else about *this* agent is worth carrying forward — quirks,
@@ -354,23 +409,75 @@ class AgentContract(BaseModel):
             )
         if self.dependencies:
             parts.append(
-                "WHAT THIS AGENT DEPENDS ON (the environment stands up each of these, and the\n"
-                "agent's own call goes to it unchanged — its code is never edited):\n  - "
+                "WHAT THIS AGENT DEPENDS ON (the environment has to provide each of these):\n  - "
                 + "\n  - ".join(
                     f"{one.name} ({one.kind or 'unspecified'}): {one.what}"
                     + (f" — used by {', '.join(one.used_by)}" if one.used_by else "")
-                    + _reached(one)
+                    + (f" — {_reached(one)}" if _reached(one) else "")
                     for one in self.dependencies
                 )
+                + "\nThe agent's code is never edited; the environment must match its existing seam."
             )
         if self.real_use_cases:
             parts.append(
                 "REAL USE CASES (what this agent is actually for):\n  - "
                 + "\n  - ".join(self.real_use_cases[:12])
             )
+        if self.tool_entrypoints:
+            parts.append(
+                "THE AGENT'S OWN TOOL CODE. Run these rather than writing replacements:\n  - "
+                + "\n  - ".join(
+                    f"{one.tool}: {one.mode}"
+                    + (f" {one.module}.{one.callable}" if one.module else "")
+                    + (f", state passed as {one.first_arg}" if one.first_arg else "")
+                    + (f", build with {one.factory}" if one.factory else "")
+                    for one in self.tool_entrypoints
+                )
+            )
+        if self.refusal_signature:
+            parts.append(
+                "HOW THIS AGENT REFUSES, in a value rather than by raising:\n  "
+                f"{self.refusal_signature}"
+            )
+        if self.data_store:
+            store = self.data_store
+            parts.append(
+                "ITS DATA STORE:\n"
+                f"  kind: {store.kind or 'unspecified'}\n"
+                f"  connection comes from: {store.configured_by or 'unknown'}\n"
+                f"  schema from: {store.schema_from or 'unknown'}\n"
+                f"  its own loader: {store.loaded_by or 'none'}"
+            )
+        if self.runtime:
+            run = self.runtime
+            parts.append(
+                "RUNNING ITS CODE:\n"
+                f"  {run.language} {run.version}, install with {run.install or 'unknown'}"
+                + (f", imports resolve from {run.workdir}" if run.workdir else "")
+                + (
+                    f", its own Dockerfile at {run.dockerfile}"
+                    if run.dockerfile
+                    else ""
+                )
+            )
         if self.notes:
             parts.append(f"NOTES from reading the agent:\n{self.notes[:1500]}")
         return "\n\n".join(parts)
+
+    def entry_for(self, tool: str) -> ToolEntry | None:
+        for one in self.tool_entrypoints:
+            # Coerced rather than assumed. Assigning this field directly bypasses validation, so
+            # an entry can arrive as a plain mapping, and reading it as an object would raise
+            # somewhere far from the assignment.
+            found = one if isinstance(one, ToolEntry) else ToolEntry(**dict(one))
+            if found.tool == tool:
+                return found
+        return None
+
+    def adoptable(self, tool: str) -> bool:
+        """Whether this tool has code of its own that should be run instead of replaced."""
+        found = self.entry_for(tool)
+        return bool(found and found.mode in ("import", "construct", "service"))
 
 
 def validate_contract(contract: AgentContract) -> list[str]:

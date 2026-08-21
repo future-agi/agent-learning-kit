@@ -29,8 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .catalogue import Catalogue
 from .checks import Outcome, run_check
-from .environment import Catalogue
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
@@ -57,7 +57,13 @@ class Proof:
 
     @property
     def holds(self) -> bool:
-        return self.ready and self.solvable and not self.vacuous and not self.broken
+        return (
+            self.ready
+            and self.solvable
+            and not self.vacuous
+            and not self.weak
+            and not self.broken
+        )
 
     def gates(self) -> dict[str, bool]:
         """The three answers, for anything that wants to show them."""
@@ -91,7 +97,9 @@ class Proof:
             )
             return (
                 "the reference solution does not pass this scenario's own checks, so either the "
-                "scenario cannot be passed or the checks are wrong:\n  - " + said + refusals
+                "scenario cannot be passed or the checks are wrong:\n  - "
+                + said
+                + refusals
             )
         if self.vacuous:
             passed = [one.name for one in self.with_nothing if one.held]
@@ -107,6 +115,15 @@ class Proof:
                 "        if not tried: return 'never attempted it'\n"
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
+            )
+        if self.weak:
+            return (
+                "these individual checks pass without the agent doing anything, so keeping them "
+                "would display credit unsupported by evidence:\n  - "
+                + "\n  - ".join(self.weak)
+                + "\n\nMake each check assert the relevant attempt or observation as well as the "
+                "final state. For a refusal, require that the call was attempted and refused; "
+                "an untouched world is not evidence that the agent refused correctly."
             )
         return "holds"
 
@@ -135,6 +152,77 @@ def prepared(
     return world, applied, ready
 
 
+def play_reference_step(world: GeneratedWorld, step: object) -> Call:
+    """Play one correct-agent step without confusing its API with its dependency's API.
+
+    A generated world can execute the agent-facing call directly.  A source-provisioned world
+    cannot: its model-facing tool may enforce local ordering and inject session state before it
+    reaches a raw HTTP service.  For those worlds, drive the raw endpoint with the explicitly
+    declared environment payload, but record only the semantic call the agent was expected to
+    make.  Purely local state-machine tools have no dependency effect and are recorded as such.
+    """
+    name = str(getattr(step, "tool", "") or "")
+    arguments = dict(getattr(step, "arguments", {}) or {})
+    environment_arguments = _resolve_reference_values(
+        dict(getattr(step, "environment_arguments", {}) or {}), world.calls
+    )
+    runtime_tools = set(getattr(world, "runtime_tools", set()))
+    if name not in runtime_tools:
+        return world.call(name, arguments)
+
+    endpoint = getattr(world, "endpoint_for", {}).get(name)
+    forward = getattr(world, "forward", None)
+    if endpoint and callable(forward):
+        dependency_arguments = environment_arguments or arguments
+        effect = forward(endpoint, dependency_arguments, record=False)
+        semantic = Call(
+            name=name,
+            arguments=arguments,
+            result=effect.result,
+            ok=effect.ok,
+            error=effect.error,
+            refused=effect.refused,
+            at=effect.at,
+        )
+    else:
+        # This is a local orchestration/state-machine action.  Its presence and ordering are
+        # observable in the real worker trace; it has no independent environment effect to
+        # replay during proof.
+        semantic = Call(name=name, arguments=arguments)
+    world.calls.append(semantic)
+    return semantic
+
+
+def _resolve_reference_values(value: object, calls: list[Call]) -> object:
+    """Resolve a dependency value produced by an earlier reference call.
+
+    ``$call.book_ride.booking_ref`` refers to the named field on the most recent successful
+    ``book_ride`` result. This drives real chained effects without pretending the model knew a
+    backend-generated id.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _resolve_reference_values(item, calls) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_reference_values(item, calls) for item in value]
+    if not isinstance(value, str) or not value.startswith("$call."):
+        return value
+    parts = value.split(".")
+    if len(parts) < 3:
+        return value
+    call_name = parts[1]
+    found = next(
+        (call for call in reversed(calls) if call.name == call_name and call.ok), None
+    )
+    current = found.result if found is not None else None
+    for key in parts[2:]:
+        if not isinstance(current, dict) or key not in current:
+            return value
+        current = current[key]
+    return current
+
+
 def _run(
     scenario: Scenario, world_root: Path, *, with_solution: bool
 ) -> tuple[GeneratedWorld, list[Call], list[str]]:
@@ -143,7 +231,7 @@ def _run(
     refused: list[str] = []
     if with_solution:
         for step in scenario.solution:
-            call = world.call(step.tool, step.arguments)
+            call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
     return world, list(world.calls), refused
@@ -195,11 +283,21 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
         ]
     finally:
         untouched.close()
-    # Vacuous only if *every* check still passes with nothing done. One check that survives an
-    # empty run is often legitimate — "no order was placed" is a real thing to assert about a
-    # refusal scenario — but a whole set of them means nothing is being graded.
+    # Record every check that passes without an action. Even when another checkpoint makes the
+    # overall scenario non-vacuous, showing this one as green would award unsupported credit —
+    # exactly the misleading partial-pass display the proof gate exists to prevent.
     proof.weak = [one.name for one in proof.with_nothing if one.held]
-    proof.vacuous = bool(proof.with_nothing) and len(proof.weak) == len(
-        proof.with_nothing
+    # A judged sub-goal reads what the agent said, and an agent that did nothing said nothing, so
+    # it cannot be passed by an empty run the way a state check can. It still does not excuse a
+    # deterministic checkpoint that independently awards credit with no evidence.
+    judged = [
+        name
+        for name in scenario.sub_goals
+        if (found := catalogue.named(name)) is not None and not found.deterministic()
+    ]
+    proof.vacuous = (
+        bool(proof.with_nothing)
+        and len(proof.weak) == len(proof.with_nothing)
+        and not judged
     )
     return proof

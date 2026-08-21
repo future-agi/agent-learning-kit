@@ -37,17 +37,29 @@ def as_persona(scenario: Scenario, simulator_prompt: str = "") -> Persona:
     values filled in. ALK wraps it in its own voice-execution rules, so what goes here is only
     what changes per scenario, not a second set of instructions about how to behave on a call.
 
-    There is no persona payload beyond a label. Who the caller is does not vary between
-    scenarios; what varies is what they want and what they know.
+    The structured persona is preserved so LiveKit can vary the caller's identity, speech style,
+    and scenario metadata instead of flattening every test into the same generic customer.
     """
-    from ..environment import fill
+    from ..simulator import fill
 
+    # The LiveKit voice simulator treats ``situation`` as private context rather than a
+    # line to recite. Preserve the harness-authored caller rules here: they explicitly keep
+    # the simulator in the customer role and stop it from volunteering held-back details.
+    # Fall back to the plain scenario instruction for older sessions without a prompt.
     filled = fill(simulator_prompt, scenario.slots())[0] if simulator_prompt else ""
+    persona = (
+        scenario.persona.model_dump(exclude_none=True)
+        if scenario.persona is not None
+        else {"name": "customer"}
+    )
     return Persona(
-        persona={"name": "customer"},
+        persona=persona,
         situation=filled or scenario.instruction,
-        outcome=scenario.tests
-        or "complete what you came for, or accept that you cannot",
+        # Said in the person's own terms, because it is read aloud with the situation.
+        # ``scenario.tests`` describes what the suite is checking — "agent correctly counts
+        # customers filtered by country" — and a person who opens by announcing what the agent
+        # is being graded on has told it the answer.
+        outcome="get what you came for, or accept that you cannot",
     )
 
 

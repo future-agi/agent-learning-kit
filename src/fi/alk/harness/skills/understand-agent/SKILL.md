@@ -56,31 +56,35 @@ Find, in roughly this order:
 
 6. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
-   what it provides, and which tools cannot work without it. The environment stage stands these
-   up, so a dependency you do not record is a tool that will have nothing to answer it.
+   what it provides, and which tools cannot work without it. The environment stage builds these,
+   so a dependency you do not record is a tool that will have nothing to answer it.
 
-   For anything the agent connects to, two more things decide whether it can be stood up at all.
+7. **Whether its tools have code, and how to reach it.** This is the difference between testing
+   the agent and testing somebody's reimplementation of it, so it is worth real effort.
 
-   **Which engine, and which version.** Postgres, ClickHouse, MySQL, Redis — read it off the
-   driver it imports, the URL scheme it builds, the image its compose file pulls. Never pick one
-   for it: engines disagree about dialect, types and what a transaction means, so an agent tested
-   against a different one is graded on queries it never runs. An engine nobody has stood up
-   before is fine to record; working it out is the environment stage's job.
+   For each tool, find the function that actually runs and record where it lives and how it is
+   called: a module-level function, a method on a class, something hanging off an object that has
+   to be built first, or an endpoint already reachable over HTTP. Say which, per tool. Where a
+   tool takes the agent's own state as an argument, name that argument.
 
-   **How it is reached.** This is what lets the harness be there instead of the real thing, and
-   **the agent's code is never edited** to make it so. Record whichever of these the agent uses:
-   the environment variable holding its connection string (`DATABASE_URL`, `PG_DSN`), or the key
-   in a config file it reads (`database.url`). Then record what it *expects to find* — host,
-   port, database name, user — whether those come from configuration or are written into the
-   source.
+   Some tools cannot be reached at all. A framework may define them as closures inside a class,
+   so there is nothing importable. **Record that plainly rather than leaving the entry blank**:
+   the environment stage must stop and tell the person which runnable seam the agent needs. It
+   never writes a replacement implementation.
 
-   Hardcoded values are worth recording, not a dead end: the environment is built to match them,
-   down to the host name, so the agent connects to us expecting exactly what it always expected.
-   Never record a password. Record where the password comes from and stop there — this file is
-   written to disk and read by people.
+8. **How its code says no.** Code written for production often reports failure by returning a
+   value rather than raising, so a returned string can be a refusal. Read one or two of its tools
+   and record the convention. Without it, every refusal is recorded as a success, which hides the
+   behaviour most worth testing.
 
-   If an agent turns out to have no seam at all, say so plainly in the open questions. That is a
-   finding worth reporting, and much more useful than a guess.
+9. **What it takes to run.** Its install command from its own lockfile or requirements, the
+   language and version, where imports resolve from, and whether it has a Dockerfile of its own.
+   Its own Dockerfile is used in preference to anything written for it.
+
+10. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
+    connection comes from an environment variable, a config file, or a constructor argument. Say
+    so if it is hardcoded: that is the difference between substituting a store cleanly and having
+    to change the agent's code, which is a decision for the person, not for you.
 
 7. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
    every field of every kind of record, and any values a field is constrained to. Record the
@@ -96,6 +100,30 @@ Find, in roughly this order:
    not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
    not write a situation with a character, a sequence of events and an outcome. Those are
    scenarios and they are written later, from these sentences.
+
+## A repository may not hold one agent
+
+What you are pointed at is a directory, not necessarily a single agent. Before reading anything in
+depth, work out what is actually in there. Three shapes come up:
+
+**One agent.** The ordinary case. Read it.
+
+**Several agents side by side.** A repository organised by domain or by product, each with its own
+tools, its own rules and its own data. They may share a base class or a runner, which is what makes
+this easy to miss: the shared parts look like the agent until you notice the tools differ per
+directory. **List what you found and ask which one is being tested.** Do not pick. Building a
+contract for the wrong one wastes every stage after it, and the person who pointed you here knows
+which they meant.
+
+**One agent with several runtimes.** The same tools reachable over voice, over chat, or through a
+browser. That is one agent, and what to ask about is the modality, not which agent.
+
+How to tell them apart: look for repeated structure. Several directories that each define their own
+set of tools, their own instructions and their own data are several agents. Several entry points
+over one set of tools are one agent with several runtimes.
+
+Say what you found either way, briefly, before you start reading in depth. "This holds four agents,
+one per domain, which do you want" costs a turn and saves the whole stage.
 
 ## When you are not sure
 

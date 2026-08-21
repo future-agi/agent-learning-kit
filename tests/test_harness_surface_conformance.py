@@ -79,9 +79,9 @@ def test_every_reached_field_can_be_written(contract_schema: dict) -> None:
 
 def test_a_password_is_still_not_writable(contract_schema: dict) -> None:
     """The one field deliberately absent, asserted so it cannot be added by accident."""
-    offered = contract_schema["properties"]["dependencies"]["items"]["properties"]["reached"][
-        "properties"
-    ]
+    offered = contract_schema["properties"]["dependencies"]["items"]["properties"][
+        "reached"
+    ]["properties"]
     assert "password" not in offered
     assert "password_from" in offered
 
@@ -137,7 +137,9 @@ def sub_goal_schema(server) -> dict:
 
 
 @pytest.mark.parametrize("build_server", ["provision", "world"])
-def test_add_sub_goal_agrees_with_the_sub_goal_model(build_server: str, tmp_path) -> None:
+def test_add_sub_goal_agrees_with_the_sub_goal_model(
+    build_server: str, tmp_path
+) -> None:
     """A schema that promises a boolean for a field the model stores as a string means the
     stage cannot add a sub-goal at all -- it is rejected on every attempt, whichever it sends.
 
@@ -155,7 +157,9 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(build_server: str, tmp_path
         assert name in offered, f"{build_server}: cannot write SubGoal.{name}"
         expected = JSON_TYPE.get(annotation.annotation)
         if expected:
-            assert offered[name].get("type") == expected, (
+            # Optional model fields accept null at the MCP boundary; normalization treats
+            # null as omission instead of wasting a model turn on a schema rejection.
+            assert offered[name].get("type") in (expected, [expected, "null"]), (
                 f"{build_server}: add_sub_goal types {name} as "
                 f"{offered[name].get('type')!r}, SubGoal stores {expected!r}"
             )

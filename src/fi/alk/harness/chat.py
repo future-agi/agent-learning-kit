@@ -12,19 +12,21 @@ is an implementation detail, not something to make somebody manage.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import build as build_stage
 from . import reception as reception_stage
 from . import scenarios as scenario_stage
 from . import understand as understand_stage
-from .run import stage as run_stage
 from .config import artifact_dir
 from .contract import AgentContract
+from .run import stage as run_stage
 from .session import Stage
 from .sources import AgentSource, resolve
+from .world.snapshot import saved as world_saved
 
 RECEPTION = "reception"
 UNDERSTAND = "understand"
@@ -77,7 +79,11 @@ class Conversation:
 
     @property
     def world_built(self) -> bool:
-        return bool(self.out) and (self.out / "world.sqlite").exists()
+        # The manifest, not a database file. Every saved world writes one; only some of them have
+        # a SQLite file beside it, and an agent whose state lives in services and files has none.
+        # Keyed on the database, such a world stays "not built" forever and the conversation can
+        # never leave this stage, however well the build actually went.
+        return world_saved(self.out)
 
     @property
     def scenarios_written(self) -> bool:
@@ -107,16 +113,6 @@ class Conversation:
 
     # -- moving between stages -------------------------------------------------------
 
-    def _source_root(self) -> str | None:
-        """Where the agent's code lives, when it is a repository.
-
-        The provisioning build stage reads the agent's own migrations and data loader from
-        here. A source supplied as a definition rather than a repository has nothing to read,
-        and that stage is then granted no read tools at all.
-        """
-        root = getattr(self.source, "root", None)
-        return str(root) if root else None
-
     async def _close(self) -> None:
         if self.stage is not None:
             self.spent_usd += self.stage.spent_usd
@@ -129,7 +125,11 @@ class Conversation:
         self.stage_name = stage_name
         if stage_name == RECEPTION:
             self.stage, self._found = reception_stage.open_stage(
-                cwd=self.workspace, ask=self.ask
+                cwd=self.workspace,
+                ask=self.ask,
+                # The UI allocates a session before the agent has a name. Put a GitHub clone in
+                # that existing session rather than creating a second artifact directory.
+                source_dir=(self.out / "source") if self.out else None,
             )
             self._grant_flow()
             await self.stage.__aenter__()
@@ -144,7 +144,9 @@ class Conversation:
             # This guard has to come before the stage opens: with a contract on disk but no
             # source, reopening understand would otherwise die on source.briefing() instead of
             # saying what is actually missing.
-            raise RuntimeError("cannot re-read the agent without knowing where it lives")
+            raise RuntimeError(
+                "cannot re-read the agent without knowing where it lives"
+            )
         if stage_name == UNDERSTAND:
             self.stage, _ = understand_stage.open_stage(
                 self.source, out=self.out, ask=self.ask
@@ -158,8 +160,20 @@ class Conversation:
         if contract is None:
             raise RuntimeError("cannot go further before there is a contract")
         if stage_name == BUILD:
+            source_root = str(getattr(self.source, "root", "") or "")
+            build_stage.require_buildable(contract, source_root)
+            from .provision import provision_if_present
+
+            await asyncio.to_thread(
+                provision_if_present, source_root, self.out, contract
+            )
             self.stage, _ = build_stage.open_stage(
-                contract, out=self.out, ask=self.ask, source=self._source_root()
+                contract,
+                out=self.out,
+                ask=self.ask,
+                # Where the agent's own code lives, so its tools can be bound to rather
+                # than rewritten. Empty for an agent given as a specification.
+                source_root=source_root,
             )
             opening = build_stage.opening(contract)
         elif stage_name == RUN:
@@ -213,27 +227,35 @@ class Conversation:
         async def hand_to_next_stage(args: dict[str, Any]) -> dict[str, Any]:
             if not self._artifact_for(self.stage_name):
                 return {
-                    "content": [{
-                        "type": "text",
-                        "text": "This stage has not produced its artifact yet, so there is "
-                        "nothing to move on from. Finish this stage's work first.",
-                    }],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "This stage has not produced its artifact yet, so there is "
+                            "nothing to move on from. Finish this stage's work first.",
+                        }
+                    ],
                     "is_error": True,
                 }
             if self.next_stage() is None:
                 return {
-                    "content": [{"type": "text", "text": "there is no stage after this one"}],
+                    "content": [
+                        {"type": "text", "text": "there is no stage after this one"}
+                    ],
                     "is_error": True,
                 }
             wanted["request"] = str(args.get("request") or "").strip() or "continue"
             return {
-                "content": [{
-                    "type": "text",
-                    "text": "Handed over. Say one short line that you are moving on, and stop.",
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Handed over. Say one short line that you are moving on, and stop.",
+                    }
+                ]
             }
 
-        return create_sdk_mcp_server(name="flow", version="0.1.0", tools=[hand_to_next_stage])
+        return create_sdk_mcp_server(
+            name="flow", version="0.1.0", tools=[hand_to_next_stage]
+        )
 
     # -- talking ---------------------------------------------------------------------
 
@@ -265,7 +287,9 @@ class Conversation:
 
     def _grant_flow(self) -> None:
         if self.stage is not None:
-            self.stage.grant("flow", self._flow_server(), ["hand_to_next_stage"], ask=self.ask)
+            self.stage.grant(
+                "flow", self._flow_server(), ["hand_to_next_stage"], ask=self.ask
+            )
 
     async def say(
         self, message: str, on_event: Callable[..., Any] | None = None
@@ -332,7 +356,9 @@ class Conversation:
             BUILD: "" if contract else needs_contract,
             SCENARIOS: ""
             if contract and self.world_built
-            else (needs_contract if not contract else "needs a built environment first"),
+            else (
+                needs_contract if not contract else "needs a built environment first"
+            ),
             RUN: ""
             if contract and self.scenarios_written
             else (needs_contract if not contract else "needs scenarios first"),

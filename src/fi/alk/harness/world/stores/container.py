@@ -13,12 +13,12 @@ is real or just an aspiration.
 
 from __future__ import annotations
 
+import os
 import secrets
 import subprocess
 import time
-from typing import Any
 
-from . import StoreError
+from . import Held, StoreError
 
 # How long to wait for a fresh container to start answering. The first run on a machine pulls
 # the image, which dominates; afterwards this is a second or two.
@@ -28,11 +28,17 @@ READY_TIMEOUT_SECONDS = 180.0
 # removed without guessing at names.
 LABEL = "alk.harness.store"
 
+# The network to join, when the harness is itself in a container. Publishing a port to the
+# host's loopback is enough when the harness runs on the host, but from inside a container
+# 127.0.0.1 is its own loopback and the engine is not there. Sharing a network instead lets
+# the engine be reached by container name, on the port it actually listens on.
+NETWORK = "ALK_DOCKER_NETWORK"
+
 
 def docker(*args: str, check: bool = True) -> str:
     """Run a docker command, and turn its failure into something worth reading."""
     try:
-        done = subprocess.run(  # nosec B603 — list args, never shell=True
+        done = subprocess.run(  # nosec B603: list args, never shell=True
             ("docker", *args), capture_output=True, text=True, check=False
         )
     except FileNotFoundError as exc:  # pragma: no cover - depends on the machine
@@ -48,7 +54,7 @@ def docker(*args: str, check: bool = True) -> str:
     return done.stdout.strip()
 
 
-class ContainerStore:
+class ContainerStore(Held):
     """An engine the harness runs in a container for the agent to be pointed at.
 
     Started once for a suite and reset between scenarios: standing an engine up costs seconds
@@ -85,9 +91,13 @@ class ContainerStore:
         self.user = user
         self.password = password or secrets.token_hex(16)
         self.container = f"alk-store-{secrets.token_hex(6)}"
+        self.network = os.environ.get(NETWORK, "").strip()
         self.host = "127.0.0.1"
         self.port: int | None = None
         self._started = False
+        # Every script `apply` has run, in order. Saved beside the rows so a restore into a
+        # fresh container can stand the schema up before putting the rows back.
+        self.applied: list[str] = []
 
     # -- lifecycle -------------------------------------------------------------------
 
@@ -109,14 +119,19 @@ class ContainerStore:
             "--label",
             f"{LABEL}=1",
             *environment,
+            *(("--network", self.network) if self.network else ()),
             # Bound to loopback and given whatever port is free, so parallel runs on one
-            # machine never collide.
+            # machine never collide. Kept even on a shared network, where it is what lets
+            # someone on the host open a client against a running scenario.
             "--publish",
             f"127.0.0.1::{self.container_port}",
             self.image,
         )
         self._started = True
-        self.port = self._published_port()
+        if self.network:
+            self.host, self.port = self.container, self.container_port
+        else:
+            self.port = self._published_port()
         self._await_ready()
 
     def stop(self) -> None:

@@ -134,6 +134,16 @@ def _missing_catalogue(
     return missing
 
 
+def _missing_argument(error: str) -> bool:
+    """Whether a failure is the language rejecting a call for want of a required argument."""
+    said = (error or "").lower()
+    return (
+        "typeerror" in said
+        and "argument" in said
+        and ("missing" in said or "required" in said or "unexpected keyword" in said)
+    )
+
+
 def _reads_argument(source: str, name: str) -> bool:
     """Whether a handler actually takes this argument out of ``args``.
 
@@ -207,9 +217,10 @@ def probe(
     # between them each one inherits the debris of the last and a check expecting three rows
     # finds seven. That is a fault in the harness, not in the world being checked.
     baseline = world.checkpoint()
+    runtime_tools = set(getattr(world, "runtime_tools", set()))
 
     for tool in contract.tools:
-        if tool.name not in world.handlers:
+        if tool.name not in world.handlers and tool.name not in runtime_tools:
             report.results.append(
                 ProbeResult(tool.name, COVERAGE, False, "contract tool has no handler")
             )
@@ -236,23 +247,38 @@ def probe(
         )
 
     for tool in contract.tools:
+        if tool.name in runtime_tools:
+            report.results.append(
+                ProbeResult(
+                    tool.name,
+                    COVERAGE,
+                    True,
+                    "executes inside the submitted agent runtime",
+                )
+            )
+            continue
         if tool.name not in world.handlers:
             continue
         source = world.handlers[tool.name]
-        unread = [arg for arg in tool.args if not _reads_argument(source, arg)]
-        report.results.append(
-            ProbeResult(
-                tool.name,
-                COVERAGE,
-                not unread,
-                # A handler reading order_ids when the tool takes order_id refuses everything,
-                # which looks exactly like a handler correctly refusing a bad id. Behaviour
-                # alone cannot tell those apart, so the argument names are checked directly.
-                ""
-                if not unread
-                else f"never reads {', '.join(unread)}, which the contract says it takes",
+        # Reading the source only says anything about a handler written here. A tool bound to the
+        # agent's own code has a handler that forwards every argument on, so it never names any of
+        # them, and checking for the names would fail every adopted tool while telling nobody
+        # anything. The names are the agent's own problem there, and its own code is what runs.
+        if not contract.adoptable(tool.name):
+            unread = [arg for arg in tool.args if not _reads_argument(source, arg)]
+            report.results.append(
+                ProbeResult(
+                    tool.name,
+                    COVERAGE,
+                    not unread,
+                    # A handler reading order_ids when the tool takes order_id refuses
+                    # everything, which looks exactly like a handler correctly refusing a bad id.
+                    # Behaviour alone cannot tell those apart, so the names are checked directly.
+                    ""
+                    if not unread
+                    else f"never reads {', '.join(unread)}, which the contract says it takes",
+                )
             )
-        )
 
         world.revert(baseline)
         call = world.call(tool.name, _valid_arguments(tool))
@@ -291,13 +317,20 @@ def probe(
             missing = _valid_arguments(tool)
             missing.pop(tool.args[0], None)
             call = world.call(tool.name, missing)
+            # A tool bound to the agent's own code is a function with real parameters, so leaving a
+            # required one out is rejected by the language before the body runs. That is the call
+            # being refused, not the world falling over, and counting it as a crash would fail
+            # every adopted tool for behaving exactly as the agent's own runtime makes it behave.
+            declined = call.refused or (
+                contract.adoptable(tool.name) and _missing_argument(call.error)
+            )
             report.results.append(
                 ProbeResult(
                     f"{tool.name}:without-{tool.args[0]}",
                     EDGE,
-                    call.refused,
+                    declined,
                     ""
-                    if call.refused
+                    if declined
                     else (
                         "accepted a call with a required argument missing"
                         if call.ok

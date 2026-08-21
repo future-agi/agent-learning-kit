@@ -127,7 +127,7 @@ def accept_contract(payload: dict[str, Any], destination: Path) -> dict[str, Any
     is usable can be exercised and reasoned about without standing up a session.
     """
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
-    payload = unwrapped(payload)
+    payload = _without_nulls(unwrapped(payload))
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
@@ -150,6 +150,17 @@ def accept_contract(payload: dict[str, Any], destination: Path) -> dict[str, Any
         f"{len(contract.real_use_cases)} use cases, "
         f"{len(contract.open_questions)} open questions."
     )
+
+
+def _without_nulls(value: Any) -> Any:
+    """Treat JSON null like an omitted optional field, including in nested records."""
+    if isinstance(value, dict):
+        return {
+            key: _without_nulls(item) for key, item in value.items() if item is not None
+        }
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value if item is not None]
+    return value
 
 
 def contract_tools(destination: Path) -> Any:
@@ -270,10 +281,7 @@ def contract_tools(destination: Path) -> Any:
                             "kind": {
                                 "type": "string",
                                 "description": "datastore, service, file, queue, or whatever "
-                                "this actually is. Anything holding the agent's own data is a "
-                                "datastore even when it is hosted somewhere — a managed "
-                                "Postgres and a vector database are datastores, not services. "
-                                "Use service for something it calls and does not store in.",
+                                "this actually is.",
                             },
                             "what": {
                                 "type": "string",
@@ -287,74 +295,26 @@ def contract_tools(destination: Path) -> Any:
                             },
                             "engine": {
                                 "type": "string",
-                                "description": "For a datastore: which engine, so it can be "
-                                "stood up. postgres, mysql, clickhouse, qdrant, redis, mongo, "
-                                "elasticsearch — whatever it actually is. Read it off the "
-                                "driver it imports, the URL scheme it builds, or the image its "
-                                "compose file pulls. NEVER choose one for the agent: engines "
-                                "disagree about dialect and types, so an agent tested against "
-                                "the wrong one is graded on queries it never runs. Record it "
-                                "even when the agent points at a hosted instance — what "
-                                "matters is which engine it speaks to, not who runs it.\n"
-                                "Use 'inprocess' when there is no server at all: the agent "
-                                "loads files into memory and its tools read that structure "
-                                "directly. That is still a datastore and still provisionable — "
-                                "the environment calls the agent's own loader. When one "
-                                "function loads several files into one structure, that is ONE "
-                                "datastore with engine 'inprocess', not one dependency per "
-                                "file: the files are where it happens to keep it, and the "
-                                "structure is what the tools actually use.",
+                                "description": "The exact database/service engine the agent uses.",
                             },
                             "version": {
                                 "type": "string",
-                                "description": "The version, if the source says.",
+                                "description": "The engine version where the source pins one.",
                             },
                             "reached": {
                                 "type": "object",
-                                "description": "How the agent connects to it. This is what "
-                                "lets the harness be there instead of the real thing, and the "
-                                "agent's code is NEVER edited to make it so — record what the "
-                                "agent already expects and the environment is built to match. "
-                                "A hardcoded host is not a dead end: that name is made to "
-                                "resolve to our container.",
+                                "description": "The agent's existing connection seam. Record "
+                                "where secrets come from, never their values.",
                                 "properties": {
-                                    "dsn_env": {
-                                        "type": "string",
-                                        "description": "The environment variable holding its "
-                                        "connection string: DATABASE_URL, QDRANT_URL, PG_DSN. "
-                                        "The easiest seam and the one most agents have.",
-                                    },
-                                    "config_key": {
-                                        "type": "string",
-                                        "description": "Where a config file holds it instead, "
-                                        "as a dotted path: database.url",
-                                    },
+                                    "dsn_env": {"type": "string"},
+                                    "config_key": {"type": "string"},
                                     "host": {"type": "string"},
                                     "port": {"type": "integer"},
-                                    "database": {
-                                        "type": "string",
-                                        "description": "Database, collection or index name.",
-                                    },
+                                    "database": {"type": "string"},
                                     "user": {"type": "string"},
-                                    "password_from": {
-                                        "type": "string",
-                                        "description": "Where the password comes from — an env "
-                                        "var name. NEVER the password itself: this file is "
-                                        "written to disk and read by people.",
-                                    },
-                                    "loader_module": {
-                                        "type": "string",
-                                        "description": "For engine 'inprocess': the importable "
-                                        "module holding the function that loads the data, e.g. "
-                                        "'tau_bench.envs.retail.data'. The environment imports "
-                                        "and calls it rather than reading the files itself, so "
-                                        "what it holds is what the agent would hold.",
-                                    },
-                                    "loader_function": {
-                                        "type": "string",
-                                        "description": "The loading function's name, e.g. "
-                                        "'load_data'.",
-                                    },
+                                    "password_from": {"type": "string"},
+                                    "loader_module": {"type": "string"},
+                                    "loader_function": {"type": "string"},
                                 },
                             },
                         },
@@ -378,6 +338,183 @@ def contract_tools(destination: Path) -> Any:
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "What the source did not settle and you could not ask about.",
+                },
+                "implementation": {
+                    "type": "string",
+                    "enum": ["present", "absent", "partial"],
+                    "description": "Whether the agent ships working code for its tools, as "
+                    "opposed to only declaring them. The environment runs the agent's own code "
+                    "wherever it exists, so this decides whether anything gets written for it.",
+                },
+                "tool_entrypoints": {
+                    "type": "array",
+                    "description": "How to reach the agent's own implementation of each tool. "
+                    "One entry per tool that has code. Without this the environment has to write "
+                    "a replacement, which tests our reading of the agent instead of the agent.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {
+                                "type": "string",
+                                "description": "The tool name, exactly as in `tools`.",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": [
+                                    "import",
+                                    "construct",
+                                    "service",
+                                    "unreachable",
+                                ],
+                                "description": "import: a module-level function or a method on a "
+                                "class, reachable directly. construct: it hangs off an object "
+                                "that has to be built first. service: its effect is implemented "
+                                "by a shipped HTTP service. unreachable: no runnable seam exists, "
+                                "which blocks environment creation rather than generating a "
+                                "replacement.",
+                            },
+                            "module": {
+                                "type": "string",
+                                "description": "Importable path as the agent's own code would "
+                                "write it, e.g. package.module.file. Not a filesystem path.",
+                            },
+                            "callable": {
+                                "type": "string",
+                                "description": "What to call inside that module. May be dotted "
+                                "to reach a method on a class, e.g. TheClass.the_method.",
+                            },
+                            "factory": {
+                                "type": "string",
+                                "description": "For construct: the expression that builds the "
+                                "object, including whatever it needs to be constructed with.",
+                            },
+                            "first_arg": {
+                                "type": "string",
+                                "description": "If the callable takes the agent's own state as "
+                                "its first argument, its name. Empty when the callable opens its "
+                                "own connection instead.",
+                            },
+                            "service": {
+                                "type": "string",
+                                "description": "For service mode, the Compose service or source "
+                                "dependency that answers this tool.",
+                            },
+                            "endpoint": {
+                                "type": "string",
+                                "description": "For service mode, its POST path without a leading "
+                                "slash. Record it even when it differs from the tool name.",
+                            },
+                            "method": {
+                                "type": "string",
+                                "enum": ["POST"],
+                                "description": "HTTP method used by the submitted implementation.",
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "Anything about reaching it that the fields above "
+                                "do not carry, especially why a tool cannot be reached.",
+                            },
+                        },
+                    },
+                },
+                "refusal_signature": {
+                    "type": "string",
+                    "description": "How this agent's own code says no in a value it returns "
+                    "rather than by raising, described so it can be recognised, e.g. a string "
+                    "beginning with a particular marker. Production code often reports failure "
+                    "this way, and without this a refusal is recorded as a success, which hides "
+                    "the behaviour most worth testing.",
+                },
+                "data_store": {
+                    "type": "object",
+                    "description": "What the agent's tools read and write, and how to point them "
+                    "at a different one.",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "description": "postgres, clickhouse, mysql, sqlite, in_process for "
+                            "state held in memory, or none.",
+                        },
+                        "configured_by": {
+                            "type": "string",
+                            "description": "How the code chooses its connection: the environment "
+                            "variable it reads, the config file, or the constructor argument. "
+                            "This is what makes substituting a store possible without editing "
+                            "the agent, so say if it is hardcoded.",
+                        },
+                        "schema_from": {
+                            "type": "string",
+                            "description": "Where the schema comes from: its migrations, a DDL "
+                            "file, its ORM models.",
+                        },
+                        "loaded_by": {
+                            "type": "string",
+                            "description": "The agent's own loader, if it has one that builds "
+                            "its starting data, as module and callable.",
+                        },
+                        "loader_module": {
+                            "type": "string",
+                            "description": "The module that loader is imported from, so it can "
+                            "be called rather than reimplemented.",
+                        },
+                        "version": {
+                            "type": "string",
+                            "description": "The engine version, where the agent pins one.",
+                        },
+                        "config_key": {
+                            "type": "string",
+                            "description": "Where a config file holds the connection instead, as "
+                            "a dotted path such as database.url.",
+                        },
+                        "host": {
+                            "type": "string",
+                            "description": "The host the agent expects. Record it even when it "
+                            "is hardcoded: a hardcoded name is not a dead end, it is a name our "
+                            "store can answer to.",
+                        },
+                        "port": {
+                            "type": "integer",
+                            "description": "The port it expects.",
+                        },
+                        "database": {
+                            "type": "string",
+                            "description": "The database name it expects. Ours is created with "
+                            "exactly this name rather than the agent being changed.",
+                        },
+                        "user": {
+                            "type": "string",
+                            "description": "The user it connects as.",
+                        },
+                        "password_from": {
+                            "type": "string",
+                            "description": "Where the password comes from, never the password "
+                            "itself. A contract is written to disk and read by people, so a "
+                            "secret in it outlives the run that needed it.",
+                        },
+                    },
+                },
+                "runtime": {
+                    "type": "object",
+                    "description": "What it takes to run the agent's code.",
+                    "properties": {
+                        "language": {"type": "string"},
+                        "version": {"type": "string"},
+                        "install": {
+                            "type": "string",
+                            "description": "Its own install command, e.g. from its lockfile or "
+                            "requirements. Used as written rather than guessed at.",
+                        },
+                        "workdir": {
+                            "type": "string",
+                            "description": "Where in the source imports resolve from, if not the "
+                            "root.",
+                        },
+                        "dockerfile": {
+                            "type": "string",
+                            "description": "Path to its own Dockerfile, if it has one. Theirs is "
+                            "used in preference to anything written for it.",
+                        },
+                    },
                 },
             },
             [],
@@ -454,18 +591,76 @@ def schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
         schema({"name": str,
                 "size": {"type": "string", "enum": ["S", "M", "L"]}}, ["name"])
     """
+    wanted = list(required)
     return {
         "type": "object",
         "properties": {
-            name: dict(kind)
+            name: _schema_fragment(dict(kind), optional=name not in wanted)
             if isinstance(kind, dict)
-            else {"type": _JSON_TYPES.get(kind, "string")}
+            else _typed(_JSON_TYPES.get(kind, "string"), optional=name not in wanted)
             for name, kind in properties.items()
         },
-        "required": list(required),
+        "required": wanted,
     }
+
+
+def _schema_fragment(fragment: dict[str, Any], *, optional: bool) -> dict[str, Any]:
+    """Make every non-required object property nullable before the SDK validates it.
+
+    Tool input validation happens before our handler. Models correctly use null for optional
+    nested fields, so allowing null at only the top level still rejects useful payloads such as
+    ``{"tool_entrypoints": [{"module": null}]}`` before normalization can omit the value.
+    """
+    result = dict(fragment)
+    if result.get("type") == "object" and isinstance(result.get("properties"), dict):
+        required = set(result.get("required") or [])
+        result["properties"] = {
+            name: _schema_fragment(dict(value), optional=name not in required)
+            for name, value in result["properties"].items()
+        }
+    elif result.get("type") == "array" and isinstance(result.get("items"), dict):
+        result["items"] = _schema_fragment(dict(result["items"]), optional=False)
+    if optional:
+        kind = result.get("type")
+        if isinstance(kind, str):
+            result["type"] = [kind, "null"]
+        if isinstance(result.get("enum"), list) and None not in result["enum"]:
+            result["enum"] = [*result["enum"], None]
+    return result
+
+
+def _typed(kind: str, *, optional: bool) -> dict[str, Any]:
+    """One property's type, letting an optional field be null.
+
+    Filling a field that does not apply with null is what a model does, and it is not wrong: the
+    alternative is inventing a value. Rejecting it costs a whole turn, and the rejection does not
+    even say which field was at fault: "None is not of type 'string'" is the entire message.
+    """
+    return {"type": [kind, "null"]} if optional else {"type": kind}
 
 
 def qualified(server: str, tool_name: str) -> str:
     """The name an in-process MCP tool is granted under."""
     return f"mcp__{server}__{tool_name}"
+
+
+def brief(value: Any, limit: int = 1800) -> str:
+    """What a call returned, shortened only when it has to be.
+
+    Generous, and explicit when it cuts. A record from a real agent's data is long, and a reply
+    trimmed silently in the middle of it reads as though the field being looked for is absent:
+    the answer is then six more calls working around something that was there all along.
+
+    Shared, because every stage that shows a caller what a tool answered has the same problem and
+    they were not agreeing about it: one showed 1800 characters and said when it cut, the other
+    showed 200 and said nothing, so the stage that most needs to read a record was the one that
+    could not.
+    """
+    rendered = value if isinstance(value, str) else json.dumps(value, default=str)
+    if len(rendered) <= limit:
+        return rendered
+    return (
+        rendered[:limit]
+        + f"\n... cut here, {len(rendered) - limit} more characters. Ask for one record rather "
+        "than many if you need the whole of it."
+    )

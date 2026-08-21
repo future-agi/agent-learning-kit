@@ -12,9 +12,12 @@ registering one class, not editing any stage.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 
 class AgentSource(Protocol):
@@ -54,12 +57,78 @@ class RepoSource:
         return {}
 
     def briefing(self) -> str:
+        ignored = {
+            ".git",
+            ".venv",
+            "node_modules",
+            "__pycache__",
+            "artifacts",
+            "build",
+            "dist",
+        }
+        indexed: list[str] = []
+        for path in sorted(self.root.rglob("*")):
+            try:
+                relative = path.relative_to(self.root)
+            except ValueError:
+                continue
+            if any(part in ignored for part in relative.parts) or not path.is_file():
+                continue
+            indexed.append(relative.as_posix())
+            if len(indexed) >= 240:
+                break
         return (
             f"This agent is a repository at {self.root}. Its truth is the source code: the tool "
             "registrations, the function signatures, the validation logic, and whatever holds "
             "its data. Read it with Read, Glob and Grep. Documentation describes intent; the "
-            "code describes behaviour, and where they disagree the code wins."
+            "code describes behaviour, and where they disagree the code wins. Never glob the "
+            "entire repository: dependency caches such as .venv and node_modules are irrelevant. "
+            "Start from this pre-indexed source/config file list and read only relevant files:\n"
+            + "\n".join(f"- {name}" for name in indexed)
         )
+
+
+@dataclass
+class GitHubSource(RepoSource):
+    """A public GitHub repository cloned into this harness session."""
+
+    url: str = ""
+    kind: str = "github"
+
+    def briefing(self) -> str:
+        return (
+            f"This agent was cloned from {self.url or 'GitHub'} into {self.root}. Its truth is "
+            "the cloned source code: the tool registrations, function signatures, validation "
+            "logic, and whatever holds its data. Read it with Read, Glob and Grep."
+        )
+
+
+_GITHUB_REPOSITORY = re.compile(
+    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$"
+)
+
+
+def clone_github_repository(url: str, destination: Path) -> Path:
+    """Shallow-clone one public GitHub repository into a session-owned directory."""
+    url = url.strip().rstrip("/")
+    if not _GITHUB_REPOSITORY.fullmatch(url):
+        raise ValueError(
+            "use a public HTTPS GitHub repository URL such as https://github.com/owner/repo"
+        )
+    if destination.exists():
+        raise ValueError(f"the session source directory already exists: {destination}")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        ["git", "clone", "--depth", "1", url, str(destination)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode:
+        detail = completed.stderr.strip() or "git clone failed"
+        raise RuntimeError(detail)
+    return destination
 
 
 @dataclass
@@ -103,6 +172,9 @@ class SpecSource:
 
 _REGISTRY: dict[str, Callable[..., AgentSource]] = {
     "repo": lambda **kw: RepoSource(name=kw["name"], root=Path(kw["root"])),
+    "github": lambda **kw: GitHubSource(
+        name=kw["name"], root=Path(kw["root"]), url=kw.get("url", "")
+    ),
     "spec": lambda **kw: SpecSource(
         name=kw["name"],
         system_prompt=kw.get("system_prompt", ""),
@@ -123,6 +195,15 @@ def resolve(kind: str, **kwargs: Any) -> AgentSource:
         raise NotImplementedError(
             f"no agent source of kind {kind!r}; registered kinds are "
             f"{', '.join(sorted(_REGISTRY))}"
+        )
+    # An empty root used to resolve to the current directory, which is worse than failing: every
+    # later stage then reads a real path, finds the harness's own repository, and reports that the
+    # agent has no code on disk. Nothing downstream can tell that apart from an agent that really
+    # was given as a specification.
+    if "root" in kwargs and not str(kwargs.get("root") or "").strip():
+        raise ValueError(
+            f"a {kind!r} source needs the path its code lives at, and none was given. If this "
+            "agent has no code on disk, it is not this kind of source."
         )
     return _REGISTRY[kind](**kwargs)
 

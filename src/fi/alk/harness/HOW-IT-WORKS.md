@@ -94,9 +94,9 @@ Each demands a `why`. A contract that can be rewritten invisibly is no longer ev
 
 `build.py`, `skills/build-environment/SKILL.md`, tools in `world/tools.py`
 
-**This is the part that makes the whole thing worth doing.** Not mocked tool responses: a real
-SQLite database with real handlers, so a call for something that is not there is *refused*, and
-the agent has to cope.
+**This is the part that makes the whole thing worth doing.** The repository's own services,
+migrations, seed process and tool code run in an isolated environment. A call for something that
+is not there is refused by the submitted implementation, not by a mock or a rewritten handler.
 
 It builds three things, all shared by every scenario: **the world**, **the simulator prompt** for
 a conversational agent, and **the sub-goal catalogue**. The stage has sixteen tools and no file
@@ -107,7 +107,8 @@ access at all:
 | `create_schema` | Run the CREATE TABLE statements |
 | `seed` | Insert rows — the agent's real catalogue |
 | `change_data` | One UPDATE or DELETE, for fixing a row put in wrong |
-| `define_handler` | One tool's implementation, **executed the moment it is defined** |
+| `adopt_tool` | Bind and smoke-test the agent's own implementation |
+| `write_env_file` / `run_env_command` | Container orchestration only; never agent behavior |
 | `run_tool` | Call a defined tool and see what the world does |
 | `declare_sequence` / `drop_sequence` | A series of calls whose end state must hold |
 | `inspect_world` | Look at what is in the world |
@@ -115,9 +116,9 @@ access at all:
 | `check_world` | Run every probe, report without saving |
 | `save_world` | Freeze it — refused unless it holds up |
 
-**A handler** is Python: `def handle(args, db)`, with `db.query` / `db.one` / `db.execute` and
-`ToolError` in scope. Nothing else — no filesystem, no network, because a world that depends on
-the outside is not reproducible. It is `exec`'d per call in `world/runtime.py`.
+Bindings are small adapters to the callable the repository ships. There is no generated-handler
+fallback. If the callable cannot be imported or the shipped service cannot start, the build stops
+and reports the missing runtime/configuration seam.
 
 **The distinction the whole design turns on** (`runtime.py`):
 
@@ -125,8 +126,8 @@ the outside is not reproducible. It is `exec`'d per call in `world/runtime.py`.
   the world working.**
 - Any other exception — our bug.
 
-They are recorded differently and never confused. `_is_refusal` matches `ToolError` by name
-across the class hierarchy, because generated handlers often declare their own.
+They are recorded differently and never confused. `_is_refusal` matches the agent's own refusal
+type across the class hierarchy.
 
 ### The gate: what `check_world` and `save_world` actually run
 

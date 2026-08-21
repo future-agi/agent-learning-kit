@@ -10,16 +10,17 @@ of these harder" is the next thing said rather than a regeneration from nothing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions
 
 from .config import (
-    artifact_dir,
     UNWANTED,
-    gate_hooks,
+    artifact_dir,
     chosen_model,
+    gate_hooks,
     load_skill,
     permission_gate,
     provider_env,
@@ -39,13 +40,31 @@ from .tools import qualified
 SKILL = "write-scenarios"
 
 
+# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
+# one more to correct what a gate refused.
+TURNS_EACH = 3
+# Enough to write a handful without the budget being the thing that stops it.
+TURNS_FLOOR = 120
+
+
+def turns_for(wanted: int) -> int:
+    """A turn budget that grows with the suite being asked for.
+
+    A fixed ceiling is what made asking for a large suite pointless: generation stopped partway
+    through, and `save_scenarios` refuses a count that does not match what was asked for, so a run
+    that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
+    the request, or the request cannot be honoured.
+    """
+    return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
+
+
 def open_stage(
     contract: AgentContract,
     *,
     out: Path | None = None,
     wanted: int = 10,
     ask: Callable[..., Any] | None = None,
-    max_turns: int = 80,
+    max_turns: int = 0,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -74,7 +93,7 @@ def open_stage(
         permission_mode="default",
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         setting_sources=[],
-        max_turns=max_turns,
+        max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
         env=provider_env(),
     )
@@ -88,17 +107,30 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
     if existing:
         return (
             f"There are already {existing} scenarios for {contract.agent!r}, and they are "
-            "loaded. Say what you want changed, or add to them. Anything you submit under an "
-            "existing name replaces it."
+            "loaded. Use inspect_scenario before changing each one so every unchanged field is "
+            "preserved exactly. Say what you want changed, or add to them. Anything you submit "
+            "under an existing name replaces it."
         )
     return (
         f"Write {wanted} scenarios for {contract.agent!r}.\n\n"
         "Look at the world first with inspect_world so every scenario names real records, and "
-        "read the sub-goals already defined. Work out each scenario's solution with try_calls "
-        "before you submit it, because a scenario is only kept if its solution passes its own "
-        "checks and those checks fail without it. Cover the ordinary case, the request that has "
+        "read the sub-goals already defined. After that inspection, immediately work out and "
+        "submit one scenario at a time; never hold the whole suite in one long response. Emit a "
+        "tool call after each scenario so progress is visible and proved work survives a stop. "
+        "Work out each scenario's solution with try_calls before you submit it, because a "
+        "scenario is only kept if its solution passes its own "
+        "checks and those checks fail without it. In a source-provisioned world, keep each "
+        "solution step's arguments exactly model-facing. If the raw dependency needs trusted "
+        "fields injected by the worker, put its complete payload in environment_arguments; "
+        "never pretend the model supplied rider ids, resolved routes, fares, or other hidden "
+        "state. Treat every contract phrase like 'from this call' literally: the reference "
+        "solution must create that state earlier in the same conversation. Never pre-seed "
+        "opaque state that the agent has no public tool or session state to retrieve. Cover the "
+        "ordinary case, the request that has "
         "to be refused, the rule under pressure, and at least one where state has to carry "
-        "across several turns. Then save_scenarios."
+        "across several turns. If a proof says an intended check is vacuous or broken, repair "
+        "that named sub-goal with add_sub_goal and resubmit. Never evade a gate by deleting a "
+        "check for behavior the scenario still claims to test. Then save_scenarios."
     )
 
 
@@ -115,7 +147,7 @@ async def write(
     follow_ups: list[str] | None = None,
     on_event: Callable[..., Any] | None = None,
     ask: Callable[..., Any] | None = None,
-    max_turns: int = 80,
+    max_turns: int = 0,
 ) -> list[Scenario]:
     """Run the stage start to finish. Returns whatever scenarios were saved."""
     stage, destination = open_stage(

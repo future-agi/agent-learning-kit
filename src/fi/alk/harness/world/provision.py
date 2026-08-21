@@ -28,14 +28,13 @@ from ..contract import AgentContract
 from ..environment import (
     SubGoal,
     load_catalogue,
-    load_simulator_prompt,
     save_catalogue,
     save_simulator_prompt,
     validate_simulator_prompt,
     validate_sub_goal,
 )
 from ..tools import schema
-from .stores import Snapshot, Store, StoreError, resolve, supported
+from .stores import Store, StoreError, resolve, supported
 from .stores.prove import prove_checks_bite, prove_store
 
 PROVISION_SERVER = "environment"
@@ -56,7 +55,10 @@ def _err(text: str) -> dict[str, Any]:
 
 
 def _counts(state: dict[str, list[dict]]) -> str:
-    return ", ".join(f"{name}: {len(rows)}" for name, rows in sorted(state.items())) or "nothing"
+    return (
+        ", ".join(f"{name}: {len(rows)}" for name, rows in sorted(state.items()))
+        or "nothing"
+    )
 
 
 def provision_tools(
@@ -156,8 +158,14 @@ def provision_tools(
             seam={
                 key: args[key]
                 for key in (
-                    "dsn_env", "config_key", "host", "port", "database", "user",
-                    "loader_module", "loader_function",
+                    "dsn_env",
+                    "config_key",
+                    "host",
+                    "port",
+                    "database",
+                    "user",
+                    "loader_module",
+                    "loader_function",
                 )
                 if args.get(key)
             },
@@ -174,7 +182,10 @@ def provision_tools(
         pointed = (
             f"${seam['dsn_env']}"
             if seam.get("dsn_env")
-            else (seam.get("config_key") or "NOTHING RECORDED — say how the agent reaches it")
+            else (
+                seam.get("config_key")
+                or "NOTHING RECORDED — say how the agent reaches it"
+            )
         )
         return _ok(
             f"{engine} is up at {running.dsn()}. The agent will be pointed at it with "
@@ -206,7 +217,9 @@ def provision_tools(
                 engine=str(args["engine"]),
                 image=str(args["image"]),
                 container_port=int(args["container_port"]),
-                boot_env={str(k): str(v) for k, v in (args.get("boot_env") or {}).items()},
+                boot_env={
+                    str(k): str(v) for k, v in (args.get("boot_env") or {}).items()
+                },
                 dsn_template=str(args.get("dsn_template") or ""),
                 code=str(args["code"]),
             )
@@ -370,7 +383,9 @@ def provision_tools(
         standing["mutation"] = mutation
         if failed:
             return _err("\n".join(lines))
-        return _ok("\n".join(lines) + "\nThe environment holds. save_environment will keep it.")
+        return _ok(
+            "\n".join(lines) + "\nThe environment holds. save_environment will keep it."
+        )
 
     @tool(
         "save_environment",
@@ -413,7 +428,9 @@ def provision_tools(
         report = prove_store(running, standing["mutation"])
         failed = [one.name for one in report.results if not one.passed]
         if failed:
-            return _err(f"Not saved, the environment does not hold up.\n{report.summary()}")
+            return _err(
+                f"Not saved, the environment does not hold up.\n{report.summary()}"
+            )
 
         baseline = running.freeze()
         manifest = {

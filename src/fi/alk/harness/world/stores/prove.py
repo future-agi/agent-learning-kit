@@ -31,8 +31,15 @@ BITES = "bites"
 # A check over a proven store: a sentence when something is wrong, None when it held.
 Check = Callable[[Store], "str | None"]
 
+# Whether the checks themselves can fail is asked elsewhere, by ``world/mutate.py``: it damages
+# the whole world rather than only emptying the store, silences every tool as well, and runs each
+# kind of damage against its own restored copy. Two gates asking the same question in different
+# words is how one of them quietly stops being run, so there is deliberately only the one.
 
-def _result(name: str, passed: bool, detail: str = "", kind: str = STORE) -> ProbeResult:
+
+def _result(
+    name: str, passed: bool, detail: str = "", kind: str = STORE
+) -> ProbeResult:
     return ProbeResult(name=name, kind=kind, passed=passed, detail=detail)
 
 
@@ -75,7 +82,9 @@ def prove_store(store: Store, mutation: str) -> ProbeReport:
         _result(
             "holds a seed",
             seeded > 0,
-            f"{seeded} rows" if seeded else "every table is empty, so nothing can be presumed",
+            f"{seeded} rows"
+            if seeded
+            else "every table is empty, so nothing can be presumed",
         )
     )
 
@@ -83,9 +92,7 @@ def prove_store(store: Store, mutation: str) -> ProbeReport:
     try:
         store.apply(mutation)
     except Exception as exc:  # noqa: BLE001 - the caller's statement, reported as given
-        report.results.append(
-            _result("the mutation runs", False, f"{exc}")
-        )
+        report.results.append(_result("the mutation runs", False, f"{exc}"))
         return report
     report.results.append(_result("the mutation runs", True))
 
@@ -141,34 +148,22 @@ def prove_store(store: Store, mutation: str) -> ProbeReport:
     )
 
     store.restore(baseline)
-    report.results.append(
-        _result("restore repeats", store.state() == baseline.rows)
-    )
+    report.results.append(_result("restore repeats", store.state() == baseline.rows))
     return report
 
 
 def prove_checks_bite(
     store: Store, checks: dict[str, Check], baseline: Snapshot | None = None
 ) -> ProbeReport:
-    """Empty the store, and insist every check notices.
-
-    A check that still passes when there is nothing there is not measuring the environment; it
-    is measuring nothing and reporting a result. This is the same discipline the scenario gate
-    applies to an agent that does nothing, moved to the thing underneath: break the world on
-    purpose, and whatever stays green was never load-bearing.
-
-    The store is emptied rather than stopped, because a stopped container cannot be put back
-    without standing it up again -- and a gate that costs a rebuild is a gate people turn off.
-    """
+    """Empty a proven store and reject any check that still reports success."""
     baseline = baseline or store.freeze()
     report = ProbeReport()
-
     store.restore(Snapshot())
     try:
         for name, check in checks.items():
             try:
                 complaint = check(store)
-            except Exception as exc:  # noqa: BLE001 - a check that raises still noticed
+            except Exception as exc:  # noqa: BLE001 - raising still notices the damage
                 complaint = f"raised {type(exc).__name__}: {exc}"
             report.results.append(
                 _result(

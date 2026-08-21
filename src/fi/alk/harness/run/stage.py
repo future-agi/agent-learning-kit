@@ -29,7 +29,13 @@ from ..contract import AgentContract
 from ..scenario_tools import load_scenarios
 from ..session import Stage
 from ..tools import qualified
-from .tools import RUN_SERVER, TOOL_NAMES, load_results, missing_prerequisites, run_tools
+from .tools import (
+    RUN_SERVER,
+    TOOL_NAMES,
+    load_results,
+    missing_prerequisites,
+    run_tools,
+)
 
 SKILL = "run-scenarios"
 
@@ -49,9 +55,7 @@ def open_stage(
         *(qualified(RUN_SERVER, name) for name in TOOL_NAMES),
     ]
     options = ClaudeAgentOptions(
-        system_prompt=(
-            f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief()}"
-        ),
+        system_prompt=(f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief()}"),
         allowed_tools=allowed,
         mcp_servers={RUN_SERVER: server},
         permission_mode="default",
@@ -76,11 +80,17 @@ def opening(contract: AgentContract, destination: Path) -> str:
     """
     written = load_scenarios(destination)
     already = load_results(destination)
-    blocked = missing_prerequisites() if contract.modality == "voice" else []
+    blocked = (
+        missing_prerequisites(destination, contract)
+        if contract.modality == "voice"
+        else []
+    )
     if blocked:
         return (
             f"There are {len(written)} scenarios for {contract.agent!r}, but a live call cannot "
-            "be placed yet:\n  - " + "\n  - ".join(blocked) + "\n\nSay this plainly and stop."
+            "be placed yet:\n  - "
+            + "\n  - ".join(blocked)
+            + "\n\nSay this plainly and stop."
         )
     if already:
         passed = sum(1 for record in already if record["passed"])

@@ -125,6 +125,8 @@ all = [
 
 [project.scripts]
 agent-learn = "fi.alk.cli:main"
+alk = "fi.alk.cli:main"
+alk-harness-worker = "fi.alk.harness.hosted_entrypoint:main"
 
 [project.urls]
 Homepage = "https://futureagi.com"

@@ -25,18 +25,35 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from ..environment import load_catalogue
+from .. import platform
+from ..catalogue import load_catalogue
+from ..config import ARTIFACTS_ROOT
 from ..scenario_tools import load_scenarios
 from ..tools import schema
-from .call import place_the_call
+from ..world.snapshot import require_source_implementation
+from .call import CASE, place_the_call
 from .live import LiveRun, grade, wire
 
 RUN_SERVER = "runs"
 RESULTS = "runs.json"
 
-# What a hosted agent needs before a call can be placed at all. Checked up front rather than
+# What a call needs before it can be placed at all, per transport. Checked up front rather than
 # three minutes in, because the failure otherwise arrives after the expensive part.
-REQUIRED = ("VAPI_API_KEY", "VAPI_ASSISTANT_ID")
+#
+# Which transport is in play is decided by the case: the 1.x cases reach a LiveKit worker, the
+# 2.x cases a hosted Vapi assistant. Asking for the other one's credentials is how a working
+# setup gets reported as broken.
+REQUIRED_VAPI = ("VAPI_API_KEY", "VAPI_ASSISTANT_ID")
+REQUIRED_LIVEKIT = (
+    "LIVEKIT_API_KEY",
+    "LIVEKIT_API_SECRET",
+    "LIVEKIT_TARGET_AGENT_NAME",
+)
+
+
+def _livekit_case() -> bool:
+    """Whether the case being run reaches a LiveKit worker rather than a hosted assistant."""
+    return os.environ.get("HARNESS_VOICE_CASE", CASE).strip().startswith("1.")
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -47,17 +64,61 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-def missing_prerequisites() -> list[str]:
+def configure_source_voice(world_root: Path, contract: Any = None) -> bool:
+    """Select and configure the zero-setup voice path for a provisioned source runtime."""
+    root = Path(world_root)
+    if not (root / "environment.json").exists():
+        return False
+    from ..provision import activate_voice_environment
+
+    prompt = str(getattr(contract, "system_prompt_excerpt", "") or "").strip()
+    activate_voice_environment(root, system_prompt=prompt)
+    os.environ.setdefault("HARNESS_VOICE_CASE", "1.1.2")
+    # This is an inbound worker: it greets first. The scripted caller turns that one greeting
+    # into its opening request. Simulator-first races an independent opening timer against the
+    # greeting transcript and can emit two consecutive caller turns.
+    os.environ["HARNESS_CONVERSATION_DIRECTION"] = "agent_first"
+    return True
+
+
+def missing_prerequisites(
+    world_root: Path | None = None, contract: Any = None
+) -> list[str]:
     """What would stop a live call, in the words of what to do about it."""
+    source_backed = bool(world_root and configure_source_voice(world_root, contract))
     problems: list[str] = []
-    absent = [name for name in REQUIRED if not os.environ.get(name)]
+    livekit = _livekit_case()
+    absent = [
+        name
+        for name in (REQUIRED_LIVEKIT if livekit else REQUIRED_VAPI)
+        if not os.environ.get(name)
+    ]
     if absent:
-        problems.append(
-            f"{', '.join(absent)} not set. The assistant already exists with the agent's own "
-            "tools; without these there is no way to reach it. Load the env file first:\n"
-            "    set -a; . ./.env.acceptance; set +a"
+        suffix = (
+            "The submitted runtime does not provide them and the platform has no workspace "
+            "values configured."
+            if source_backed
+            else "Load the environment that owns these credentials before running."
         )
-    if not os.environ.get("HARNESS_WEBHOOK_URL") and not shutil.which("cloudflared"):
+        problems.append(
+            f"{', '.join(absent)} not set, so there is no way to reach the agent. {suffix}"
+        )
+    credential = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    google_simulator = os.environ.get("SIMULATOR_LLM_PROVIDER", "google").lower() in {
+        "google",
+        "gemini",
+        "vertex",
+    }
+    if livekit and google_simulator and credential and not Path(credential).is_file():
+        problems.append(
+            "GOOGLE_APPLICATION_CREDENTIALS points to a file that does not exist in the "
+            "harness runtime. Configure the platform's simulator credential mount once; this "
+            "is not per-agent setup."
+        )
+    # A LiveKit worker we run ourselves calls the world directly on the network we share with it,
+    # so there is nothing to expose. Only a hosted assistant has to reach in from outside.
+    exposed = os.environ.get("HARNESS_WEBHOOK_URL") or shutil.which("cloudflared")
+    if not livekit and not exposed:
         problems.append(
             "no way to expose the webhook publicly. A hosted agent cannot reach loopback, so "
             "either install cloudflared (brew install cloudflared) or set HARNESS_WEBHOOK_URL "
@@ -89,7 +150,9 @@ def load_results(destination: Path) -> list[dict[str, Any]]:
 def as_record(run: LiveRun) -> dict[str, Any]:
     return {
         "scenario": run.scenario,
-        "passed": bool(run.settled) and run.met == len(run.settled) and not run.problems,
+        "passed": bool(run.settled)
+        and run.met == len(run.settled)
+        and not run.problems,
         "met": run.met,
         "of": len(run.settled),
         "settled": [
@@ -110,7 +173,7 @@ def transcript_since(started: float) -> str:
     any of the call. Only a report written after this run started counts — the newest file on
     disk is otherwise last week's call wearing today's verdict.
     """
-    root = Path("artifacts/simulation-acceptance")
+    root = ARTIFACTS_ROOT / "simulation-acceptance"
     if not root.exists():
         return ""
     newest: tuple[float, Path] | None = None
@@ -140,7 +203,9 @@ def report(run: LiveRun) -> str:
         lines += [f"  !!  {problem}" for problem in run.problems]
     lines.append("")
     lines.append("what the agent actually did:")
-    lines += [f"  {call}" for call in run.calls or ["(no tool calls reached the world)"]]
+    lines += [
+        f"  {call}" for call in run.calls or ["(no tool calls reached the world)"]
+    ]
     return "\n".join(lines)
 
 
@@ -162,8 +227,15 @@ def run_tools(
     written = load_scenarios(destination)
     catalogue = load_catalogue(destination)
     results = load_results(destination)
-    voice_case = case or os.environ.get("HARNESS_VOICE_CASE", "2.1.2")
     live = bool(contract is not None and getattr(contract, "modality", "") == "voice")
+    if live:
+        configure_source_voice(world_root, contract)
+    voice_case = case or os.environ.get("HARNESS_VOICE_CASE", "2.1.2")
+    authenticity_error = ""
+    try:
+        require_source_implementation(world_root)
+    except (FileNotFoundError, RuntimeError) as failed:
+        authenticity_error = str(failed)
 
     @tool(
         "list_scenarios",
@@ -183,7 +255,13 @@ def run_tools(
             ]
             judged = [name for name in one.sub_goals if name not in settled]
             ran = next((r for r in results if r["scenario"] == one.name), None)
-            mark = "" if ran is None else ("  [last run: PASS]" if ran.get("passed") else "  [last run: FAIL]")
+            mark = (
+                ""
+                if ran is None
+                else (
+                    "  [last run: PASS]" if ran.get("passed") else "  [last run: FAIL]"
+                )
+            )
             lines.append(
                 f"{one.name}{mark}\n  tests: {one.tests or one.use_case or '—'}\n"
                 f"  settled by code: {', '.join(settled) or 'none'}\n"
@@ -199,12 +277,14 @@ def run_tools(
         schema({}, []),
     )
     async def preflight(_args: dict[str, Any]) -> dict[str, Any]:
+        if authenticity_error:
+            return _err(f"Not ready:\n  - {authenticity_error}")
         if not live:
-            return _ok(
-                "Ready. This agent runs here, against the world, from its contract — nothing "
-                f"external is needed. {len(written)} scenarios are available."
+            return _err(
+                "Not ready: no shipped-runtime target is registered for this agent. The old "
+                "local target reconstructed it from the contract and is intentionally disabled."
             )
-        problems = missing_prerequisites()
+        problems = missing_prerequisites(world_root, contract)
         if problems:
             return _err("Not ready:\n  - " + "\n  - ".join(problems))
         return _ok(
@@ -216,6 +296,8 @@ def run_tools(
         """The scenario against the agent stood up from its contract, over the same world."""
         from . import run_suite
 
+        if authenticity_error:
+            return _err(authenticity_error)
         if contract is None:
             return _err("no contract is loaded, so there is no agent to stand up")
         graded = await run_suite([scenario], contract, world_root, out=destination)
@@ -226,6 +308,105 @@ def run_tools(
             lines += ["", "the conversation:", result.transcript]
         answer = "\n".join(lines)
         return _ok(answer) if result.passed else _err(answer)
+
+    @tool(
+        "run_simulation",
+        "Run the whole suite. One call: every scenario, each in its own copy of the world, "
+        "graded, and written out as one run you can come back to.\n\n"
+        "This is how a suite is run. Running scenarios one at a time is for looking into a "
+        "single failure afterwards, not for getting results.\n\n"
+        "`concurrency` is how many run at once. Leave it at 1 for a spoken agent, where every "
+        "scenario is a real call. It takes minutes and blocks until the whole suite is done.",
+        schema({"concurrency": int, "model": str}, []),
+    )
+    async def run_simulation(args: dict[str, Any]) -> dict[str, Any]:
+        from .simulation import simulate
+
+        if authenticity_error:
+            return _err(authenticity_error)
+        if not live:
+            return _err(
+                "no shipped-runtime target is registered for this agent; refusing to "
+                "reconstruct it from the contract"
+            )
+        if contract is None:
+            return _err("no contract is loaded, so there is no agent to run against")
+        if not written:
+            return _err("there are no scenarios to run")
+        # Kept as they finish, because reporting needs the graded results themselves and the
+        # summary carries only their rendering.
+        produced: list[Any] = []
+        summary = await simulate(
+            list(written),
+            contract,
+            world_root,
+            destination=destination,
+            model=str(args.get("model") or "") or None,
+            concurrency=max(1, int(args.get("concurrency") or 1)),
+            on_case_done=produced.append,
+        )
+        results[:] = load_results(destination)
+        lines = [
+            f"{summary['run_id']}: {summary['passed']}/{summary['scenarios']} passed "
+            f"in {summary['seconds']}s, ${summary['spent_usd']}",
+            "",
+        ]
+        for one in summary["results"]:
+            mark = "PASS" if one["passed"] else "FAIL"
+            note = f"  {one['problems'][0]}" if one["problems"] else ""
+            audio = "  [recording]" if one["recording"] else ""
+            lines.append(
+                f"  {mark}  {one['scenario']}  {one['met']}/{one['of']}{audio}{note}"
+            )
+        # Reported here too, not only from the run button: a run that reaches the platform only
+        # when it was started one particular way leaves the page an unreliable record of what
+        # has been run.
+        _, said = platform.deliver(
+            produced, list(written), destination, modality=contract.modality or "text"
+        )
+        lines += ["", *said]
+        lines += [
+            "",
+            "read_run gives any one of these in full: the conversation, every tool call with "
+            "its arguments, and what each check decided.",
+        ]
+        return _ok("\n".join(lines))
+
+    @tool(
+        "read_run",
+        "One run in full, or the list of runs when no id is given. A run holds every scenario's "
+        "conversation, every tool call with its arguments and result, and what each check "
+        "decided — which is what a failure is diagnosed from.",
+        schema({"run_id": str, "scenario": str}, []),
+    )
+    async def read_run(args: dict[str, Any]) -> dict[str, Any]:
+        from .simulation import every_run, read_run as load_run
+
+        run_id = str(args.get("run_id") or "")
+        if not run_id:
+            runs = every_run(destination)
+            if not runs:
+                return _ok("No runs yet. run_simulation makes one.")
+            return _ok(
+                "\n".join(
+                    f"  {one['run_id']}  {one.get('passed', 0)}/{one.get('scenarios', 0)} "
+                    f"passed  {one.get('seconds', 0)}s"
+                    for one in runs
+                )
+            )
+        try:
+            whole = load_run(destination, run_id)
+        except FileNotFoundError as missing:
+            return _err(str(missing))
+        wanted = str(args.get("scenario") or "")
+        cases = [
+            one
+            for one in whole.get("scenarios", [])
+            if not wanted or one.get("scenario") == wanted
+        ]
+        if not cases:
+            return _err(f"{run_id} has no scenario called {wanted!r}")
+        return _ok(json.dumps(cases if wanted else whole, indent=2, default=str)[:6000])
 
     @tool(
         "run_scenario",
@@ -242,6 +423,8 @@ def run_tools(
         schema({"name": str, "scenario": str}, []),
     )
     async def run_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if authenticity_error:
+            return _err(authenticity_error)
         name = str(args.get("name") or args.get("scenario") or "")
         scenario = next((one for one in written if one.name == name), None)
         if scenario is None:
@@ -251,7 +434,7 @@ def run_tools(
             )
         if not live:
             return await _run_here(scenario)
-        problems = missing_prerequisites()
+        problems = missing_prerequisites(world_root, contract)
         if problems:
             return _err(
                 "Cannot place a call:\n  - "
@@ -275,6 +458,16 @@ def run_tools(
                 os.environ["HARNESS_INSTRUCTION"] = instruction
                 os.environ["HARNESS_SCENARIO"] = scenario.name
                 os.environ["HARNESS_OUTCOME"] = scenario.tests
+                os.environ["HARNESS_PERSONA"] = json.dumps(
+                    scenario.persona.model_dump(exclude_none=True)
+                    if scenario.persona is not None
+                    else {"name": "customer"}
+                )
+                os.environ["HARNESS_INITIAL_MESSAGE"] = (
+                    scenario.persona.initial_message
+                    if scenario.persona is not None
+                    else ""
+                )
                 code = place_the_call(voice_case)
                 run = grade(scenario, world, world_root)
                 if code != 0 and not run.calls:
@@ -286,6 +479,10 @@ def run_tools(
                 webhook.stop()
                 if tunnel is not None:
                     tunnel.terminate()
+                if (Path(world_root) / "environment.json").exists():
+                    from ..provision import stop_runtime
+
+                    stop_runtime(world_root)
                 world.close()
             return run, url, moved, transcript_since(started)
 
@@ -335,7 +532,14 @@ def run_tools(
     server = create_sdk_mcp_server(
         name=RUN_SERVER,
         version="0.1.0",
-        tools=[list_scenarios, preflight, run_scenario, read_results],
+        tools=[
+            list_scenarios,
+            preflight,
+            run_simulation,
+            read_run,
+            run_scenario,
+            read_results,
+        ],
     )
     return server
 
@@ -343,6 +547,45 @@ def run_tools(
 TOOL_NAMES = (
     "list_scenarios",
     "preflight",
+    "run_simulation",
+    "read_run",
     "run_scenario",
     "read_results",
 )
+
+
+# Which of the several recordings a call leaves behind is the one worth keeping. Both sides on
+# one track, because the question asked of a spoken run is nearly always about the interaction:
+# whether the agent talked over the caller, how long it left them waiting, what it heard.
+PREFERRED = ("_stereo.wav", "stereo.wav", "combined.wav")
+
+
+def recording_since(started: float, into: Path) -> str:
+    """Copy the audio from the call that just happened into this run's folder.
+
+    ALK records already and writes several tracks under its own artifacts directory. Rather than
+    tell it where to put them — which it takes from its manifest, not from the environment — the
+    files it wrote are found the same way the transcript is, by being newer than the moment this
+    run began, and the one worth keeping is copied in beside the result.
+    """
+    root = ARTIFACTS_ROOT / "simulation-acceptance"
+    if not root.exists():
+        return ""
+    fresh = [
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in (".wav", ".mp3", ".ogg")
+        and path.stat().st_mtime >= started
+    ]
+    if not fresh:
+        return ""
+    chosen = next(
+        (one for mark in PREFERRED for one in fresh if one.name.endswith(mark)),
+        max(fresh, key=lambda one: one.stat().st_size),
+    )
+    into = Path(into)
+    into.mkdir(parents=True, exist_ok=True)
+    landed = into / f"recording{chosen.suffix}"
+    shutil.copyfile(chosen, landed)
+    return str(landed)

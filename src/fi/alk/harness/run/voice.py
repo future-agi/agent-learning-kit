@@ -44,7 +44,19 @@ class WorldWebhook:
     stays configured while every scenario still starts from its own restored copy.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 0) -> None:
+    def __init__(self, host: str | None = None, port: int | None = None) -> None:
+        # A container must bind 0.0.0.0 on a fixed port or nothing outside can
+        # be configured to call it; a laptop keeps loopback and an ephemeral port.
+        host = (
+            host
+            if host is not None
+            else os.environ.get("HARNESS_WEBHOOK_HOST", "127.0.0.1")
+        )
+        port = (
+            port
+            if port is not None
+            else int(os.environ.get("HARNESS_WEBHOOK_PORT", "0"))
+        )
         self._world: GeneratedWorld | None = None
         self._lock = threading.Lock()
         try:
@@ -78,7 +90,13 @@ class WorldWebhook:
         with self._lock:
             return list(self._world.calls) if self._world else []
 
-    def respond(self, name: str, arguments: Mapping[str, Any]) -> str:
+    def respond(
+        self,
+        name: str,
+        arguments: Mapping[str, Any],
+        *,
+        session_id: str = "harness",
+    ) -> str:
         """Answer one tool call by running it.
 
         A refusal is returned as the answer, not as an error: the agent has to hear "that item is
@@ -89,6 +107,72 @@ class WorldWebhook:
             world = self._world
         if world is None:
             return "the environment is not ready"
+
+        # Caller hydration is an adapter concern, not a contract tool. The local
+        # LiveKit worker normally gets this from its demo API before exposing any
+        # conversational tools. Resolve the same safe profile from the generated
+        # world without adding a call that scenario grading would mistake for an
+        # agent action.
+        if name == "lookup_rider_by_phone":
+            forward = getattr(world, "forward", None)
+            if callable(forward):
+                hydrated = forward(
+                    name,
+                    arguments,
+                    record=False,
+                    session_id=session_id,
+                )
+                if hydrated.ok:
+                    return (
+                        hydrated.result
+                        if isinstance(hydrated.result, str)
+                        else json.dumps(hydrated.result, default=str)
+                    )
+                return hydrated.error
+            phone = str(arguments.get("phone") or "")
+            state = world.observe().state
+            user = next(
+                (
+                    row
+                    for row in state.get("users", [])
+                    if str(row.get("phone")) == phone
+                ),
+                None,
+            )
+            if user is None:
+                return json.dumps({"rider_id": None, "phone": phone})
+            market = next(
+                (
+                    row
+                    for row in state.get("market_config", [])
+                    if row.get("market") == user.get("default_market")
+                ),
+                {},
+            )
+            return json.dumps(
+                {
+                    **user,
+                    "cash_supported_in_market": bool(market.get("cash_supported")),
+                    "accessibility_needs": [],
+                },
+                default=str,
+            )
+
+        if hasattr(world, "forward"):
+            endpoint = getattr(world, "endpoint_for", {}).get(name, name)
+            done_call = world.forward(
+                endpoint,
+                arguments,
+                record_as=name,
+                session_id=session_id,
+            )
+            if done_call.ok:
+                return (
+                    done_call.result
+                    if isinstance(done_call.result, str)
+                    else json.dumps(done_call.result, default=str)
+                )
+            return done_call.error
 
         done = world.handle_tool_call({"name": name, "arguments": dict(arguments)})
         if done is None:
@@ -108,9 +192,35 @@ def _handler_for(owner: "WorldWebhook"):
                 payload = json.loads(raw or b"{}")
             except json.JSONDecodeError:
                 payload = {}
+
+            calls = tool_calls(payload)
+            session_id = self.headers.get("x-session-id") or "harness"
+            if not calls:
+                # An agent whose tools are its own HTTP API asks differently: the tool is the
+                # path and the body is the arguments, with the answer expected back plainly.
+                # Serving both shapes is what lets a world stand in for such an API without the
+                # agent being changed to suit us.
+                name = self.path.strip("/").split("?")[0]
+                if name:
+                    answer = owner.respond(
+                        name,
+                        payload if isinstance(payload, dict) else {},
+                        session_id=session_id,
+                    )
+                    plain = json.dumps(_as_body(answer)).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(plain)))
+                    self.end_headers()
+                    self.wfile.write(plain)
+                    return
+
             results = [
-                {"toolCallId": call_id, "result": owner.respond(name, arguments)}
-                for call_id, name, arguments in tool_calls(payload)
+                {
+                    "toolCallId": call_id,
+                    "result": owner.respond(name, arguments, session_id=session_id),
+                }
+                for call_id, name, arguments in calls
             ]
             body = json.dumps({"results": results}).encode()
             self.send_response(200)
@@ -120,6 +230,20 @@ def _handler_for(owner: "WorldWebhook"):
             self.wfile.write(body)
 
     return Handler
+
+
+def _as_body(answer: str) -> Any:
+    """A tool's answer as a JSON body, keeping structure when the handler produced any.
+
+    Handlers return text because that is what a spoken agent hears. An HTTP tool API expects an
+    object, so a JSON answer is passed through as itself and anything else is wrapped, rather
+    than a caller having to parse a string out of a string.
+    """
+    try:
+        parsed = json.loads(answer)
+    except (json.JSONDecodeError, TypeError):
+        return {"result": answer}
+    return parsed if isinstance(parsed, (dict, list)) else {"result": parsed}
 
 
 def tool_calls(payload: Mapping[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
@@ -171,9 +295,7 @@ def fetch_assistant(assistant_id: str, api_key: str) -> dict[str, Any]:
         return json.loads(answer.read())
 
 
-def repoint_assistant(
-    assistant_id: str, api_key: str, webhook_url: str
-) -> list[str]:
+def repoint_assistant(assistant_id: str, api_key: str, webhook_url: str) -> list[str]:
     """Send the assistant's existing tool calls to our webhook. Returns the tools moved."""
     import urllib.request
 

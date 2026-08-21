@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from ..contract import AgentContract
-from ..environment import load_catalogue, load_simulator_prompt
+from ..catalogue import load_catalogue
+from ..simulator import load_simulator_prompt
 from ..scenario import Scenario
 from ..folder import apply_setup, check_ready
 from ..world.snapshot import restore
@@ -29,28 +30,84 @@ from .grade import (
     checkpoints,
     grade_sub_goals,
     judge,
+    judge_suite_evals,
     summarise,
 )
 from .targets import LocalAgent, Target, register_target, resolve, supported
 
 
+def _cases(report: Any) -> list[Any]:
+    """The per-scenario results, whichever report this is.
+
+    The runner hands back a ``SimulationReport``, whose cases are ``test_cases`` and whose
+    messages live a level down; the plugins hand back the older ``TestReport``, whose cases are
+    ``results``. Reading only one of them finds nothing in the other and reports a run in which
+    nobody said anything, which is indistinguishable from an agent that ignored the person.
+    """
+    legacy = getattr(report, "to_legacy", None)
+    if callable(legacy):
+        try:
+            report = legacy()
+        except Exception:  # noqa: BLE001 - a report that will not convert is still readable
+            pass
+    return list(
+        getattr(report, "results", None) or getattr(report, "test_cases", None) or []
+    )
+
+
 def from_alk(report: Any, world, spent: float) -> Transcript:
-    """What ALK's report says happened, in the shape the grading already reads."""
+    """What ALK's report says happened, in the shape the grading already reads.
+
+    Read from ``messages``, the normalised trajectory, and not from ``transcript`` — which is a
+    string, so iterating it yields characters, matches nothing, and produces a run with no turns
+    at all. The judge is then handed an empty conversation and fails every claim about what was
+    said, which arrives looking like an agent that never spoke.
+    """
     exchanges: list[Exchange] = []
-    for case in getattr(report, "results", None) or []:
-        for message in getattr(case, "transcript", None) or []:
-            role = (message.get("role") or "") if isinstance(message, dict) else ""
-            text = (message.get("content") or "") if isinstance(message, dict) else ""
-            if text:
-                exchanges.append(
-                    Exchange("agent" if role == "assistant" else "customer", str(text))
-                )
+    for case in _cases(report):
+        for message in getattr(case, "messages", None) or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "")
+            text = message.get("content") or ""
+            # Tool turns are in here too, and they are already recorded as calls. Putting them
+            # in the conversation as well would have the judge read a tool result as something
+            # the agent said.
+            if role in ("tool", "function") or not str(text).strip():
+                continue
+            exchanges.append(
+                Exchange("agent" if role == "assistant" else "customer", str(text))
+            )
+        if not exchanges and isinstance(getattr(case, "transcript", None), str):
+            # A plugin that only fills the text form still has to be readable.
+            spoken = case.transcript.strip()
+            if spoken:
+                exchanges.append(Exchange("customer", spoken))
     return Transcript(
         exchanges=exchanges,
         calls=list(world.calls),
         ended=FINISHED,
         spent_usd=spent,
     )
+
+
+def audio_from(report: Any) -> str:
+    """Where ALK left this run's audio, if it left any.
+
+    Artifacts are how a modality hands back what it produced, so the recording is asked of the
+    report rather than guessed at from a directory. A run with none says so.
+    """
+    for case in _cases(report):
+        for artifact in getattr(case, "artifacts", None) or []:
+            kind = str(getattr(artifact, "type", "") or "")
+            mime = str(getattr(artifact, "mime_type", "") or "")
+            if "audio" in kind.lower() or mime.startswith("audio/"):
+                found = getattr(artifact, "path", None) or getattr(
+                    artifact, "uri", None
+                )
+                if found:
+                    return str(found)
+    return ""
 
 
 RUNS = "runs.json"
@@ -138,6 +195,9 @@ async def run_scenario(
         judgements, judged_cost = await judge(
             scenario, transcript, contract, catalogue, model=model, ending=ending
         )
+        judgements += judge_suite_evals(
+            catalogue.suite_evals, scenario, transcript, contract, ending=ending
+        )
         return Result(
             scenario=scenario.name,
             tests=scenario.tests,
@@ -152,6 +212,10 @@ async def run_scenario(
             calls=len(transcript.calls),
             spent_usd=transcript.spent_usd + judged_cost,
             transcript=transcript.spoken(),
+            exchanges=[
+                {"speaker": turn.speaker, "text": turn.text}
+                for turn in transcript.exchanges
+            ],
             actions=transcript.actions(),
         )
     finally:

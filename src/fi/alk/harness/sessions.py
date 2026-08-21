@@ -32,7 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-SESSIONS = Path("artifacts/sessions")
+from .config import ARTIFACTS_ROOT
+
+SESSIONS = ARTIFACTS_ROOT / "sessions"
 META = "session.json"
 CHAT = "chat.jsonl"
 
@@ -87,16 +89,19 @@ class Session:
         Asking the folder means the answer survives a restart, and it cannot drift from what is
         really there — which is what makes reopening a session trustworthy.
         """
-        from .environment import load_catalogue
+        from .catalogue import load_catalogue
         from .folder import read_all
+        from .world.snapshot import saved as world_saved
 
         scenarios = read_all(self.path) if self.path.exists() else []
         runs = _runs(self.path)
         return {
             "contract": (self.path / "contract.json").exists(),
-            "world": (self.path / "world.sqlite").exists(),
+            "world": world_saved(self.path),
             "simulator_prompt": (self.path / "simulator_prompt.md").exists(),
-            "sub_goals": len(load_catalogue(self.path).sub_goals) if self.path.exists() else 0,
+            "sub_goals": len(load_catalogue(self.path).sub_goals)
+            if self.path.exists()
+            else 0,
             "scenarios": len(scenarios),
             "validated": None,  # filled in by whoever wants to pay for proving them
             "runs": len(runs),
@@ -106,17 +111,74 @@ class Session:
 
 
 def _runs(path: Path) -> list[dict[str, Any]]:
+    # A completed timestamped simulation is the authoritative run record.  ``runs.json`` is the
+    # compatibility file written by the older chat/local runner and may still be present after a
+    # voice simulation.  Looking at it first made the Runs tab keep showing a discarded local
+    # attempt while the Simulations page correctly showed the newer WebRTC calls.
+    modern = sorted((path / "runs").glob("run-*/run.json"))
+    if modern:
+        from .run.simulation import read_run
+
+        newest = modern[-1]
+        return list(read_run(path, newest.parent.name).get("scenarios") or [])
+
     found = path / "runs.json"
     if not found.exists():
-        return []
+        # The suite runner writes one rich timestamped folder per suite. The RL Environment's
+        # Runs tab predates that layout and reads this flattened view; without the bridge, the
+        # Simulations page showed the call while the adjacent Runs tab and stage badge said zero.
+        # Native WebRTC campaigns preserve richer per-case artifacts in timestamped folders.
+        # Show the newest completed campaign in the same Runs tab instead of making a
+        # successful external call campaign look as though nothing has ever run.
+        batches = sorted((path / "webrtc-runs").glob("run_*/results.json"))
+        if not batches:
+            return []
+        found = batches[-1]
     try:
         loaded = json.loads(found.read_text(encoding="utf-8"))
-        return loaded if isinstance(loaded, list) else []
+        if not isinstance(loaded, list):
+            return []
+        if found.name == "runs.json":
+            return loaded
+        return [_webrtc_run(one) for one in loaded if isinstance(one, dict)]
     except json.JSONDecodeError:
         return []
 
 
-def create(agent: str = "", source: str = "", kind: str = "repo", base: Path | None = None) -> Session:
+def _webrtc_run(record: dict[str, Any]) -> dict[str, Any]:
+    """Present a native WebRTC result in the live-run shape the UI already renders."""
+    calls = []
+    for call in record.get("tool_calls") or []:
+        if not isinstance(call, dict):
+            continue
+        arguments = json.dumps(
+            call.get("arguments") or {}, ensure_ascii=False, sort_keys=True
+        )
+        outcome = "ok" if call.get("ok") else "crashed"
+        calls.append(f"{call.get('name', 'unknown')}({arguments}) -> {outcome}")
+    problems = []
+    status = str(record.get("voice_status") or "")
+    if status and status != "completed":
+        problems.append(f"WebRTC call ended with voice status: {status}")
+    if record.get("error"):
+        problems.append(str(record["error"]))
+    return {
+        "scenario": record.get("scenario") or "unknown",
+        "passed": bool(record.get("passed")),
+        "met": int(record.get("deterministic_met") or 0),
+        "of": int(record.get("deterministic_of") or 0),
+        "settled": record.get("settled") or [],
+        "judged": record.get("judged") or [],
+        "calls": calls,
+        "problems": problems,
+        "transcript": record.get("transcript") or "",
+        "ended": status,
+    }
+
+
+def create(
+    agent: str = "", source: str = "", kind: str = "repo", base: Path | None = None
+) -> Session:
     """Start a new conversation, with its own folder."""
     identifier = new_id(agent, base)
     path = root(base) / identifier
@@ -250,3 +312,61 @@ def history(path: Path) -> list[dict[str, Any]]:
 
 def count_messages(path: Path) -> int:
     return len(history(path))
+
+
+def environments(base: Path | None = None) -> list[dict[str, Any]]:
+    """Every session with at least a contract, newest first, one table row each.
+
+    Read off each folder without adopting it, so listing environments can never
+    move the open session. A session appears as soon as its contract is written
+    — an hour-long build that shows nothing until its last artifact reads as an
+    empty product — and ``state`` says whether the world is there yet. Runs are
+    simulation runs; the legacy chat runs in ``runs.json`` are a different
+    thing and would double-count a session's work.
+    """
+    from .run.simulation import every_run
+
+    found: list[dict[str, Any]] = []
+    for one in every(base):
+        held = one.has()
+        if not held.get("contract"):
+            continue
+        contract = _read_json(one.path / "contract.json")
+        manifest = _read_json(one.path / "manifest.json")
+        runs = every_run(one.path)
+        found.append(
+            {
+                "session_id": one.id,
+                "state": "ready" if held.get("world") else "building",
+                "agent": one.agent or contract.get("agent", ""),
+                "title": one.title or one.agent or one.id,
+                "one_liner": contract.get("one_liner", ""),
+                "created": one.created,
+                "updated": one.updated,
+                # A source-backed world may expose fewer raw service endpoints than the agent
+                # has model-facing tools because the worker supplies session state and local
+                # state-machine operations. The contract-facing specs are what the UI means by
+                # tools; counting only handlers made a complete environment look incomplete.
+                "tools": len(manifest.get("tool_specs") or manifest.get("tools") or []),
+                "sub_goals": held.get("sub_goals", 0),
+                "scenarios": held.get("scenarios", 0),
+                "runs": len(runs),
+                "runs_passed": sum(
+                    1
+                    for run in runs
+                    if run.get("scenarios")
+                    and run.get("passed") == run.get("scenarios")
+                ),
+            }
+        )
+    return found
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}

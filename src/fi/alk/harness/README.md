@@ -6,6 +6,22 @@ test scenarios, runs them as conversations, and tells you what held and what did
 Nothing here is written for a particular agent. Every stage takes the contract and the world as
 input, so a different agent is the same commands with a different name.
 
+The normal product path is autonomous—no operator messages or stage-by-stage nudges:
+
+```bash
+agent-learn harness auto \
+  --path /absolute/path/to/private-agent \
+  --count 10
+```
+
+This creates one session containing `job.json`, a sealed `environment-bundle/`, contract,
+generated world/data, validated scenarios, canonical progress events, calls, evidence and run
+artifacts. Agent check failures still complete the run and remain visible as RL evidence.
+
+The same `HarnessJob` and `HarnessExecutor` run in Future AGI's isolated hosted sandbox. The
+platform creates jobs and stores their events/artifacts; it does not execute harness stages. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for boundaries, isolation and extension points.
+
 ---
 
 # Part 1 — Setting up, from nothing

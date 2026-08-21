@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .environment import Catalogue
+from .catalogue import Catalogue
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
 
@@ -36,16 +36,16 @@ INDEX = "scenarios.json"
 # Appended to every check file the harness writes. The model writes only ``check(world, calls)``;
 # this is what makes that same file runnable by a person, so nobody has to keep two versions of
 # one truth in step.
-_RUNNABLE = '''
+_RUNNABLE = """
 
 if __name__ == "__main__":
-    # Run this check by hand against what a run left behind:
-    #     python <this file> <world.sqlite> [calls.json]
+    # Run this check by hand against what a run left behind. The first argument is anything
+    # inside the saved world's folder, because not every world has a database to name:
+    #     python <this file> <world folder>/manifest.json [calls.json]
     import json as _json
     import sys as _sys
     from pathlib import Path as _Path
 
-    _sys.path.insert(0, str(_Path(__file__).resolve().parents[4]))
     from fi.alk.harness.world.runtime import Call as _Call
     from fi.alk.harness.world.snapshot import restore as _restore
 
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     _said = check(_world, _calls)
     print("held" if _said is None else f"FAILED: {_said}")
     raise SystemExit(0 if _said is None else 1)
-'''
+"""
 
 
 @dataclass
@@ -92,8 +92,18 @@ def _run(source: str, name: str, entry: str, *args: Any) -> Outcome:
         return Outcome(
             False, f"{name} raised {type(failed).__name__}: {failed}", broken=True
         )
-    if said is None or said is True:
+    # The convention is that a complaint is a sentence, and anything else means it held. An empty
+    # string is the case worth naming: it reads as "no complaint" to whoever wrote it, and taking
+    # it as a failure produces a rejection with no reason attached, which cannot be acted on and
+    # sends the author hunting for a problem that is not there.
+    if said is None or said is True or (isinstance(said, str) and not said.strip()):
         return Outcome(True)
+    if said is False:
+        return Outcome(
+            False,
+            f"{name} returned False without saying what is wrong. Return the sentence instead, "
+            "or None if it holds.",
+        )
     return Outcome(False, str(said))
 
 
@@ -127,12 +137,12 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
 
     (root / "setup.py").write_text(
         scenario.setup_code
-        or "def setup(world):\n    \"\"\"This scenario runs on the base world unchanged.\"\"\"\n",
+        or 'def setup(world):\n    """This scenario runs on the base world unchanged."""\n',
         encoding="utf-8",
     )
     (root / "ready.py").write_text(
         scenario.ready_code
-        or "def ready(world):\n    \"\"\"Nothing beyond the base world is presumed.\"\"\"\n",
+        or 'def ready(world):\n    """Nothing beyond the base world is presumed."""\n',
         encoding="utf-8",
     )
 

@@ -12,20 +12,22 @@ it lives. Everything after it, including where artifacts are written, follows fr
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 
 from .config import (
     UNWANTED,
+    artifact_dir,
     chosen_model,
     gate_hooks,
     permission_gate,
     provider_env,
 )
 from .session import Stage
-from .sources import AgentSource, resolve, supported
+from .sources import AgentSource, clone_github_repository, resolve, supported
 from .tools import qualified, schema
 
 RECEPTION_SERVER = "agent"
@@ -37,9 +39,12 @@ You are the front desk of a harness that builds test environments for agents.
 Somebody has arrived with an agent they want tested. Your only job is to work out which agent,
 and where it lives, and then call point_at_agent. Nothing else happens until you do.
 
-Usually they will just tell you: a path, a repository, a folder. Take it. Use Read, Glob and Grep
-to check the path exists and to see what is actually there, and to pick a sensible short name if
-they did not give one. A name is a label for their artifacts, so lower case and no spaces.
+Usually they will just tell you: a path, a repository, a folder, or a public GitHub URL. Take it.
+For an explicit local path, call point_at_agent immediately: that tool validates the path. Do not
+scan it first. Use Read, Glob or Grep only when the person gave an ambiguous parent directory or
+no path and you genuinely have to locate the agent. For a GitHub URL, call point_at_agent with kind "github" and the URL as
+path. The harness clones it into this session; do not ask them to clone it themselves. A name is a
+label for their artifacts, so lower case and no spaces.
 
 The agent is usually somewhere else on disk, not inside the harness. A path they give you is
 relative to where you are looking from, which is a workspace holding many repositories, so try
@@ -55,7 +60,11 @@ about to do, and stop.
 
 
 def point_at(
-    name: str, path: str, kind: str, found: dict[str, AgentSource]
+    name: str,
+    path: str,
+    kind: str,
+    found: dict[str, AgentSource],
+    source_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Establish which agent this is, or say why it cannot be.
 
@@ -73,7 +82,13 @@ def point_at(
             "ask where the agent actually lives."
         )
     try:
-        found["source"] = resolve(kind, name=name, root=Path(path).expanduser())
+        if kind == "github":
+            root = clone_github_repository(
+                path, source_dir or artifact_dir(name) / "source"
+            )
+            found["source"] = resolve(kind, name=name, root=root, url=path)
+        else:
+            found["source"] = resolve(kind, name=name, root=Path(path).expanduser())
     except Exception as failed:
         return _err(f"could not reach that agent: {failed}")
     return {
@@ -84,6 +99,7 @@ def point_at(
 def open_stage(
     *,
     cwd: str | Path | None = None,
+    source_dir: str | Path | None = None,
     ask: Callable[..., Any] | None = None,
     max_turns: int = 20,
 ) -> tuple[Stage, dict[str, AgentSource]]:
@@ -93,8 +109,9 @@ def open_stage(
     @tool(
         "point_at_agent",
         "Name the agent this conversation is about and say where it is. `kind` is how it is "
-        f"supplied, one of: {', '.join(supported())}. For a repository, `path` is its directory. "
-        "Call this once you know what you are pointing at.",
+        f"supplied, one of: {', '.join(supported())}. For a repository, `path` is its directory; "
+        "for github, it is the public HTTPS repository URL and the harness clones it. Call this "
+        "once you know what you are pointing at.",
         schema({"name": str, "path": str, "kind": str}, ["name", "path"]),
     )
     async def point_at_agent(args: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +120,7 @@ def open_stage(
             str(args.get("path") or ""),
             str(args.get("kind") or "repo"),
             found,
+            Path(source_dir) if source_dir else None,
         )
 
     server = create_sdk_mcp_server(
