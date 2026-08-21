@@ -2336,6 +2336,10 @@ async def _ensure_sip_inbound_dispatch(
     """
 
     existing = await api_client.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
+    # An explicit inbound trunk (e.g. the leased carrier pool trunk) pins the
+    # carrier; it takes precedence over the LIVEKIT_INBOUND_TRUNK_ID env, which
+    # is only a fallback for a self-provisioned rule.
+    explicit_trunk = transport.sip_inbound_trunk_id
     if transport.dispatch_rule_name:
         for rule in existing.items:
             if rule.name != transport.dispatch_rule_name:
@@ -2354,12 +2358,21 @@ async def _ensure_sip_inbound_dispatch(
                     "sip_inbound_rule_mismatch: "
                     f"{transport.dispatch_rule_name} targets a different room"
                 )
+            # When the caller pins a trunk, the reused rule must belong to it —
+            # otherwise a stale/other-carrier rule of the same name would route
+            # the call onto the wrong (e.g. Twilio) trunk.
+            if explicit_trunk and explicit_trunk not in list(rule.trunk_ids):
+                raise RuntimeError(
+                    "sip_inbound_rule_trunk_mismatch: "
+                    f"{transport.dispatch_rule_name} is not bound to {explicit_trunk}"
+                )
             return rule.sip_dispatch_rule_id, False
         raise RuntimeError(f"sip_inbound_rule_missing: {transport.dispatch_rule_name}")
-    trunk_id = os.environ.get(_LIVEKIT_INBOUND_TRUNK_ENV)
+    trunk_id = explicit_trunk or os.environ.get(_LIVEKIT_INBOUND_TRUNK_ENV)
     if not trunk_id:
         raise RuntimeError(
-            f"sip_inbound_trunk_missing: set {_LIVEKIT_INBOUND_TRUNK_ENV}"
+            "sip_inbound_trunk_missing: set transport.sip_inbound_trunk_id or "
+            f"{_LIVEKIT_INBOUND_TRUNK_ENV}"
         )
     for rule in existing.items:
         if trunk_id and trunk_id in rule.trunk_ids:

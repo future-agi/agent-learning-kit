@@ -64,8 +64,18 @@ def _leg_manifest(base: Mapping[str, Any], leg: MatrixLeg) -> dict[str, Any]:
     transport = dict(agent_definition.get("transport") or {})
     transport["kind"] = leg.channel
     if leg.channel == "webrtc":
-        for legacy in ("sip_trunk_id", "sip_number", "sip_call_to", "dispatch_rule_name"):
-            transport.pop(legacy, None)
+        for sip_only in (
+            "sip_trunk_id",
+            "sip_number",
+            "sip_call_to",
+            "participant_identity",
+            "dispatch_rule_name",
+            "sip_inbound_trunk_id",
+            "readiness_timeout_seconds",
+            "answer_timeout_seconds",
+            "inbound_call_originator",
+        ):
+            transport.pop(sip_only, None)
     agent_definition["transport"] = transport
     if leg.provider_evidence_overrides is not None:
         agent_definition["provider_evidence"] = leg.provider_evidence_overrides

@@ -108,6 +108,16 @@ class TelephonyTransport(BaseModel):
         None,
         description="Dispatch rule that routes the inbound call (sip_inbound only).",
     )
+    sip_inbound_trunk_id: Optional[str] = Field(
+        None,
+        description=(
+            "LiveKit inbound SIP trunk the leased dispatch rule belongs to "
+            "(sip_inbound only). When set, the SDK validates the named rule binds "
+            "this trunk and skips the LIVEKIT_INBOUND_TRUNK_ID env fallback — this "
+            "is how a run pins the carrier's (e.g. Telnyx) pool trunk instead of "
+            "inheriting the worker's default inbound trunk."
+        ),
+    )
     readiness_timeout_seconds: Optional[float] = Field(
         None,
         gt=0,
@@ -128,6 +138,8 @@ class TelephonyTransport(BaseModel):
         if self.kind == "sip_outbound":
             if self.inbound_call_originator is not None:
                 raise ValueError("sip_outbound cannot set inbound_call_originator")
+            if self.sip_inbound_trunk_id is not None:
+                raise ValueError("sip_outbound cannot set sip_inbound_trunk_id")
             if not self.sip_trunk_id or not self.sip_trunk_id.strip():
                 raise ValueError("sip_outbound requires sip_trunk_id")
             if not self.sip_call_to or not _E164.match(self.sip_call_to):
@@ -153,6 +165,7 @@ class TelephonyTransport(BaseModel):
                     self.sip_call_to,
                     self.sip_number,
                     self.dispatch_rule_name,
+                    self.sip_inbound_trunk_id,
                     self.inbound_call_originator,
                 ]
             ):

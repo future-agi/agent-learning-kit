@@ -139,7 +139,13 @@ def _sip_inbound_required_env(agent_definition: Any) -> list[str]:
     transport = agent_definition.transport
     target = agent_definition.target
     names: list[str] = []
-    if transport is not None and not transport.dispatch_rule_name:
+    if (
+        transport is not None
+        and not transport.dispatch_rule_name
+        and not transport.sip_inbound_trunk_id
+    ):
+        # Only needed when the SDK must self-provision a rule: with a named rule
+        # or an explicit inbound trunk id, the trunk is already pinned.
         names.append("LIVEKIT_INBOUND_TRUNK_ID")
     if transport is not None and transport.inbound_call_originator == "vapi":
         names.extend(

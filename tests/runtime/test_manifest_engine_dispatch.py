@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from fi.simulate import cli
+from fi.simulate.agent.definition import AgentDefinition
 from fi.simulate.manifest import ManifestError, run_manifest_file
+from fi.simulate.simulation.matrix import MatrixLeg, _leg_manifest
 from fi.simulate.simulation.models import (
     Persona,
     TestCaseResult as CaseResult,
@@ -387,6 +389,39 @@ def test_livekit_manifest_accepts_sip_inbound_without_dispatch_rule(
     asyncio.run(cli._run_manifest(manifest, tmp_path / "m.json"))
     assert captured["agent_definition"].transport.kind == "sip_inbound"
     assert captured["agent_definition"].transport.dispatch_rule_name is None
+
+
+def test_matrix_webrtc_leg_strips_sip_fields_and_validates() -> None:
+    base = {
+        "agent_definition": {
+            "name": "phone-agent",
+            "url": "ws://127.0.0.1:7880",
+            "room_name": "sdk-{test_case_id}",
+            "system_prompt": "Help.",
+            "transport": {
+                "kind": "sip_inbound",
+                "sip_trunk_id": "ST_outbound",
+                "sip_number": "+12068956991",
+                "sip_call_to": "+14155551234",
+                "participant_identity": "sip-{test_case_id}",
+                "dispatch_rule_name": "inbound-rule",
+                "sip_inbound_trunk_id": "ST_telnyx",
+                "readiness_timeout_seconds": 30,
+                "answer_timeout_seconds": 30,
+                "inbound_call_originator": "vapi",
+            },
+        }
+    }
+
+    manifest = _leg_manifest(
+        base,
+        MatrixLeg(provider="livekit", channel="webrtc"),
+    )
+    transport = manifest["agent_definition"]["transport"]
+
+    assert transport == {"kind": "webrtc"}
+    validated = AgentDefinition.model_validate(manifest["agent_definition"])
+    assert validated.transport.kind == "webrtc"
 
 
 def test_livekit_manifest_rejects_sip_inbound_empty_dispatch_rule(
