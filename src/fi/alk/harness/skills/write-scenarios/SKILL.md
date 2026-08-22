@@ -20,6 +20,7 @@ afterwards.
 ```
 name          short identifier; it becomes this scenario's folder
 use_case      which of the agent's use cases this belongs to
+branch        what makes this one different from its siblings in that use case
 tests         one line: what this scenario is trying to find out
 instruction   the task, written to the person the agent is serving
 persona       who that person is: identity, communication style, languages/accent and characteristics
@@ -157,6 +158,16 @@ rule under pressure, the state that has to carry, the same request against a dif
 world.
 
 Keep that plan concise and continue immediately unless the person explicitly asked to review it.
+
+**Then write the suite with `generate_suite`, not one scenario at a time.** It splits the work
+across the agent's use cases and runs several writers at once, each proving its own scenarios
+through the same three gates. Writing a suite yourself with `submit_scenario` costs about three
+turns per scenario against one budget, so a request for twenty or fifty runs out long before it
+finishes, and what does get written is lost because nothing was saved.
+
+Use `submit_scenario` for what it is good at: one scenario somebody asked for by name, a
+replacement for one that came back wrong, or filling a specific gap in a suite that already
+exists. Anything described as a number of scenarios is a suite.
 After inspecting the world, submit the first scenario in the same response. Then prove and save
 one scenario at a time. Never silently compose the whole suite before the next tool call: the UI
 must show progress, and already-proved work must survive a stopped or timed-out model turn.
@@ -212,9 +223,7 @@ Every stance still obeys the bar above: a real person could bring it, a competen
 fail it, and the values are real. A stance chooses *what to look at*, never whether the scenario
 has to be honest.
 
-Two rules keep this from turning into noise. **Each scenario carries one use case, and no two
-scenarios carry the same one** — a duplicate is either the same test twice or one of them is
-mislabelled, and it hides a gap while appearing to fill it. And a stance that produces nothing new
+Two rules keep this from turning into noise. **Each scenario carries one use case and one branch, and no two scenarios carry the same pair** — a duplicate is either the same test twice or one of them is mislabelled, and it hides a gap while appearing to fill it. Several scenarios sharing a use case is normal and expected; that is what branches are for. What is not allowed is two rows that agree on both. And a stance that produces nothing new
 for a given agent produces nothing: an agent with no rules to bend does not need an adversarial
 scenario invented for it.
 
@@ -376,10 +385,12 @@ hides the problem and everything built afterwards inherits it.
 1. `inspect_world` with no table, then look at the ones that matter. Read the sub-goals already
    defined.
 2. Read the agent's hard rules. Each one is a branch waiting to be written.
-3. For each scenario: work out the solution, `try_calls` it with your `setup_code`, then
+3. For a suite, say how you are splitting it and then `generate_suite` with the count. It
+   writes the whole thing and saves it, and you report what came back.
+4. For a single scenario: work out the solution, `try_calls` it with your `setup_code`, then
    `submit_scenario`.
-4. Read what comes back. A refusal names which gate failed and why.
-5. `save_scenarios` when you have the number that was asked for.
+5. Read what comes back. A refusal names which gate failed and why.
+6. `save_scenarios` when you have the number that was asked for.
 
 ## Finishing
 

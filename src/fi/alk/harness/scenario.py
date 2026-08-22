@@ -154,6 +154,11 @@ class Scenario(BaseModel):
 
     name: str
     use_case: str = ""
+    # Which branch of that use case this is: the condition that makes this row different from
+    # its siblings. A use case fans out into several — the ordinary path, the one that cannot be
+    # completed, the rule under pressure — and each is its own test. Coverage is counted on the
+    # pair, so a use case can carry many scenarios without any of them reading as a duplicate.
+    branch: str = ""
     tests: str = ""
 
     # What this scenario changes about the world after it is reset, as code: a file defining
@@ -232,6 +237,13 @@ def validate_scenario(
         missing := scenario.persona.missing_profile_fields()
     ):
         problems.append("persona is incomplete: " + ", ".join(missing))
+    elif scenario.persona is not None:
+        # A persona written in words of its own renders fine and then does nothing: no behaviour
+        # guidance attaches to it, and the accent it names selects no voice. Caught here, where
+        # the writer is still holding the scenario and can fix it in one turn.
+        from .persona_guides import unrecognised
+
+        problems.extend(unrecognised(scenario.persona.model_dump()))
     if not scenario.sub_goals:
         problems.append(
             "no sub_goals: nothing would be graded. Name the entries of the catalogue this "
