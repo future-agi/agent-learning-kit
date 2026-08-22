@@ -27,6 +27,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from .packaging import PackagingKind, inspect_packaging
 from .service_catalog import address, profile_for
 
 MANIFEST = "environment.json"
@@ -112,6 +113,10 @@ def compose_file(source: str | Path) -> Path | None:
         candidate = root / name
         if candidate.is_file():
             return candidate
+    packaging = inspect_packaging(root)
+    if packaging.ready and packaging.selected_kind is PackagingKind.COMPOSE:
+        assert packaging.selected_path is not None
+        return root / packaging.selected_path
     return None
 
 
@@ -238,10 +243,24 @@ def _run(
         raise ProvisionError(f"environment command timed out after {timeout}s") from exc
     output = ((completed.stdout or "") + (completed.stderr or "")).strip()
     if check and completed.returncode:
+        shown = _command_failure_output(output)
         raise ProvisionError(
-            f"{' '.join(command)} failed ({completed.returncode}): {output or 'no output'}"
+            f"{' '.join(command)} failed ({completed.returncode}): {shown}"
         )
     return output
+
+
+def _command_failure_output(output: str, *, limit: int = 16_000) -> str:
+    """Keep actionable build context without putting megabytes of logs into job state/UI."""
+    if not output:
+        return "no output"
+    if len(output) <= limit:
+        return output
+    head_size = min(2000, max(1, limit // 4))
+    head = output[:head_size]
+    tail = output[-(limit - len(head)) :]
+    omitted = len(output) - len(head) - len(tail)
+    return f"{head}\n... {omitted} characters omitted ...\n{tail}"
 
 
 def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
@@ -277,18 +296,31 @@ def _started_services(config: dict[str, Any]) -> list[str]:
 
 
 def _runtime_services(config: dict[str, Any]) -> list[str]:
-    """Opt-in services that look like the submitted agent/worker runtime."""
+    """Opt-in services that identify the submitted agent/worker runtime.
+
+    Compose profiles are also commonly used for pgAdmin, dashboards and debugging tools. Treating
+    every profiled service as an agent causes the harness to launch infrastructure UIs as if they
+    were voice workers. A generated harness runtime is explicit; repository runtimes must carry a
+    recognizable agent/worker/bot name.
+    """
     profiled = [
         name
         for name, service in config["services"].items()
         if service.get("profiles") or []
     ]
+    explicit = [
+        name
+        for name in profiled
+        if "harness-runtime" in (config["services"][name].get("profiles") or [])
+    ]
+    if explicit:
+        return sorted(explicit)
     preferred = [
         name
         for name in profiled
         if any(word in name.lower() for word in ("agent", "worker", "bot"))
     ]
-    return sorted(preferred or profiled)
+    return sorted(preferred)
 
 
 def _validate_compose_security(config: dict[str, Any]) -> None:
@@ -339,6 +371,11 @@ def _write_port_override(
         "127.0.0.1" if _published_host() == "127.0.0.1" else "0.0.0.0"
     )
     for name, service in config["services"].items():
+        # Compose excludes profiled services unless that profile is explicitly enabled. Do not
+        # allocate ports for dormant TURN/admin/debug services; doing so can exhaust a runner's
+        # ephemeral port range before the selected environment even starts.
+        if service.get("profiles"):
+            continue
         ports: list[dict[str, Any]] = []
         for item in service.get("ports") or []:
             target = int(item.get("target") or 0)
@@ -511,7 +548,10 @@ def _endpoint_ready(endpoint: dict[str, Any], host: str) -> bool:
         with socket.create_connection((host, port), timeout=0.75) as connection:
             if protocol == "redis":
                 connection.sendall(b"*1\r\n$4\r\nPING\r\n")
-                return connection.recv(64).startswith(b"+PONG")
+                response = connection.recv(128)
+                # An authentication challenge is a semantic Redis response and proves the
+                # server is ready. Credentials are validated by the submitted agent itself.
+                return response.startswith((b"+PONG", b"-NOAUTH"))
     except OSError:
         return False
     readiness_path = str(endpoint.get("readiness_path") or "")
@@ -521,7 +561,8 @@ def _endpoint_ready(endpoint: dict[str, Any], host: str) -> bool:
             with urllib_request.build_opener(urllib_request.ProxyHandler({})).open(
                 url, timeout=1.0
             ) as response:
-                return 200 <= response.status < 400 and bool(response.read(256))
+                response.read(256)
+                return 200 <= response.status < 400
         except (OSError, urllib_error.URLError, urllib_error.HTTPError):
             return False
     return True
@@ -811,6 +852,36 @@ def _managed_service(
             "redis://redis:6379",
             "REDIS_URL",
         )
+    if engine == "mongodb":
+        return (
+            {
+                "image": f"mongo:{version or '7'}",
+                "ports": ["${HARNESS_MONGODB_PORT:-57017}:27017"],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "mongosh",
+                        "--quiet",
+                        "--eval",
+                        "db.adminCommand('ping').ok",
+                    ],
+                    "interval": "1s",
+                    "timeout": "5s",
+                    "retries": 60,
+                },
+            },
+            f"mongodb://mongodb:27017/{quote(database, safe='')}",
+            "MONGODB_URL",
+        )
+    if engine == "qdrant":
+        return (
+            {
+                "image": f"qdrant/qdrant:{version or 'v1.13.6'}",
+                "ports": ["${HARNESS_QDRANT_HTTP_PORT:-56333}:6333"],
+            },
+            "http://qdrant:6333",
+            "QDRANT_URL",
+        )
     raise ProvisionError(f"managed_dependency_unsupported: {engine}")
 
 
@@ -824,7 +895,7 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
     store = getattr(contract, "data_store", None)
     kind = str(getattr(store, "kind", "") or "").lower()
     dependencies = list(getattr(contract, "dependencies", None) or [])
-    supported = ("clickhouse", "postgres", "redis")
+    supported = ("clickhouse", "postgres", "redis", "mongodb", "qdrant")
     primary_engine = next((one for one in supported if one in kind), "")
     requested: list[tuple[str, Any | None]] = []
     unsupported_declared = bool(kind) and not primary_engine
@@ -903,12 +974,31 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
         runtime_environment[variable or default_variable] = internal_dsn
         services[engine] = service
         depends_on[engine] = {"condition": "service_healthy"}
-    services["agent-runtime"] = {
+    platform_value = str(getattr(runtime, "platform", "") or "")
+    if not platform_value:
+        declared_platforms: set[str] = set()
+        for name in COMPOSE_FILES:
+            compose = source / name
+            if not compose.is_file():
+                continue
+            declared_platforms.update(
+                match.group(1)
+                for match in re.finditer(
+                    r"(?m)^\s*platform\s*:\s*['\"]?([^'\"\s#]+)",
+                    compose.read_text(encoding="utf-8", errors="replace"),
+                )
+            )
+        if len(declared_platforms) == 1:
+            platform_value = declared_platforms.pop()
+    runtime_service: dict[str, Any] = {
         "build": {"context": str(source), "dockerfile": dockerfile_value},
         "profiles": ["harness-runtime"],
         "environment": runtime_environment,
         "depends_on": depends_on,
     }
+    if platform_value:
+        runtime_service["platform"] = platform_value
+    services["agent-runtime"] = runtime_service
     document = {"services": services}
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / "managed-compose.json"
@@ -924,7 +1014,55 @@ def provision(
     """Start and record the environment described by one source repository."""
     source_root = Path(source).expanduser().resolve()
     destination = Path(destination)
-    compose = compose_file(source_root)
+    packaging = inspect_packaging(source_root)
+    explicit_dockerfile = str(
+        getattr(getattr(contract, "runtime", None), "dockerfile", "") or ""
+    )
+    if explicit_dockerfile:
+        selected_dockerfile = (source_root / explicit_dockerfile).resolve()
+        try:
+            selected_dockerfile.relative_to(source_root)
+        except ValueError as exc:
+            raise ProvisionError(
+                "runtime Dockerfile escapes the submitted repository"
+            ) from exc
+        if not selected_dockerfile.is_file():
+            raise ProvisionError(
+                f"runtime Dockerfile does not exist: {explicit_dockerfile}"
+            )
+        explicit_candidate = next(
+            (
+                item
+                for item in packaging.candidates
+                if item.kind is PackagingKind.DOCKERFILE
+                and item.path == Path(explicit_dockerfile).as_posix()
+            ),
+            None,
+        )
+        blocking = [
+            finding.message
+            for finding in (explicit_candidate.findings if explicit_candidate else [])
+            if finding.blocking
+        ]
+        if blocking:
+            raise ProvisionError("packaging preflight failed: " + "; ".join(blocking))
+        compose = None
+    elif packaging.ready and packaging.selected_kind is PackagingKind.COMPOSE:
+        assert packaging.selected_path is not None
+        compose = source_root / packaging.selected_path
+    elif packaging.ready and packaging.selected_kind is PackagingKind.DOCKERFILE:
+        compose = None
+    elif packaging.candidates:
+        details = list(packaging.notes)
+        details.extend(
+            finding.message
+            for candidate in packaging.candidates
+            for finding in candidate.findings
+            if finding.blocking
+        )
+        raise ProvisionError("packaging preflight failed: " + "; ".join(details))
+    else:
+        compose = None
     managed = False
     if compose is None and contract is not None:
         compose = _managed_compose(source_root, destination, contract)

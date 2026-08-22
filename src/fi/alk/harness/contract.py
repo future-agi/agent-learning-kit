@@ -221,6 +221,9 @@ class Runtime(BaseModel):
     install: str = ""
     workdir: str = ""
     dockerfile: str = ""
+    # Preserve a repository-declared target architecture (for example linux/amd64 on an ARM
+    # runner). This is execution metadata, not a change to the submitted application.
+    platform: str = ""
 
 
 class Dependency(BaseModel):

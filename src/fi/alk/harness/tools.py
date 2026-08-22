@@ -514,6 +514,12 @@ def contract_tools(destination: Path) -> Any:
                             "description": "Path to its own Dockerfile, if it has one. Theirs is "
                             "used in preference to anything written for it.",
                         },
+                        "platform": {
+                            "type": "string",
+                            "description": "Container target declared by the repository, such "
+                            "as linux/amd64. Preserve it exactly; never infer one from the "
+                            "runner machine.",
+                        },
                     },
                 },
             },

@@ -42,6 +42,7 @@ from .job import (
     SourceKind,
     SourceVisibility,
 )
+from .packaging import PackagingManifest, inspect_packaging
 from .provision import source_fingerprint
 from .secrets import resolve_worker_secrets, worker_environment
 
@@ -90,6 +91,7 @@ class SandboxPreflightResponse(BaseModel):
     ready_to_submit: bool
     checkout_required: bool = False
     credentials: CredentialManifest
+    packaging: PackagingManifest | None = None
     notes: list[str] = Field(default_factory=list)
 
 
@@ -193,16 +195,23 @@ class LocalSandbox:
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
         if request.source_path:
             source = _allowed_source(request.source_path)
+            packaging = inspect_packaging(source)
             manifest = discover_credentials(
                 source,
                 secret_refs=request.secret_refs,
                 provided_environment=request.connector_config,
+                scan_paths=_credential_scan_paths(packaging),
             )
             return SandboxPreflightResponse(
                 source_kind=SourceKind.LOCAL_REPOSITORY,
                 source_label=str(source),
-                ready_to_submit=manifest.ready,
+                ready_to_submit=(
+                    manifest.ready
+                    and packaging.ready
+                    and (packaging.agent_runtime_packaged or not packaging.candidates)
+                ),
                 credentials=manifest,
+                packaging=packaging,
             )
         repository = _github_repository(request.github_repository or "")
         requirement = CredentialRequirement(
@@ -282,11 +291,36 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
+                packaging_manifest = inspect_packaging(source)
                 credential_manifest = discover_credentials(
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
+                    scan_paths=_credential_scan_paths(packaging_manifest),
                 )
+                _write_json(
+                    directory / "packaging.json",
+                    packaging_manifest.model_dump(mode="json"),
+                )
+                if not packaging_manifest.ready:
+                    detail = (
+                        "; ".join(packaging_manifest.notes)
+                        or "packaging is not runnable"
+                    )
+                    state.update(
+                        stage=HarnessStage.FAILED.value,
+                        detail=f"repository packaging preflight failed: {detail}",
+                        failure={
+                            "domain": "environment",
+                            "stage": HarnessStage.ACQUIRING_SOURCE.value,
+                            "code": "packaging_preflight_failed",
+                            "message": detail,
+                            "retryable": False,
+                        },
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+                    return
                 _write_json(
                     directory / "credentials.json",
                     credential_manifest.model_dump(mode="json"),
@@ -546,6 +580,23 @@ def _configuration_environment(config: dict[str, Any]) -> dict[str, str]:
         elif isinstance(value, (str, int, float)):
             result[str(name)] = str(value)
     return result
+
+
+def _credential_scan_paths(packaging: PackagingManifest) -> list[str] | None:
+    """Scope preflight credentials to the Compose runtime that will actually run."""
+    if packaging.selected_kind is None or packaging.selected_kind.value != "compose":
+        return None
+    selected = next(
+        (
+            candidate
+            for candidate in packaging.candidates
+            if candidate.path == packaging.selected_path
+        ),
+        None,
+    )
+    if selected is None or packaging.selected_path is None:
+        return None
+    return [packaging.selected_path, *selected.runtime_source_roots]
 
 
 def _worker_failure_retryable(

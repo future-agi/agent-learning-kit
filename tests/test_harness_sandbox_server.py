@@ -140,6 +140,27 @@ def test_preflight_accepts_non_secret_connector_configuration(tmp_path, monkeypa
     assert "agent-42" not in response.text
 
 
+def test_preflight_does_not_call_infrastructure_only_compose_execution_ready(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    (source / "compose.yml").write_text(
+        "services:\n  postgres:\n    image: postgres:17\n  redis:\n    image: redis:7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post("/v1/preflight", json={"source_path": str(source)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["packaging"]["ready"] is True
+    assert payload["packaging"]["agent_runtime_packaged"] is False
+    assert payload["ready_to_submit"] is False
+
+
 def test_preflight_accepts_public_github_url_and_requires_app_for_private_repo(
     tmp_path,
 ):

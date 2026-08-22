@@ -115,6 +115,10 @@ _SOURCE_SUFFIXES = {
 _CONFIG_NAMES = {
     ".env.example",
     ".env.sample",
+    ".env.template",
+    "env.example",
+    "env.sample",
+    "env.template",
     "docker-compose.yml",
     "docker-compose.yaml",
     "compose.yml",
@@ -127,6 +131,28 @@ _MAX_FILE_BYTES = 1_000_000
 
 _ENV_DECLARATION = re.compile(
     r"(?m)^(?:export[ \t]+)?([A-Z][A-Z0-9_]{2,})[ \t]*=[ \t]*([^\r\n#]*)"
+)
+_ENV_TEMPLATE_NAMES = {
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    "env.example",
+    "env.sample",
+    "env.template",
+}
+_COMPOSE_NAMES = {
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "compose.yml",
+    "compose.yaml",
+}
+_PLACEHOLDER_VALUE = re.compile(
+    r"^(?:"
+    r"\[[^\]]*\]|<[^>]*>|\{[^}]*\}|"
+    r"(?:your|replace|insert|change)[-_ ]?(?:me|this|.*)|"
+    r"example|placeholder|todo|xxx+"
+    r")$",
+    re.IGNORECASE,
 )
 _COMPOSE_VARIABLE = re.compile(r"\$\{([A-Z][A-Z0-9_]{2,})(?:(:?[-?])([^}]*))?\}")
 _PYTHON_REQUIRED = re.compile(r"os\.environ\s*\[\s*['\"]([A-Z][A-Z0-9_]{2,})['\"]\s*\]")
@@ -199,6 +225,7 @@ def discover_credentials(
     *,
     secret_refs: dict[str, SecretRef] | None = None,
     provided_environment: Iterable[str] = (),
+    scan_paths: Iterable[str | Path] | None = None,
 ) -> CredentialManifest:
     """Inspect declarations and environment reads without executing submitted code."""
     root = Path(root).expanduser().resolve()
@@ -216,7 +243,7 @@ def discover_credentials(
     truncated = False
     digest = hashlib.sha256()
 
-    for path in _candidate_files(root):
+    for path in _candidate_files(root, scan_paths=scan_paths):
         if scanned >= _MAX_FILES:
             truncated = True
             break
@@ -262,22 +289,27 @@ def discover_credentials(
 
         # An uppercase assignment in source is usually a constant, not an
         # environment declaration. Only env templates use NAME=value syntax.
-        if path.name.startswith(".env"):
+        if path.name.lower() in _ENV_TEMPLATE_NAMES:
             for match in _ENV_DECLARATION.finditer(content):
                 value = match.group(2).strip().strip("\"'")
+                usable_default = bool(value) and not _PLACEHOLDER_VALUE.fullmatch(value)
                 record(
                     match.group(1),
-                    required=not bool(value),
-                    declared_default=bool(value),
+                    required=not usable_default,
+                    declared_default=usable_default,
                 )
-        for match in _COMPOSE_VARIABLE.finditer(content):
-            operator, fallback = match.group(2), (match.group(3) or "").strip()
-            required = operator in {"?", ":?"} or not fallback
-            record(
-                match.group(1),
-                required=required,
-                declared_default=bool(fallback) and operator not in {"?", ":?"},
-            )
+        if path.name.lower() in _COMPOSE_NAMES:
+            for match in _COMPOSE_VARIABLE.finditer(content):
+                operator, fallback = match.group(2), (match.group(3) or "").strip()
+                # Compose substitutes an unset plain ${NAME} with an empty string. Only its
+                # explicit error operators are admission requirements; source-level strict
+                # reads can still make the same name required when a built runtime is scanned.
+                required = operator in {"?", ":?"}
+                record(
+                    match.group(1),
+                    required=required,
+                    declared_default=bool(fallback) and operator not in {"?", ":?"},
+                )
         for match in _PYTHON_REQUIRED.finditer(content):
             # ``os.environ[NAME] if os.environ.get(NAME) else default`` is a common guarded
             # access idiom. The indexed read alone looks mandatory, but the same-line guard
@@ -370,7 +402,20 @@ def discover_credentials(
     )
 
 
-def _candidate_files(root: Path) -> list[Path]:
+def _candidate_files(
+    root: Path, *, scan_paths: Iterable[str | Path] | None = None
+) -> list[Path]:
+    scopes: list[Path] | None = None
+    if scan_paths is not None:
+        scopes = []
+        for value in scan_paths:
+            candidate = (root / value).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                continue
+            if candidate.exists():
+                scopes.append(candidate)
     result: list[Path] = []
     for path in sorted(root.rglob("*")):
         try:
@@ -380,6 +425,11 @@ def _candidate_files(root: Path) -> list[Path]:
         if any(part in _IGNORED_PARTS for part in relative.parts):
             continue
         if path.is_symlink() or not path.is_file():
+            continue
+        if scopes is not None and not any(
+            path == scope or (scope.is_dir() and scope in path.parents)
+            for scope in scopes
+        ):
             continue
         if path.name in _CONFIG_NAMES or path.suffix.lower() in _SOURCE_SUFFIXES:
             result.append(path)

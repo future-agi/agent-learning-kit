@@ -215,6 +215,20 @@ def test_source_environment_uses_configured_docker_gateway(tmp_path, monkeypatch
     }
 
 
+def test_profiled_infrastructure_tools_are_not_mistaken_for_agent_runtimes():
+    from fi.alk.harness.provision import _runtime_services
+
+    config = {
+        "services": {
+            "postgres": {},
+            "pgadmin": {"profiles": ["tools"]},
+            "redis-commander": {"profiles": ["tools"]},
+        }
+    }
+
+    assert _runtime_services(config) == []
+
+
 def test_runtime_trace_uses_job_scoped_exchange_volume(monkeypatch):
     from fi.alk.harness import provision as provisioning
 
@@ -416,6 +430,90 @@ def test_dockerfile_only_agent_is_built_without_inventing_infrastructure(
     assert set(generated["services"]) == {"agent-runtime"}
     assert generated["services"]["agent-runtime"]["environment"] == {}
     assert provisioning.healthy(output)
+
+
+def test_packaging_preflight_reports_missing_dockerfile_input_before_docker(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "broken-agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text(
+        "FROM python:3.12\nRUN --mount=type=bind,source=uv.lock,target=uv.lock true\n",
+        encoding="utf-8",
+    )
+    contract = AgentContract(
+        agent="broken-agent",
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("Docker must not start"),
+    )
+
+    with pytest.raises(
+        provisioning.ProvisionError, match="missing build input: uv.lock"
+    ):
+        provisioning.provision(source, tmp_path / "out", contract)
+
+
+def test_managed_runtime_preserves_repository_platform_hint(tmp_path, monkeypatch):
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM ubuntu:22.04\n", encoding="utf-8")
+    (source / "docker-compose.yml").write_text(
+        "services:\n  dev:\n    build: .\n    tty: true\n    platform: linux/amd64\n",
+        encoding="utf-8",
+    )
+    contract = AgentContract(
+        agent="architecture-specific-agent",
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    config = {
+        "services": {
+            "agent-runtime": {
+                "profiles": ["harness-runtime"],
+                "platform": "linux/amd64",
+            }
+        }
+    }
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(config)
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision(source, tmp_path / "out", contract)
+
+    generated = json.loads((tmp_path / "out" / "managed-compose.json").read_text())
+    assert environment.managed
+    assert generated["services"]["agent-runtime"]["platform"] == "linux/amd64"
+
+
+def test_large_docker_failure_keeps_start_and_actionable_tail():
+    from fi.alk.harness.provision import _command_failure_output
+
+    output = (
+        "BUILD START\n" + ("dependency installed\n" * 2000) + "fatal: bun exited 132"
+    )
+
+    shown = _command_failure_output(output, limit=1000)
+
+    assert shown.startswith("BUILD START")
+    assert "characters omitted" in shown
+    assert shown.endswith("fatal: bun exited 132")
+    assert len(shown) < 1100
 
 
 def test_runtime_only_environment_reset_does_not_start_an_empty_service_set(

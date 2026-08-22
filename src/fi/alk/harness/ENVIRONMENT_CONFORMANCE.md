@@ -37,6 +37,8 @@ templates are:
 | Postgres | `DATABASE_URL`/declared seam | project volume recreation + submitted SQL init |
 | ClickHouse | `CLICKHOUSE_URL`/declared seam | project volume recreation + submitted SQL init |
 | Redis | `REDIS_URL`/declared seam | project volume recreation |
+| MongoDB | `MONGODB_URL`/declared seam | project volume recreation |
+| Qdrant | `QDRANT_URL`/declared seam | project volume recreation |
 
 Multiple dependencies are included in one private network and injected into the submitted
 runtime. Generated services use no persisted resolved password, so the environment bundle passes
@@ -46,6 +48,16 @@ Conformance fixtures:
 
 - `voice_analytics_agent` with Compose removed: managed ClickHouse + Redis;
 - `voice_ledger_agent`: managed Postgres.
+
+An additional generated Dockerfile-only conformance agent uses MongoDB and Qdrant together. Its
+unchanged runtime writes both services, ALK destroys and recreates the project volumes, and a
+second runtime proves both stores begin empty. The real integration gate completes in about 41
+seconds on the current Docker Desktop host.
+
+The public `dograh-hq/dograh` root Compose is also exercised unchanged. Its default API, UI,
+pgvector/Postgres, password-protected Redis and MinIO services pass readiness and cleanup while
+profile-gated TURN/init/tunnel services remain dormant. See `ENVIRONMENT_VALIDATION_MATRIX.md`
+for evidence levels and the wider repository batch.
 
 Both real tests build and run the submitted Dockerfile, query submitted seed data from inside the
 runtime, emit application readiness evidence and clean up.

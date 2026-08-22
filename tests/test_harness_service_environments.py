@@ -157,6 +157,70 @@ def test_static_ports_receive_a_job_scoped_compose_override(tmp_path, monkeypatc
     assert 'host_ip: "127.0.0.1"' in generated
 
 
+def test_profile_gated_service_ports_are_not_allocated(tmp_path, monkeypatch):
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        """services:
+  api:
+    image: example/api
+    ports: ["8000:8000"]
+  coturn:
+    image: coturn/coturn
+    profiles: [remote]
+    ports: ["49152-49200:49152-49200/udp"]
+"""
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+    monkeypatch.setattr("fi.alk.harness.provision._free_port", lambda: 48000)
+
+    _write_port_override(
+        tmp_path / "session",
+        environment,
+        {
+            "services": {
+                "api": {"ports": [{"target": 8000, "published": "8000"}]},
+                "coturn": {
+                    "profiles": ["remote"],
+                    "ports": [
+                        {"target": port, "published": str(port), "protocol": "udp"}
+                        for port in range(49152, 49201)
+                    ],
+                },
+            }
+        },
+    )
+
+    generated = Path(environment.compose_override_file).read_text()
+    assert '"api"' in generated
+    assert "coturn" not in generated
+    assert "49152" not in generated
+
+
+def test_authenticated_redis_response_counts_as_protocol_ready(monkeypatch):
+    class RedisSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def sendall(self, _payload):
+            return None
+
+        def recv(self, _size):
+            return b"-NOAUTH Authentication required.\r\n"
+
+    monkeypatch.setattr(
+        socket, "create_connection", lambda *_args, **_kwargs: RedisSocket()
+    )
+
+    from fi.alk.harness.provision import _endpoint_ready
+
+    assert _endpoint_ready({"host_port": 6379, "protocol": "redis"}, "127.0.0.1")
+
+
 @pytest.mark.parametrize(
     "service",
     [
@@ -316,6 +380,41 @@ def test_dockerfile_only_agent_gets_every_declared_supported_dependency(tmp_path
     assert bundle.runtime.document == "compose.json"
 
 
+def test_mongodb_and_qdrant_are_generated_from_declared_dependencies(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-alpine\n")
+    contract = AgentContract(
+        agent="voice-rag-agent",
+        tools=[ToolSpec(name="answer_from_memory", args=["question"])],
+        real_use_cases=["answer a caller using document and vector memory"],
+        dependencies=[
+            Dependency(
+                name="conversation-memory",
+                engine="mongodb",
+                kind="datastore",
+                reached={"dsn_env": "MONGODB_URL"},
+            ),
+            Dependency(
+                name="knowledge-index",
+                engine="qdrant",
+                kind="vector_store",
+                reached={"dsn_env": "QDRANT_URL"},
+            ),
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+    document = json.loads(target.read_text())
+
+    assert set(document["services"]) == {"mongodb", "qdrant", "agent-runtime"}
+    assert document["services"]["agent-runtime"]["environment"] == {
+        "MONGODB_URL": "mongodb://mongodb:27017/harness",
+        "QDRANT_URL": "http://qdrant:6333",
+    }
+
+
 def _fixture_agent() -> Path:
     return (
         Path(__file__).parent / "fixtures" / "harness_agents" / "voice_analytics_agent"
@@ -444,6 +543,109 @@ def test_case_two_dockerfile_agent_gets_managed_postgres(tmp_path, monkeypatch):
         environment = start_runtime(session)
         expected = "AGENT_READY postgres=Mumbai"
         assert expected in _wait_runtime_log(environment, expected)
+    finally:
+        stop_runtime(session)
+        stop(session)
+
+
+@pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
+def test_case_two_dockerfile_agent_gets_clean_mongodb_and_qdrant(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "1")
+    source = tmp_path / "voice-rag-agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text(
+        """FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir pymongo==4.10.1
+COPY agent.py .
+CMD ["python", "agent.py"]
+"""
+    )
+    (source / "agent.py").write_text(
+        """import json
+import os
+import time
+import urllib.error
+import urllib.request
+
+from pymongo import MongoClient
+
+mongo = MongoClient(os.environ["MONGODB_URL"], serverSelectionTimeoutMS=5000)
+records = mongo.get_default_database()["calls"]
+mongo_before = records.count_documents({})
+records.insert_one({"caller": "Aarav", "intent": "retrieve policy"})
+
+qdrant = os.environ["QDRANT_URL"].rstrip("/")
+try:
+    urllib.request.urlopen(qdrant + "/collections/calls", timeout=5)
+    qdrant_before = 1
+except urllib.error.HTTPError as exc:
+    if exc.code != 404:
+        raise
+    qdrant_before = 0
+
+def request(path, method, payload):
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        qdrant + path,
+        data=body,
+        method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as response:
+        return response.read()
+
+if not qdrant_before:
+    request(
+        "/collections/calls",
+        "PUT",
+        {"vectors": {"size": 2, "distance": "Cosine"}},
+    )
+request(
+    "/collections/calls/points?wait=true",
+    "PUT",
+    {"points": [{"id": 1, "vector": [0.2, 0.8], "payload": {"city": "Pune"}}]},
+)
+print(
+    f"AGENT_READY mongo_before={mongo_before} qdrant_before={qdrant_before}",
+    flush=True,
+)
+while True:
+    time.sleep(60)
+"""
+    )
+    contract = AgentContract(
+        agent="dockerfile-only-voice-rag",
+        tools=[ToolSpec(name="answer_from_memory", args=["question"])],
+        real_use_cases=["answer a caller using document and vector memory"],
+        dependencies=[
+            Dependency(
+                name="conversation-memory",
+                engine="mongodb",
+                kind="datastore",
+                reached={"dsn_env": "MONGODB_URL"},
+            ),
+            Dependency(
+                name="knowledge-index",
+                engine="qdrant",
+                kind="vector_store",
+                reached={"dsn_env": "QDRANT_URL"},
+            ),
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    session = tmp_path / "mongo-qdrant-session"
+    environment = provision(source, session, contract)
+    expected = "AGENT_READY mongo_before=0 qdrant_before=0"
+    try:
+        assert environment.managed
+        assert set(environment.services) == {"mongodb", "qdrant"}
+        environment = start_runtime(session)
+        assert expected in _wait_runtime_log(environment, expected, timeout=30)
+        stop_runtime(session)
+        reset(session)
+        environment = start_runtime(session)
+        assert expected in _wait_runtime_log(environment, expected, timeout=30)
     finally:
         stop_runtime(session)
         stop(session)

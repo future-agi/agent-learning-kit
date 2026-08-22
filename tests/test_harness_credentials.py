@@ -128,6 +128,27 @@ services:
     assert requirements["REDIS_URL"].status is RequirementStatus.HARNESS_PROVIDED
 
 
+def test_plain_compose_substitution_is_optional_but_error_operator_is_required(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "compose.yml",
+        """services:
+  agent:
+    image: example/agent
+    environment:
+      OPTIONAL_REGION: ${OPTIONAL_REGION}
+      REQUIRED_TOKEN: ${REQUIRED_TOKEN:?supply token}
+""",
+    )
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert requirements["OPTIONAL_REGION"].status is RequirementStatus.OPTIONAL
+    assert requirements["REQUIRED_TOKEN"].status is RequirementStatus.MISSING
+
+
 def test_discovery_ignores_dependencies_symlinks_and_large_files(
     tmp_path: Path,
 ) -> None:
@@ -153,6 +174,48 @@ def test_manifest_is_deterministic_and_contains_no_values(tmp_path: Path) -> Non
     encoded = first.model_dump_json()
     assert "gpt-test" not in encoded
     assert "OPENAI_API_KEY" in encoded
+
+
+@pytest.mark.parametrize("filename", ["env.example", "env.sample", "env.template"])
+def test_common_non_dot_env_templates_are_discovered(
+    tmp_path: Path, filename: str
+) -> None:
+    _write(tmp_path, filename, "GOOGLE_API_KEY=[project]\nSAFE_MODE=true\n")
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert requirements["GOOGLE_API_KEY"].status is RequirementStatus.MISSING
+    assert requirements["GOOGLE_API_KEY"].kind is RequirementKind.SECRET
+    assert requirements["SAFE_MODE"].status is RequirementStatus.OPTIONAL
+
+
+@pytest.mark.parametrize(
+    "placeholder", ["<api-key>", "{TOKEN}", "your-api-key", "replace_me", "CHANGEME"]
+)
+def test_template_placeholders_are_not_treated_as_working_defaults(
+    tmp_path: Path, placeholder: str
+) -> None:
+    _write(tmp_path, ".env.example", f"OPENAI_API_KEY={placeholder}\n")
+
+    requirement = _requirements(discover_credentials(tmp_path))["OPENAI_API_KEY"]
+
+    assert requirement.required
+    assert requirement.status is RequirementStatus.MISSING
+
+
+def test_compose_interpolation_inside_env_value_is_not_a_compose_requirement(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "env.example",
+        "PUBLIC_URL=https://voice.example/${AGENT_NAME}\n",
+    )
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert "AGENT_NAME" not in requirements
+    assert requirements["PUBLIC_URL"].status is RequirementStatus.OPTIONAL
 
 
 def test_source_constants_tests_and_declared_defaults_are_not_credentials(
@@ -251,3 +314,24 @@ def test_agent_setup_compatibility_matrix(
 
     assert connector in manifest.detected_connectors
     assert _requirements(manifest)[required_name].status is RequirementStatus.MISSING
+
+
+def test_explicit_scan_paths_exclude_unused_optional_integrations(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "compose.yml",
+        "services:\n  api:\n    image: example/api\n"
+        "    environment:\n      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}\n",
+    )
+    _write(
+        tmp_path,
+        "optional/retell.py",
+        "import os\nimport retell\nkey = os.environ['RETELL_API_KEY']\n",
+    )
+
+    manifest = discover_credentials(tmp_path, scan_paths=["compose.yml"])
+
+    assert set(_requirements(manifest)) == {"OPENAI_API_KEY"}
+    assert "retell" not in manifest.detected_connectors
