@@ -40,6 +40,16 @@ class CapabilityProtocol(str, Enum):
     SQLITE = "sqlite"
     LIVEKIT = "livekit"
     TCP = "tcp"
+    CLICKHOUSE = "clickhouse"
+    REDIS = "redis"
+    MONGODB = "mongodb"
+    MYSQL = "mysql"
+    AMQP = "amqp"
+    KAFKA = "kafka"
+    NATS = "nats"
+    S3 = "s3"
+    GRPC = "grpc"
+    BOLT = "bolt"
 
 
 class BundleRuntime(BaseModel):
@@ -346,22 +356,33 @@ def export_session_bundle(
 
         provisioned = ProvisionedEnvironment.load(session)
         services = list(provisioned.services) if provisioned else []
-        configuration_names = sorted(
-            (provisioned.overrides if provisioned else {}).keys()
-        )
-        capabilities = {
-            "agent_tools": Capability(
-                protocol=CapabilityProtocol.HTTP,
-                service=(
-                    provisioned.services[-1]
-                    if provisioned and provisioned.services
-                    else None
-                ),
-                configuration_name=(
-                    configuration_names[0] if len(configuration_names) == 1 else None
-                ),
-            )
-        }
+        capabilities: dict[str, Capability] = {}
+        readiness: list[dict[str, Any]] = []
+        if provisioned:
+            configured = set(provisioned.overrides)
+            for endpoint in provisioned.service_endpoints:
+                key = (
+                    f"{endpoint['service']}_{endpoint['kind']}_"
+                    f"{endpoint['container_port']}"
+                ).replace("-", "_")
+                names = [
+                    name
+                    for name in endpoint.get("configuration_names", [])
+                    if name in configured
+                ]
+                capabilities[key] = Capability(
+                    protocol=CapabilityProtocol(str(endpoint["protocol"])),
+                    service=str(endpoint["service"]),
+                    container_port=int(endpoint["container_port"]),
+                    configuration_name=names[0] if len(names) == 1 else None,
+                    metadata={"kind": str(endpoint["kind"])},
+                )
+                readiness.append(
+                    {
+                        "capability": key,
+                        "path": str(endpoint.get("readiness_path") or "") or None,
+                    }
+                )
         compose = compose_file(source)
         if compose is None and provisioned and provisioned.compose_file:
             compose = Path(provisioned.compose_file)
@@ -389,11 +410,7 @@ def export_session_bundle(
                 key: value.model_dump(mode="json", exclude_none=True)
                 for key, value in capabilities.items()
             },
-            "readiness": (
-                [{"capability": "agent_tools", "path": "/health"}]
-                if provisioned and provisioned.overrides
-                else []
-            ),
+            "readiness": readiness,
             "provenance": {
                 "source_kind": "repository",
                 "repository": source.name,

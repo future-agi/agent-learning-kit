@@ -11,16 +11,26 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import signal
 import sys
 from typing import Any
 import uuid
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .credentials import (
+    CredentialManifest,
+    CredentialRequirement,
+    RequirementKind,
+    RequirementStatus,
+    discover_credentials,
+)
+from .executor import GitHubSourceAcquirer, SourceAcquisitionError
 from .job import (
     AgentConnection,
     ExecutionMode,
@@ -30,11 +40,19 @@ from .job import (
     HarnessStage,
     RepositorySource,
     SourceKind,
+    SourceVisibility,
 )
+from .provision import source_fingerprint
+from .secrets import resolve_worker_secrets, worker_environment
 
 
 class LocalSandboxRequest(BaseModel):
-    source_path: str
+    source_path: str | None = None
+    github_repository: str | None = None
+    github_ref: str | None = None
+    github_commit_sha: str | None = None
+    github_visibility: SourceVisibility = SourceVisibility.PUBLIC
+    github_installation_id: str | None = None
     scenario_count: int = Field(default=10, ge=1, le=100)
     seed: int | None = None
     agent_name: str | None = None
@@ -44,12 +62,43 @@ class LocalSandboxRequest(BaseModel):
     platform_run_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _one_source(self) -> "LocalSandboxRequest":
+        if bool(self.source_path) == bool(self.github_repository):
+            raise ValueError("exactly_one_source_required")
+        return self
+
+
+class SandboxPreflightRequest(BaseModel):
+    source_path: str | None = None
+    github_repository: str | None = None
+    github_visibility: SourceVisibility = SourceVisibility.PUBLIC
+    github_installation_id: str | None = None
+    connector_config: dict[str, Any] = Field(default_factory=dict)
+    secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _one_source(self) -> "SandboxPreflightRequest":
+        if bool(self.source_path) == bool(self.github_repository):
+            raise ValueError("exactly_one_source_required")
+        return self
+
+
+class SandboxPreflightResponse(BaseModel):
+    source_kind: SourceKind
+    source_label: str
+    ready_to_submit: bool
+    checkout_required: bool = False
+    credentials: CredentialManifest
+    notes: list[str] = Field(default_factory=list)
+
 
 class SandboxJobResponse(BaseModel):
     job: HarnessJob
     status: HarnessJobStatus
     events: list[dict[str, Any]] = Field(default_factory=list)
     artifact_path: str | None = None
+    credentials: CredentialManifest | None = None
 
 
 class LocalSandbox:
@@ -76,16 +125,36 @@ class LocalSandbox:
                 _write_json(path, state)
 
     def submit(self, request: LocalSandboxRequest) -> SandboxJobResponse:
-        source = _allowed_source(request.source_path)
+        source = _allowed_source(request.source_path) if request.source_path else None
         identifier = str(uuid.uuid4())
         run_id = f"harness-{identifier}"
+        github_repository = (
+            _github_repository(request.github_repository)
+            if request.github_repository
+            else None
+        )
+        source_spec = (
+            RepositorySource(kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source))
+            if source
+            else RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository=github_repository,
+                ref=request.github_ref,
+                commit_sha=request.github_commit_sha,
+                visibility=request.github_visibility,
+                installation_id=request.github_installation_id,
+            )
+        )
         job = HarnessJob(
             job_id=identifier,
             run_id=run_id,
-            execution=ExecutionMode.LOCAL,
-            source=RepositorySource(
-                kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
+            execution=(
+                ExecutionMode.HOSTED
+                if request.github_repository
+                and request.github_visibility is SourceVisibility.PRIVATE
+                else ExecutionMode.LOCAL
             ),
+            source=source_spec,
             agent=AgentConnection(
                 connector=request.connector,
                 config=request.connector_config,
@@ -97,8 +166,9 @@ class LocalSandbox:
             platform_run_id=request.platform_run_id,
             metadata={
                 **request.metadata,
-                "agent_name": request.agent_name or source.name,
-                "source_kind": "repo",
+                "agent_name": request.agent_name
+                or (source.name if source else str(github_repository).split("/")[-1]),
+                "source_kind": source_spec.kind.value,
             },
         )
         directory = self.jobs_root / identifier
@@ -114,12 +184,61 @@ class LocalSandbox:
                 "detail": "waiting for a local sandbox slot",
                 "completed_scenarios": 0,
                 "total_scenarios": request.scenario_count,
+                "attempt": 1,
             },
         )
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
-    async def _execute(self, job: HarnessJob, source: Path) -> None:
+    def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
+        if request.source_path:
+            source = _allowed_source(request.source_path)
+            manifest = discover_credentials(
+                source,
+                secret_refs=request.secret_refs,
+                provided_environment=request.connector_config,
+            )
+            return SandboxPreflightResponse(
+                source_kind=SourceKind.LOCAL_REPOSITORY,
+                source_label=str(source),
+                ready_to_submit=manifest.ready,
+                credentials=manifest,
+            )
+        repository = _github_repository(request.github_repository or "")
+        requirement = CredentialRequirement(
+            id="github_installation",
+            environment_name="GITHUB_INSTALLATION",
+            provider="github",
+            purpose="read private repository source",
+            kind=RequirementKind.SECRET,
+            required=request.github_visibility is SourceVisibility.PRIVATE,
+            status=(
+                RequirementStatus.CONFIGURED
+                if request.github_installation_id
+                else RequirementStatus.MISSING
+                if request.github_visibility is SourceVisibility.PRIVATE
+                else RequirementStatus.OPTIONAL
+            ),
+            accepted_secret_types=["github_app_installation"],
+        )
+        manifest = CredentialManifest(
+            source_digest="0" * 64,
+            detected_connectors=[],
+            requirements=[requirement],
+            scanned_files=0,
+        )
+        return SandboxPreflightResponse(
+            source_kind=SourceKind.GITHUB,
+            source_label=repository,
+            ready_to_submit=manifest.ready,
+            checkout_required=True,
+            credentials=manifest,
+            notes=[
+                "Agent credential discovery continues inside the sandbox after checkout."
+            ],
+        )
+
+    async def _execute(self, job: HarnessJob, source: Path | None) -> None:
         directory = self.jobs_root / job.job_id
         state_path = directory / "state.json"
         output = self.artifacts_root / job.run_id
@@ -129,30 +248,155 @@ class LocalSandbox:
                 return
             state.update(
                 stage=HarnessStage.ACQUIRING_SOURCE.value,
-                detail="local source accepted; starting isolated ALK worker",
+                detail="acquiring source inside the ALK runner",
                 updated_at=_now(),
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
             try:
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-m",
-                    "fi.alk.harness.sandbox_worker",
-                    str(directory / "job.json"),
-                    "--source",
-                    str(source),
-                    "--output",
-                    str(output),
-                    "--status",
-                    str(directory / "result.json"),
-                    stdout=log_handle,
-                    stderr=asyncio.subprocess.STDOUT,
-                    start_new_session=True,
+                if source is None:
+                    workspace = directory / "workspace"
+                    for attempt in range(1, job.retry.max_infrastructure_attempts + 1):
+                        state.update(
+                            attempt=attempt,
+                            detail=f"cloning public GitHub source (attempt {attempt})",
+                            updated_at=_now(),
+                        )
+                        _write_json(state_path, state)
+                        try:
+                            source = await GitHubSourceAcquirer(
+                                _github_installation_token
+                            ).acquire(job, workspace)
+                            break
+                        except SourceAcquisitionError:
+                            checkout = workspace / "repository"
+                            if checkout.exists():
+                                shutil.rmtree(checkout)
+                            if attempt >= job.retry.max_infrastructure_attempts:
+                                raise
+                            delay = min(
+                                job.retry.max_backoff_seconds,
+                                job.retry.initial_backoff_seconds
+                                * (2 ** (attempt - 1)),
+                            )
+                            await asyncio.sleep(delay)
+                    if source is None:
+                        raise SourceAcquisitionError("github_checkout_missing")
+                credential_manifest = discover_credentials(
+                    source,
+                    secret_refs=job.agent.secret_refs,
+                    provided_environment=job.agent.config,
                 )
-                self._processes[job.job_id] = process
-                return_code = await process.wait()
-                result = _read_json(directory / "result.json")
+                _write_json(
+                    directory / "credentials.json",
+                    credential_manifest.model_dump(mode="json"),
+                )
+                if not credential_manifest.ready:
+                    missing = [
+                        item.environment_name
+                        for item in credential_manifest.missing_required
+                    ]
+                    missing.extend(
+                        f"one of {choice.options}"
+                        for choice in credential_manifest.credential_choices
+                        if not choice.satisfied
+                    )
+                    names = ", ".join(missing)
+                    state.update(
+                        stage=HarnessStage.FAILED.value,
+                        detail=f"missing required credentials: {names}",
+                        failure={
+                            "domain": "connectivity",
+                            "stage": HarnessStage.ACQUIRING_SOURCE.value,
+                            "code": "credentials_missing",
+                            "message": f"Configure secret references for: {names}",
+                            "retryable": False,
+                        },
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+                    return
+                resolved_secrets = resolve_worker_secrets(job.agent.secret_refs)
+                submitted_source_digest = source_fingerprint(source)
+                result: dict[str, Any] = {}
+                return_code = 1
+                for worker_attempt in range(
+                    1, job.retry.max_infrastructure_attempts + 1
+                ):
+                    state.update(
+                        attempt=worker_attempt,
+                        detail=f"running isolated harness worker (attempt {worker_attempt})",
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+                    if worker_attempt > 1 and output.exists():
+                        archived = directory / f"failed-attempt-{worker_attempt - 1}"
+                        if archived.exists():
+                            shutil.rmtree(archived)
+                        output.replace(archived)
+                    process = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-m",
+                        "fi.alk.harness.sandbox_worker",
+                        str(directory / "job.json"),
+                        "--source",
+                        str(source),
+                        "--output",
+                        str(output),
+                        "--status",
+                        str(directory / "result.json"),
+                        stdout=log_handle,
+                        stderr=asyncio.subprocess.STDOUT,
+                        start_new_session=True,
+                        env=worker_environment(
+                            {
+                                **_configuration_environment(job.agent.config),
+                                **resolved_secrets,
+                            }
+                        ),
+                    )
+                    self._processes[job.job_id] = process
+                    return_code = await process.wait()
+                    result = _read_json(directory / "result.json")
+                    if source_fingerprint(source) != submitted_source_digest:
+                        return_code = 1
+                        result = {
+                            "stage": HarnessStage.FAILED.value,
+                            "detail": "submitted source changed during isolated execution",
+                            "failure": {
+                                "domain": "infrastructure",
+                                "stage": HarnessStage.CLEANING_UP.value,
+                                "code": "source_mutation_detected",
+                                "message": (
+                                    "The runner detected writes to the read-only source tree"
+                                ),
+                                "retryable": False,
+                            },
+                        }
+                    failure = result.get("failure") or {}
+                    retryable = _worker_failure_retryable(
+                        return_code,
+                        failure,
+                        job.retry.retryable_domains,
+                    )
+                    if (
+                        not retryable
+                        or worker_attempt >= job.retry.max_infrastructure_attempts
+                    ):
+                        break
+                    delay = min(
+                        job.retry.max_backoff_seconds,
+                        job.retry.initial_backoff_seconds * (2 ** (worker_attempt - 1)),
+                    )
+                    state.update(
+                        detail=(
+                            f"retrying {failure.get('domain', 'infrastructure')} "
+                            f"failure in {delay:g}s"
+                        ),
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+                    await asyncio.sleep(delay)
                 state = _read_json(state_path)
                 if state.get("stage") != HarnessStage.CANCELED.value:
                     state.update(
@@ -167,14 +411,28 @@ class LocalSandbox:
                             None if return_code == 0 else f"worker exited {return_code}"
                         ),
                         completed_scenarios=result.get("completed_scenarios", 0),
+                        failure=result.get("failure"),
+                        attempt=state.get("attempt", 1),
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
             except Exception as exc:
                 state = _read_json(state_path)
+                domain = (
+                    "connectivity"
+                    if isinstance(exc, SourceAcquisitionError)
+                    else "infrastructure"
+                )
                 state.update(
                     stage=HarnessStage.FAILED.value,
                     detail=f"{type(exc).__name__}: {exc}",
+                    failure={
+                        "domain": domain,
+                        "stage": HarnessStage.ACQUIRING_SOURCE.value,
+                        "code": type(exc).__name__,
+                        "message": str(exc),
+                        "retryable": isinstance(exc, SourceAcquisitionError),
+                    },
                     updated_at=_now(),
                 )
                 _write_json(state_path, state)
@@ -216,14 +474,23 @@ class LocalSandbox:
             stage=stage,
             updated_at=updated_at,
             detail=detail,
+            failure=raw_state.get("failure"),
             completed_scenarios=raw_state.get("completed_scenarios", 0),
             total_scenarios=raw_state.get("total_scenarios", job.scenario_count),
+            attempt=raw_state.get("attempt", 1),
         )
         return SandboxJobResponse(
             job=job,
             status=status_value,
             events=events,
             artifact_path=str(self.artifacts_root / job.run_id),
+            credentials=(
+                CredentialManifest.model_validate(
+                    _read_json(directory / "credentials.json")
+                )
+                if (directory / "credentials.json").is_file()
+                else None
+            ),
         )
 
     def list(self) -> list[SandboxJobResponse]:
@@ -268,6 +535,30 @@ class LocalSandbox:
         return self.get(job_id)
 
 
+def _configuration_environment(config: dict[str, Any]) -> dict[str, str]:
+    """Convert explicit, non-secret connector configuration into child env vars."""
+    result: dict[str, str] = {}
+    for name, value in config.items():
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", str(name)):
+            continue
+        if isinstance(value, bool):
+            result[str(name)] = "true" if value else "false"
+        elif isinstance(value, (str, int, float)):
+            result[str(name)] = str(value)
+    return result
+
+
+def _worker_failure_retryable(
+    return_code: int, failure: dict[str, Any], retryable_domains: list[str]
+) -> bool:
+    """Retry infrastructure transport, never agent behavior or grading outcomes."""
+    return (
+        return_code != 0
+        and failure.get("retryable") is True
+        and failure.get("domain") in retryable_domains
+    )
+
+
 def _allowed_source(raw: str) -> Path:
     source_text = raw
     for mapping in os.getenv("ALK_SANDBOX_PATH_MAP", "").split(os.pathsep):
@@ -299,6 +590,28 @@ def _allowed_source(raw: str) -> Path:
             status_code=403, detail="source_path is outside allowed roots"
         )
     return source
+
+
+def _github_repository(raw: str) -> str:
+    repository = raw.strip()
+    prefix = "https://github.com/"
+    if repository.startswith(prefix):
+        repository = repository[len(prefix) :]
+    repository = repository.removesuffix(".git").strip("/")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise HTTPException(status_code=400, detail="github_repository is invalid")
+    return repository
+
+
+def _github_installation_token(installation_id: str) -> str:
+    """Local broker adapter; production exchanges the installation via its vault."""
+    safe_id = re.sub(r"[^A-Za-z0-9_]", "_", installation_id)
+    token = os.getenv(f"GITHUB_INSTALLATION_{safe_id}_TOKEN")
+    if not token:
+        raise SourceAcquisitionError(
+            "github_installation_token_unavailable; authorize the GitHub App installation"
+        )
+    return token
 
 
 def _events(path: Path) -> list[dict[str, Any]]:
@@ -374,6 +687,16 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "provider": "local-process"}
+
+    @app.post(
+        "/v1/preflight",
+        response_model=SandboxPreflightResponse,
+        dependencies=[Depends(_authorize)],
+    )
+    async def preflight(
+        request: SandboxPreflightRequest,
+    ) -> SandboxPreflightResponse:
+        return sandbox.preflight(request)
 
     @app.post(
         "/v1/jobs",

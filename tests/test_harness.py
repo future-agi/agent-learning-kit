@@ -177,6 +177,7 @@ services:
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     environment = provisioning.provision(source, output)
 
     assert environment.services == ["postgres", "tools-api"]
@@ -302,6 +303,7 @@ def test_source_environment_is_reused_instead_of_rebuilt(tmp_path, monkeypatch):
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     assert provisioning.provision(source, output).project == "fagi-harness-existing"
     assert calls == [
         ("ps", "--status", "running", "--quiet"),
@@ -356,6 +358,7 @@ def test_postgres_and_runtime_are_generated_when_source_has_no_compose(
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     environment = provisioning.provision_if_present(source, output, contract)
 
     assert environment is not None and environment.managed
@@ -364,6 +367,159 @@ def test_postgres_and_runtime_are_generated_when_source_has_no_compose(
     generated = json.loads((output / "managed-compose.json").read_text())
     runtime = generated["services"]["agent-runtime"]
     assert runtime["environment"]["DATABASE_URL"].startswith("postgresql://")
+
+
+def test_dockerfile_only_agent_is_built_without_inventing_infrastructure(
+    tmp_path, monkeypatch
+):
+    """A real standalone agent is a complete Case 2 even when it needs no database."""
+    from fi.alk.harness.contract import AgentContract, Runtime, ToolSpec
+
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "standalone-agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    contract = AgentContract(
+        agent="standalone-voice-agent",
+        tools=[ToolSpec(name="answer_call")],
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    config = {
+        "services": {
+            "agent-runtime": {
+                "build": {"context": str(source), "dockerfile": "Dockerfile"},
+                "profiles": ["harness-runtime"],
+                "environment": {},
+            }
+        }
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(config)
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision_if_present(source, output, contract)
+
+    assert environment is not None and environment.managed and environment.running
+    assert environment.services == []
+    assert environment.runtime_services == ["agent-runtime"]
+    assert ("build", "agent-runtime") in calls
+    assert not any(arguments and arguments[0] == "up" for arguments in calls)
+    generated = json.loads((output / "managed-compose.json").read_text())
+    assert set(generated["services"]) == {"agent-runtime"}
+    assert generated["services"]["agent-runtime"]["environment"] == {}
+    assert provisioning.healthy(output)
+
+
+def test_runtime_only_environment_reset_does_not_start_an_empty_service_set(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        "services:\n  agent-runtime:\n    image: example\n    profiles: [harness-runtime]\n",
+        encoding="utf-8",
+    )
+    provisioning.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-runtime-only",
+        services=[],
+        runtime_services=["agent-runtime"],
+        running=True,
+    ).save(output)
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "image": "example",
+                            "profiles": ["harness-runtime"],
+                        }
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.reset(output)
+
+    assert environment.running and environment.services == []
+    assert calls[0] == ("down", "--volumes", "--remove-orphans")
+    assert not any(arguments and arguments[0] == "up" for arguments in calls)
+
+
+def test_runtime_credentials_are_not_serialized_into_docker_arguments(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        "services:\n  agent-runtime:\n    image: example\n    profiles: [harness-runtime]\n",
+        encoding="utf-8",
+    )
+    provisioning.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-secure-runtime",
+        services=[],
+        runtime_services=["agent-runtime"],
+        running=True,
+    ).save(output)
+    invocations: list[tuple[tuple[str, ...], dict]] = []
+
+    def run(_environment, *arguments, **kwargs):
+        invocations.append((arguments, kwargs))
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "image": "example",
+                            "profiles": ["harness-runtime"],
+                            "environment": {},
+                        }
+                    }
+                }
+            )
+        return ""
+
+    def docker(*arguments, **_kwargs):
+        return "running healthy" if arguments and arguments[0] == "inspect" else ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_docker", docker)
+    secret = "must-never-appear-in-argv"
+    provisioning.start_runtime(
+        output,
+        overrides={"LIVEKIT_API_SECRET": secret},
+    )
+
+    run_arguments, run_kwargs = next(
+        invocation for invocation in invocations if invocation[0][0] == "run"
+    )
+    assert secret not in repr(run_arguments)
+    assert ("--env", "LIVEKIT_API_SECRET") == run_arguments[-3:-1]
+    assert run_kwargs["process_overrides"]["LIVEKIT_API_SECRET"] == secret
 
 
 def test_source_change_replaces_the_old_project_instead_of_reusing_it(
@@ -394,6 +550,7 @@ def test_source_change_replaces_the_old_project_instead_of_reusing_it(
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     environment = provisioning.provision(source, output)
 
     assert environment.project != "fagi-harness-old"
@@ -430,6 +587,7 @@ def test_environment_reset_recreates_only_recorded_services_without_building(
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     provisioning.reset(output)
 
     assert calls[0] == ("down", "--volumes", "--remove-orphans")
@@ -5117,6 +5275,11 @@ def test_sub_goals_travel_named_so_a_page_can_show_one_per_column():
     assert payload["call_metadata"]["harness_of"] == 2
     assert "evaluations" not in payload
     assert payload["call_metadata"]["harness_evaluations"]
+    assert payload["result_digest"].startswith("sha256:")
+    assert (
+        platform.result_of(_reported_result())["result_digest"]
+        == payload["result_digest"]
+    )
 
 
 def test_a_scenario_that_never_ran_is_not_reported_as_one_the_agent_failed():

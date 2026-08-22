@@ -5,13 +5,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 from typing import Callable, Protocol
 
-from .job import HarnessJob, HarnessJobStatus, HarnessStage
+from .job import (
+    FailureDomain,
+    HarnessFailure,
+    HarnessJob,
+    HarnessJobStatus,
+    HarnessStage,
+    SourceVisibility,
+)
 
 
 class SourceAcquirer(Protocol):
@@ -38,11 +46,16 @@ class GitHubSourceAcquirer:
         installation_id = str(source.installation_id or "")
         if not self._REPOSITORY.fullmatch(repository):
             raise SourceAcquisitionError("github_repository_invalid")
-        if not installation_id:
+        is_public = source.visibility is SourceVisibility.PUBLIC
+        if not is_public and not installation_id:
             raise SourceAcquisitionError("github_installation_missing")
-        token = self._installation_token(installation_id)
-        if not token:
+        token = "" if is_public else self._installation_token(installation_id)
+        if not is_public and not token:
             raise SourceAcquisitionError("github_installation_token_missing")
+        if source.ref and (
+            ".." in source.ref or not re.fullmatch(r"[A-Za-z0-9._/-]+", source.ref)
+        ):
+            raise SourceAcquisitionError("github_ref_invalid")
         workspace = workspace.expanduser().resolve()
         workspace.mkdir(parents=True, exist_ok=True)
         destination = workspace / "repository"
@@ -55,13 +68,15 @@ class GitHubSourceAcquirer:
         command.extend([f"https://github.com/{repository}.git", str(destination)])
         # Git reads the authorization header from its child environment. It never appears in
         # the process command, exception, persisted job, or event stream.
-        environment = {
-            **os.environ,
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "http.extraHeader",
-            "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
-            "GIT_TERMINAL_PROMPT": "0",
-        }
+        environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if token:
+            environment.update(
+                {
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "http.extraHeader",
+                    "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+                }
+            )
 
         def clone() -> None:
             try:
@@ -85,6 +100,20 @@ class GitHubSourceAcquirer:
                 # Git errors should not contain an env-only header, but redact defensively.
                 detail = detail.replace(token, "[REDACTED]")[:1000]
                 raise SourceAcquisitionError(f"github_clone_failed: {detail}")
+
+            if source.commit_sha:
+                verified = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=destination,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                )
+                actual = verified.stdout.strip().lower()
+                if verified.returncode or actual != source.commit_sha.lower():
+                    raise SourceAcquisitionError("github_commit_mismatch")
 
         await asyncio.to_thread(clone)
         if not destination.is_dir():
@@ -125,6 +154,7 @@ class HarnessExecutor:
             job=job,
         )
         status = await _auto(args)
+        failure = _failure_from_events(output) if status not in (0, 2) else None
         return HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
@@ -137,6 +167,7 @@ class HarnessExecutor:
                 if status == 0
                 else f"exit {status}"
             ),
+            failure=failure,
             completed_scenarios=job.scenario_count if status in (0, 2) else 0,
             total_scenarios=job.scenario_count,
         )
@@ -164,6 +195,46 @@ class HarnessExecutor:
 def run_sync(job: HarnessJob, *, source: Path, output: Path) -> HarnessJobStatus:
     """Small synchronous adapter for job consumers that do not own an event loop."""
     return asyncio.run(HarnessExecutor().run(job, source=source, output=output))
+
+
+def _failure_from_events(output: Path) -> HarnessFailure:
+    failed: dict = {}
+    path = output / "harness-events.jsonl"
+    if path.is_file():
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                continue
+            if event.get("type") == "harness.stage.failed":
+                failed = event.get("payload") or {}
+    label = str(failed.get("stage") or "running")
+    stage, domain = {
+        "understand": (HarnessStage.UNDERSTANDING_AGENT, FailureDomain.AGENT),
+        "environment": (
+            HarnessStage.VALIDATING_ENVIRONMENT,
+            FailureDomain.ENVIRONMENT,
+        ),
+        "scenarios": (
+            HarnessStage.VALIDATING_SCENARIOS,
+            FailureDomain.SIMULATOR,
+        ),
+        "calls": (HarnessStage.RUNNING, FailureDomain.CONNECTIVITY),
+        "uploading_artifacts": (
+            HarnessStage.UPLOADING_ARTIFACTS,
+            FailureDomain.INFRASTRUCTURE,
+        ),
+    }.get(label, (HarnessStage.RUNNING, FailureDomain.INFRASTRUCTURE))
+    return HarnessFailure(
+        domain=domain,
+        stage=stage,
+        code=str(failed.get("code") or f"{label}_failed"),
+        message=str(failed.get("detail") or f"Harness stage {label} failed"),
+        # A job replay can repeat real calls. Only a failing stage that explicitly proves
+        # it is safe may opt in to retry; deterministic agent/grading failures never do.
+        retryable=bool(failed.get("retryable", False)),
+        details={"status": failed.get("status", 1)},
+    )
 
 
 __all__ = [

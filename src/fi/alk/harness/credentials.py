@@ -1,0 +1,469 @@
+"""Safe, deterministic credential discovery for submitted agent repositories.
+
+The reasoning model may later explain a requirement, but it never needs to see a resolved
+credential.  This module performs the cheap preflight first and emits a structured manifest the
+platform can use to ask for missing secrets before a build or provider call starts.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from enum import Enum
+from pathlib import Path
+from typing import Iterable
+
+from pydantic import BaseModel, Field
+
+from fi.simulate.runtime.spec import SecretRef
+
+CREDENTIAL_MANIFEST_VERSION = "futureagi.credential-requirements.v1"
+
+
+class RequirementKind(str, Enum):
+    SECRET = "secret"
+    CONFIGURATION = "configuration"
+    HARNESS_INFRASTRUCTURE = "harness_infrastructure"
+
+
+class RequirementStatus(str, Enum):
+    MISSING = "missing"
+    CONFIGURED = "configured"
+    OPTIONAL = "optional"
+    HARNESS_PROVIDED = "harness_provided"
+
+
+class CredentialRequirement(BaseModel):
+    id: str
+    environment_name: str
+    provider: str
+    purpose: str
+    kind: RequirementKind
+    required: bool = True
+    status: RequirementStatus
+    detected_from: list[str] = Field(default_factory=list)
+    accepted_secret_types: list[str] = Field(default_factory=list)
+
+
+class CredentialChoice(BaseModel):
+    id: str
+    purpose: str
+    options: list[list[str]]
+    satisfied: bool = False
+
+
+class CredentialManifest(BaseModel):
+    schema_version: str = CREDENTIAL_MANIFEST_VERSION
+    source_digest: str
+    detected_connectors: list[str] = Field(default_factory=list)
+    requirements: list[CredentialRequirement] = Field(default_factory=list)
+    credential_choices: list[CredentialChoice] = Field(default_factory=list)
+    scanned_files: int = Field(ge=0)
+    truncated: bool = False
+
+    @property
+    def missing_required(self) -> list[CredentialRequirement]:
+        choice_members = {
+            name
+            for choice in self.credential_choices
+            for option in choice.options
+            for name in option
+        }
+        return [
+            item
+            for item in self.requirements
+            if item.required
+            and item.status is RequirementStatus.MISSING
+            and item.environment_name not in choice_members
+        ]
+
+    @property
+    def ready(self) -> bool:
+        return not self.missing_required and all(
+            choice.satisfied for choice in self.credential_choices
+        )
+
+
+_IGNORED_PARTS = {
+    ".git",
+    ".venv",
+    "node_modules",
+    "test",
+    "tests",
+    "__pycache__",
+    "artifacts",
+    "build",
+    "dist",
+    "vendor",
+}
+_SOURCE_SUFFIXES = {
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".mjs",
+    ".cjs",
+    ".go",
+    ".rb",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".json",
+}
+_CONFIG_NAMES = {
+    ".env.example",
+    ".env.sample",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "compose.yml",
+    "compose.yaml",
+    "pyproject.toml",
+    "package.json",
+}
+_MAX_FILES = 2_000
+_MAX_FILE_BYTES = 1_000_000
+
+_ENV_DECLARATION = re.compile(
+    r"(?m)^(?:export[ \t]+)?([A-Z][A-Z0-9_]{2,})[ \t]*=[ \t]*([^\r\n#]*)"
+)
+_COMPOSE_VARIABLE = re.compile(r"\$\{([A-Z][A-Z0-9_]{2,})(?:(:?[-?])([^}]*))?\}")
+_PYTHON_REQUIRED = re.compile(r"os\.environ\s*\[\s*['\"]([A-Z][A-Z0-9_]{2,})['\"]\s*\]")
+_PYTHON_GETENV = re.compile(
+    r"(?:os\.getenv|os\.environ\.get)\s*\(\s*['\"]([A-Z][A-Z0-9_]{2,})['\"](?:\s*,\s*([^\)]+))?"
+)
+_JS_ENV = re.compile(r"process\.env\.([A-Z][A-Z0-9_]{2,})")
+
+_SECRET_NAME = re.compile(
+    r"(?:^|_)(?:API_?KEY|API_?SECRET|AUTHORIZATION|CREDENTIALS?|PASSWORD|PRIVATE_?KEY|SECRET|TOKEN)(?:_|$)"
+)
+_HARNESS_PROVIDED = {
+    "DATABASE_URL",
+    "POSTGRES_HOST",
+    "POSTGRES_PORT",
+    "POSTGRES_DB",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "REDIS_URL",
+    "TOOLS_API_URL",
+    "MCP_URL",
+}
+_NON_USER_CONFIGURATION = {
+    "PORT",
+    "HOST",
+    "LOG_LEVEL",
+    "ENVIRONMENT",
+    "NODE_ENV",
+    "PYTHONPATH",
+}
+
+_PROVIDERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("LIVEKIT_", "ACCEPTANCE_LIVEKIT_"), "livekit", "connect to the voice room"),
+    (("DEEPGRAM_",), "deepgram", "speech-to-text"),
+    (("CARTESIA_",), "cartesia", "text-to-speech"),
+    (("ELEVENLABS_",), "elevenlabs", "text-to-speech"),
+    (("OPENAI_",), "openai", "language or realtime model"),
+    (("ANTHROPIC_",), "anthropic", "language model"),
+    (("GOOGLE_", "VERTEX_", "CLOUD_ML_"), "google_cloud", "model or cloud runtime"),
+    (("VAPI_",), "vapi", "hosted voice agent connection"),
+    (("RETELL_",), "retell", "hosted voice agent connection"),
+    (("TWILIO_",), "twilio", "telephony connection"),
+    (("AWS_",), "aws", "cloud service"),
+    (("AZURE_",), "azure", "cloud service"),
+    (("MONGODB_", "MONGO_"), "mongodb", "database connection"),
+    (("PINECONE_",), "pinecone", "vector database"),
+)
+
+_CONNECTOR_SIGNALS = {
+    "livekit": ("livekit", "@livekit/", "livekit-agents"),
+    "vapi": ("vapi", "@vapi-ai"),
+    "retell": ("retell", "retell-sdk"),
+    "twilio": ("twilio",),
+    "pipecat": ("pipecat",),
+    "mcp": ("mcp", "modelcontextprotocol"),
+    "http": ("fastapi", "flask", "express", "axios", "httpx"),
+}
+
+# Some SDKs consume credentials internally, so the submitted source never calls ``getenv``.
+# Connector detection must still make those requirements visible before the expensive build or
+# worker-start phase. Keep this list to credentials inherent to the connector itself; model and
+# optional application integrations continue to be discovered from explicit source declarations.
+_CONNECTOR_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "livekit": ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"),
+}
+
+
+def discover_credentials(
+    root: str | Path,
+    *,
+    secret_refs: dict[str, SecretRef] | None = None,
+    provided_environment: Iterable[str] = (),
+) -> CredentialManifest:
+    """Inspect declarations and environment reads without executing submitted code."""
+    root = Path(root).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"credential_source_missing: {root}")
+    configured = {str(name).upper() for name in provided_environment}
+    for alias, ref in (secret_refs or {}).items():
+        configured.add(str(alias).upper())
+        configured.add(str(ref.key).upper())
+        configured.add(_identifier(ref.purpose).upper())
+
+    findings: dict[str, dict[str, object]] = {}
+    connector_hits: set[str] = set()
+    scanned = 0
+    truncated = False
+    digest = hashlib.sha256()
+
+    for path in _candidate_files(root):
+        if scanned >= _MAX_FILES:
+            truncated = True
+            break
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > _MAX_FILE_BYTES:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        scanned += 1
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode())
+        digest.update(hashlib.sha256(content.encode()).digest())
+        lowered = content.lower()
+        for connector, signals in _CONNECTOR_SIGNALS.items():
+            if any(signal in lowered for signal in signals):
+                connector_hits.add(connector)
+
+        def record(
+            name: str, *, required: bool, declared_default: bool = False
+        ) -> None:
+            if name in _NON_USER_CONFIGURATION:
+                return
+            item = findings.setdefault(
+                name,
+                {
+                    "required": False,
+                    "declared_default": False,
+                    "detected_from": set(),
+                },
+            )
+            item["required"] = bool(item["required"]) or required
+            item["declared_default"] = (
+                bool(item["declared_default"]) or declared_default
+            )
+            detected = item["detected_from"]
+            assert isinstance(detected, set)
+            detected.add(relative)
+
+        # An uppercase assignment in source is usually a constant, not an
+        # environment declaration. Only env templates use NAME=value syntax.
+        if path.name.startswith(".env"):
+            for match in _ENV_DECLARATION.finditer(content):
+                value = match.group(2).strip().strip("\"'")
+                record(
+                    match.group(1),
+                    required=not bool(value),
+                    declared_default=bool(value),
+                )
+        for match in _COMPOSE_VARIABLE.finditer(content):
+            operator, fallback = match.group(2), (match.group(3) or "").strip()
+            required = operator in {"?", ":?"} or not fallback
+            record(
+                match.group(1),
+                required=required,
+                declared_default=bool(fallback) and operator not in {"?", ":?"},
+            )
+        for match in _PYTHON_REQUIRED.finditer(content):
+            # ``os.environ[NAME] if os.environ.get(NAME) else default`` is a common guarded
+            # access idiom. The indexed read alone looks mandatory, but the same-line guard
+            # proves the application has a fallback and should not block job submission.
+            line_start = content.rfind("\n", 0, match.start()) + 1
+            line_end = content.find("\n", match.end())
+            line = content[line_start : line_end if line_end >= 0 else len(content)]
+            name = match.group(1)
+            guarded = bool(
+                re.search(
+                    rf"(?:os\.getenv|os\.environ\.get)\s*\(\s*['\"]{re.escape(name)}['\"]",
+                    line,
+                )
+            )
+            record(name, required=not guarded, declared_default=guarded)
+        for match in _PYTHON_GETENV.finditer(content):
+            default = (match.group(2) or "").strip()
+            record(
+                match.group(1),
+                # getenv/get is explicitly nullable. Treat it as optional unless
+                # a blank env template or a strict indexed read says otherwise.
+                required=False,
+                declared_default=bool(default),
+            )
+        for match in _JS_ENV.finditer(content):
+            record(match.group(1), required=True)
+
+    for connector in sorted(connector_hits):
+        for name in _CONNECTOR_REQUIREMENTS.get(connector, ()):
+            item = findings.setdefault(
+                name,
+                {
+                    "required": True,
+                    "declared_default": False,
+                    "detected_from": set(),
+                },
+            )
+            item["required"] = True
+            detected = item["detected_from"]
+            assert isinstance(detected, set)
+            detected.add(f"connector:{connector}")
+
+    requirements = []
+    for name, finding in sorted(findings.items()):
+        kind = _kind(name)
+        required = bool(finding["required"])
+        if kind is RequirementKind.CONFIGURATION and finding["declared_default"]:
+            required = False
+        if kind is RequirementKind.HARNESS_INFRASTRUCTURE:
+            status = RequirementStatus.HARNESS_PROVIDED
+        elif name in configured:
+            status = RequirementStatus.CONFIGURED
+        elif not required:
+            status = RequirementStatus.OPTIONAL
+        else:
+            status = RequirementStatus.MISSING
+        provider, purpose = _provider(name)
+        requirements.append(
+            CredentialRequirement(
+                id=_identifier(name),
+                environment_name=name,
+                provider=provider,
+                purpose=purpose,
+                kind=kind,
+                required=required,
+                status=status,
+                detected_from=sorted(finding["detected_from"]),
+                accepted_secret_types=(
+                    [_secret_type(name)] if kind is RequirementKind.SECRET else []
+                ),
+            )
+        )
+
+    choices = _credential_choices(requirements)
+    manifest_core = {
+        "files": digest.hexdigest(),
+        "connectors": sorted(connector_hits),
+        "requirements": [item.model_dump(mode="json") for item in requirements],
+        "credential_choices": [item.model_dump(mode="json") for item in choices],
+    }
+    return CredentialManifest(
+        source_digest=hashlib.sha256(
+            json.dumps(manifest_core, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        detected_connectors=sorted(connector_hits),
+        requirements=requirements,
+        credential_choices=choices,
+        scanned_files=scanned,
+        truncated=truncated,
+    )
+
+
+def _candidate_files(root: Path) -> list[Path]:
+    result: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if any(part in _IGNORED_PARTS for part in relative.parts):
+            continue
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.name in _CONFIG_NAMES or path.suffix.lower() in _SOURCE_SUFFIXES:
+            result.append(path)
+    return result
+
+
+def _kind(name: str) -> RequirementKind:
+    if name in _HARNESS_PROVIDED:
+        return RequirementKind.HARNESS_INFRASTRUCTURE
+    if _SECRET_NAME.search(name):
+        return RequirementKind.SECRET
+    return RequirementKind.CONFIGURATION
+
+
+def _provider(name: str) -> tuple[str, str]:
+    for prefixes, provider, purpose in _PROVIDERS:
+        if name.startswith(prefixes):
+            return provider, purpose
+    if name in _HARNESS_PROVIDED:
+        return "harness", "generated test infrastructure"
+    return "agent", "agent runtime configuration"
+
+
+def _secret_type(name: str) -> str:
+    if "PRIVATE_KEY" in name or name.endswith("CREDENTIALS"):
+        return "credential_file"
+    if "TOKEN" in name:
+        return "token"
+    if "SECRET" in name or "PASSWORD" in name:
+        return "secret"
+    return "api_key"
+
+
+def _credential_choices(
+    requirements: list[CredentialRequirement],
+) -> list[CredentialChoice]:
+    """Describe common provider auth alternatives without reading secret values."""
+    by_name = {item.environment_name: item for item in requirements}
+    google_options = [
+        ["GEMINI_API_KEY"],
+        ["GOOGLE_API_KEY"],
+        ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+    ]
+    present_options = [
+        option for option in google_options if all(name in by_name for name in option)
+    ]
+    if len(present_options) < 2:
+        return []
+    configured = {
+        RequirementStatus.CONFIGURED,
+        RequirementStatus.HARNESS_PROVIDED,
+    }
+    satisfied = any(
+        all(by_name[name].status in configured for name in option)
+        for option in present_options
+    )
+    if not satisfied:
+        # These variables are optional individually but one complete route is
+        # mandatory. Mark the members input-capable; the choice prevents the UI
+        # from requiring every alternative.
+        for name in {name for option in present_options for name in option}:
+            if by_name[name].status not in configured:
+                by_name[name].required = True
+                by_name[name].status = RequirementStatus.MISSING
+    return [
+        CredentialChoice(
+            id="google_model_auth",
+            purpose="authenticate the Google/Gemini model runtime",
+            options=present_options,
+            satisfied=satisfied,
+        )
+    ]
+
+
+def _identifier(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+__all__ = [
+    "CREDENTIAL_MANIFEST_VERSION",
+    "CredentialManifest",
+    "CredentialChoice",
+    "CredentialRequirement",
+    "RequirementKind",
+    "RequirementStatus",
+    "discover_credentials",
+]

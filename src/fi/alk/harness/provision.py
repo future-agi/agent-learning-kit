@@ -23,7 +23,11 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import quote, urlsplit, urlunsplit
+
+from .service_catalog import address, profile_for
 
 MANIFEST = "environment.json"
 COMPOSE_FILES = (
@@ -43,7 +47,19 @@ _PORT_VARIABLE = re.compile(
 _URL_SETTING = re.compile(
     r"(?:os\.(?:environ\.get|getenv)\(\s*|os\.environ\[\s*)"
     r"[\"'](?P<name>[A-Za-z_][A-Za-z0-9_]*)[\"']"
-    r"(?:\s*,\s*[\"'](?P<url>https?://[^\"']+)[\"'])?"
+    r"(?:\s*,\s*[\"'](?P<url>[a-zA-Z][a-zA-Z0-9+.-]*://[^\"']+)[\"'])?"
+)
+_JS_URL_SETTING = re.compile(
+    r"process\.env\.(?P<name>[A-Z][A-Z0-9_]{2,})\s*(?:\?\?|\|\|)\s*"
+    r"[\"'](?P<url>[a-zA-Z][a-zA-Z0-9+.-]*://[^\"']+)[\"']"
+)
+_DOTENV_URL_SETTING = re.compile(
+    r"(?m)^\s*(?P<name>[A-Z][A-Z0-9_]{2,})\s*=\s*"
+    r"(?P<url>[a-zA-Z][a-zA-Z0-9+.-]*://\S+)\s*$"
+)
+_ENV_NAME = re.compile(
+    r"(?:os\.(?:environ\.get|getenv)\(\s*|os\.environ\[\s*|process\.env\.)"
+    r"[\"']?(?P<name>[A-Z][A-Z0-9_]{2,})"
 )
 _AGENT_NAME_SETTING = re.compile(
     r"agent_name\s*=\s*os\.(?:environ\.get|getenv)\(\s*"
@@ -60,10 +76,12 @@ class ProvisionedEnvironment:
     source: str
     compose_file: str
     project: str
+    compose_override_file: str = ""
     services: list[str] = field(default_factory=list)
     port_variables: dict[str, str] = field(default_factory=dict)
     overrides: dict[str, str] = field(default_factory=dict)
     internal_overrides: dict[str, str] = field(default_factory=dict)
+    service_endpoints: list[dict[str, Any]] = field(default_factory=list)
     runtime_services: list[str] = field(default_factory=list)
     runtime_container: str = ""
     runtime_trace_volume: str = ""
@@ -123,6 +141,16 @@ def source_fingerprint(source: str | Path) -> str:
     for path in sorted(root.rglob("*")):
         if any(part in _FINGERPRINT_IGNORED for part in path.relative_to(root).parts):
             continue
+        if path.is_symlink():
+            # Never follow a submitted link while fingerprinting. A malicious
+            # repository could otherwise make preflight read an arbitrary host file.
+            relative = path.relative_to(root).as_posix().encode()
+            target = os.readlink(path).encode(errors="surrogateescape")
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(b"\0symlink\0")
+            digest.update(target)
+            continue
         if not path.is_file():
             continue
         relative = path.relative_to(root).as_posix().encode()
@@ -174,17 +202,26 @@ def _run(
     *arguments: str,
     check: bool = True,
     timeout: int = 900,
+    process_overrides: dict[str, str] | None = None,
 ) -> str:
+    files = ["--file", environment.compose_file]
+    if environment.compose_override_file:
+        files.extend(("--file", environment.compose_override_file))
     command = [
         "docker",
         "compose",
-        "--file",
-        environment.compose_file,
+        *files,
         "--project-name",
         environment.project,
         *arguments,
     ]
-    process_env = {**os.environ, **environment.port_variables}
+    # Runtime credentials are inherited by Compose and selected with ``--env NAME``. They must
+    # never be serialized into argv, where error messages and host process listings expose them.
+    process_env = {
+        **os.environ,
+        **environment.port_variables,
+        **(process_overrides or {}),
+    }
     try:
         completed = subprocess.run(
             command,
@@ -254,6 +291,93 @@ def _runtime_services(config: dict[str, Any]) -> list[str]:
     return sorted(preferred or profiled)
 
 
+def _validate_compose_security(config: dict[str, Any]) -> None:
+    """Reject host-escape primitives before any submitted container is created."""
+    violations: list[str] = []
+    for name, service in config["services"].items():
+        if service.get("privileged"):
+            violations.append(f"{name}: privileged")
+        for key in ("network_mode", "pid", "ipc"):
+            if str(service.get(key) or "").lower() == "host":
+                violations.append(f"{name}: {key}=host")
+        if service.get("devices"):
+            violations.append(f"{name}: host devices")
+        for volume in service.get("volumes") or []:
+            source = (
+                str(volume.get("source") or "")
+                if isinstance(volume, dict)
+                else str(volume)
+            )
+            if (
+                source in {"/var/run/docker.sock", "/run/docker.sock"}
+                or "docker.sock:" in source
+            ):
+                violations.append(f"{name}: Docker socket mount")
+    if violations:
+        raise ProvisionError(
+            "submitted Compose requests forbidden host access: " + ", ".join(violations)
+        )
+
+
+def _write_port_override(
+    destination: Path,
+    environment: ProvisionedEnvironment,
+    config: dict[str, Any],
+) -> None:
+    """Replace every fixed published port with a job-owned port.
+
+    Environment variables cover only repositories that deliberately parameterise their Compose
+    ports.  Most repositories publish constants, which collide as soon as two jobs overlap.  A
+    generated Compose override makes isolation universal while leaving container ports intact.
+    """
+    services: list[tuple[str, list[dict[str, Any]]]] = []
+    used: set[int] = set()
+    dynamic_targets = set(
+        _declared_port_targets(Path(environment.compose_file)).values()
+    )
+    bind_host = os.environ.get("ALK_DOCKER_BIND_HOST", "").strip() or (
+        "127.0.0.1" if _published_host() == "127.0.0.1" else "0.0.0.0"
+    )
+    for name, service in config["services"].items():
+        ports: list[dict[str, Any]] = []
+        for item in service.get("ports") or []:
+            target = int(item.get("target") or 0)
+            if not target or target in dynamic_targets:
+                continue
+            published = _free_port()
+            while published in used:
+                published = _free_port()
+            used.add(published)
+            ports.append(
+                {
+                    "target": target,
+                    "published": str(published),
+                    "host_ip": bind_host,
+                    "protocol": str(item.get("protocol") or "tcp"),
+                }
+            )
+        if ports:
+            services.append((name, ports))
+    if not services:
+        return
+    lines = ["services:"]
+    for name, ports in services:
+        lines.extend((f"  {json.dumps(name)}:", "    ports: !override"))
+        for item in ports:
+            lines.extend(
+                (
+                    f"      - target: {item['target']}",
+                    f"        published: {json.dumps(item['published'])}",
+                    f"        host_ip: {json.dumps(item['host_ip'])}",
+                    f"        protocol: {item['protocol']}",
+                )
+            )
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / "compose.harness.override.yaml"
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    environment.compose_override_file = str(target.resolve())
+
+
 def _published_port(
     environment: ProvisionedEnvironment, service: str, target: int
 ) -> int:
@@ -270,7 +394,12 @@ def _published_port(
 def _url_settings(source: Path) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     ignored = {".git", ".venv", "node_modules", "dist", "build", "__pycache__"}
-    for path in source.rglob("*.py"):
+    for path in source.rglob("*"):
+        if (
+            path.suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx"}
+            and path.name != ".env.example"
+        ):
+            continue
         if any(part in ignored for part in path.parts):
             continue
         try:
@@ -281,22 +410,165 @@ def _url_settings(source: Path) -> list[tuple[str, str]]:
             url = match.group("url") or ""
             if url:
                 found.append((match.group("name"), url))
+        for pattern in (_JS_URL_SETTING, _DOTENV_URL_SETTING):
+            found.extend(
+                (match.group("name"), match.group("url"))
+                for match in pattern.finditer(text)
+            )
     return found
+
+
+def _declared_configuration_names(source: Path) -> set[str]:
+    """Configuration variables the submitted source actually reads or documents."""
+    found = {name for name, _ in _url_settings(source)}
+    ignored = {".git", ".venv", "node_modules", "dist", "build", "__pycache__"}
+    for path in source.rglob("*"):
+        if (
+            path.suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx"}
+            and path.name != ".env.example"
+        ):
+            continue
+        if not path.is_file() or any(part in ignored for part in path.parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        found.update(match.group("name") for match in _ENV_NAME.finditer(text))
+        if path.name == ".env.example":
+            found.update(
+                match.group(1)
+                for match in re.finditer(r"(?m)^\s*([A-Z][A-Z0-9_]{2,})\s*=", text)
+            )
+    return found
+
+
+def _replace_endpoint(value: str, host: str, port: int) -> str:
+    parsed = urlsplit(value)
+    userinfo = ""
+    if parsed.username is not None:
+        userinfo = quote(parsed.username, safe="")
+        if parsed.password is not None:
+            userinfo += ":" + quote(parsed.password, safe="")
+        userinfo += "@"
+    return urlunsplit(
+        (
+            parsed.scheme,
+            f"{userinfo}{host}:{port}",
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def _service_endpoints(
+    environment: ProvisionedEnvironment, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Describe every published dependency; unknown images remain usable TCP services."""
+    records: list[dict[str, Any]] = []
+    for service_name in environment.services:
+        service = config["services"][service_name]
+        image = str(service.get("image") or "")
+        for port in service.get("ports") or []:
+            target = int(port.get("target") or 0)
+            if not target:
+                continue
+            configured_host_port = int(port.get("published") or 0)
+            try:
+                host_port = _published_port(environment, service_name, target)
+            except ProvisionError:
+                # Primarily useful for provider adapters and dry-run validation. A real started
+                # Compose project normally resolves through ``compose port``.
+                if not configured_host_port:
+                    raise
+                host_port = configured_host_port
+            profile = profile_for(service_name, image, target)
+            records.append(
+                {
+                    "service": service_name,
+                    "kind": profile.kind,
+                    "protocol": profile.protocol,
+                    "container_port": target,
+                    "host_port": host_port,
+                    "configured_host_port": configured_host_port,
+                    "external_address": address(
+                        profile.protocol, _published_host(), host_port
+                    ),
+                    "internal_address": address(profile.protocol, service_name, target),
+                    "configuration_names": list(profile.configuration_names),
+                    "readiness_path": profile.readiness_path,
+                }
+            )
+    return records
+
+
+def _endpoint_ready(endpoint: dict[str, Any], host: str) -> bool:
+    """Probe the service protocol when known, falling back to a TCP connection."""
+    port = int(endpoint["host_port"])
+    protocol = str(endpoint.get("protocol") or "tcp")
+    try:
+        with socket.create_connection((host, port), timeout=0.75) as connection:
+            if protocol == "redis":
+                connection.sendall(b"*1\r\n$4\r\nPING\r\n")
+                return connection.recv(64).startswith(b"+PONG")
+    except OSError:
+        return False
+    readiness_path = str(endpoint.get("readiness_path") or "")
+    if readiness_path and protocol in {"clickhouse", "http", "mcp", "s3"}:
+        url = f"http://{host}:{port}/{readiness_path.lstrip('/')}"
+        try:
+            with urllib_request.build_opener(urllib_request.ProxyHandler({})).open(
+                url, timeout=1.0
+            ) as response:
+                return 200 <= response.status < 400 and bool(response.read(256))
+        except (OSError, urllib_error.URLError, urllib_error.HTTPError):
+            return False
+    return True
+
+
+def _wait_for_endpoints(
+    endpoints: list[dict[str, Any]],
+    timeout: float = 60.0,
+    stability_seconds: float = 2.0,
+) -> None:
+    """Require stable protocol readiness, not merely a briefly-open container port."""
+    indexed = {
+        (str(item["service"]), int(item["host_port"])): item for item in endpoints
+    }
+    pending = set(indexed)
+    ready_since: dict[tuple[str, int], float] = {}
+    deadline = time.monotonic() + timeout
+    host = _published_host()
+    while pending and time.monotonic() < deadline:
+        for endpoint in list(pending):
+            if _endpoint_ready(indexed[endpoint], host):
+                first_ready = ready_since.setdefault(endpoint, time.monotonic())
+                # Protocol services can briefly answer while an init script is about to restart
+                # them. A short stability window prevents the first real tool call racing that
+                # transition. Unknown TCP services retain the fast generic behavior.
+                needs_stability = bool(indexed[endpoint].get("readiness_path"))
+                if (
+                    not needs_stability
+                    or time.monotonic() - first_ready >= stability_seconds
+                ):
+                    pending.remove(endpoint)
+            else:
+                ready_since.pop(endpoint, None)
+        if pending:
+            time.sleep(0.2)
+    if pending:
+        rendered = ", ".join(f"{service}:{port}" for service, port in sorted(pending))
+        raise ProvisionError(f"environment endpoints did not become ready: {rendered}")
 
 
 def _overrides(
     environment: ProvisionedEnvironment, config: dict[str, Any]
 ) -> dict[str, str]:
-    """Map source URL settings to the equivalent endpoint in this isolated Compose project."""
-    published: list[tuple[str, int, int]] = []
-    for service_name in environment.services:
-        service = config["services"][service_name]
-        for port in service.get("ports") or []:
-            target = int(port.get("target") or 0)
-            published_port = int(port.get("published") or 0)
-            if target and published_port:
-                published.append((service_name, target, published_port))
-
+    """Map declared settings to the equivalent endpoint in this isolated project."""
+    endpoints = environment.service_endpoints or _service_endpoints(environment, config)
+    source = Path(environment.source)
+    names = _declared_configuration_names(source)
     answers: dict[str, str] = {}
     declared = _declared_port_targets(Path(environment.compose_file))
     for variable, default in _url_settings(Path(environment.source)):
@@ -306,17 +578,40 @@ def _overrides(
         match = next(
             (
                 item
-                for item in published
-                if item[2] == default_port
-                or (expected_target is not None and item[1] == expected_target)
+                for item in endpoints
+                if item["host_port"] == default_port
+                or item["configured_host_port"] == default_port
+                or item["container_port"] == default_port
+                or (
+                    expected_target is not None
+                    and item["container_port"] == expected_target
+                )
             ),
             None,
         )
         if match is None:
             continue
-        service, target, _ = match
-        live_port = _published_port(environment, service, target)
-        answers[variable] = f"{parsed.scheme}://{_published_host()}:{live_port}"
+        answers[variable] = _replace_endpoint(
+            default, _published_host(), int(match["host_port"])
+        )
+    for endpoint in endpoints:
+        kind = str(endpoint["kind"]).upper().replace("-", "_")
+        candidates = set(endpoint["configuration_names"]) | {
+            f"{kind}_HOST",
+            f"{kind}_PORT",
+        }
+        for variable in sorted(names & candidates):
+            if variable in answers:
+                continue
+            if variable.endswith("_HOST"):
+                value = _published_host()
+            elif variable.endswith("_PORT"):
+                value = str(endpoint["host_port"])
+            elif variable.endswith("BOOTSTRAP_SERVERS"):
+                value = f"{_published_host()}:{endpoint['host_port']}"
+            else:
+                value = str(endpoint["external_address"])
+            answers[variable] = value
     return answers
 
 
@@ -324,14 +619,7 @@ def _internal_overrides(
     environment: ProvisionedEnvironment, config: dict[str, Any]
 ) -> dict[str, str]:
     """The same inferred endpoints, addressed from another Compose container."""
-    published: list[tuple[str, int, int]] = []
-    for service_name in environment.services:
-        service = config["services"][service_name]
-        for port in service.get("ports") or []:
-            target = int(port.get("target") or 0)
-            host_port = int(port.get("published") or 0)
-            if target and host_port:
-                published.append((service_name, target, host_port))
+    endpoints = environment.service_endpoints or _service_endpoints(environment, config)
     declared = _declared_port_targets(Path(environment.compose_file))
     answers: dict[str, str] = {}
     for variable, default in _url_settings(Path(environment.source)):
@@ -341,15 +629,42 @@ def _internal_overrides(
         match = next(
             (
                 item
-                for item in published
-                if item[2] == default_port
-                or (expected_target is not None and item[1] == expected_target)
+                for item in endpoints
+                if item["host_port"] == default_port
+                or item["configured_host_port"] == default_port
+                or item["container_port"] == default_port
+                or (
+                    expected_target is not None
+                    and item["container_port"] == expected_target
+                )
             ),
             None,
         )
         if match is not None:
-            service, target, _ = match
-            answers[variable] = f"{parsed.scheme}://{service}:{target}"
+            answers[variable] = _replace_endpoint(
+                default, str(match["service"]), int(match["container_port"])
+            )
+    external = _overrides(environment, config)
+    by_name: dict[str, dict[str, Any]] = {}
+    for endpoint in endpoints:
+        for name in endpoint["configuration_names"]:
+            by_name[name] = endpoint
+        kind = str(endpoint["kind"]).upper().replace("-", "_")
+        by_name[f"{kind}_HOST"] = endpoint
+        by_name[f"{kind}_PORT"] = endpoint
+    for variable in external:
+        if variable in answers or variable not in by_name:
+            continue
+        endpoint = by_name[variable]
+        if variable.endswith("_HOST"):
+            value = str(endpoint["service"])
+        elif variable.endswith("_PORT"):
+            value = str(endpoint["container_port"])
+        elif variable.endswith("BOOTSTRAP_SERVERS"):
+            value = f"{endpoint['service']}:{endpoint['container_port']}"
+        else:
+            value = str(endpoint["internal_address"])
+        answers[variable] = value
     return answers
 
 
@@ -420,57 +735,54 @@ def _configuration_name(value: str) -> str:
     )
 
 
-def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | None:
-    """Write a minimal harness-owned Compose adapter for a source-declared Postgres store.
-
-    This is intentionally narrow and truthful: it supplies infrastructure and the repository's
-    own runtime, never an invented tool service. Repositories with their own Compose file remain
-    authoritative. Repositories with only in-process tools need no container environment.
-    """
-    store = getattr(contract, "data_store", None)
-    kind = str(getattr(store, "kind", "") or "").lower()
-    dependencies = list(getattr(contract, "dependencies", None) or [])
-    needs_postgres = "postgres" in kind or any(
-        "postgres"
-        in f"{getattr(one, 'name', '')} {getattr(one, 'kind', '')} {getattr(one, 'what', '')}".lower()
-        for one in dependencies
-    )
-    if not needs_postgres:
-        return None
-    runtime = getattr(contract, "runtime", None)
-    dockerfile_value = str(getattr(runtime, "dockerfile", "") or "Dockerfile")
-    dockerfile = source / dockerfile_value
-    if not dockerfile.is_file():
-        raise ProvisionError(
-            "the agent requires Postgres but ships neither Compose nor a Dockerfile; "
-            "the harness can provision dependencies only when it can run the submitted code"
+def _managed_service(
+    engine: str,
+    *,
+    version: str,
+    database: str,
+    user: str,
+    init_mounts: list[str],
+) -> tuple[dict[str, Any], str, str]:
+    """A real infrastructure service, its internal connector and default config name."""
+    if engine == "clickhouse":
+        return (
+            {
+                "image": f"clickhouse/clickhouse-server:{version or '24.8'}",
+                "environment": {
+                    "CLICKHOUSE_DB": database,
+                    "CLICKHOUSE_USER": user,
+                    "CLICKHOUSE_PASSWORD": "",
+                    "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1",
+                },
+                "ports": [
+                    "${HARNESS_CLICKHOUSE_HTTP_PORT:-58123}:8123",
+                    "${HARNESS_CLICKHOUSE_NATIVE_PORT:-59000}:9000",
+                ],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "wget",
+                        "--spider",
+                        "-q",
+                        "http://127.0.0.1:8123/ping",
+                    ],
+                    "interval": "1s",
+                    "timeout": "3s",
+                    "retries": 60,
+                },
+                "volumes": init_mounts,
+            },
+            f"http://{quote(user, safe='')}@clickhouse:8123/{quote(database, safe='')}",
+            "CLICKHOUSE_URL",
         )
-
-    init_mounts: list[str] = []
-    schema_value = str(getattr(store, "schema_from", "") or "")
-    if schema_value:
-        schema = (source / schema_value).resolve()
-        if schema.exists() and (schema.is_dir() or schema.suffix.lower() == ".sql"):
-            init_mounts.append(f"{schema}:/docker-entrypoint-initdb.d/source:ro")
-
-    variable = (
-        _configuration_name(
-            str(getattr(store, "config_key", "") or "")
-            or str(getattr(store, "configured_by", "") or "")
-        )
-        or "DATABASE_URL"
-    )
-    database = str(getattr(store, "database", "") or "harness")
-    user = str(getattr(store, "user", "") or "harness")
-    internal_dsn = f"postgresql://{user}:harness-only@postgres:5432/{database}"
-    document = {
-        "services": {
-            "postgres": {
-                "image": f"postgres:{getattr(store, 'version', '') or '16'}",
+    if engine == "postgres":
+        return (
+            {
+                "image": f"postgres:{version or '16'}",
                 "environment": {
                     "POSTGRES_DB": database,
                     "POSTGRES_USER": user,
-                    "POSTGRES_PASSWORD": "harness-only",
+                    "POSTGRES_HOST_AUTH_METHOD": "trust",
                 },
                 "ports": ["${HARNESS_POSTGRES_PORT:-55432}:5432"],
                 "healthcheck": {
@@ -481,14 +793,123 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
                 },
                 "volumes": init_mounts,
             },
-            "agent-runtime": {
-                "build": {"context": str(source), "dockerfile": dockerfile_value},
-                "profiles": ["harness-runtime"],
-                "environment": {variable: internal_dsn},
-                "depends_on": {"postgres": {"condition": "service_healthy"}},
+            f"postgresql://{user}@postgres:5432/{database}",
+            "DATABASE_URL",
+        )
+    if engine == "redis":
+        return (
+            {
+                "image": f"redis:{version or '7-alpine'}",
+                "ports": ["${HARNESS_REDIS_PORT:-56379}:6379"],
+                "healthcheck": {
+                    "test": ["CMD", "redis-cli", "ping"],
+                    "interval": "1s",
+                    "timeout": "3s",
+                    "retries": 30,
+                },
             },
-        }
+            "redis://redis:6379",
+            "REDIS_URL",
+        )
+    raise ProvisionError(f"managed_dependency_unsupported: {engine}")
+
+
+def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | None:
+    """Write a harness-owned adapter for a supported source-declared data store.
+
+    This is deliberately registry-like and explicit.  A recognized engine gets its real service;
+    an unknown engine returns no adapter and provisioning fails clearly rather than substituting
+    Postgres or an in-memory fake with different behavior.
+    """
+    store = getattr(contract, "data_store", None)
+    kind = str(getattr(store, "kind", "") or "").lower()
+    dependencies = list(getattr(contract, "dependencies", None) or [])
+    supported = ("clickhouse", "postgres", "redis")
+    primary_engine = next((one for one in supported if one in kind), "")
+    requested: list[tuple[str, Any | None]] = []
+    unsupported_declared = bool(kind) and not primary_engine
+    if primary_engine:
+        requested.append((primary_engine, None))
+    for dependency in dependencies:
+        description = (
+            f"{getattr(dependency, 'name', '')} {getattr(dependency, 'engine', '')} "
+            f"{getattr(dependency, 'kind', '')} {getattr(dependency, 'what', '')}"
+        ).lower()
+        engine = next((one for one in supported if one in description), "")
+        if not engine:
+            unsupported_declared = True
+        if engine and engine not in {name for name, _ in requested}:
+            requested.append((engine, dependency))
+    # A standalone Dockerfile needs no service adapter. A Dockerfile whose contract names a
+    # service we cannot supply is different: do not silently omit that dependency and pretend
+    # the environment is complete.
+    if unsupported_declared:
+        return None
+    runtime = getattr(contract, "runtime", None)
+    dockerfile_value = str(getattr(runtime, "dockerfile", "") or "Dockerfile")
+    dockerfile = source / dockerfile_value
+    if not dockerfile.is_file():
+        if not requested:
+            return None
+        raise ProvisionError(
+            "the agent requires "
+            + ", ".join(engine for engine, _ in requested)
+            + " but ships neither Compose nor a Dockerfile; "
+            "the harness can provision dependencies only when it can run the submitted code"
+        )
+
+    init_mounts: list[str] = []
+    schema_value = str(getattr(store, "schema_from", "") or "")
+    if schema_value:
+        schema = (source / schema_value).resolve()
+        if schema.exists() and (schema.is_dir() or schema.suffix.lower() == ".sql"):
+            target = (
+                "/docker-entrypoint-initdb.d/source"
+                if schema.is_dir()
+                else "/docker-entrypoint-initdb.d/001-source.sql"
+            )
+            init_mounts.append(f"{schema}:{target}:ro")
+
+    database = str(getattr(store, "database", "") or "harness")
+    user = str(getattr(store, "user", "") or "harness")
+    services: dict[str, Any] = {}
+    runtime_environment: dict[str, str] = {}
+    depends_on: dict[str, Any] = {}
+    for engine, declared_dependency in requested:
+        version = str(
+            getattr(declared_dependency, "version", "")
+            or (getattr(store, "version", "") if engine == primary_engine else "")
+            or ""
+        )
+        service, internal_dsn, default_variable = _managed_service(
+            engine,
+            version=version,
+            database=database,
+            user=user,
+            init_mounts=init_mounts if engine == primary_engine else [],
+        )
+        variable = ""
+        if engine == primary_engine:
+            variable = _configuration_name(
+                str(getattr(store, "config_key", "") or "")
+                or str(getattr(store, "configured_by", "") or "")
+            )
+        if declared_dependency is not None:
+            reached = getattr(declared_dependency, "reached", None)
+            variable = variable or _configuration_name(
+                str(getattr(reached, "dsn_env", "") or "")
+                or str(getattr(reached, "config_key", "") or "")
+            )
+        runtime_environment[variable or default_variable] = internal_dsn
+        services[engine] = service
+        depends_on[engine] = {"condition": "service_healthy"}
+    services["agent-runtime"] = {
+        "build": {"context": str(source), "dockerfile": dockerfile_value},
+        "profiles": ["harness-runtime"],
+        "environment": runtime_environment,
+        "depends_on": depends_on,
     }
+    document = {"services": services}
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / "managed-compose.json"
     target.write_text(json.dumps(document, indent=2), encoding="utf-8")
@@ -521,12 +942,15 @@ def provision(
         and existing.running
     ):
         # Verify rather than trusting a stale file left by a killed process.
-        if _run(
+        if not existing.services or _run(
             existing, "ps", "--status", "running", "--quiet", check=False, timeout=30
         ):
             config = _config(existing)
+            _validate_compose_security(config)
             existing.services = _started_services(config)
             existing.runtime_services = _runtime_services(config)
+            existing.service_endpoints = _service_endpoints(existing, config)
+            _wait_for_endpoints(existing.service_endpoints)
             existing.overrides = _overrides(existing, config)
             existing.internal_overrides = _internal_overrides(existing, config)
             existing.save(destination)
@@ -555,13 +979,36 @@ def provision(
         managed=managed,
     )
     config = _config(environment)
+    _validate_compose_security(config)
+    _write_port_override(destination, environment, config)
+    if environment.compose_override_file:
+        config = _config(environment)
+        _validate_compose_security(config)
     environment.services = _started_services(config)
     environment.runtime_services = _runtime_services(config)
-    if not environment.services:
-        raise ProvisionError("the Compose file has no services enabled by default")
+    if not environment.services and len(environment.runtime_services) != 1:
+        raise ProvisionError(
+            "the Compose file has neither default infrastructure services nor exactly one "
+            "opt-in agent runtime"
+        )
     try:
         started = time.monotonic()
-        _run(environment, "up", "--detach", "--build", "--wait", *environment.services)
+        # Build the submitted runtime during provisioning so packaging failures surface before a
+        # simulation is accepted. A Dockerfile-only agent may legitimately have no infrastructure
+        # containers to start; its environment is the isolated, validated, built runtime itself.
+        if environment.runtime_services:
+            _run(environment, "build", *environment.runtime_services)
+        if environment.services:
+            _run(
+                environment,
+                "up",
+                "--detach",
+                "--build",
+                "--wait",
+                *environment.services,
+            )
+        environment.service_endpoints = _service_endpoints(environment, config)
+        _wait_for_endpoints(environment.service_endpoints)
         environment.overrides = _overrides(environment, config)
         environment.internal_overrides = _internal_overrides(environment, config)
         environment.running = True
@@ -589,7 +1036,10 @@ def provision_if_present(
     if compose_file(source) is None:
         store = getattr(contract, "data_store", None)
         dependencies = list(getattr(contract, "dependencies", None) or [])
-        if store is None and not dependencies:
+        runtime = getattr(contract, "runtime", None)
+        dockerfile_value = str(getattr(runtime, "dockerfile", "") or "Dockerfile")
+        has_runtime = (Path(source).expanduser().resolve() / dockerfile_value).is_file()
+        if store is None and not dependencies and not has_runtime:
             return None
     return provision(source, destination, contract)
 
@@ -606,6 +1056,9 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
     environment = ProvisionedEnvironment.load(destination)
     if environment is None:
         raise ProvisionError(f"no environment recorded at {destination}")
+    if environment.runtime_container:
+        stop_runtime(destination)
+        environment = ProvisionedEnvironment.load(destination) or environment
     _run(
         environment,
         "down",
@@ -615,17 +1068,21 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
         timeout=120,
     )
     started = time.monotonic()
-    _run(
-        environment,
-        "up",
-        "--detach",
-        "--no-build",
-        "--wait",
-        *environment.services,
-    )
+    if environment.services:
+        _run(
+            environment,
+            "up",
+            "--detach",
+            "--no-build",
+            "--wait",
+            *environment.services,
+        )
     config = _config(environment)
+    _validate_compose_security(config)
     environment.services = _started_services(config)
     environment.runtime_services = _runtime_services(config)
+    environment.service_endpoints = _service_endpoints(environment, config)
+    _wait_for_endpoints(environment.service_endpoints)
     environment.overrides = _overrides(environment, config)
     environment.internal_overrides = _internal_overrides(environment, config)
     environment.running = True
@@ -641,8 +1098,24 @@ def healthy(destination: str | Path) -> bool:
     stale manifest therefore becomes an unhealthy runtime instead of being trusted as ready.
     """
     environment = ProvisionedEnvironment.load(Path(destination))
-    if environment is None or not environment.running or not environment.services:
+    if environment is None or not environment.running:
         return False
+    if not environment.services:
+        if not environment.runtime_services:
+            return False
+        if not environment.runtime_container:
+            return True
+        return bool(
+            _docker(
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                environment.runtime_container,
+                check=False,
+                timeout=30,
+            ).strip()
+            == "true"
+        )
     running = _run(
         environment,
         "ps",
@@ -653,7 +1126,14 @@ def healthy(destination: str | Path) -> bool:
         timeout=30,
     )
     found = {line.strip() for line in running.splitlines() if line.strip()}
-    return set(environment.services).issubset(found)
+    if not set(environment.services).issubset(found):
+        return False
+    try:
+        # Provision/reset require a stability window; this is a point-in-time liveness probe.
+        _wait_for_endpoints(environment.service_endpoints, 1.0, 0.0)
+    except ProvisionError:
+        return False
+    return True
 
 
 def _docker(*arguments: str, check: bool = True, timeout: int = 120) -> str:
@@ -760,8 +1240,20 @@ def start_runtime(
     # session-owned container behind without recording it; always reconcile the deterministic
     # name before starting instead of trusting bookkeeping from a process that may have died.
     _docker("rm", "--force", container, check=False)
+    config = _config(environment)
+    service_config = config["services"][service]
+    service_environment = _environment_values(service_config)
+    endpoint_overrides = environment.internal_overrides
+    if environment.managed:
+        # Managed Compose already contains the complete internal DSN, including its ephemeral
+        # database credentials. The generic non-secret endpoint view must not replace it.
+        endpoint_overrides = {
+            name: value
+            for name, value in endpoint_overrides.items()
+            if name not in service_environment
+        }
     injected = {
-        **environment.internal_overrides,
+        **endpoint_overrides,
         "HARNESS_MODE": "1",
         # The SDK recorder is also a remote LiveKit participant. Agents that
         # wait for an arbitrary participant can otherwise bind their audio
@@ -801,9 +1293,6 @@ def start_runtime(
         # at the same mounted file, so evidence is still collected exactly once.
         injected["HARNESS_AGENT_TOOL_TRACE"] = container_trace
         injected["HARNESS_TOOL_TRACE"] = container_trace
-    config = _config(environment)
-    service_config = config["services"][service]
-    service_environment = _environment_values(service_config)
     # Credential paths in a repository env file name host files. Mount them into a stable,
     # read-only container location and replace only the path value; never copy or persist the
     # credential contents in harness artifacts.
@@ -812,10 +1301,10 @@ def start_runtime(
     ):
         arguments.extend(("--volume", f"{source}:{target}:ro"))
         injected[name] = target
-    for name, value in sorted(injected.items()):
-        arguments.extend(("--env", f"{name}={value}"))
+    for name in sorted(injected):
+        arguments.extend(("--env", name))
     arguments.append(service)
-    _run(environment, *arguments, timeout=900)
+    _run(environment, *arguments, timeout=900, process_overrides=injected)
     deadline = time.monotonic() + 60
     # LiveKit workers commonly stay alive while warming VAD/STT/TTS processes and only register
     # for dispatch afterwards.  Starting a room after five seconds races that registration: the
@@ -1114,6 +1603,9 @@ def stop(destination: str | Path) -> bool:
     environment = ProvisionedEnvironment.load(destination)
     if environment is None:
         return False
+    if environment.runtime_container:
+        stop_runtime(destination)
+        environment = ProvisionedEnvironment.load(destination) or environment
     _run(environment, "down", "--volumes", "--remove-orphans", check=False, timeout=120)
     environment.running = False
     environment.save(destination)

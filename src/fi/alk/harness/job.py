@@ -13,7 +13,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from fi.simulate.runtime.spec import RuntimeRequirements, SecretRef
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
 
@@ -31,12 +31,19 @@ class SourceKind(str, Enum):
     REMOTE = "remote"
 
 
+class SourceVisibility(str, Enum):
+    PRIVATE = "private"
+    PUBLIC = "public"
+
+
 class RepositorySource(BaseModel):
     kind: SourceKind
     local_path: str | None = None
     installation_id: str | None = None
     repository: str | None = None
     ref: str | None = None
+    commit_sha: str | None = None
+    visibility: SourceVisibility = SourceVisibility.PRIVATE
     archive_artifact_id: str | None = None
     image: str | None = None
     endpoint: str | None = None
@@ -45,13 +52,20 @@ class RepositorySource(BaseModel):
     def _required_locator(self) -> "RepositorySource":
         required = {
             SourceKind.LOCAL_REPOSITORY: self.local_path,
-            SourceKind.GITHUB: self.installation_id and self.repository,
+            SourceKind.GITHUB: self.repository
+            and (self.visibility is SourceVisibility.PUBLIC or self.installation_id),
             SourceKind.ARCHIVE: self.archive_artifact_id,
             SourceKind.IMAGE: self.image,
             SourceKind.REMOTE: self.endpoint,
         }[self.kind]
         if not required:
             raise ValueError(f"source_locator_missing: {self.kind.value}")
+        if self.kind is SourceKind.GITHUB and self.commit_sha:
+            normalized = self.commit_sha.lower()
+            if len(normalized) != 40 or any(
+                char not in "0123456789abcdef" for char in normalized
+            ):
+                raise ValueError("github_commit_sha_invalid")
         return self
 
 
@@ -76,6 +90,37 @@ class HarnessArtifactPolicy(BaseModel):
     max_artifact_bytes: int = Field(default=1_073_741_824, ge=0)
 
 
+class SandboxSecurityPolicy(BaseModel):
+    """Security invariants a provider must satisfy before executing customer code."""
+
+    untrusted_source: bool = True
+    read_only_source: bool = True
+    allow_privileged: bool = False
+    allow_host_runtime_control: bool = False
+    allowed_egress_domains: list[str] = Field(default_factory=list)
+
+
+class HarnessRetryPolicy(BaseModel):
+    """Conservative job retry policy; agent behavior is intentionally absent."""
+
+    max_infrastructure_attempts: int = Field(default=2, ge=1, le=5)
+    initial_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
+    max_backoff_seconds: float = Field(default=15.0, ge=0, le=300)
+    retryable_domains: list[str] = Field(
+        default_factory=lambda: ["infrastructure", "connectivity"]
+    )
+
+    @model_validator(mode="after")
+    def _valid_retry_policy(self) -> "HarnessRetryPolicy":
+        allowed = {"infrastructure", "connectivity", "platform_sync"}
+        unsupported = set(self.retryable_domains) - allowed
+        if unsupported:
+            raise ValueError("retry_domain_unsafe: " + ", ".join(sorted(unsupported)))
+        if self.max_backoff_seconds < self.initial_backoff_seconds:
+            raise ValueError("retry_backoff_invalid")
+        return self
+
+
 class HarnessJob(BaseModel):
     schema_version: str = HARNESS_JOB_SCHEMA_VERSION
     job_id: str
@@ -86,6 +131,8 @@ class HarnessJob(BaseModel):
     scenario_count: int = Field(default=10, ge=1, le=1000)
     seed: int | None = None
     runtime: RuntimeRequirements = Field(default_factory=RuntimeRequirements)
+    security: SandboxSecurityPolicy = Field(default_factory=SandboxSecurityPolicy)
+    retry: HarnessRetryPolicy = Field(default_factory=HarnessRetryPolicy)
     artifacts: HarnessArtifactPolicy = Field(default_factory=HarnessArtifactPolicy)
     platform_run_id: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
@@ -97,15 +144,34 @@ class HarnessJob(BaseModel):
         if (
             self.execution is ExecutionMode.LOCAL
             and self.source.kind is SourceKind.GITHUB
+            and (
+                self.source.visibility is not SourceVisibility.PUBLIC
+                or self.source.installation_id
+            )
         ):
-            # A local invocation may use a local clone or public URL through the repository
-            # source adapter; it must not receive a platform GitHub installation credential.
-            raise ValueError("local_job_cannot_use_platform_github_installation")
+            # A local runner may clone public source, but it must never receive a platform
+            # GitHub installation credential. Private source is acquired by a hosted provider.
+            raise ValueError("local_job_cannot_use_private_platform_github_source")
         if (
             self.execution is ExecutionMode.HOSTED
             and self.source.kind is SourceKind.LOCAL_REPOSITORY
         ):
             raise ValueError("hosted_job_cannot_use_local_path")
+        if self.execution is ExecutionMode.HOSTED:
+            if self.runtime.isolation is RuntimeIsolation.SHARED_RUNNER_PROCESS:
+                object.__setattr__(
+                    self,
+                    "runtime",
+                    self.runtime.model_copy(
+                        update={"isolation": RuntimeIsolation.DEDICATED_VM}
+                    ),
+                )
+            if self.security.allow_privileged:
+                raise ValueError("hosted_privileged_execution_forbidden")
+            if self.security.allow_host_runtime_control:
+                raise ValueError("hosted_runtime_control_forbidden")
+            if not self.security.read_only_source:
+                raise ValueError("hosted_source_must_be_read_only")
         _reject_secret_fields(self.model_dump(exclude={"agent": {"secret_refs"}}))
         return self
 
@@ -164,6 +230,7 @@ class HarnessJobStatus(BaseModel):
     scenario_set_digest: str | None = None
     completed_scenarios: int = Field(default=0, ge=0)
     total_scenarios: int = Field(default=0, ge=0)
+    attempt: int = Field(default=1, ge=1)
 
 
 class HostedHarnessPort(Protocol):
@@ -209,6 +276,8 @@ __all__ = [
     "ExecutionMode",
     "FailureDomain",
     "HarnessArtifactPolicy",
+    "HarnessRetryPolicy",
+    "SandboxSecurityPolicy",
     "HarnessFailure",
     "HarnessJob",
     "HarnessJobStatus",
@@ -216,4 +285,5 @@ __all__ = [
     "HostedHarnessPort",
     "RepositorySource",
     "SourceKind",
+    "SourceVisibility",
 ]

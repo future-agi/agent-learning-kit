@@ -18,6 +18,7 @@ the one the rest of the platform is measured by. This reports only what the run 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -150,9 +151,7 @@ class Platform:
         self, run_test_id: str, scenario_ids: list[str] | None = None
     ) -> dict[str, Any]:
         payload = {"scenario_ids": scenario_ids} if scenario_ids else {}
-        return self._call(
-            f"/run-tests/{run_test_id}/test-executions/", payload
-        )
+        return self._call(f"/run-tests/{run_test_id}/test-executions/", payload)
 
     def batch(self, test_execution_id: str, count: int) -> dict[str, Any]:
         return self._call(
@@ -171,13 +170,20 @@ class Platform:
         makes, and a dependency for one boundary string is not worth carrying.
         """
         edge = "----harness" + os.urandom(8).hex()
-        head = (
+        content = audio.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        field = (
             f"--{edge}\r\n"
             f'Content-Disposition: form-data; name="file"; filename="{audio.name}"\r\n'
             "Content-Type: audio/wav\r\n\r\n"
         ).encode()
+        checksum = (
+            f"\r\n--{edge}\r\n"
+            'Content-Disposition: form-data; name="sha256"\r\n\r\n'
+            f"{digest}"
+        ).encode()
         tail = f"\r\n--{edge}--\r\n".encode()
-        body = head + audio.read_bytes() + tail
+        body = field + content + checksum + tail
         request = urllib.request.Request(
             f"{self.base}{INGESTION}/call-executions/{call_execution_id}/recording/",
             data=body,
@@ -349,6 +355,14 @@ def result_of(result: Any) -> dict[str, Any]:
     }
     if problems:
         payload["error_message"] = "; ".join(problems)[:2000]
+    payload["result_digest"] = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), default=str
+            ).encode()
+        ).hexdigest()
+    )
     return payload
 
 

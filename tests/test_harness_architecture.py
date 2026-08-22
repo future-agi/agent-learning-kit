@@ -16,8 +16,10 @@ from fi.alk.harness.bundle import (
     seal_bundle,
 )
 from fi.alk.harness.events import BufferedEventSink, EventOutbox
-from fi.alk.harness.executor import GitHubSourceAcquirer
+from fi.alk.harness.executor import GitHubSourceAcquirer, _failure_from_events
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.provision import source_fingerprint
+from fi.simulate.runtime.spec import RuntimeIsolation
 from fi.simulate.runtime.events import CanonicalEvent
 
 
@@ -104,7 +106,9 @@ def test_local_and_hosted_jobs_reject_the_other_sides_source() -> None:
             agent={"connector": "http"},
         )
 
-    with pytest.raises(ValueError, match="local_job_cannot_use_platform_github"):
+    with pytest.raises(
+        ValueError, match="local_job_cannot_use_private_platform_github"
+    ):
         HarnessJob(
             job_id="job",
             run_id="run",
@@ -141,6 +145,7 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
         },
     )
     assert job.agent.secret_refs["api_key"].key == "secret_livekit_key"
+    assert job.runtime.isolation is RuntimeIsolation.DEDICATED_VM
 
     with pytest.raises(ValueError, match="resolved_secret_forbidden"):
         HarnessJob(
@@ -154,6 +159,79 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             },
             agent={"connector": "livekit", "config": {"api_key": "raw-key"}},
         )
+
+
+def test_public_github_job_needs_no_installation_but_is_commit_pinnable() -> None:
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/public-agent",
+            "ref": "main",
+            "commit_sha": "a" * 40,
+        },
+        agent={"connector": "auto"},
+    )
+
+    assert job.source.installation_id is None
+    assert job.source.commit_sha == "a" * 40
+
+
+@pytest.mark.parametrize(
+    "security",
+    [
+        {"allow_privileged": True},
+        {"allow_host_runtime_control": True},
+        {"read_only_source": False},
+    ],
+)
+def test_hosted_job_rejects_unsafe_security_policy(security: dict) -> None:
+    with pytest.raises(ValueError, match="hosted_.*forbidden|hosted_source"):
+        HarnessJob(
+            job_id="job",
+            run_id="run",
+            execution="hosted",
+            source={
+                "kind": "github",
+                "visibility": "public",
+                "repository": "customer/public-agent",
+            },
+            agent={"connector": "auto"},
+            security=security,
+        )
+
+
+def test_job_retry_policy_cannot_retry_agent_or_grading_failures() -> None:
+    with pytest.raises(ValueError, match="retry_domain_unsafe"):
+        HarnessJob(
+            job_id="job",
+            run_id="run",
+            execution="hosted",
+            source={
+                "kind": "github",
+                "visibility": "public",
+                "repository": "customer/public-agent",
+            },
+            agent={"connector": "auto"},
+            retry={"retryable_domains": ["agent", "grading"]},
+        )
+
+
+def test_failed_stage_is_reported_as_structured_non_retryable_failure(tmp_path: Path):
+    (tmp_path / "harness-events.jsonl").write_text(
+        '{"type":"harness.stage.failed","payload":'
+        '{"stage":"scenarios","status":1,"detail":"invalid generated fixture"}}\n',
+        encoding="utf-8",
+    )
+
+    failure = _failure_from_events(tmp_path)
+
+    assert failure.domain.value == "simulator"
+    assert failure.stage.value == "validating_scenarios"
+    assert failure.retryable is False
 
 
 class _Transport:
@@ -226,3 +304,51 @@ def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
     assert checkout == tmp_path / "repository"
     assert token not in " ".join(observed["command"])
     assert observed["environment"]["GIT_CONFIG_VALUE_0"].endswith(token)
+
+
+def test_public_github_checkout_does_not_request_or_inject_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = {}
+
+    def token(_installation):
+        raise AssertionError("public checkout must not request an installation token")
+
+    def run(command, **kwargs):
+        observed["environment"] = kwargs["env"]
+        Path(command[-1]).mkdir()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/public-agent",
+        },
+        agent={"connector": "auto"},
+    )
+
+    checkout = asyncio.run(GitHubSourceAcquirer(token).acquire(job, tmp_path))
+
+    assert checkout == tmp_path / "repository"
+    assert "GIT_CONFIG_VALUE_0" not in observed["environment"]
+
+
+def test_source_fingerprint_hashes_symlink_metadata_without_reading_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    secret = tmp_path / "outside-secret"
+    secret.write_text("first secret", encoding="utf-8")
+    (source / "link").symlink_to(secret)
+
+    first = source_fingerprint(source)
+    secret.write_text("different secret", encoding="utf-8")
+    second = source_fingerprint(source)
+
+    assert first == second

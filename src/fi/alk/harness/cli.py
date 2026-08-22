@@ -677,6 +677,37 @@ async def _auto(args: argparse.Namespace) -> int:
             return status
         emit("harness.stage.completed", label, status=status)
 
+    from .artifacts import ArtifactIntegrityError, seal_artifacts
+
+    emit("harness.stage.started", "uploading_artifacts")
+    try:
+        manifest = seal_artifacts(
+            destination,
+            run_id=job.run_id,
+            max_bytes=job.artifacts.max_artifact_bytes,
+            expected_scenarios=job.scenario_count,
+        )
+    except ArtifactIntegrityError as exc:
+        emit(
+            "harness.stage.failed",
+            "uploading_artifacts",
+            status=1,
+            code="artifact_integrity_failed",
+            detail=str(exc),
+        )
+        print(
+            f"\nautomatic run stopped: artifact integrity failed: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    emit(
+        "harness.stage.completed",
+        "uploading_artifacts",
+        status=0,
+        artifact_manifest_digest=manifest.digest,
+        artifact_count=len(manifest.files),
+        artifact_bytes=manifest.total_bytes,
+    )
     emit("harness.run.completed", "completed")
     print(f"\nautomatic run complete: {destination}")
     return 0
