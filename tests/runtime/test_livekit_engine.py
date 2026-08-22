@@ -1226,6 +1226,44 @@ def test_failed_stop_reasons_never_report_completed(
     assert outcome.failure.code == failure_code
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {"role": "assistant", "content": "How can I help?"},
+            {"role": "user", "content": "Please book a ride."},
+            {"role": "assistant", "content": "Your ride is booked."},
+            {"role": "user", "content": "No, nothing else."},
+            {"role": "assistant", "content": "Have a great day, goodbye!"},
+            {"role": "user", "content": "Thanks, bye."},
+        ],
+        [
+            {"role": "assistant", "content": "I cannot book this account."},
+            {"role": "user", "content": "Can somebody help me?"},
+            {"role": "assistant", "content": "I will transfer you to support."},
+            {"role": "user", "content": "Please do."},
+            {"role": "assistant", "content": "I am transferring you now. Please wait."},
+            {"role": "user", "content": "Okay."},
+        ],
+    ],
+)
+def test_agent_first_silence_after_terminal_exchange_is_completed(
+    messages: list[dict[str, str]],
+) -> None:
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata == {
+        "stop_reason": "conversation_silence_timeout",
+        "terminal_exchange_recovered": True,
+    }
+
+
 def test_unsupported_provider_lists_supported_options() -> None:
     from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
 

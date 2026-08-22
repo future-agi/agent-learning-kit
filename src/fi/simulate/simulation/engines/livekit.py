@@ -2216,6 +2216,28 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if (
+        stop_reason == "conversation_silence_timeout"
+        and len(messages) >= min_turn_messages
+        and _has_role_alternation(messages)
+        and _has_natural_terminal_exchange(messages)
+    ):
+        # Agent-first calls use a short silence watchdog because the tested
+        # agent owns the opening turn.  A simulator can occasionally omit its
+        # endCall tool even after both sides have clearly closed the call.  Do
+        # not turn a fully recorded farewell/transfer into an infrastructure
+        # failure merely because the now-idle room remained open.  Evaluation
+        # still decides whether the agent actually completed the requested
+        # business action.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={
+                "stop_reason": stop_reason,
+                "terminal_exchange_recovered": True,
+            },
+        )
     if stop_reason == "timeout":
         return _failure_outcome(
             TestCaseStatus.TIMED_OUT,
@@ -2285,6 +2307,53 @@ def _conversation_outcome(
         messages=messages,
         metadata={"stop_reason": stop_reason},
     )
+
+
+def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
+    """Recognize only explicit terminal language near the end of a call.
+
+    This deliberately avoids broad sentiment or short-answer heuristics.  A
+    normal unanswered question must remain a silence failure.  The two safe
+    cases are an explicit farewell, or a transfer handoff followed by the
+    caller's acknowledgement.
+    """
+    tail = [
+        (
+            str(message.get("role") or "").lower(),
+            str(message.get("content") or "").strip().lower(),
+        )
+        for message in messages[-4:]
+        if str(message.get("content") or "").strip()
+    ]
+    if not tail:
+        return False
+    farewell_markers = (
+        "goodbye",
+        "bye",
+        "take care",
+        "have a great day",
+        "have a good day",
+        "have a nice day",
+    )
+    if any(marker in text for _role, text in tail for marker in farewell_markers):
+        return True
+
+    for index, (role, text) in enumerate(tail[:-1]):
+        if role != "assistant" or "transfer" not in text:
+            continue
+        if not any(marker in text for marker in ("now", "connect", "please wait")):
+            continue
+        next_role, acknowledgement = tail[index + 1]
+        if next_role == "user" and acknowledgement.rstrip(".! ") in {
+            "ok",
+            "okay",
+            "alright",
+            "please do",
+            "thank you",
+            "thanks",
+        }:
+            return True
+    return False
 
 
 def _failure_outcome(
