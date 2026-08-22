@@ -50,6 +50,9 @@ _PROFILES = (
     ServiceProfile("neo4j", 7474, "http", ("NEO4J_HTTP_URL",)),
     ServiceProfile("neo4j", 7687, "bolt", ("NEO4J_URI", "NEO4J_URL")),
     ServiceProfile("livekit", 7880, "livekit", ("LIVEKIT_URL",)),
+    ServiceProfile(
+        "code-executor", 8000, "http", ("CODE_EXECUTOR_URL",), "/health"
+    ),
     ServiceProfile("mcp", 8000, "mcp", ("MCP_URL", "MCP_SERVER_URL")),
 )
 
@@ -59,6 +62,7 @@ _ALIASES = {
     "opensearch": "elasticsearch",
     "redpanda": "kafka",
     "seaweedfs": "s3",
+    "code_executor": "code-executor",
 }
 
 

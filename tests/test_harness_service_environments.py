@@ -23,6 +23,7 @@ from fi.alk.harness.provision import (
     ProvisionError,
     ProvisionedEnvironment,
     _internal_overrides,
+    _endpoint_ready,
     _managed_compose,
     _overrides,
     _validate_compose_security,
@@ -41,14 +42,52 @@ def test_catalog_recognizes_voice_agent_dependency_families():
     expected = {
         ("clickhouse/clickhouse-server:24.8", 8123): ("clickhouse", "clickhouse"),
         ("redis:7", 6379): ("redis", "redis"),
+        ("mysql:8.4", 3306): ("mysql", "mysql"),
         ("mongo:7", 27017): ("mongodb", "mongodb"),
         ("minio/minio", 9000): ("minio", "s3"),
+        ("rabbitmq:3.13-management-alpine", 5672): ("rabbitmq", "amqp"),
+        ("nats:2.10-alpine", 4222): ("nats", "nats"),
+        ("private/code-executor", 8000): ("code-executor", "http"),
         ("qdrant/qdrant", 6333): ("qdrant", "http"),
         ("private/calculator", 9999): ("service", "tcp"),
     }
     for (image, port), result in expected.items():
         profile = profile_for("dependency", image, port)
         assert (profile.kind, profile.protocol) == result
+
+
+def test_queue_readiness_requires_protocol_greeting(monkeypatch):
+    class FakeSocket:
+        def __init__(self, response):
+            self.response = response
+            self.sent = b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def sendall(self, value):
+            self.sent = value
+
+        def recv(self, _size):
+            return self.response
+
+    amqp = FakeSocket(b"\x01\x00\x00\x00")
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: amqp)
+    assert _endpoint_ready({"host_port": 5672, "protocol": "amqp"}, "127.0.0.1")
+    assert amqp.sent == b"AMQP\x00\x00\x09\x01"
+
+    nats = FakeSocket(b'INFO {"server_id":"one"}\r\n')
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: nats)
+    assert _endpoint_ready({"host_port": 4222, "protocol": "nats"}, "127.0.0.1")
+
+    silent = FakeSocket(b"")
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: silent)
+    assert not _endpoint_ready(
+        {"host_port": 5672, "protocol": "amqp"}, "127.0.0.1"
+    )
 
 
 def test_clickhouse_connectors_are_injected_from_python_js_and_dotenv(
@@ -415,6 +454,87 @@ def test_mongodb_and_qdrant_are_generated_from_declared_dependencies(tmp_path):
     }
 
 
+def test_queue_and_object_services_are_generated_from_declared_dependencies(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-alpine\n")
+    contract = AgentContract(
+        agent="voice-workflow-agent",
+        tools=[ToolSpec(name="process_call", args=["call_id"])],
+        real_use_cases=["process a call using queued work and stored artifacts"],
+        dependencies=[
+            Dependency(
+                name="durable-jobs",
+                engine="rabbitmq",
+                kind="queue",
+                reached={"dsn_env": "AMQP_URL"},
+            ),
+            Dependency(
+                name="live-events",
+                engine="nats",
+                kind="event_bus",
+                reached={"dsn_env": "NATS_URL"},
+            ),
+            Dependency(
+                name="call-artifacts",
+                engine="minio",
+                kind="object_store",
+                reached={"dsn_env": "S3_ENDPOINT_URL"},
+            ),
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+    document = json.loads(target.read_text())
+
+    assert set(document["services"]) == {
+        "rabbitmq",
+        "nats",
+        "minio",
+        "agent-runtime",
+    }
+    assert document["services"]["rabbitmq"]["image"] == "rabbitmq:3.13-alpine"
+    assert document["services"]["rabbitmq"]["environment"][
+        "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS"
+    ] == "+S 2:2 +SDcpu 1 +SDio 1"
+    assert document["services"]["agent-runtime"]["environment"] == {
+        "AMQP_URL": "amqp://harness:harness-local@rabbitmq:5672/%2F",
+        "NATS_URL": "nats://nats:4222",
+        "S3_ENDPOINT_URL": "http://minio:9000",
+        "AWS_ACCESS_KEY_ID": "harness",
+        "AWS_SECRET_ACCESS_KEY": "harness-local-secret",
+        "AWS_DEFAULT_REGION": "us-east-1",
+    }
+
+
+def test_mysql_service_is_generated_from_declared_store(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-alpine\n")
+    contract = AgentContract(
+        agent="voice-crm-agent",
+        tools=[ToolSpec(name="find_customer", args=["phone"])],
+        real_use_cases=["retrieve a caller from a MySQL-backed CRM"],
+        data_store=DataStore(
+            kind="mysql",
+            configured_by="DATABASE_URL",
+            database="voice",
+            user="harness",
+        ),
+        dependencies=[Dependency(name="crm", engine="mysql", kind="datastore")],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+    document = json.loads(target.read_text())
+
+    assert set(document["services"]) == {"mysql", "agent-runtime"}
+    assert document["services"]["agent-runtime"]["environment"] == {
+        "DATABASE_URL": "mysql://harness:harness-local@mysql:3306/voice"
+    }
+
+
 def _fixture_agent() -> Path:
     return (
         Path(__file__).parent / "fixtures" / "harness_agents" / "voice_analytics_agent"
@@ -549,6 +669,77 @@ def test_case_two_dockerfile_agent_gets_managed_postgres(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
+def test_case_two_dockerfile_agent_gets_clean_managed_mysql(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "1")
+    source = tmp_path / "voice-crm-agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text(
+        """FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir pymysql==1.1.1
+COPY agent.py .
+CMD ["python", "agent.py"]
+"""
+    )
+    (source / "agent.py").write_text(
+        """import os
+import time
+from urllib.parse import urlsplit
+
+import pymysql
+
+dsn = urlsplit(os.environ["DATABASE_URL"])
+connection = pymysql.connect(
+    host=dsn.hostname,
+    port=dsn.port or 3306,
+    user=dsn.username,
+    password=dsn.password,
+    database=dsn.path.lstrip("/"),
+    autocommit=True,
+)
+with connection.cursor() as cursor:
+    cursor.execute("CREATE TABLE IF NOT EXISTS callers (id INT PRIMARY KEY, name VARCHAR(80))")
+    cursor.execute("SELECT COUNT(*) FROM callers")
+    before = cursor.fetchone()[0]
+    cursor.execute("INSERT INTO callers (id, name) VALUES (901, 'Meera Shah')")
+    cursor.execute("SELECT name FROM callers WHERE id = 901")
+    assert cursor.fetchone()[0] == "Meera Shah"
+connection.close()
+print(f"AGENT_READY mysql_before={before} caller=Meera Shah", flush=True)
+while True:
+    time.sleep(60)
+"""
+    )
+    contract = AgentContract(
+        agent="dockerfile-only-voice-crm",
+        tools=[ToolSpec(name="find_customer", args=["phone"])],
+        real_use_cases=["retrieve and update a caller in a MySQL-backed CRM"],
+        data_store=DataStore(
+            kind="mysql",
+            configured_by="DATABASE_URL",
+            database="voice",
+            user="harness",
+        ),
+        dependencies=[Dependency(name="crm", engine="mysql", kind="datastore")],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    session = tmp_path / "mysql-session"
+    expected = "AGENT_READY mysql_before=0 caller=Meera Shah"
+    environment = provision(source, session, contract)
+    try:
+        assert environment.managed and environment.services == ["mysql"]
+        environment = start_runtime(session)
+        assert expected in _wait_runtime_log(environment, expected, timeout=45)
+        stop_runtime(session)
+        reset(session)
+        environment = start_runtime(session)
+        assert expected in _wait_runtime_log(environment, expected, timeout=45)
+    finally:
+        stop_runtime(session)
+        stop(session)
+
+
+@pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
 def test_case_two_dockerfile_agent_gets_clean_mongodb_and_qdrant(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "1")
     source = tmp_path / "voice-rag-agent"
@@ -640,6 +831,304 @@ while True:
     try:
         assert environment.managed
         assert set(environment.services) == {"mongodb", "qdrant"}
+        environment = start_runtime(session)
+        assert expected in _wait_runtime_log(environment, expected, timeout=30)
+        stop_runtime(session)
+        reset(session)
+        environment = start_runtime(session)
+        assert expected in _wait_runtime_log(environment, expected, timeout=30)
+    finally:
+        stop_runtime(session)
+        stop(session)
+
+
+@pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
+def test_case_two_queue_and_object_environment_is_exercised_isolated_and_reset(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "1")
+    source = tmp_path / "voice-workflow-agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text(
+        """FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir boto3==1.35.99 nats-py==2.9.0 pika==1.3.2
+COPY agent.py .
+CMD ["python", "agent.py"]
+"""
+    )
+    (source / "agent.py").write_text(
+        """import asyncio
+import os
+import time
+
+import boto3
+import nats
+import pika
+from botocore.exceptions import ClientError
+from nats.js.errors import NotFoundError
+
+
+async def exercise_nats():
+    connection = await nats.connect(os.environ["NATS_URL"])
+    jetstream = connection.jetstream()
+    try:
+        info = await jetstream.stream_info("CALLS")
+        before = info.state.messages
+    except NotFoundError:
+        before = 0
+        await jetstream.add_stream(name="CALLS", subjects=["calls.events"])
+    await jetstream.publish("calls.events", b'{"call_id":"call-901"}')
+    await connection.drain()
+    return before
+
+
+rabbit = pika.BlockingConnection(pika.URLParameters(os.environ["AMQP_URL"]))
+channel = rabbit.channel()
+queue = channel.queue_declare(queue="calls", durable=True)
+rabbit_before = queue.method.message_count
+channel.basic_publish(exchange="", routing_key="calls", body=b"call-901")
+rabbit.close()
+
+nats_before = asyncio.run(exercise_nats())
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url=os.environ["S3_ENDPOINT_URL"],
+    aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+    aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+    region_name=os.environ["AWS_DEFAULT_REGION"],
+)
+bucket = "call-artifacts"
+try:
+    s3.head_bucket(Bucket=bucket)
+    object_before = s3.list_objects_v2(Bucket=bucket).get("KeyCount", 0)
+except ClientError as error:
+    if error.response["Error"]["Code"] not in {"404", "NoSuchBucket"}:
+        raise
+    object_before = 0
+    s3.create_bucket(Bucket=bucket)
+s3.put_object(Bucket=bucket, Key="call-901/transcript.txt", Body=b"hello caller")
+assert s3.get_object(Bucket=bucket, Key="call-901/transcript.txt")["Body"].read() == b"hello caller"
+
+print(
+    f"AGENT_READY rabbit_before={rabbit_before} "
+    f"nats_before={nats_before} object_before={object_before}",
+    flush=True,
+)
+while True:
+    time.sleep(60)
+"""
+    )
+    contract = AgentContract(
+        agent="dockerfile-only-voice-workflow",
+        tools=[ToolSpec(name="process_call", args=["call_id"])],
+        real_use_cases=["process a call using queued work and stored artifacts"],
+        dependencies=[
+            Dependency(
+                name="durable-jobs",
+                engine="rabbitmq",
+                kind="queue",
+                reached={"dsn_env": "AMQP_URL"},
+            ),
+            Dependency(
+                name="live-events",
+                engine="nats",
+                kind="event_bus",
+                reached={"dsn_env": "NATS_URL"},
+            ),
+            Dependency(
+                name="call-artifacts",
+                engine="minio",
+                kind="object_store",
+                reached={"dsn_env": "S3_ENDPOINT_URL"},
+            ),
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    first_session = tmp_path / "queue-object-first"
+    second_session = tmp_path / "queue-object-second"
+    expected = "AGENT_READY rabbit_before=0 nats_before=0 object_before=0"
+    first = None
+    second = None
+    try:
+        # Enter the cleanup guard before the first external resource is created. If the second
+        # environment fails admission/startup, the first one must not leak into the developer's
+        # Docker daemon or the next test.
+        first = provision(source, first_session, contract)
+        second = provision(source, second_session, contract)
+        assert set(first.services) == {"rabbitmq", "nats", "minio"}
+        assert {
+            (endpoint["kind"], endpoint["host_port"])
+            for endpoint in first.service_endpoints
+        }.isdisjoint(
+            {
+                (endpoint["kind"], endpoint["host_port"])
+                for endpoint in second.service_endpoints
+            }
+        )
+        first = start_runtime(first_session)
+        second = start_runtime(second_session)
+        assert expected in _wait_runtime_log(first, expected, timeout=60)
+        assert expected in _wait_runtime_log(second, expected, timeout=60)
+
+        stop_runtime(first_session)
+        reset(first_session)
+        first = start_runtime(first_session)
+        assert expected in _wait_runtime_log(first, expected, timeout=60)
+        assert healthy(second_session)
+    finally:
+        if first is not None:
+            stop_runtime(first_session)
+            stop(first_session)
+        if second is not None:
+            stop_runtime(second_session)
+            stop(second_session)
+
+
+@pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
+def test_compose_agent_uses_submitted_code_executor_and_resets_artifacts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "1")
+    source = tmp_path / "voice-code-agent"
+    source.mkdir()
+    (source / "Dockerfile.executor").write_text(
+        """FROM python:3.12-slim
+WORKDIR /app
+COPY executor.py .
+CMD ["python", "executor.py"]
+"""
+    )
+    (source / "Dockerfile.agent").write_text(
+        """FROM python:3.12-slim
+WORKDIR /app
+COPY agent.py .
+CMD ["python", "agent.py"]
+"""
+    )
+    (source / "executor.py").write_text(
+        """import json
+import os
+import subprocess
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_error(404)
+            return
+        self.send_response(204)
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/execute":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length))
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", payload["code"]],
+            cwd="/artifacts",
+            env={"PATH": os.environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        body = json.dumps(
+            {"returncode": result.returncode, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        return
+
+
+HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
+"""
+    )
+    (source / "agent.py").write_text(
+        """import json
+import os
+import time
+import urllib.request
+from pathlib import Path
+
+artifact = Path("/artifacts/call-volume.svg")
+artifact_before = int(artifact.exists())
+code = '''from pathlib import Path
+values = [17, 29, 41, 53]
+mean = sum(values) / len(values)
+bars = "".join(f'<rect x="{10 + i * 25}" y="{70 - value}" width="15" height="{value}"/>' for i, value in enumerate(values))
+Path("call-volume.svg").write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">{bars}</svg>')
+print(mean)
+'''
+request = urllib.request.Request(
+    os.environ["CODE_EXECUTOR_URL"].rstrip("/") + "/execute",
+    data=json.dumps({"code": code}).encode(),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    result = json.load(response)
+assert result["returncode"] == 0, result
+assert result["stdout"] == "35.0"
+deadline = time.monotonic() + 5
+while not artifact.exists() and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert artifact.read_text().startswith("<svg")
+print(f"AGENT_READY artifact_before={artifact_before} mean={result['stdout']} svg=1", flush=True)
+while True:
+    time.sleep(60)
+"""
+    )
+    (source / "compose.yml").write_text(
+        """services:
+  code-executor:
+    build:
+      context: .
+      dockerfile: Dockerfile.executor
+    ports: ["8000:8000"]
+    read_only: true
+    cap_drop: ["ALL"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    tmpfs: ["/tmp"]
+    volumes: ["artifacts:/artifacts"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  agent-runtime:
+    profiles: ["harness-runtime"]
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      CODE_EXECUTOR_URL: http://code-executor:8000
+    depends_on:
+      code-executor:
+        condition: service_healthy
+    volumes: ["artifacts:/artifacts:ro"]
+volumes:
+  artifacts: {}
+"""
+    )
+    session = tmp_path / "code-session"
+    expected = "AGENT_READY artifact_before=0 mean=35.0 svg=1"
+    environment = provision(source, session)
+    try:
+        assert environment.services == ["code-executor"]
+        assert environment.runtime_services == ["agent-runtime"]
         environment = start_runtime(session)
         assert expected in _wait_runtime_log(environment, expected, timeout=30)
         stop_runtime(session)

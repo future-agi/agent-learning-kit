@@ -552,6 +552,15 @@ def _endpoint_ready(endpoint: dict[str, Any], host: str) -> bool:
                 # An authentication challenge is a semantic Redis response and proves the
                 # server is ready. Credentials are validated by the submitted agent itself.
                 return response.startswith((b"+PONG", b"-NOAUTH"))
+            if protocol == "amqp":
+                # A listening RabbitMQ socket can appear before the AMQP application is ready.
+                # Require the server to answer the protocol header, not merely accept TCP.
+                connection.sendall(b"AMQP\x00\x00\x09\x01")
+                return bool(connection.recv(128))
+            if protocol == "nats":
+                # NATS begins every client session with an INFO line once the server can route
+                # traffic. This also distinguishes it from an unrelated process on the port.
+                return connection.recv(256).startswith(b"INFO ")
     except OSError:
         return False
     readiness_path = str(endpoint.get("readiness_path") or "")
@@ -588,7 +597,9 @@ def _wait_for_endpoints(
                 # Protocol services can briefly answer while an init script is about to restart
                 # them. A short stability window prevents the first real tool call racing that
                 # transition. Unknown TCP services retain the fast generic behavior.
-                needs_stability = bool(indexed[endpoint].get("readiness_path"))
+                needs_stability = bool(indexed[endpoint].get("readiness_path")) or str(
+                    indexed[endpoint].get("protocol") or ""
+                ) in {"amqp", "nats", "redis"}
                 if (
                     not needs_stability
                     or time.monotonic() - first_ready >= stability_seconds
@@ -837,6 +848,33 @@ def _managed_service(
             f"postgresql://{user}@postgres:5432/{database}",
             "DATABASE_URL",
         )
+    if engine == "mysql":
+        return (
+            {
+                "image": f"mysql:{version or '8.4'}",
+                "environment": {
+                    "MYSQL_DATABASE": database,
+                    "MYSQL_USER": user,
+                    "MYSQL_PASSWORD": "harness-local",
+                    "MYSQL_ROOT_PASSWORD": "harness-root-local",
+                },
+                "ports": ["${HARNESS_MYSQL_PORT:-53306}:3306"],
+                "healthcheck": {
+                    "test": [
+                        "CMD-SHELL",
+                        "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER "
+                        "-p$$MYSQL_PASSWORD --silent",
+                    ],
+                    "interval": "1s",
+                    "timeout": "5s",
+                    "retries": 60,
+                },
+                "volumes": init_mounts,
+            },
+            f"mysql://{quote(user, safe='')}:harness-local@mysql:3306/"
+            f"{quote(database, safe='')}",
+            "DATABASE_URL",
+        )
     if engine == "redis":
         return (
             {
@@ -882,6 +920,86 @@ def _managed_service(
             "http://qdrant:6333",
             "QDRANT_URL",
         )
+    if engine == "rabbitmq":
+        return (
+            {
+                # The management plugin is not needed for AMQP workloads and materially raises
+                # memory/boot pressure when several isolated jobs start together. Customers can
+                # still request a management tag explicitly in their contract.
+                "image": f"rabbitmq:{version or '3.13-alpine'}",
+                "environment": {
+                    "RABBITMQ_DEFAULT_USER": "harness",
+                    "RABBITMQ_DEFAULT_PASS": "harness-local",
+                    # Erlang otherwise sizes scheduler/dirty-scheduler pools from the host CPU
+                    # count, not the job's practical sandbox share. Concurrent environments can
+                    # then exhaust Docker's thread budget during boot even though each broker is
+                    # small. Keep the harness-owned broker deterministic and resource-bounded.
+                    "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "+S 2:2 +SDcpu 1 +SDio 1",
+                },
+                "ports": ["${HARNESS_RABBITMQ_PORT:-55672}:5672"],
+                "healthcheck": {
+                    "test": ["CMD", "rabbitmq-diagnostics", "-q", "ping"],
+                    "interval": "1s",
+                    "timeout": "5s",
+                    "retries": 90,
+                },
+            },
+            "amqp://harness:harness-local@rabbitmq:5672/%2F",
+            "AMQP_URL",
+        )
+    if engine == "nats":
+        return (
+            {
+                "image": f"nats:{version or '2.10-alpine'}",
+                "command": ["-js", "-m", "8222"],
+                "ports": [
+                    "${HARNESS_NATS_PORT:-54222}:4222",
+                    "${HARNESS_NATS_MONITORING_PORT:-58222}:8222",
+                ],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "wget",
+                        "--spider",
+                        "-q",
+                        "http://127.0.0.1:8222/healthz",
+                    ],
+                    "interval": "1s",
+                    "timeout": "5s",
+                    "retries": 60,
+                },
+            },
+            "nats://nats:4222",
+            "NATS_URL",
+        )
+    if engine == "minio":
+        return (
+            {
+                "image": f"minio/minio:{version or 'RELEASE.2025-04-22T22-12-26Z'}",
+                "command": ["server", "/data", "--console-address", ":9001"],
+                "environment": {
+                    "MINIO_ROOT_USER": "harness",
+                    "MINIO_ROOT_PASSWORD": "harness-local-secret",
+                },
+                "ports": [
+                    "${HARNESS_MINIO_PORT:-59010}:9000",
+                    "${HARNESS_MINIO_CONSOLE_PORT:-59011}:9001",
+                ],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "curl",
+                        "-f",
+                        "http://127.0.0.1:9000/minio/health/ready",
+                    ],
+                    "interval": "1s",
+                    "timeout": "5s",
+                    "retries": 60,
+                },
+            },
+            "http://minio:9000",
+            "S3_ENDPOINT_URL",
+        )
     raise ProvisionError(f"managed_dependency_unsupported: {engine}")
 
 
@@ -895,7 +1013,17 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
     store = getattr(contract, "data_store", None)
     kind = str(getattr(store, "kind", "") or "").lower()
     dependencies = list(getattr(contract, "dependencies", None) or [])
-    supported = ("clickhouse", "postgres", "redis", "mongodb", "qdrant")
+    supported = (
+        "clickhouse",
+        "postgres",
+        "mysql",
+        "redis",
+        "mongodb",
+        "qdrant",
+        "rabbitmq",
+        "nats",
+        "minio",
+    )
     primary_engine = next((one for one in supported if one in kind), "")
     requested: list[tuple[str, Any | None]] = []
     unsupported_declared = bool(kind) and not primary_engine
@@ -972,6 +1100,16 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
                 or str(getattr(reached, "config_key", "") or "")
             )
         runtime_environment[variable or default_variable] = internal_dsn
+        if engine == "minio":
+            # These are harness-owned, run-local credentials for the isolated MinIO service,
+            # not customer credentials. They never enter HarnessJob or SecretRef payloads.
+            runtime_environment.update(
+                {
+                    "AWS_ACCESS_KEY_ID": "harness",
+                    "AWS_SECRET_ACCESS_KEY": "harness-local-secret",
+                    "AWS_DEFAULT_REGION": "us-east-1",
+                }
+            )
         services[engine] = service
         depends_on[engine] = {"condition": "service_healthy"}
     platform_value = str(getattr(runtime, "platform", "") or "")
