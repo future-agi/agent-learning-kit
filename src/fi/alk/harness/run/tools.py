@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -73,6 +74,12 @@ def configure_source_voice(world_root: Path, contract: Any = None) -> bool:
 
     prompt = str(getattr(contract, "system_prompt_excerpt", "") or "").strip()
     activate_voice_environment(root, system_prompt=prompt)
+    if not os.environ.get("LIVEKIT_TARGET_AGENT_NAME", "").strip():
+        label = str(getattr(contract, "agent", "") or "harness-agent").lower()
+        label = re.sub(r"[^a-z0-9-]+", "-", label).strip("-") or "harness-agent"
+        # The worker setup replaces this with a scenario-scoped value immediately before start.
+        # This base merely lets valid unnamed AgentServer workers pass transport preflight.
+        os.environ["LIVEKIT_TARGET_AGENT_NAME"] = label[:48]
     os.environ.setdefault("HARNESS_VOICE_CASE", "1.1.2")
     # This is an inbound worker: it greets first. The scripted caller turns that one greeting
     # into its opening request. Simulator-first races an independent opening timer against the

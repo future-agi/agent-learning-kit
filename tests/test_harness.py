@@ -2934,9 +2934,11 @@ def test_source_livekit_calls_follow_the_workers_agent_first_greeting(
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setenv("HARNESS_CONVERSATION_DIRECTION", "simulator_first")
+    monkeypatch.delenv("LIVEKIT_TARGET_AGENT_NAME", raising=False)
 
     assert run_tools.configure_source_voice(tmp_path)
     assert os.environ["HARNESS_CONVERSATION_DIRECTION"] == "agent_first"
+    assert os.environ["LIVEKIT_TARGET_AGENT_NAME"] == "harness-agent"
 
 
 def test_sdk_voice_spec_keeps_canonical_and_engine_direction_aligned(monkeypatch):
@@ -4472,6 +4474,29 @@ def test_a_tool_that_cannot_be_reached_stops_with_an_actionable_problem(tmp_path
     assert len(problems) == 1
     assert "look" in problems[0]
     assert "importable callable or an HTTP service" in problems[0]
+
+
+def test_voice_runtime_owns_session_closure_tools(tmp_path):
+    """A real RTC worker is the seam for closures that cannot be imported independently."""
+    from fi.alk.harness.build import blockers
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="voice-worker",
+        modality="voice",
+        tools=[{"name": "place_order", "args": ["item"]}],
+        real_use_cases=["place an order over a call"],
+        runtime={"language": "python", "command": ["python", "agent.py", "start"]},
+        tool_entrypoints=[
+            {
+                "tool": "place_order",
+                "mode": "unreachable",
+                "notes": "closure captures the LiveKit RunContext",
+            }
+        ],
+    )
+
+    assert blockers(contract, str(tmp_path)) == []
 
 
 def test_a_refusal_convention_written_with_escaped_quotes_still_matches():

@@ -502,7 +502,15 @@ def contract_tools(destination: Path) -> Any:
                         "install": {
                             "type": "string",
                             "description": "Its own install command, e.g. from its lockfile or "
-                            "requirements. Used as written rather than guessed at.",
+                            "requirements. Recorded as evidence; generated packaging derives "
+                            "the executable install from the submitted manifest/lockfile.",
+                        },
+                        "extras": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional dependency groups declared by the source "
+                            "manifest that this runtime needs, such as voice or qdrant. Never "
+                            "invent a group that the manifest does not declare.",
                         },
                         "workdir": {
                             "type": "string",
@@ -513,6 +521,13 @@ def contract_tools(destination: Path) -> Any:
                             "type": "string",
                             "description": "Path to its own Dockerfile, if it has one. Theirs is "
                             "used in preference to anything written for it.",
+                        },
+                        "command": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Exact argv for the submitted process when the "
+                            "repository has no container entrypoint. Leave empty only when one "
+                            "conventional entrypoint is unambiguous in source.",
                         },
                         "platform": {
                             "type": "string",

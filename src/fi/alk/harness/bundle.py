@@ -292,6 +292,90 @@ _COPY_IGNORED = {
 }
 
 
+def _copy_generated_runtime_context(
+    session: Path, staging: Path, generated: list[str]
+) -> Path | None:
+    source = session / "generated-runtime-context"
+    if not source.is_dir():
+        return None
+    target = staging / "services" / "generated-runtime"
+    shutil.copytree(source, target)
+    for path in sorted(target.rglob("*")):
+        if path.is_file():
+            generated.append(path.relative_to(staging).as_posix())
+    plan = session / "generated-runtime.json"
+    if plan.is_file():
+        try:
+            portable_plan = json.loads(plan.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BundleError(f"bundle_generated_runtime_plan_invalid: {exc}") from exc
+        portable_plan["context_directory"] = "services/generated-runtime"
+        (staging / plan.name).write_text(
+            json.dumps(portable_plan, indent=2), encoding="utf-8"
+        )
+        generated.append(plan.name)
+    return target
+
+
+def _portable_managed_compose(
+    compose: Path,
+    *,
+    source: Path,
+    session: Path,
+    generated_context: Path | None,
+) -> dict[str, Any]:
+    """Rewrite harness-generated host paths to paths inside the sealed bundle."""
+    try:
+        document = json.loads(compose.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BundleError(f"bundle_managed_compose_invalid: {exc}") from exc
+    generated_source = session / "generated-runtime-context"
+
+    def portable_path(raw: str) -> str:
+        value = Path(raw)
+        resolved = (
+            value.resolve()
+            if value.is_absolute()
+            else (compose.parent / value).resolve()
+        )
+        try:
+            relative = resolved.relative_to(source)
+        except ValueError:
+            relative = None
+        if relative is not None:
+            return (Path("services/source") / relative).as_posix()
+        if generated_context is not None and resolved == generated_source.resolve():
+            return "services/generated-runtime"
+        raise BundleError(f"bundle_build_or_mount_path_outside_submission: {raw}")
+
+    services = document.get("services", {}) if isinstance(document, dict) else {}
+    for service in services.values() if isinstance(services, dict) else []:
+        if not isinstance(service, dict):
+            continue
+        build = service.get("build")
+        if isinstance(build, str):
+            service["build"] = portable_path(build)
+        elif isinstance(build, dict) and build.get("context"):
+            build["context"] = portable_path(str(build["context"]))
+        volumes = service.get("volumes", [])
+        rewritten: list[Any] = []
+        for volume in volumes if isinstance(volumes, list) else []:
+            if isinstance(volume, str):
+                parts = volume.split(":", 2)
+                if parts and Path(parts[0]).is_absolute():
+                    parts[0] = portable_path(parts[0])
+                rewritten.append(":".join(parts))
+            elif isinstance(volume, dict) and volume.get("type") == "bind":
+                item = dict(volume)
+                item["source"] = portable_path(str(item.get("source", "")))
+                rewritten.append(item)
+            else:
+                rewritten.append(volume)
+        if isinstance(volumes, list):
+            service["volumes"] = rewritten
+    return document
+
+
 def export_session_bundle(
     source: str | Path,
     session: str | Path,
@@ -355,6 +439,11 @@ def export_session_bundle(
             generated.append(artifact)
 
         provisioned = ProvisionedEnvironment.load(session)
+        generated_context = (
+            _copy_generated_runtime_context(session, staging, generated)
+            if provisioned and provisioned.generated_runtime_plan
+            else None
+        )
         services = list(provisioned.services) if provisioned else []
         capabilities: dict[str, Capability] = {}
         readiness: list[dict[str, Any]] = []
@@ -396,7 +485,15 @@ def export_session_bundle(
             except ValueError:
                 # Managed Compose is generated into the session, not the repository.
                 document = "compose.json"
-                shutil.copy2(compose, staging / document)
+                portable = _portable_managed_compose(
+                    compose,
+                    source=source,
+                    session=session,
+                    generated_context=generated_context,
+                )
+                (staging / document).write_text(
+                    json.dumps(portable, indent=2), encoding="utf-8"
+                )
                 generated.append(document)
             runtime = BundleRuntime(kind=RuntimeKind.COMPOSE, document=document)
 

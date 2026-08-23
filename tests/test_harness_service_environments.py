@@ -25,6 +25,7 @@ from fi.alk.harness.provision import (
     _internal_overrides,
     _endpoint_ready,
     _managed_compose,
+    _start_managed_services,
     _overrides,
     _validate_compose_security,
     _write_port_override,
@@ -36,6 +37,52 @@ from fi.alk.harness.provision import (
     stop_runtime,
 )
 from fi.alk.harness.service_catalog import profile_for
+
+
+def test_harness_owned_service_boot_gets_one_clean_retry(monkeypatch, tmp_path):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="fagi-harness-retry",
+        managed=True,
+    )
+    calls = []
+
+    def run(_environment, *arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        if arguments[0] == "up" and sum(item[0][0] == "up" for item in calls) == 1:
+            raise ProvisionError("container rabbitmq exited (1)")
+        return ""
+
+    monkeypatch.setattr("fi.alk.harness.provision._run", run)
+
+    _start_managed_services(environment, ["rabbitmq", "nats"])
+
+    assert [item[0][0] for item in calls] == ["up", "down", "up", "up"]
+    assert calls[2][0][-1] == "rabbitmq"
+    assert calls[3][0][-1] == "nats"
+    assert calls[1][1]["check"] is False
+
+
+def test_submitted_compose_boot_is_not_automatically_retried(monkeypatch, tmp_path):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="customer-compose",
+        managed=False,
+    )
+    calls = []
+
+    def run(_environment, *arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        raise ProvisionError("container customer-agent exited (1)")
+
+    monkeypatch.setattr("fi.alk.harness.provision._run", run)
+
+    with pytest.raises(ProvisionError, match="customer-agent"):
+        _start_managed_services(environment, ["customer-agent"])
+
+    assert [item[0][0] for item in calls] == ["up"]
 
 
 def test_catalog_recognizes_voice_agent_dependency_families():
@@ -85,9 +132,7 @@ def test_queue_readiness_requires_protocol_greeting(monkeypatch):
 
     silent = FakeSocket(b"")
     monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: silent)
-    assert not _endpoint_ready(
-        {"host_port": 5672, "protocol": "amqp"}, "127.0.0.1"
-    )
+    assert not _endpoint_ready({"host_port": 5672, "protocol": "amqp"}, "127.0.0.1")
 
 
 def test_clickhouse_connectors_are_injected_from_python_js_and_dotenv(
@@ -332,6 +377,29 @@ def test_missing_custom_tool_service_is_never_generated(tmp_path):
     assert _managed_compose(source, tmp_path / "session", contract) is None
 
 
+def test_external_model_provider_is_not_mistaken_for_managed_infrastructure(
+    tmp_path,
+):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    contract = AgentContract(
+        agent="voice-agent",
+        tools=[ToolSpec(name="answer", args=["question"])],
+        real_use_cases=["answer a caller"],
+        dependencies=[
+            Dependency(name="OpenAI TTS", kind="service", what="speech synthesis")
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+
+    assert target is not None
+    document = json.loads(target.read_text())
+    assert set(document["services"]) == {"agent-runtime"}
+
+
 def test_declared_managed_dependency_without_dockerfile_fails_actionably(tmp_path):
     source = tmp_path / "unpackaged-agent"
     source.mkdir()
@@ -495,9 +563,12 @@ def test_queue_and_object_services_are_generated_from_declared_dependencies(tmp_
         "agent-runtime",
     }
     assert document["services"]["rabbitmq"]["image"] == "rabbitmq:3.13-alpine"
-    assert document["services"]["rabbitmq"]["environment"][
-        "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS"
-    ] == "+S 2:2 +SDcpu 1 +SDio 1"
+    assert (
+        document["services"]["rabbitmq"]["environment"][
+            "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS"
+        ]
+        == "+S 2:2 +SDcpu 1 +SDio 1"
+    )
     assert document["services"]["agent-runtime"]["environment"] == {
         "AMQP_URL": "amqp://harness:harness-local@rabbitmq:5672/%2F",
         "NATS_URL": "nats://nats:4222",

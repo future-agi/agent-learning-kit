@@ -28,6 +28,13 @@ from urllib import request as urllib_request
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .packaging import PackagingKind, inspect_packaging
+from .generated_runtime import (
+    GENERATED_DOCKERFILE,
+    GeneratedRuntimeError,
+    GeneratedRuntimePlan,
+    can_generate_runtime,
+    prepare_generated_runtime,
+)
 from .service_catalog import address, profile_for
 
 MANIFEST = "environment.json"
@@ -92,6 +99,11 @@ class ProvisionedEnvironment:
     source_fingerprint: str = ""
     provision_seconds: float = 0.0
     managed: bool = False
+    generated_runtime_plan: str = ""
+    runtime_fingerprint: str = ""
+    # Names only. Values are resolved from the job secret environment immediately before the
+    # ephemeral worker starts and are never serialized into environment.json or a bundle.
+    runtime_configuration_names: list[str] = field(default_factory=list)
 
     def save(self, destination: Path) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
@@ -248,6 +260,49 @@ def _run(
             f"{' '.join(command)} failed ({completed.returncode}): {shown}"
         )
     return output
+
+
+def _start_managed_services(
+    environment: ProvisionedEnvironment, services: list[str], *, build: bool = True
+) -> None:
+    """Start dependencies, retrying one clean boot for harness-owned stacks only."""
+    attempts = 2 if environment.managed else 1
+    for attempt in range(attempts):
+        try:
+            # Managed dependencies are independent. Starting heavyweight brokers and object
+            # stores in one burst can exhaust a local/hosted sandbox's process budget even when
+            # its steady-state capacity is sufficient. Admit each service to readiness before
+            # starting the next; submitted Compose retains its own native dependency graph.
+            groups = (
+                ([service] for service in services)
+                if environment.managed
+                else [services]
+            )
+            for group in groups:
+                _run(
+                    environment,
+                    "up",
+                    "--detach",
+                    "--build" if build else "--no-build",
+                    "--wait",
+                    *group,
+                )
+            return
+        except ProvisionError as exc:
+            detail = str(exc).lower()
+            transient_boot = " exited (" in detail or "unhealthy" in detail
+            if attempt + 1 >= attempts or not transient_boot:
+                raise
+            # A retry starts from a genuinely clean state. Reusing a partially initialized
+            # broker/database volume makes the second attempt neither isolated nor diagnostic.
+            _run(
+                environment,
+                "down",
+                "--volumes",
+                "--remove-orphans",
+                check=False,
+                timeout=120,
+            )
 
 
 def _command_failure_output(output: str, *, limit: int = 16_000) -> str:
@@ -779,12 +834,37 @@ def attached_postgres_store(destination: str | Path):
 
 def _configuration_name(value: str) -> str:
     """Extract an environment variable name from a contract's prose or config key."""
-    candidates = re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", value or "")
-    return (
-        candidates[0]
-        if candidates
-        else (value.strip() if value.strip().isupper() else "")
-    )
+    candidates = _configuration_names(value)
+    return candidates[0] if candidates else ""
+
+
+def _configuration_names(value: str) -> list[str]:
+    """Extract every env name from fields that may contain comma/slash-separated prose."""
+    raw = (value or "").strip()
+    candidates = re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", raw)
+    names = [candidate for candidate in candidates if "_" in candidate]
+    if not names and re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", raw):
+        names = [raw]
+    return list(dict.fromkeys(names))
+
+
+def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
+    names: set[str] = set()
+    for dependency in list(getattr(contract, "dependencies", None) or []):
+        reached = getattr(dependency, "reached", None)
+        if reached is None:
+            continue
+        for field_name in ("dsn_env", "config_key", "user", "password_from"):
+            names.update(
+                _configuration_names(str(getattr(reached, field_name, "") or ""))
+            )
+    forbidden = {
+        "FI_API_KEY",
+        "FI_SECRET_KEY",
+        "HARNESS_PLATFORM_API_KEY",
+        "HARNESS_PLATFORM_SECRET_KEY",
+    }
+    return sorted(name for name in names if name not in forbidden)
 
 
 def _managed_service(
@@ -1003,7 +1083,12 @@ def _managed_service(
     raise ProvisionError(f"managed_dependency_unsupported: {engine}")
 
 
-def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | None:
+def _managed_compose(
+    source: Path,
+    destination: Path,
+    contract: Any,
+    generated_runtime: GeneratedRuntimePlan | None = None,
+) -> Path | None:
     """Write a harness-owned adapter for a supported source-declared data store.
 
     This is deliberately registry-like and explicit.  A recognized engine gets its real service;
@@ -1026,7 +1111,30 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
     )
     primary_engine = next((one for one in supported if one in kind), "")
     requested: list[tuple[str, Any | None]] = []
-    unsupported_declared = bool(kind) and not primary_engine
+    embedded_store = any(
+        marker in kind.replace("-", "_").replace(" ", "_")
+        for marker in (
+            "in_process",
+            "in_memory",
+            "memory",
+            "sqlite",
+            "filesystem",
+            "file_store",
+            "local_state",
+        )
+    )
+    unsupported_declared = bool(kind) and not primary_engine and not embedded_store
+    dependency_manifest = ""
+    if generated_runtime is not None:
+        manifest = (
+            source / generated_runtime.component / generated_runtime.dependency_file
+        )
+        if manifest.is_file():
+            dependency_manifest = (
+                manifest.read_text(encoding="utf-8", errors="replace")
+                .lower()
+                .replace("_", "-")
+            )
     if primary_engine:
         requested.append((primary_engine, None))
     for dependency in dependencies:
@@ -1035,7 +1143,50 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
             f"{getattr(dependency, 'kind', '')} {getattr(dependency, 'what', '')}"
         ).lower()
         engine = next((one for one in supported if one in description), "")
-        if not engine:
+        declared_engine = str(getattr(dependency, "engine", "") or "").strip()
+        reached = getattr(dependency, "reached", None)
+        dsn_env = str(getattr(reached, "dsn_env", "") or "").strip()
+        config_key = str(getattr(reached, "config_key", "") or "").strip()
+        password_from = str(getattr(reached, "password_from", "") or "").strip()
+        embedded_dependency = bool(
+            reached
+            and (
+                str(getattr(reached, "loader_module", "") or "").strip()
+                or str(getattr(reached, "loader_function", "") or "").strip()
+            )
+            and not dsn_env
+            and not str(getattr(reached, "config_key", "") or "").strip()
+            and not str(getattr(reached, "password_from", "") or "").strip()
+            and not str(getattr(reached, "host", "") or "").strip()
+            and not getattr(reached, "port", None)
+            and not str(getattr(reached, "database", "") or "").strip()
+        )
+        package_name = re.split(r"[<>=!~\s\[]", declared_engine, maxsplit=1)[0]
+        packaged_dependency = bool(
+            generated_runtime is not None
+            and package_name
+            and package_name.lower().replace("_", "-") in dependency_manifest
+            and not dsn_env
+            and not config_key
+            and not password_from
+            and not str(getattr(reached, "database", "") or "").strip()
+            and not (
+                str(getattr(reached, "host", "") or "").strip() not in {"", ":memory:"}
+            )
+            and not getattr(reached, "port", None)
+        )
+        external_provider = bool(
+            reached
+            and (password_from or dsn_env or config_key)
+            and not str(getattr(reached, "database", "") or "").strip()
+        )
+        if (
+            not engine
+            and declared_engine
+            and not external_provider
+            and not embedded_dependency
+            and not packaged_dependency
+        ):
             unsupported_declared = True
         if engine and engine not in {name for name, _ in requested}:
             requested.append((engine, dependency))
@@ -1047,7 +1198,7 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
     runtime = getattr(contract, "runtime", None)
     dockerfile_value = str(getattr(runtime, "dockerfile", "") or "Dockerfile")
     dockerfile = source / dockerfile_value
-    if not dockerfile.is_file():
+    if generated_runtime is None and not dockerfile.is_file():
         if not requested:
             return None
         raise ProvisionError(
@@ -1128,12 +1279,18 @@ def _managed_compose(source: Path, destination: Path, contract: Any) -> Path | N
             )
         if len(declared_platforms) == 1:
             platform_value = declared_platforms.pop()
+    build_context = str(source)
+    if generated_runtime is not None:
+        build_context = generated_runtime.context_directory
+        dockerfile_value = GENERATED_DOCKERFILE
     runtime_service: dict[str, Any] = {
-        "build": {"context": str(source), "dockerfile": dockerfile_value},
+        "build": {"context": build_context, "dockerfile": dockerfile_value},
         "profiles": ["harness-runtime"],
         "environment": runtime_environment,
         "depends_on": depends_on,
     }
+    if generated_runtime is not None:
+        runtime_service["command"] = list(generated_runtime.command)
     if platform_value:
         runtime_service["platform"] = platform_value
     services["agent-runtime"] = runtime_service
@@ -1153,6 +1310,7 @@ def provision(
     source_root = Path(source).expanduser().resolve()
     destination = Path(destination)
     packaging = inspect_packaging(source_root)
+    generated_runtime: GeneratedRuntimePlan | None = None
     explicit_dockerfile = str(
         getattr(getattr(contract, "runtime", None), "dockerfile", "") or ""
     )
@@ -1203,18 +1361,46 @@ def provision(
         compose = None
     managed = False
     if compose is None and contract is not None:
-        compose = _managed_compose(source_root, destination, contract)
+        if not packaging.candidates and not (source_root / "Dockerfile").is_file():
+            try:
+                generated_runtime = prepare_generated_runtime(
+                    source_root,
+                    destination,
+                    getattr(contract, "runtime", None),
+                )
+            except GeneratedRuntimeError as exc:
+                dependencies = list(getattr(contract, "dependencies", None) or [])
+                required = [
+                    str(getattr(item, "engine", "") or getattr(item, "name", ""))
+                    for item in dependencies
+                ]
+                prefix = (
+                    "the agent requires "
+                    + ", ".join(item for item in required if item)
+                    + " but ships neither Compose nor a Dockerfile; "
+                    if required
+                    else ""
+                )
+                raise ProvisionError(prefix + str(exc)) from exc
+        compose = _managed_compose(
+            source_root, destination, contract, generated_runtime=generated_runtime
+        )
         managed = compose is not None
     if compose is None:
         raise ProvisionError(
             f"{source_root} does not ship a Compose file; a non-Compose runtime adapter is required"
         )
     fingerprint = source_fingerprint(source_root)
+    runtime_fingerprint = generated_runtime.fingerprint if generated_runtime else ""
+    runtime_configuration_names = (
+        _contract_runtime_configuration_names(contract) if generated_runtime else []
+    )
     existing = ProvisionedEnvironment.load(destination)
     if (
         existing
         and Path(existing.source) == source_root
         and existing.source_fingerprint == fingerprint
+        and existing.runtime_fingerprint == runtime_fingerprint
         and existing.running
     ):
         # Verify rather than trusting a stale file left by a killed process.
@@ -1229,6 +1415,7 @@ def provision(
             _wait_for_endpoints(existing.service_endpoints)
             existing.overrides = _overrides(existing, config)
             existing.internal_overrides = _internal_overrides(existing, config)
+            existing.runtime_configuration_names = runtime_configuration_names
             existing.save(destination)
             return existing
 
@@ -1253,6 +1440,11 @@ def provision(
         port_variables=port_variables(compose),
         source_fingerprint=fingerprint,
         managed=managed,
+        generated_runtime_plan=(
+            str(destination / "generated-runtime.json") if generated_runtime else ""
+        ),
+        runtime_fingerprint=runtime_fingerprint,
+        runtime_configuration_names=runtime_configuration_names,
     )
     config = _config(environment)
     _validate_compose_security(config)
@@ -1275,14 +1467,7 @@ def provision(
         if environment.runtime_services:
             _run(environment, "build", *environment.runtime_services)
         if environment.services:
-            _run(
-                environment,
-                "up",
-                "--detach",
-                "--build",
-                "--wait",
-                *environment.services,
-            )
+            _start_managed_services(environment, environment.services)
         environment.service_endpoints = _service_endpoints(environment, config)
         _wait_for_endpoints(environment.service_endpoints)
         environment.overrides = _overrides(environment, config)
@@ -1315,7 +1500,8 @@ def provision_if_present(
         runtime = getattr(contract, "runtime", None)
         dockerfile_value = str(getattr(runtime, "dockerfile", "") or "Dockerfile")
         has_runtime = (Path(source).expanduser().resolve() / dockerfile_value).is_file()
-        if store is None and not dependencies and not has_runtime:
+        generated = can_generate_runtime(source, runtime)
+        if store is None and not dependencies and not has_runtime and not generated:
             return None
     return provision(source, destination, contract)
 
@@ -1345,14 +1531,7 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
     )
     started = time.monotonic()
     if environment.services:
-        _run(
-            environment,
-            "up",
-            "--detach",
-            "--no-build",
-            "--wait",
-            *environment.services,
-        )
+        _start_managed_services(environment, environment.services, build=False)
     config = _config(environment)
     _validate_compose_security(config)
     environment.services = _started_services(config)
@@ -1538,6 +1717,23 @@ def start_runtime(
         "HARNESS_CALLER_IDENTITY_PREFIX": "fagi-simulator",
         **(overrides or {}),
     }
+    for name in environment.runtime_configuration_names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            if name == "LIVEKIT_URL":
+                parsed = urlsplit(value)
+                if (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
+                    port = f":{parsed.port}" if parsed.port else ""
+                    value = urlunsplit(
+                        (
+                            parsed.scheme,
+                            f"host.docker.internal{port}",
+                            parsed.path,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
+            injected.setdefault(name, value)
     arguments = [
         "run",
         "--detach",
@@ -1577,6 +1773,17 @@ def start_runtime(
     ):
         arguments.extend(("--volume", f"{source}:{target}:ro"))
         injected[name] = target
+    google_path = injected.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    if google_path:
+        google_source = Path(google_path).expanduser()
+        if not _valid_google_credentials(google_source):
+            raise ProvisionError(
+                "GOOGLE_APPLICATION_CREDENTIALS for the generated runtime is not a valid "
+                "readable JSON credential file"
+            )
+        google_target = f"/run/harness-secrets/{google_source.name}"
+        arguments.extend(("--volume", f"{google_source.resolve()}:{google_target}:ro"))
+        injected["GOOGLE_APPLICATION_CREDENTIALS"] = google_target
     for name in sorted(injected):
         arguments.extend(("--env", name))
     arguments.append(service)
@@ -1711,19 +1918,28 @@ def connect_runner_network(
     """
     destination = Path(destination)
     environment = ProvisionedEnvironment.load(destination)
-    if environment is None or not environment.running or not environment.services:
+    if environment is None or not environment.running:
         raise ProvisionError(f"no running environment recorded at {destination}")
     configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
     if not configured:
         return ""
     runner = socket.gethostname() if configured == "self" else configured
-    service_container = _run(
-        environment,
-        "ps",
-        "--quiet",
-        environment.services[0],
-        timeout=30,
-    ).strip()
+    service_container = ""
+    if environment.services:
+        service_container = _run(
+            environment,
+            "ps",
+            "--quiet",
+            environment.services[0],
+            timeout=30,
+        ).strip()
+    elif environment.runtime_container:
+        service_container = environment.runtime_container
+    else:
+        # A runtime-only Compose project creates its network when ``compose run`` starts the
+        # worker. Return the stable alias now; the caller invokes this again immediately after
+        # startup to make that alias resolvable from the submitted container.
+        return alias
     if not service_container:
         raise ProvisionError("could not identify a container in the source environment")
     networks = json.loads(

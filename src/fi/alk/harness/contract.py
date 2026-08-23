@@ -12,9 +12,10 @@ rather than a bad contract reaching disk.
 from __future__ import annotations
 
 import json
+import shlex
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
@@ -216,14 +217,36 @@ class Reached(BaseModel):
 class Runtime(BaseModel):
     """What it takes to run the agent's code."""
 
-    language: str = "python"
+    # Empty means detect from the submitted dependency manifest. Defaulting this to Python makes
+    # an otherwise unambiguous Node repository fail the generated-runtime admission path.
+    language: str = ""
     version: str = ""
     install: str = ""
+    # Optional dependency groups declared by the repository itself (for example ``voice`` in
+    # pyproject.toml). Generated packaging validates these names against the manifest.
+    extras: list[str] = Field(default_factory=list)
     workdir: str = ""
     dockerfile: str = ""
+    # For repositories without container metadata, this is an argv vector for the submitted
+    # process. It is optional when one conventional entrypoint can be proven from source.
+    command: list[str] = Field(default_factory=list)
     # Preserve a repository-declared target architecture (for example linux/amd64 on an ARM
     # runner). This is execution metadata, not a change to the submitted application.
     platform: str = ""
+
+    @field_validator("command", mode="before")
+    @classmethod
+    def _normalize_command(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return shlex.split(value)
+        return value
+
+    @field_validator("extras", mode="before")
+    @classmethod
+    def _normalize_extras(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
 
 class Dependency(BaseModel):
@@ -455,7 +478,8 @@ class AgentContract(BaseModel):
             run = self.runtime
             parts.append(
                 "RUNNING ITS CODE:\n"
-                f"  {run.language} {run.version}, install with {run.install or 'unknown'}"
+                f"  {run.language or 'language unspecified'} {run.version}, "
+                f"install with {run.install or 'unknown'}"
                 + (f", imports resolve from {run.workdir}" if run.workdir else "")
                 + (
                     f", its own Dockerfile at {run.dockerfile}"

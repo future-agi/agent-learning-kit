@@ -287,6 +287,10 @@ def wire(
                 overrides=runtime_overrides,
                 trace_path=trace_path,
             )
+            # Runtime-only projects have no dependency container (and therefore no Compose
+            # network) until the worker starts. The first call above reserves the alias; this
+            # second idempotent call joins a hosted runner to the newly created network.
+            connect_runner_network(world_root)
             tunnel, moved = None, []
         elif ours:
             # The agent was started pointing here, so this is where its tools already go.
