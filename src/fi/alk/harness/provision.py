@@ -2105,6 +2105,15 @@ def _runtime_credential_mounts(
                     # ALK-owned destination that cannot collide with submitted mounts.
                     target = f"/run/harness-secrets/{runtime.name}"
             if source is None or not _valid_google_credentials(source):
+                # Local development supplies the credential through the sandbox's own environment
+                # rather than an uploaded runtime configuration; fall back to it, at an ALK-owned
+                # destination so a placeholder Compose mount cannot shadow it.
+                env_value = os.environ.get(name, "").strip()
+                env_path = Path(env_value).expanduser() if env_value else None
+                if env_path is not None and _valid_google_credentials(env_path):
+                    source = env_path
+                    target = f"/run/harness-secrets/{env_path.name}"
+            if source is None or not _valid_google_credentials(source):
                 raise ProvisionError(
                     "the submitted runtime needs GOOGLE_APPLICATION_CREDENTIALS, but neither its "
                     "Compose mount nor the uploaded runtime configuration points to a valid JSON "
