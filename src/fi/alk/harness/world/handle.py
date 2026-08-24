@@ -85,9 +85,12 @@ class HostedWorld:
 
         Bare `state()` leaves an over-cap table out of the snapshot rather than raising through
         it — one seeded audit table must not make the primary read verb inert for the whole
-        run. Naming that table explicitly (`state("big_table")`) still raises: the exclusion is
-        a property of the snapshot, not a way to read the table around its own cap. If every
-        visible table is over cap the exclusion would leave the snapshot `{}` — the one thing
+        run. A table nothing measured at baseline freeze gets the same treatment: the only way
+        one exists is a table the agent under test created since construction, and nothing it
+        does during a call may decide whether bare `state()` raises. Naming either kind of table
+        explicitly (`state("big_table")`) still raises: the exclusion is a property of the
+        snapshot, not a way to read the table around its own cap. If every visible table is
+        over-cap or unmeasured, the exclusion would leave the snapshot `{}` — the one thing
         state() must never return, since an empty snapshot reads as an observation and makes a
         negative check pass on a world nobody actually looked at — so that case raises too,
         naming the tables it would have excluded. The exclusion itself happens at the read: the
@@ -103,9 +106,10 @@ class HostedWorld:
                 raise WorldUsageError(
                     f"{table!r} is not a table in this world; it holds {sorted(visible)}."
                 )
-            if self._baseline_row_counts[table] > STATE_ROW_CAP:
+            count = self._row_count(table)
+            if count > STATE_ROW_CAP:
                 raise WorldStateTooLarge(
-                    f"{table!r} held {self._baseline_row_counts[table]} rows when the baseline "
+                    f"{table!r} held {count} rows when the baseline "
                     f"was frozen, over the {STATE_ROW_CAP}-row cap; state() will not read it "
                     "back."
                 )
@@ -113,11 +117,21 @@ class HostedWorld:
 
         names = self._visible_tables()
         self._require_nonempty_schema(names)
-        included = [name for name in names if self._baseline_row_counts[name] <= STATE_ROW_CAP]
+        # A table nothing measured at freeze is treated the same as an over-cap one here, not
+        # routed through `_row_count`'s typed refusal — that refusal is for a scenario naming a
+        # table explicitly; the bare snapshot must not go unavailable over a table the agent
+        # itself created since construction (the only actor besides the provisioner that can).
+        included = [
+            name
+            for name in names
+            if name in self._baseline_row_counts
+            and self._baseline_row_counts[name] <= STATE_ROW_CAP
+        ]
         if not included:
             raise WorldStateTooLarge(
                 f"every table this world holds — {sorted(names)} — is over the "
-                f"{STATE_ROW_CAP}-row cap; state() will not return {{}} in their place."
+                f"{STATE_ROW_CAP}-row cap or was never measured at baseline freeze; state() "
+                "will not return {} in their place."
             )
         # One connection, asked for only the included tables — a bare state() used to open a
         # fresh connection per table (and a second one just to look up its primary key) to read
@@ -245,6 +259,20 @@ class HostedWorld:
                 f"{sorted(missing)}; state()'s cap cannot be decided for a table nobody "
                 "measured at freeze."
             )
+
+    def _row_count(self, table: str) -> int:
+        """This table's baseline row count, or the same typed refusal `_require_baseline_coverage`
+        gives a construction-time gap — for a table that only shows up afterward, so it never
+        reaches the caller as a bare `KeyError`.
+        """
+        try:
+            return self._baseline_row_counts[table]
+        except KeyError:
+            raise WorldUnavailable(
+                f"the baseline row counts this world was built with never measured "
+                f"{table!r}; state()'s cap cannot be decided for a table nobody measured at "
+                "freeze."
+            ) from None
 
     def _visible_tables(self) -> list[str]:
         rows = self._store.query(

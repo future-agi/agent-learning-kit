@@ -276,6 +276,31 @@ def test_a_table_missing_from_the_baseline_dict_is_unavailable_not_under_cap() -
         _world({"orders": [{"id": 1}]}, baseline={})
 
 
+def test_a_table_appearing_after_construction_is_unavailable_on_the_selector_path() -> None:
+    """`_require_baseline_coverage` only sees the tables visible when the handle was built; a
+    table that shows up afterward is still absent from `_baseline_row_counts`. Naming it
+    explicitly must reach the typed `WorldUnavailable` naming the table, not a bare `KeyError`
+    off an unguarded index — a `WorldUnavailable("")` would pass this test for the wrong reason,
+    so the message is asserted, not just the type."""
+    world = _world({"orders": [{"id": 1}]})
+    world._store.tables["late_table"] = [{"id": 1}]
+    with pytest.raises(WorldUnavailable) as raised:
+        world.state("late_table")
+    assert "late_table" in str(raised.value)
+
+
+def test_a_table_appearing_after_construction_is_excluded_from_the_bare_snapshot() -> None:
+    """Nothing the agent under test does during a call may decide whether bare `state()` raises
+    — a table it creates since construction is the only way an unmeasured table can exist, so the
+    bare path excludes it the same way it excludes an over-cap table rather than going
+    unavailable for the whole snapshot."""
+    world = _world({"orders": [{"id": 1}]})
+    world._store.tables["late_table"] = [{"id": 1}]
+    snapshot = world.state()
+    assert snapshot == {"orders": [{"id": 1}]}
+    assert "late_table" not in snapshot
+
+
 # --- put / change / drop -------------------------------------------------------------------
 
 

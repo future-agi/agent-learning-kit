@@ -99,10 +99,23 @@ def _run(source: str, name: str, entry: str, *args: Any) -> Outcome:
     if said is None or said is True or (isinstance(said, str) and not said.strip()):
         return Outcome(True)
     if said is False:
+        # Bare False from ready() names no precondition, so a scenario that hits it cannot be
+        # told apart from one whose ready.py is simply wrong — that is our mistake, not a
+        # generation-time precondition failure, so ready() alone reports it broken.
         return Outcome(
             False,
             f"{name} returned False without saying what is wrong. Return the sentence instead, "
             "or None if it holds.",
+            broken=(entry == "ready"),
+        )
+    if entry == "ready" and not isinstance(said, str):
+        # Same reasoning as bare False, widened: ready() has no way to turn a non-string value
+        # into a precondition sentence, so any of them is our mistake rather than the world's.
+        return Outcome(
+            False,
+            f"{name} returned {type(said).__name__} {said!r}. Return the sentence naming what is "
+            "missing, or None if it holds.",
+            broken=True,
         )
     return Outcome(False, str(said))
 
