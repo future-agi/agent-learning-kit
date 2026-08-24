@@ -16,7 +16,16 @@ from uuid import uuid4
 
 try:
     from livekit import api, rtc
-    from livekit.agents import Agent, AgentSession, RunContext, function_tool, metrics
+    from livekit.agents import (
+        Agent,
+        AgentSession,
+        AudioConfig,
+        BackgroundAudioPlayer,
+        RunContext,
+        function_tool,
+        metrics,
+    )
+    from livekit.agents.voice.background_audio import BuiltinAudioClip
     from livekit.agents.types import (
         ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
         TOPIC_TRANSCRIPTION,
@@ -320,7 +329,56 @@ class _TestRunnerAgent(Agent):
             room=room,
             room_options=RoomOptions(**room_kwargs),
         )
+        await self._maybe_start_background_audio(room, session)
         return session
+
+    async def _maybe_start_background_audio(
+        self, room: "rtc.Room", session: "AgentSession"
+    ) -> None:
+        """Mix caller-side ambient noise under the simulated caller, if the run asked for it.
+
+        Off unless HARNESS_BACKGROUND_NOISE names a source: a LiveKit builtin clip name, or an
+        http(s) URL to an ambient file. Any failure is swallowed, because a call without ambience is
+        preferable to a dropped one.
+        """
+        source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
+        if not source:
+            return
+
+        def _download() -> str | None:
+            import tempfile
+            import urllib.request
+
+            try:
+                suffix = (
+                    ".mp3" if ".mp3" in source else ".ogg" if ".ogg" in source else ".wav"
+                )
+                with urllib.request.urlopen(source, timeout=15) as response:
+                    data = response.read()
+                handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                handle.write(data)
+                handle.close()
+                return handle.name
+            except Exception:
+                return None
+
+        try:
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "0.3"))
+            if source.startswith(("http://", "https://")):
+                clip_source: Any = await asyncio.to_thread(_download)
+                if not clip_source:
+                    return
+            else:
+                clip_source = getattr(BuiltinAudioClip, source, None)
+                if clip_source is None:
+                    return
+            player = BackgroundAudioPlayer(
+                ambient_sound=AudioConfig(clip_source, volume=volume)
+            )
+            await player.start(room=room, agent_session=session)
+            self._background_player = player
+        except Exception:
+            logger.warning("background audio not started", exc_info=True)
 
     def open_conversation(self) -> None:
         if self._session is None:

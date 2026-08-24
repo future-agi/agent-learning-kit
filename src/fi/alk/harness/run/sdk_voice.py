@@ -41,6 +41,40 @@ def _json_env(name: str, default):
     return parsed
 
 
+# Language names a persona may carry, to the codes Deepgram STT expects. Unrecognised values that
+# already look like a code are passed through; everything else falls back to English.
+_LANGUAGE_CODES: dict[str, str] = {
+    "english": "en", "hindi": "hi", "hinglish": "hi", "spanish": "es", "french": "fr",
+    "german": "de", "portuguese": "pt", "italian": "it", "dutch": "nl", "japanese": "ja",
+    "korean": "ko", "mandarin": "zh", "chinese": "zh", "arabic": "ar", "russian": "ru",
+    "tamil": "ta", "telugu": "te", "bengali": "bn",
+}
+
+
+def _persona_stt_language() -> str:
+    """The STT language for this call's caller, from the persona's languages.
+
+    An explicit SIMULATOR_STT_LANGUAGE always wins. Otherwise the persona's first language is used,
+    so a caller who speaks Hindi is transcribed as Hindi rather than forced to English.
+    """
+    override = os.environ.get("SIMULATOR_STT_LANGUAGE", "").strip()
+    if override:
+        return override
+    raw = os.environ.get("HARNESS_PERSONA", "").strip()
+    if raw:
+        try:
+            languages = (json.loads(raw) or {}).get("languages") or []
+        except ValueError:
+            languages = []
+        if isinstance(languages, list) and languages:
+            first = str(languages[0]).strip().lower()
+            if first in _LANGUAGE_CODES:
+                return _LANGUAGE_CODES[first]
+            if 2 <= len(first) <= 5 and first.replace("-", "").isalpha():
+                return first
+    return "en"
+
+
 def _simulator() -> simulate.SimulatorAgentDefinition:
     llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google")
     stt_provider = os.environ.get("SIMULATOR_STT_PROVIDER", "deepgram")
@@ -67,7 +101,7 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
         stt={
             "provider": stt_provider,
             "model": model("stt", stt_provider),
-            "language": os.environ.get("SIMULATOR_STT_LANGUAGE", "en"),
+            "language": _persona_stt_language(),
         },
         tts={
             "provider": tts_provider,

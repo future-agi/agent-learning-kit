@@ -586,6 +586,24 @@ async def _spoken_to(
             os.environ["HARNESS_FIXTURE"] = json.dumps(
                 scenario.fixture, ensure_ascii=False, default=str
             )
+            # A scenario that asks to be heard through background noise selects a clip for the
+            # caller's environment; the voice engine mixes it under the caller. Cleared otherwise so
+            # a previous call's noise never leaks into a quiet one.
+            if getattr(scenario, "background_noise", False):
+                from ..background_noise import source_for
+
+                environment = ""
+                if isinstance(scenario.fixture, dict):
+                    environment = str(
+                        scenario.fixture.get("environment")
+                        or scenario.fixture.get("location")
+                        or ""
+                    )
+                os.environ["HARNESS_BACKGROUND_NOISE"] = source_for(
+                    environment, seed=scenario.name
+                )
+            else:
+                os.environ.pop("HARNESS_BACKGROUND_NOISE", None)
             code = place_the_call(
                 os.environ.get("HARNESS_VOICE_CASE", "2.1.2"),
                 on_exchange=live_exchange if on_exchange else None,
