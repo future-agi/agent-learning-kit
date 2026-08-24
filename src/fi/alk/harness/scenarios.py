@@ -27,6 +27,7 @@ from .config import (
     load_skill,
     permission_gate,
     provider_env,
+    thinking_config,
 )
 from . import progress
 from .catalogue import load_catalogue
@@ -106,6 +107,7 @@ def open_stage(
     options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(ask, allowed)
+    options.thinking = thinking_config()
     return Stage(options, name=SKILL), destination
 
 
@@ -386,6 +388,7 @@ async def _write_slice(
     options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(ask, allowed)
+    options.thinking = thinking_config()
     stage = Stage(options, name=f"{SKILL}:{mine.named()[:40]}")
     try:
         async with stage:

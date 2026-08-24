@@ -26,6 +26,7 @@ from .config import (
     permission_gate,
     provider_env,
     provisioning,
+    thinking_config,
 )
 from .contract import AgentContract
 from .session import Stage
@@ -202,6 +203,7 @@ def open_stage(
     options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(ask, allowed)
+    options.thinking = thinking_config()
     return Stage(options, name=SKILL), destination
 
 

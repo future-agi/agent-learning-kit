@@ -52,6 +52,24 @@ def chosen_model(model: str | None = None) -> str:
     return model or os.environ.get("ALK_HARNESS_MODEL", DEFAULT_MODEL)
 
 
+def thinking_config() -> dict[str, Any]:
+    """How much the model may think, from ALK_HARNESS_THINKING.
+
+    The Claude Code CLI defaults to adaptive thinking. In this harness the correctness of what a
+    stage produces is re-checked by code gates (a scenario is proved against the real world, a
+    contract is validated), so the model's private reasoning is spent on decisions the gates make
+    again anyway. Left unset, that reasoning was the majority of generated tokens and the majority
+    of wall time. Default to disabled for speed; ``adaptive`` restores the old behaviour, and an
+    integer sets an explicit budget for models that still honour one.
+    """
+    setting = os.environ.get("ALK_HARNESS_THINKING", "disabled").strip().lower()
+    if setting in {"adaptive", "on", "auto"}:
+        return {"type": "adaptive", "display": "omitted"}
+    if setting.isdigit() and int(setting) > 0:
+        return {"type": "enabled", "budget_tokens": int(setting), "display": "omitted"}
+    return {"type": "disabled"}
+
+
 def provisioning(enabled: bool | None = None) -> bool:
     """Compatibility switch for callers selecting the legacy provisioning surface.
 
@@ -123,6 +141,7 @@ def read_only_session(
     options.disallowed_tools = list(UNWANTED)
     options.hooks = gate_hooks(allowed)
     options.can_use_tool = permission_gate(granted=allowed)
+    options.thinking = thinking_config()
     return options
 
 
