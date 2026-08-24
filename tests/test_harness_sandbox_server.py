@@ -6,11 +6,23 @@ import os
 
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
+    SandboxAdjustmentRequest,
     LocalSandboxRequest,
+    _presentation_value,
     _worker_failure_retryable,
     create_app,
 )
 from fi.alk.harness.secrets import resolve_worker_secrets
+
+
+def test_presentation_redaction_handles_prose_with_email_before_url():
+    prose = "Contact owner@example.com or see https://example.com/docs"
+
+    assert _presentation_value(prose) == prose
+    assert (
+        _presentation_value("postgres://user:password@database:5432/app")
+        == "postgres://[redacted]@database:5432/app"
+    )
 
 
 def test_local_sandbox_rejects_source_outside_allowed_root(tmp_path, monkeypatch):
@@ -92,6 +104,77 @@ def test_local_sandbox_reports_live_stage_timestamp_and_detail_from_events(
     assert current["stage"] == "generating_scenarios"
     assert current["updated_at"] == "2026-08-22T01:02:03Z"
     assert current["detail"] == "generating and validating scenarios"
+
+
+def test_local_sandbox_exposes_generated_stage_outputs_and_adjustments(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    async def idle(_job, _source):
+        await asyncio.sleep(0)
+
+    sandbox._execute = idle
+
+    async def submit():
+        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    output = tmp_path / "state" / "artifacts" / response.job.run_id
+    output.mkdir(parents=True)
+    (output / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "agent",
+                "one_liner": "Books appointments",
+                "tools": [{"name": "book"}],
+                "hard_constraints": ["confirm first"],
+                "real_use_cases": ["new booking"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "environment.json").write_text(
+        json.dumps(
+            {
+                "source": "/private/source",
+                "compose_file": "/private/docker-compose.yml",
+                "compose_override_file": "/private/override.yml",
+                "services": ["postgres"],
+                "overrides": {"DATABASE_URL": "postgres://test"},
+                "running": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "scenarios.json").write_text(
+        json.dumps([{"name": "booking", "instruction": "Book tomorrow"}]),
+        encoding="utf-8",
+    )
+
+    adjusted = sandbox.adjust(
+        response.job.job_id,
+        SandboxAdjustmentRequest(
+            instruction="Add 10 more scenarios covering payment failures"
+        ),
+    )
+
+    assert [item["kind"] for item in adjusted.stage_outputs] == [
+        "contract",
+        "environment",
+        "scenarios",
+    ]
+    assert "source" not in adjusted.stage_outputs[1]["data"]
+    assert "compose_override_file" not in adjusted.stage_outputs[1]["data"]
+    assert adjusted.status.total_scenarios == 10
+    assert adjusted.adjustments[0]["target_stage"] == "scenarios"
+    assert adjusted.adjustments[0]["scenario_delta"] == 10
+    assert adjusted.adjustments[0]["status"] == "pending"
 
 
 def test_preflight_discovers_connectors_and_missing_credentials_without_values(

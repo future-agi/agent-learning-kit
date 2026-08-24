@@ -138,6 +138,7 @@ class HarnessExecutor:
         output: Path,
         model: str | None = None,
         run_model: str | None = None,
+        adjustments_path: Path | None = None,
     ) -> HarnessJobStatus:
         from .cli import _auto
 
@@ -160,6 +161,7 @@ class HarnessExecutor:
             model=model,
             run_model=run_model,
             job=job,
+            adjustments_path=str(adjustments_path) if adjustments_path else None,
         )
         status = await _auto(args)
         failure = _failure_from_events(output) if status not in (0, 2) else None
@@ -176,8 +178,8 @@ class HarnessExecutor:
                 else f"exit {status}"
             ),
             failure=failure,
-            completed_scenarios=job.scenario_count if status in (0, 2) else 0,
-            total_scenarios=job.scenario_count,
+            completed_scenarios=_scenario_count(output) if status in (0, 2) else 0,
+            total_scenarios=_scenario_count(output) or job.scenario_count,
         )
 
     async def acquire_and_run(
@@ -203,6 +205,14 @@ class HarnessExecutor:
 def run_sync(job: HarnessJob, *, source: Path, output: Path) -> HarnessJobStatus:
     """Small synchronous adapter for job consumers that do not own an event loop."""
     return asyncio.run(HarnessExecutor().run(job, source=source, output=output))
+
+
+def _scenario_count(output: Path) -> int:
+    try:
+        value = json.loads((output / "scenarios.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    return len(value) if isinstance(value, list) else 0
 
 
 def _failure_from_events(output: Path) -> HarnessFailure:
