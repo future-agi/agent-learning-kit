@@ -81,11 +81,46 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
             "verification code should be sent, and disclose the actual code only after the "
             "agent says it was sent and explicitly asks you to read it. Answer repair questions "
             "with the missing fact, not by restarting the request. Never repeat the same answer "
-            "more than twice. When the requested outcome is complete, thank the agent and end "
-            "the call."
+            "more than twice. Do not end the call while the agent still has a step to finish: when "
+            "it asks to proceed, say yes and wait for it to actually complete the task and confirm "
+            "it is done. Only once the outcome is actually done and confirmed, thank the agent and "
+            "end the call."
         ),
         allow_interruptions=True,
     )
+
+
+# Deepgram aura encodes the speaker in the model name, so a persona's accent selects a voice by
+# choosing the aura model. Only English accents aura actually ships are mapped; anything else keeps
+# the default so a caller never loses a voice to an accent the provider cannot render.
+_AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
+    "american": {
+        "female": ["aura-asteria-en", "aura-luna-en", "aura-hera-en", "aura-stella-en"],
+        "male": ["aura-orion-en", "aura-arcas-en", "aura-perseus-en", "aura-zeus-en"],
+    },
+    "british": {"female": ["aura-athena-en"], "male": ["aura-helios-en"]},
+    "irish": {"female": ["aura-athena-en"], "male": ["aura-angus-en"]},
+    "australian": {"female": ["aura-athena-en"], "male": ["aura-helios-en"]},
+}
+
+
+def _aura_voice_for(persona: dict) -> str:
+    """A stable aura voice for one caller, chosen by accent and gender.
+
+    Callers who share an accent still differ: the voice within the accent's set is picked by the
+    persona name, so a suite varies without being random between runs of the same scenario.
+    """
+    accent = str(persona.get("accent") or "").strip().lower()
+    gender = str(persona.get("gender") or "").strip().lower()
+    if gender not in ("male", "female"):
+        gender = "female"
+    bucket = next(
+        (voices for key, voices in _AURA_BY_ACCENT.items() if key in accent),
+        _AURA_BY_ACCENT["american"],
+    )
+    voices = bucket.get(gender) or next(iter(bucket.values()))
+    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(voices)
+    return voices[index]
 
 
 def _scenario() -> simulate.Scenario:
@@ -93,6 +128,14 @@ def _scenario() -> simulate.Scenario:
     persona = _json_env("HARNESS_PERSONA", {"name": "customer"})
     persona = dict(persona) if isinstance(persona, dict) else {"name": "customer"}
     persona["role"] = "customer"
+    # Give the caller a voice from its accent when the suite runs on aura and none was set, so
+    # different callers sound different and match the accent the scenario wrote.
+    if (
+        not persona.get("voice")
+        and not persona.get("voice_id")
+        and os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram").lower() == "deepgram"
+    ):
+        persona["voice"] = _aura_voice_for(persona)
     metadata = dict(persona.get("metadata") or {})
     if isinstance(fixture, dict) and fixture.get("phone"):
         # LiveKit exposes this as participant metadata/attributes. A target can
