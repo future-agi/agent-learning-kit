@@ -134,6 +134,24 @@ def test_missing_compose_env_file_fails_before_docker_and_names_service(
     assert "voice-app" in candidate.findings[0].message
 
 
+def test_uploaded_environment_satisfies_missing_compose_env_file(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "docker-compose.yml",
+        "services:\n  voice-app:\n    image: example/voice\n    env_file: [.env]\n",
+    )
+
+    manifest = inspect_packaging(tmp_path, external_environment=True)
+
+    assert manifest.ready
+    assert manifest.selected_path == "docker-compose.yml"
+    finding = manifest.candidates[0].findings[0]
+    assert finding.code == "compose_env_file_missing"
+    assert finding.blocking is False
+
+
 def test_optional_compose_env_file_does_not_block_admission(tmp_path: Path) -> None:
     _write(
         tmp_path,

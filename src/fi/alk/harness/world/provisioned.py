@@ -68,13 +68,17 @@ class ProvisionedWorld(GeneratedWorld):
         # worker during scenarios and is marked as such here. Matching endpoints remain available
         # as environment handlers for setup/health sequences only.
         self.runtime_tools: set[str] = set(contract.tool_names())
+        self.local_runtime_tools: set[str] = set()
         for spec in contract.tools:
             entry = contract.entry_for(spec.name)
             endpoint = str(getattr(entry, "endpoint", "") or spec.name).strip("/")
             if endpoint in self.endpoints:
                 self.endpoint_for[spec.name] = endpoint
-            # A missing endpoint is normal for a purely local state-machine tool. It remains a
-            # runtime tool and no synthetic handler is manufactured for it.
+            elif entry is not None and entry.mode in {"import", "construct"}:
+                # The submitted worker executes this tool inside its own process. Some workers
+                # mirror that completed action to TOOLS_API_URL so ALK can observe it. That
+                # mirror is telemetry, not a request for ALK to invent a second implementation.
+                self.local_runtime_tools.add(spec.name)
         # Marker source is persisted only as provenance/readability. ``call`` below performs the
         # forwarding, so no generated implementation executes.
         self.handlers = {
@@ -155,6 +159,18 @@ class ProvisionedWorld(GeneratedWorld):
         return self._record(call) if record else call
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        if name in self.local_runtime_tools and name not in self.endpoint_for:
+            return self._record(
+                Call(
+                    name=name,
+                    arguments=dict(arguments or {}),
+                    result={
+                        "observed": True,
+                        "execution": "submitted_agent_runtime",
+                    },
+                    ok=True,
+                )
+            )
         endpoint = self.endpoint_for.get(name, name)
         semantic_name = next(
             (tool for tool, path in self.endpoint_for.items() if path == name), name

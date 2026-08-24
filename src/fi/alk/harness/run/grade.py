@@ -325,6 +325,47 @@ def judge_suite_evals(
     return verdicts
 
 
+def reconcile_task_completion(
+    suite_verdicts: list[Judgement],
+    settled: list[Outcome],
+    scenario_verdicts: list[Judgement],
+) -> list[Judgement]:
+    """Keep the generic task-completion eval consistent with scenario evidence.
+
+    The built-in eval sees only prompt plus conversation. Scenario checks additionally see the
+    authoritative tool trace and final state, so they must win when the two disagree. This avoids
+    both false negatives (a cancellation exists but wording fooled the eval) and false positives
+    (the agent claimed success but no action/state proves it). Conversation-quality remains an
+    independent assessment and is never rewritten here.
+    """
+    authoritative = [outcome.held for outcome in settled] + [
+        verdict.holds for verdict in scenario_verdicts
+    ]
+    if not authoritative:
+        return suite_verdicts
+    completed = all(authoritative)
+    for verdict in suite_verdicts:
+        if verdict.kind != "customer_agent_task_completion":
+            continue
+        if verdict.holds == completed:
+            continue
+        original = verdict.why.strip()
+        verdict.holds = completed
+        verdict.why = (
+            "Reconciled to authoritative scenario checks and final environment evidence: "
+            + (
+                "all required scenario outcomes passed."
+                if completed
+                else "at least one required scenario outcome failed."
+            )
+            + (f" Built-in eval said: {original}" if original else "")
+        )
+        verdict.by = (verdict.by + "; authoritative scenario reconciliation").strip(
+            "; "
+        )
+    return suite_verdicts
+
+
 async def judge(
     scenario: Scenario,
     transcript: Transcript,

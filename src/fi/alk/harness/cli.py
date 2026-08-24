@@ -261,7 +261,12 @@ async def _environment(args: argparse.Namespace) -> int:
         elif args.action == "reset":
             environment = reset(destination)
         else:
-            environment = provision(args.path, destination)
+            # Resuming a saved environment must use the same repository/runtime decision as the
+            # autonomous and hosted paths.  In particular, a submitted Compose runtime may name
+            # a repository-local env file that is intentionally replaced by job-scoped values.
+            # Without the saved contract this command can incorrectly fall back to a Dockerfile
+            # and report that a previously valid Compose environment cannot be started.
+            environment = provision(args.path, destination, load(destination))
     except ProvisionError as failed:
         print(f"Environment failed: {failed}", file=sys.stderr)
         return 1

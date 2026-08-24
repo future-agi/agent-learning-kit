@@ -401,8 +401,12 @@ def contract_tools(destination: Path) -> Any:
                             },
                             "endpoint": {
                                 "type": "string",
-                                "description": "For service mode, its POST path without a leading "
-                                "slash. Record it even when it differs from the tool name.",
+                                "description": "The dependency POST path invoked by this tool, "
+                                "without a leading slash. Record it even for import/construct "
+                                "tools when their implementation calls a service, and especially "
+                                "when it differs from the model-facing name (for example "
+                                "check_status calling get_status). Leave empty only for a fully "
+                                "local tool.",
                             },
                             "method": {
                                 "type": "string",
@@ -546,6 +550,44 @@ def contract_tools(destination: Path) -> Any:
                             "description": "Container target declared by the repository, such "
                             "as linux/amd64. Preserve it exactly; never infer one from the "
                             "runner machine.",
+                        },
+                        "interface": {
+                            "type": "object",
+                            "description": "For a chat agent, the existing ingress exposed by "
+                            "the submitted runtime. Record only an endpoint the repository "
+                            "actually implements; never invent a gateway or route.",
+                            "properties": {
+                                "kind": {
+                                    "type": "string",
+                                    "enum": ["http", "websocket", "callable"],
+                                    "description": "How the simulator reaches the running "
+                                    "agent. HTTP is currently the hosted repository path.",
+                                },
+                                "protocol": {
+                                    "type": "string",
+                                    "enum": ["fi.alk", "openai_chat"],
+                                    "description": "The submitted endpoint's request/response "
+                                    "envelope. openai_chat means Chat Completions-compatible.",
+                                },
+                                "port": {
+                                    "type": "integer",
+                                    "description": "Container port the submitted chat service "
+                                    "listens on.",
+                                },
+                                "path": {
+                                    "type": "string",
+                                    "description": "Exact POST path for one conversational turn.",
+                                },
+                                "health_path": {
+                                    "type": "string",
+                                    "description": "Optional existing GET readiness path.",
+                                },
+                                "include_tools": {
+                                    "type": "boolean",
+                                    "description": "Whether the endpoint accepts tool schemas "
+                                    "with each request.",
+                                },
+                            },
                         },
                     },
                 },

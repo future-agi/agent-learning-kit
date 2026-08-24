@@ -22,6 +22,12 @@ The same `HarnessJob` and `HarnessExecutor` run in Future AGI's isolated hosted 
 platform creates jobs and stores their events/artifacts; it does not execute harness stages. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries, isolation and extension points.
 
+Repository-backed chat agents now follow the same runtime lifecycle as voice agents when their
+submitted service exposes an HTTP (ALK or OpenAI-compatible) or JSON WebSocket ingress. ALK starts
+the real service per scenario, connects the simulated user, routes declared environment endpoints,
+records tool/state evidence and tears the service down. It does not reconstruct a repository agent
+from its prompt when no conversational ingress exists.
+
 ---
 
 # Part 1 — Setting up, from nothing

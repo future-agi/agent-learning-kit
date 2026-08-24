@@ -365,7 +365,10 @@ class LocalSandbox:
                 if request.source_path
                 else self.uploaded_source(request.source_id or "")
             )
-            packaging = inspect_packaging(source)
+            packaging = inspect_packaging(
+                source,
+                external_environment=bool(request.environment_values),
+            )
             manifest = discover_credentials(
                 source,
                 secret_refs=request.secret_refs,
@@ -474,7 +477,12 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
-                packaging_manifest = inspect_packaging(source)
+                packaging_manifest = inspect_packaging(
+                    source,
+                    external_environment=bool(
+                        job.metadata.get("environment_value_names", [])
+                    ),
+                )
                 credential_manifest = discover_credentials(
                     source,
                     secret_refs=job.agent.secret_refs,

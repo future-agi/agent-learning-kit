@@ -214,6 +214,65 @@ class Reached(BaseModel):
         )
 
 
+class RuntimeInterface(BaseModel):
+    """The submitted runtime's existing conversational ingress.
+
+    This is connection metadata, not generated agent behavior. The harness may publish the
+    declared container port and translate its request/response envelope, but it never adds an
+    endpoint the repository does not already implement.
+    """
+
+    kind: str = ""
+    protocol: str = "fi.alk"
+    port: int | None = Field(default=None, ge=1, le=65535)
+    path: str = ""
+    health_path: str = ""
+    include_tools: bool = True
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower().replace("-", "_")
+        aliases = {"openai": "http", "openai_compatible": "http"}
+        return aliases.get(normalized, normalized)
+
+    @field_validator("protocol")
+    @classmethod
+    def _known_protocol(cls, value: str) -> str:
+        normalized = str(value or "fi.alk").strip().lower().replace("-", "_")
+        aliases = {
+            "openai": "openai_chat",
+            "openai_compatible": "openai_chat",
+            "chat_completions": "openai_chat",
+            "http": "fi.alk",
+        }
+        return aliases.get(normalized, normalized)
+
+    @field_validator("path", "health_path")
+    @classmethod
+    def _absolute_http_path(cls, value: str) -> str:
+        path = str(value or "").strip()
+        if path and not path.startswith("/"):
+            path = "/" + path
+        return path
+
+    @model_validator(mode="after")
+    def _complete(self) -> "RuntimeInterface":
+        if self.kind in {"http", "websocket"}:
+            if self.port is None:
+                raise ValueError(f"runtime_{self.kind}_interface_requires_port")
+            if not self.path:
+                raise ValueError(f"runtime_{self.kind}_interface_requires_path")
+        if self.kind == "http":
+            if self.protocol not in {"fi.alk", "openai_chat"}:
+                raise ValueError(
+                    "runtime_http_protocol_unsupported: expected fi.alk or openai_chat"
+                )
+        if self.kind == "websocket" and self.protocol != "fi.alk":
+            raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
+        return self
+
+
 class Runtime(BaseModel):
     """What it takes to run the agent's code."""
 
@@ -238,6 +297,13 @@ class Runtime(BaseModel):
     # Preserve a repository-declared target architecture (for example linux/amd64 on an ARM
     # runner). This is execution metadata, not a change to the submitted application.
     platform: str = ""
+
+    # How a turn-based simulator reaches the submitted process after it starts. Voice has a
+    # standard rendezvous (LiveKit dispatch); chat repositories do not. Recording this seam is
+    # what lets the harness start the real runtime instead of reconstructing the agent from its
+    # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
+    # repository.
+    interface: RuntimeInterface | None = None
 
     @field_validator("command", mode="before")
     @classmethod
@@ -494,6 +560,12 @@ class AgentContract(BaseModel):
                 + (
                     f", its own Dockerfile at {run.dockerfile}"
                     if run.dockerfile
+                    else ""
+                )
+                + (
+                    f", reached over {run.interface.kind} {run.interface.protocol} on "
+                    f"port {run.interface.port}{run.interface.path}"
+                    if run.interface
                     else ""
                 )
             )

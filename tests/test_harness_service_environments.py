@@ -149,9 +149,7 @@ def test_runtime_build_does_not_retry_submitted_dockerfile_failure(monkeypatch):
     assert calls == [("build", "agent")]
 
 
-def test_hosted_world_uses_private_http_and_postgres_endpoints(
-    monkeypatch, tmp_path
-):
+def test_hosted_world_uses_private_http_and_postgres_endpoints(monkeypatch, tmp_path):
     environment = ProvisionedEnvironment(
         source=str(tmp_path),
         compose_file=str(tmp_path / "compose.yml"),
@@ -195,6 +193,53 @@ def test_hosted_world_uses_private_http_and_postgres_endpoints(
 
     assert world.base_url == "http://tools-api:8080"
     assert seen["overrides"]["DATABASE_URL"].endswith("@postgres:5432/db")
+
+
+def test_provisioned_world_accepts_local_runtime_tool_telemetry(monkeypatch, tmp_path):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="fagi-harness-local-tool",
+        overrides={"TOOLS_API_URL": "http://127.0.0.1:41002"},
+        running=True,
+    )
+    environment.save(tmp_path)
+
+    class Store:
+        def start(self):
+            return None
+
+    monkeypatch.setattr(
+        "fi.alk.harness.world.provisioned.attached_postgres_store",
+        lambda _destination: Store(),
+    )
+    monkeypatch.setattr(ProvisionedWorld, "_discover_endpoints", lambda self: set())
+    world = ProvisionedWorld(
+        AgentContract(
+            agent="ride",
+            tools=[{"name": "confirm_address", "args": ["place_id"]}],
+            tool_entrypoints=[
+                {
+                    "tool": "confirm_address",
+                    "mode": "construct",
+                    "module": "agent",
+                    "callable": "RideAgent.confirm_address",
+                }
+            ],
+            real_use_cases=["book a ride"],
+        ),
+        tmp_path,
+        source_root=str(tmp_path),
+    )
+
+    call = world.call("confirm_address", {"place_id": "place-1"})
+
+    assert call.ok
+    assert call.result == {
+        "observed": True,
+        "execution": "submitted_agent_runtime",
+    }
+    assert world.calls == [call]
 
 
 def test_world_rejects_only_genuinely_distinct_http_endpoints(monkeypatch, tmp_path):
@@ -1539,4 +1584,111 @@ def test_real_clickhouse_and_redis_lifecycle_is_isolated_and_resettable(tmp_path
             client.sendall(b"*2\r\n$3\r\nGET\r\n$5\r\nstate\r\n")
             assert client.recv(64) == b"$-1\r\n"
     finally:
+        stop(session)
+
+
+@pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
+def test_repository_chat_runtime_runs_through_the_same_environment_lifecycle(tmp_path):
+    """A default Compose API is isolated, started per case and driven as the real target."""
+    import asyncio
+
+    from fi.alk.harness.run.targets import RepositoryChatTarget
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    source = tmp_path / "chat-agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        """import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_GET(self):
+        self.send_response(200 if self.path == '/health' else 404)
+        self.end_headers()
+    def do_POST(self):
+        size = int(self.headers.get('content-length') or 0)
+        body = json.loads(self.rfile.read(size) or b'{}')
+        messages = body.get('messages') or []
+        if messages and messages[-1].get('role') == 'tool':
+            message = {'role': 'assistant', 'content': 'The item is in your cart.'}
+            payload = {'choices': [{'message': message, 'finish_reason': 'stop'}]}
+        else:
+            call = {
+                'id': 'add-1', 'type': 'function',
+                'function': {'name': 'add', 'arguments': json.dumps({'item_id': 'big_mac'})},
+            }
+            payload = {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [call]}, 'finish_reason': 'tool_calls'}]}
+        encoded = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header('content-type', 'application/json')
+        self.send_header('content-length', str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+""",
+        encoding="utf-8",
+    )
+    (source / "Dockerfile").write_text(
+        'FROM python:3.12-alpine\nWORKDIR /app\nCOPY agent.py .\nCMD ["python", "agent.py"]\n',
+        encoding="utf-8",
+    )
+    (source / "compose.yml").write_text(
+        """services:
+  api:
+    build: .
+    ports: ["8080:8080"]
+""",
+        encoding="utf-8",
+    )
+    contract = AgentContract(
+        agent="packaged-chat",
+        modality="chat",
+        implementation="present",
+        tools=[ToolSpec(name="add", args=["item_id"])],
+        real_use_cases=["add an item"],
+        runtime=Runtime(
+            compose_file="compose.yml",
+            interface={
+                "kind": "http",
+                "protocol": "openai_chat",
+                "port": 8080,
+                "path": "/v1/chat/completions",
+                "health_path": "/health",
+            },
+        ),
+    )
+    environment = provision(source, session, contract)
+    assert environment.services == []
+    assert environment.runtime_services == ["api"]
+
+    world = GeneratedWorld(":memory:")
+    world.tools = [{"name": "add"}]
+    world.handlers = {
+        "add": "def handle(args, db):\n    return {'added': args['item_id']}\n"
+    }
+    target = RepositoryChatTarget(
+        contract,
+        world,
+        world_root=session,
+        trace_path=session / "chat-tool-calls.jsonl",
+        scenario_name="add-item",
+    )
+
+    async def exercise() -> str:
+        await target.open()
+        try:
+            return await target.say("Please add a Big Mac")
+        finally:
+            await target.close()
+
+    try:
+        assert asyncio.run(exercise()) == "The item is in your cart."
+        assert [call.name for call in world.calls] == ["add"]
+        assert ProvisionedEnvironment.load(session).runtime_container == ""
+    finally:
+        world.close()
         stop(session)

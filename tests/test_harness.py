@@ -189,6 +189,83 @@ services:
     assert "agent" not in up
 
 
+def test_saved_contract_resumes_compose_when_repository_env_file_is_external(
+    tmp_path, monkeypatch
+):
+    """A job-scoped env upload replaces, rather than materializes, a missing .env file."""
+    from fi.alk.harness import provision as provisioning
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        """
+services:
+  postgres:
+    image: postgres:16
+  agent:
+    profiles: ["full"]
+    build: .
+    env_file: .env.local
+""".strip(),
+        encoding="utf-8",
+    )
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    contract = AgentContract(
+        agent="resumable-agent",
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(
+            compose_file="docker-compose.yml",
+            dockerfile="Dockerfile",
+        ),
+    )
+    output.mkdir()
+    (output / "job.json").write_text(
+        json.dumps(
+            {
+                "agent": {
+                    "secret_refs": {
+                        "LIVEKIT_API_KEY": {
+                            "manager": "mounted",
+                            "key": "opaque-job-key",
+                        }
+                    }
+                },
+                "metadata": {
+                    "environment_value_names": ["LIVEKIT_URL", "DEEPGRAM_API_KEY"]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = {
+        "services": {
+            "postgres": {},
+            "agent": {"profiles": ["full"], "build": {"context": "."}},
+        }
+    }
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(config)
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
+
+    environment = provisioning.provision(source, output, contract)
+
+    assert environment.compose_file == str(source / "docker-compose.yml")
+    assert environment.services == ["postgres"]
+    assert {"LIVEKIT_API_KEY", "LIVEKIT_URL", "DEEPGRAM_API_KEY"} <= set(
+        environment.runtime_configuration_names
+    )
+    assert (output / "compose.harness.override.yaml").read_text() == (
+        'services:\n  "agent":\n    env_file: !reset []\n'
+    )
+
+
 def test_source_environment_uses_configured_docker_gateway(tmp_path, monkeypatch):
     from fi.alk.harness import provision as provisioning
 
@@ -228,6 +305,41 @@ def test_profiled_infrastructure_tools_are_not_mistaken_for_agent_runtimes():
     }
 
     assert _runtime_services(config) == []
+
+
+def test_chat_ingress_selects_a_default_compose_agent_without_starting_it_as_infra():
+    from fi.alk.harness.contract import AgentContract, Runtime
+    from fi.alk.harness.provision import _runtime_services, _started_services
+
+    config = {
+        "services": {
+            "api": {
+                "build": {"context": "."},
+                "ports": [{"target": 8080, "published": "8080"}],
+            },
+            "postgres": {"image": "postgres:16"},
+            "redis-commander": {
+                "image": "rediscommander/redis-commander",
+                "profiles": ["tools"],
+            },
+        }
+    }
+    contract = AgentContract(
+        agent="support",
+        tools=[{"name": "lookup", "args": ["id"]}],
+        real_use_cases=["look up a record"],
+        runtime=Runtime(
+            interface={
+                "kind": "http",
+                "port": 8080,
+                "path": "/chat",
+            }
+        ),
+    )
+
+    runtimes = _runtime_services(config, contract)
+    assert runtimes == ["api"]
+    assert _started_services(config, runtimes) == ["postgres"]
 
 
 def test_runtime_trace_uses_job_scoped_exchange_volume(monkeypatch):
@@ -774,6 +886,63 @@ def test_runtime_credentials_are_not_serialized_into_docker_arguments(
     assert run_kwargs["process_overrides"]["LIVEKIT_API_SECRET"] == secret
 
 
+def test_runtime_chat_port_is_ephemeral_and_recorded(tmp_path, monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        "services:\n  agent-runtime:\n    image: example\n    profiles: [harness-runtime]\n",
+        encoding="utf-8",
+    )
+    provisioning.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-chat-runtime",
+        runtime_services=["agent-runtime"],
+        running=True,
+    ).save(output)
+    invocations: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        invocations.append(arguments)
+        if "config" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "image": "example",
+                            "profiles": ["harness-runtime"],
+                            "environment": {},
+                        }
+                    }
+                }
+            )
+        return ""
+
+    def docker(*arguments, **_kwargs):
+        if arguments and arguments[0] == "inspect":
+            return "running healthy"
+        if arguments and arguments[0] == "port":
+            return "127.0.0.1:49123"
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_docker", docker)
+    environment = provisioning.start_runtime(
+        output, publish_ports=[8080], stable_seconds=0.25
+    )
+
+    run_arguments = next(
+        arguments for arguments in invocations if arguments[0] == "run"
+    )
+    assert ("--publish", "127.0.0.1::8080") == run_arguments[5:7]
+    assert environment.runtime_endpoints == {"8080": "127.0.0.1:49123"}
+    assert provisioning.runtime_endpoint(output, 8080) == "http://127.0.0.1:49123"
+
+
 def test_source_change_replaces_the_old_project_instead_of_reusing_it(
     tmp_path, monkeypatch
 ):
@@ -943,6 +1112,89 @@ def test_repository_agent_is_not_reconstructed_by_the_local_target():
     try:
         with pytest.raises(RuntimeError, match="shipped runtime"):
             LocalAgent(contract, world)
+    finally:
+        world.close()
+
+
+def test_chat_runtime_interface_is_normalized_and_requires_a_real_route():
+    from pydantic import ValidationError
+
+    from fi.alk.harness.contract import Runtime
+
+    runtime = Runtime(
+        interface={
+            "kind": "openai-compatible",
+            "protocol": "chat-completions",
+            "port": 8080,
+            "path": "v1/chat/completions",
+            "health_path": "health",
+        }
+    )
+    assert runtime.interface is not None
+    assert runtime.interface.kind == "http"
+    assert runtime.interface.protocol == "openai_chat"
+    assert runtime.interface.path == "/v1/chat/completions"
+    assert runtime.interface.health_path == "/health"
+
+    with pytest.raises(ValidationError, match="requires_path"):
+        Runtime(interface={"kind": "http", "port": 8080})
+
+
+def test_repository_chat_target_executes_returned_tools_in_the_scenario_world():
+    import asyncio
+
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness.run.targets import RepositoryChatTarget
+    from fi.simulate.agent.wrapper import AgentResponse
+
+    world, contract = _cart_world()
+    contract.runtime = Runtime(
+        language="python",
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+        },
+    )
+    target = RepositoryChatTarget(
+        contract, world, world_root=".", scenario_name="order-fries"
+    )
+
+    class Endpoint:
+        def __init__(self):
+            self.calls = 0
+
+        async def call(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                return AgentResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "tool-1",
+                            "type": "function",
+                            "function": {
+                                "name": "add",
+                                "arguments": json.dumps({"item_id": "big_mac"}),
+                            },
+                        }
+                    ],
+                    metadata={"external_agent": {"success": True}},
+                )
+            assert request.messages[-1]["role"] == "tool"
+            return AgentResponse(
+                content="I added the fries.",
+                metadata={"external_agent": {"success": True}},
+            )
+
+    endpoint = Endpoint()
+    target._wrapper = endpoint
+    try:
+        said = asyncio.run(target.say("Please add fries"))
+        assert said == "I added the fries."
+        assert endpoint.calls == 2
+        assert [call.name for call in world.calls] == ["add"]
     finally:
         world.close()
 
@@ -2473,6 +2725,70 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
     assert calls[0].name == "book_ride"
     assert calls[0].arguments["caller_explicitly_confirmed"] is True
     assert calls[0].result == {"booking_ref": "UBR-71904"}
+
+
+def test_semantic_worker_trace_collapses_only_local_telemetry_mirror(tmp_path):
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run.simulation import _semantic_calls
+
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    records = [
+        {
+            "name": "confirm_address",
+            "arguments": {"place_id": "place-1"},
+            "output": {
+                "observed": True,
+                "execution": "submitted_agent_runtime",
+            },
+            "is_error": False,
+        },
+        {
+            "name": "confirm_address",
+            "arguments": '{"place_id": "place-1"}',
+            "output": "{'confirmed': True}",
+            "is_error": False,
+        },
+        {
+            "name": "get_payment_link_status",
+            "arguments": {"phone": "+14155550102"},
+            "output": {"status": "pending"},
+            "is_error": False,
+        },
+        {
+            "name": "get_payment_link_status",
+            "arguments": {"phone": "+14155550102"},
+            "output": {"status": "ready"},
+            "is_error": False,
+        },
+    ]
+    trace.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    contract = AgentContract(
+        agent="ride",
+        tools=[{"name": "check_payment_link_status", "args": []}],
+        tool_entrypoints=[
+            {
+                "tool": "check_payment_link_status",
+                "mode": "construct",
+                "module": "agent",
+                "callable": "RideAgent.check_payment_link_status",
+                "endpoint": "get_payment_link_status",
+            }
+        ],
+        real_use_cases=["book a ride"],
+    )
+    calls = _semantic_calls(trace, contract=contract)
+
+    assert [call.name for call in calls] == [
+        "confirm_address",
+        "check_payment_link_status",
+        "check_payment_link_status",
+    ]
+    assert calls[0].result == "{'confirmed': True}"
+    assert [call.result["status"] for call in calls[1:]] == ["pending", "ready"]
 
 
 def test_a_store_that_is_not_sqlite_needs_nothing_above_it_to_change(tmp_path):
@@ -5468,6 +5784,65 @@ def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
         )
         == []
     )
+
+
+def test_task_completion_eval_is_reconciled_to_authoritative_scenario_checks():
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.run.grade import Judgement, reconcile_task_completion
+
+    suite = [
+        Judgement(
+            claim="customer_agent_task_completion",
+            kind="customer_agent_task_completion",
+            holds=False,
+            why="The wording did not sound complete.",
+            by="builtin",
+        ),
+        Judgement(
+            claim="customer_agent_conversation_quality",
+            kind="customer_agent_conversation_quality",
+            holds=True,
+            why="Good conversation.",
+            by="builtin",
+        ),
+    ]
+    settled = [Outcome(name="ride_cancelled", held=True)]
+    scenario = [
+        Judgement(
+            claim="fee disclosed",
+            kind="fee_disclosed",
+            holds=True,
+        )
+    ]
+
+    reconciled = reconcile_task_completion(suite, settled, scenario)
+
+    assert reconciled[0].holds
+    assert "authoritative scenario checks" in reconciled[0].why
+    assert reconciled[1].holds
+
+
+def test_task_completion_cannot_pass_when_authoritative_state_failed():
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.run.grade import Judgement, reconcile_task_completion
+
+    suite = [
+        Judgement(
+            claim="customer_agent_task_completion",
+            kind="customer_agent_task_completion",
+            holds=True,
+            why="The agent claimed it was done.",
+        )
+    ]
+
+    reconciled = reconcile_task_completion(
+        suite,
+        [Outcome(name="ride_booked", held=False, said="No booking exists")],
+        [],
+    )
+
+    assert not reconciled[0].holds
+    assert "at least one required scenario outcome failed" in reconciled[0].why
 
 
 def test_webhook_binds_where_the_environment_says(monkeypatch):

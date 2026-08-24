@@ -64,7 +64,12 @@ _HOST_MOUNT = re.compile(
 )
 
 
-def inspect_packaging(root: str | Path, *, max_depth: int = 4) -> PackagingManifest:
+def inspect_packaging(
+    root: str | Path,
+    *,
+    max_depth: int = 4,
+    external_environment: bool = False,
+) -> PackagingManifest:
     """Find and validate existing container packaging without running Docker."""
     source = Path(root).expanduser().resolve()
     if not source.is_dir():
@@ -80,7 +85,13 @@ def inspect_packaging(root: str | Path, *, max_depth: int = 4) -> PackagingManif
         if path.is_symlink() or not path.is_file():
             continue
         if _is_compose_file(path.name):
-            candidates.append(_compose_candidate(source, path))
+            candidates.append(
+                _compose_candidate(
+                    source,
+                    path,
+                    external_environment=external_environment,
+                )
+            )
         elif _is_dockerfile(path.name):
             candidates.append(_dockerfile_candidate(source, path))
 
@@ -259,7 +270,12 @@ def _dockerfile_copy_sources(content: str) -> list[str]:
     return sources
 
 
-def _compose_candidate(root: Path, path: Path) -> PackagingCandidate:
+def _compose_candidate(
+    root: Path,
+    path: Path,
+    *,
+    external_environment: bool = False,
+) -> PackagingCandidate:
     content = path.read_text(encoding="utf-8", errors="replace")
     findings: list[PackagingFinding] = []
     services: dict[str, object] = {}
@@ -310,7 +326,13 @@ def _compose_candidate(root: Path, path: Path) -> PackagingCandidate:
                 findings.append(
                     PackagingFinding(
                         code="compose_env_file_missing",
-                        message=f"{service_name} requires missing env file: {value}",
+                        message=(
+                            f"{service_name} uses uploaded environment values instead of "
+                            f"repository secret file: {value}"
+                            if external_environment
+                            else f"{service_name} requires missing env file: {value}"
+                        ),
+                        blocking=not external_environment,
                     )
                 )
     if services and all(

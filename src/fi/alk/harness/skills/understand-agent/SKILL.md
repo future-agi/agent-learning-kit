@@ -67,6 +67,13 @@ Find, in roughly this order:
    to be built first, or an endpoint already reachable over HTTP. Say which, per tool. Where a
    tool takes the agent's own state as an argument, name that argument.
 
+   Also follow the callable one level into any dependency client it invokes. Record the exact
+   dependency endpoint even when the model-facing tool is an import or constructed method, and
+   especially when the two names differ. For example, a semantic check-payment-link-status
+   action may call a dependency path named get-payment-link-status. A runtime trace naturally
+   sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
+   tool the agent actually chose.
+
    Some tools cannot be reached at all. A framework may define them as closures inside a class,
    so there is nothing importable. **Record that plainly rather than leaving the entry blank**:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
@@ -79,7 +86,11 @@ Find, in roughly this order:
 
 9. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   Its own Dockerfile is used in preference to anything written for it.
+   Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
+   record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
+   callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
+   existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
+   startable but the simulator cannot honestly claim to have exercised it.
 
 10. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
