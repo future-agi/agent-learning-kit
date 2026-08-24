@@ -174,7 +174,19 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
         raise FileNotFoundError(f"no world snapshot at {root}")
 
     manifest = read_manifest(root)
+    provisioned_http = False
     if (root / "environment.json").exists():
+        from ..provision import ProvisionedEnvironment
+
+        environment = ProvisionedEnvironment.load(root)
+        provisioned_http = bool(
+            environment
+            and any(
+                value.startswith(("http://", "https://"))
+                for value in environment.overrides.values()
+            )
+        )
+    if provisioned_http:
         if into is not None:
             raise ValueError(
                 "a source-provisioned world restores into its submitted service, not a database "
@@ -224,6 +236,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
 
     world.name = manifest.get("agent", "generated")
     world.handlers = handlers
+    world.runtime_tools = set(manifest.get("runtime_tools") or [])
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
     # A world whose handlers bind to the agent's own code cannot run them unless that code

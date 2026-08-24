@@ -6,11 +6,17 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
 from ..contract import AgentContract
-from ..provision import ProvisionedEnvironment, ProvisionError, attached_postgres_store
+from ..provision import (
+    ProvisionedEnvironment,
+    ProvisionError,
+    attached_postgres_store,
+    reachable_overrides,
+)
 from .runtime import Call, GeneratedWorld
 
 
@@ -27,21 +33,30 @@ class ProvisionedWorld(GeneratedWorld):
         environment = ProvisionedEnvironment.load(destination)
         if environment is None or not environment.running:
             raise ProvisionError(f"no running source environment at {destination}")
-        if not environment.overrides:
+        overrides = reachable_overrides(environment)
+        http_overrides = {
+            name: value
+            for name, value in overrides.items()
+            if urlsplit(value).scheme.lower() in {"http", "https"}
+        }
+        if not http_overrides:
             raise ProvisionError(
                 "the source environment publishes no HTTP endpoint that the agent can be "
                 "pointed at"
             )
-        if len(environment.overrides) != 1:
+        http_endpoints = {value.rstrip("/") for value in http_overrides.values()}
+        if len(http_endpoints) != 1:
             raise ProvisionError(
-                "more than one source endpoint was discovered; each service-backed tool must "
-                "name which configuration variable reaches its service"
+                "more than one HTTP source endpoint was discovered ("
+                + ", ".join(sorted(http_overrides))
+                + "); each service-backed tool must name which configuration variable reaches "
+                "its service"
             )
         super().__init__(store=attached_postgres_store(destination))
         self.name = contract.agent
         self.destination = Path(destination)
         self.source_root = str(source_root)
-        self.base_url = next(iter(environment.overrides.values())).rstrip("/")
+        self.base_url = next(iter(http_endpoints))
         self.refusal_signature = contract.refusal_signature
         self.endpoints = self._discover_endpoints()
         self.endpoint_for: dict[str, str] = {}
@@ -53,13 +68,17 @@ class ProvisionedWorld(GeneratedWorld):
         # worker during scenarios and is marked as such here. Matching endpoints remain available
         # as environment handlers for setup/health sequences only.
         self.runtime_tools: set[str] = set(contract.tool_names())
+        self.local_runtime_tools: set[str] = set()
         for spec in contract.tools:
             entry = contract.entry_for(spec.name)
             endpoint = str(getattr(entry, "endpoint", "") or spec.name).strip("/")
             if endpoint in self.endpoints:
                 self.endpoint_for[spec.name] = endpoint
-            # A missing endpoint is normal for a purely local state-machine tool. It remains a
-            # runtime tool and no synthetic handler is manufactured for it.
+            elif entry is not None and entry.mode in {"import", "construct"}:
+                # The submitted worker executes this tool inside its own process. Some workers
+                # mirror that completed action to TOOLS_API_URL so ALK can observe it. That
+                # mirror is telemetry, not a request for ALK to invent a second implementation.
+                self.local_runtime_tools.add(spec.name)
         # Marker source is persisted only as provenance/readability. ``call`` below performs the
         # forwarding, so no generated implementation executes.
         self.handlers = {
@@ -140,6 +159,18 @@ class ProvisionedWorld(GeneratedWorld):
         return self._record(call) if record else call
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        if name in self.local_runtime_tools and name not in self.endpoint_for:
+            return self._record(
+                Call(
+                    name=name,
+                    arguments=dict(arguments or {}),
+                    result={
+                        "observed": True,
+                        "execution": "submitted_agent_runtime",
+                    },
+                    ok=True,
+                )
+            )
         endpoint = self.endpoint_for.get(name, name)
         semantic_name = next(
             (tool for tool, path in self.endpoint_for.items() if path == name), name

@@ -12,6 +12,8 @@ Neither is privileged, which is the point.
 
 from __future__ import annotations
 
+import asyncio
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
@@ -31,6 +33,17 @@ TOOL = "tool"
 RESULT = "result"
 ARTIFACT = "artifact"
 DONE = "done"
+
+# Provider streams normally emit a message or tool event every few seconds.  A subprocess can
+# remain alive forever after a dropped upstream stream, though, which previously left a hosted
+# job looking healthy while making no progress.  Bound *inactivity*, not total stage duration:
+# long scenario suites remain valid as long as they keep producing observable work.
+STAGE_IDLE_TIMEOUT_SECONDS = float(os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", "180"))
+STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
+
+
+class StageIdleTimeout(TimeoutError):
+    """The provider stream stayed open without producing any observable event."""
 
 
 @dataclass
@@ -239,7 +252,19 @@ class Stage:
         """Send a message and yield events as they arrive."""
         await self.client.query(message)
         turn = Turn()
-        async for received in self.client.receive_response():
+        response = self.client.receive_response().__aiter__()
+        while True:
+            try:
+                received = await asyncio.wait_for(
+                    response.__anext__(), timeout=STAGE_IDLE_TIMEOUT_SECONDS
+                )
+            except StopAsyncIteration:
+                break
+            except TimeoutError as exc:
+                raise StageIdleTimeout(
+                    f"{self.name or 'model'} produced no event for "
+                    f"{STAGE_IDLE_TIMEOUT_SECONDS:g}s"
+                ) from exc
             for event in self._events(received, turn):
                 # Which stage this came from, stamped once here rather than by every caller,
                 # so a front end showing several stages can tell them apart.
@@ -328,10 +353,23 @@ class Stage:
         self, message: str, *, on_event: Callable[[Event], None] | None = None
     ) -> Turn:
         """Send a message and wait for the whole reply."""
-        async for event in self.stream(message):
-            if on_event:
-                on_event(event)
-        return self.history[-1]
+        for attempt in range(STAGE_IDLE_RETRIES + 1):
+            try:
+                async for event in self.stream(message):
+                    if on_event:
+                        on_event(event)
+                return self.history[-1]
+            except StageIdleTimeout:
+                if attempt >= STAGE_IDLE_RETRIES:
+                    raise
+                # A timed-out receive has been cancelled and the SDK process may still be
+                # waiting in epoll.  Reusing it can only reproduce the dead stream.  Start a
+                # clean provider session and replay the same stage instruction.  Harness writes
+                # are named/idempotent and remain protected by their validation gates.
+                await self.client.disconnect()
+                self._client = ClaudeSDKClient(options=self._options)
+                await self._client.connect()
+        raise AssertionError("unreachable")
 
     def unexpected_models(self) -> set[str]:
         """Models that were billed but not the one asked for."""

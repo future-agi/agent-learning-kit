@@ -261,7 +261,12 @@ async def _environment(args: argparse.Namespace) -> int:
         elif args.action == "reset":
             environment = reset(destination)
         else:
-            environment = provision(args.path, destination)
+            # Resuming a saved environment must use the same repository/runtime decision as the
+            # autonomous and hosted paths.  In particular, a submitted Compose runtime may name
+            # a repository-local env file that is intentionally replaced by job-scoped values.
+            # Without the saved contract this command can incorrectly fall back to a Dockerfile
+            # and report that a previously valid Compose environment cannot be started.
+            environment = provision(args.path, destination, load(destination))
     except ProvisionError as failed:
         print(f"Environment failed: {failed}", file=sys.stderr)
         return 1
@@ -502,7 +507,12 @@ async def _simulate(args: argparse.Namespace) -> int:
         for problem in reported.problems:
             print(f"platform reporting problem: {problem}", file=sys.stderr)
         print(f"reported to the platform: {reported.url}")
-    return 0
+    # Exit 1 means the environment/call lane could not execute at least one scenario. Exit 2
+    # means every scenario ran and the submitted agent failed one or more checks.  Hosted
+    # execution retries/classifies the former and preserves the latter as valid RL evidence.
+    if summary.get("unrunnable"):
+        return 1
+    return 0 if summary["passed"] == summary["scenarios"] else 2
 
 
 def _load_connection_env(source: Path) -> list[str]:
@@ -662,21 +672,78 @@ async def _auto(args: argparse.Namespace) -> int:
             ),
         ),
     )
-    for label, operation, stage_args in stages:
-        print(f"\n=== {label} ===", flush=True)
-        emit("harness.stage.started", label)
-        status = await operation(stage_args)
-        # A completed call suite returns 2 when the submitted agent fails one or more checks.
-        # That is a valid RL result. Earlier stages returning non-zero are harness failures.
-        if status and label != "calls":
-            emit("harness.stage.failed", label, status=status)
-            print(f"\nautomatic run stopped: {label} failed", file=sys.stderr)
-            return status
-        if label == "calls" and status not in (0, 2):
-            emit("harness.stage.failed", label, status=status)
-            return status
-        emit("harness.stage.completed", label, status=status)
+    from .provision import ProvisionError, stop
 
+    cleanup_failed: ProvisionError | None = None
+    try:
+        for label, operation, stage_args in stages:
+            print(f"\n=== {label} ===", flush=True)
+            emit("harness.stage.started", label)
+            status = await operation(stage_args)
+            # A completed call suite returns 2 when the submitted agent fails one or more checks.
+            # That is a valid RL result. Earlier stages returning non-zero are harness failures.
+            if status and label != "calls":
+                emit("harness.stage.failed", label, status=status)
+                print(f"\nautomatic run stopped: {label} failed", file=sys.stderr)
+                return status
+            if label == "calls" and status not in (0, 2):
+                emit("harness.stage.failed", label, status=status)
+                return status
+            emit("harness.stage.completed", label, status=status)
+    finally:
+        # The source environment exists only for this run. This boundary covers normal stage
+        # failures and exceptions raised by world/scenario construction. Cleanup happens before
+        # sealing so environment.json's terminal state is part of the immutable manifest.
+        emit("harness.stage.started", "cleaning_up")
+        try:
+            await asyncio.to_thread(stop, destination)
+        except ProvisionError as exc:
+            cleanup_failed = exc
+            emit(
+                "harness.stage.failed",
+                "cleaning_up",
+                status=1,
+                code="environment_cleanup_failed",
+                detail=str(exc),
+            )
+            print(f"\nautomatic run cleanup failed: {exc}", file=sys.stderr)
+        else:
+            emit("harness.stage.completed", "cleaning_up", status=0)
+
+    if cleanup_failed is not None:
+        return 1
+
+    from .artifacts import ArtifactIntegrityError, seal_artifacts
+
+    emit("harness.stage.started", "uploading_artifacts")
+    try:
+        manifest = seal_artifacts(
+            destination,
+            run_id=job.run_id,
+            max_bytes=job.artifacts.max_artifact_bytes,
+            expected_scenarios=job.scenario_count,
+        )
+    except ArtifactIntegrityError as exc:
+        emit(
+            "harness.stage.failed",
+            "uploading_artifacts",
+            status=1,
+            code="artifact_integrity_failed",
+            detail=str(exc),
+        )
+        print(
+            f"\nautomatic run stopped: artifact integrity failed: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    emit(
+        "harness.stage.completed",
+        "uploading_artifacts",
+        status=0,
+        artifact_manifest_digest=manifest.digest,
+        artifact_count=len(manifest.files),
+        artifact_bytes=manifest.total_bytes,
+    )
     emit("harness.run.completed", "completed")
     print(f"\nautomatic run complete: {destination}")
     return 0

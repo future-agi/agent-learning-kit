@@ -40,6 +40,16 @@ class CapabilityProtocol(str, Enum):
     SQLITE = "sqlite"
     LIVEKIT = "livekit"
     TCP = "tcp"
+    CLICKHOUSE = "clickhouse"
+    REDIS = "redis"
+    MONGODB = "mongodb"
+    MYSQL = "mysql"
+    AMQP = "amqp"
+    KAFKA = "kafka"
+    NATS = "nats"
+    S3 = "s3"
+    GRPC = "grpc"
+    BOLT = "bolt"
 
 
 class BundleRuntime(BaseModel):
@@ -282,6 +292,90 @@ _COPY_IGNORED = {
 }
 
 
+def _copy_generated_runtime_context(
+    session: Path, staging: Path, generated: list[str]
+) -> Path | None:
+    source = session / "generated-runtime-context"
+    if not source.is_dir():
+        return None
+    target = staging / "services" / "generated-runtime"
+    shutil.copytree(source, target)
+    for path in sorted(target.rglob("*")):
+        if path.is_file():
+            generated.append(path.relative_to(staging).as_posix())
+    plan = session / "generated-runtime.json"
+    if plan.is_file():
+        try:
+            portable_plan = json.loads(plan.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BundleError(f"bundle_generated_runtime_plan_invalid: {exc}") from exc
+        portable_plan["context_directory"] = "services/generated-runtime"
+        (staging / plan.name).write_text(
+            json.dumps(portable_plan, indent=2), encoding="utf-8"
+        )
+        generated.append(plan.name)
+    return target
+
+
+def _portable_managed_compose(
+    compose: Path,
+    *,
+    source: Path,
+    session: Path,
+    generated_context: Path | None,
+) -> dict[str, Any]:
+    """Rewrite harness-generated host paths to paths inside the sealed bundle."""
+    try:
+        document = json.loads(compose.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BundleError(f"bundle_managed_compose_invalid: {exc}") from exc
+    generated_source = session / "generated-runtime-context"
+
+    def portable_path(raw: str) -> str:
+        value = Path(raw)
+        resolved = (
+            value.resolve()
+            if value.is_absolute()
+            else (compose.parent / value).resolve()
+        )
+        try:
+            relative = resolved.relative_to(source)
+        except ValueError:
+            relative = None
+        if relative is not None:
+            return (Path("services/source") / relative).as_posix()
+        if generated_context is not None and resolved == generated_source.resolve():
+            return "services/generated-runtime"
+        raise BundleError(f"bundle_build_or_mount_path_outside_submission: {raw}")
+
+    services = document.get("services", {}) if isinstance(document, dict) else {}
+    for service in services.values() if isinstance(services, dict) else []:
+        if not isinstance(service, dict):
+            continue
+        build = service.get("build")
+        if isinstance(build, str):
+            service["build"] = portable_path(build)
+        elif isinstance(build, dict) and build.get("context"):
+            build["context"] = portable_path(str(build["context"]))
+        volumes = service.get("volumes", [])
+        rewritten: list[Any] = []
+        for volume in volumes if isinstance(volumes, list) else []:
+            if isinstance(volume, str):
+                parts = volume.split(":", 2)
+                if parts and Path(parts[0]).is_absolute():
+                    parts[0] = portable_path(parts[0])
+                rewritten.append(":".join(parts))
+            elif isinstance(volume, dict) and volume.get("type") == "bind":
+                item = dict(volume)
+                item["source"] = portable_path(str(item.get("source", "")))
+                rewritten.append(item)
+            else:
+                rewritten.append(volume)
+        if isinstance(volumes, list):
+            service["volumes"] = rewritten
+    return document
+
+
 def export_session_bundle(
     source: str | Path,
     session: str | Path,
@@ -345,23 +439,39 @@ def export_session_bundle(
             generated.append(artifact)
 
         provisioned = ProvisionedEnvironment.load(session)
-        services = list(provisioned.services) if provisioned else []
-        configuration_names = sorted(
-            (provisioned.overrides if provisioned else {}).keys()
+        generated_context = (
+            _copy_generated_runtime_context(session, staging, generated)
+            if provisioned and provisioned.generated_runtime_plan
+            else None
         )
-        capabilities = {
-            "agent_tools": Capability(
-                protocol=CapabilityProtocol.HTTP,
-                service=(
-                    provisioned.services[-1]
-                    if provisioned and provisioned.services
-                    else None
-                ),
-                configuration_name=(
-                    configuration_names[0] if len(configuration_names) == 1 else None
-                ),
-            )
-        }
+        services = list(provisioned.services) if provisioned else []
+        capabilities: dict[str, Capability] = {}
+        readiness: list[dict[str, Any]] = []
+        if provisioned:
+            configured = set(provisioned.overrides)
+            for endpoint in provisioned.service_endpoints:
+                key = (
+                    f"{endpoint['service']}_{endpoint['kind']}_"
+                    f"{endpoint['container_port']}"
+                ).replace("-", "_")
+                names = [
+                    name
+                    for name in endpoint.get("configuration_names", [])
+                    if name in configured
+                ]
+                capabilities[key] = Capability(
+                    protocol=CapabilityProtocol(str(endpoint["protocol"])),
+                    service=str(endpoint["service"]),
+                    container_port=int(endpoint["container_port"]),
+                    configuration_name=names[0] if len(names) == 1 else None,
+                    metadata={"kind": str(endpoint["kind"])},
+                )
+                readiness.append(
+                    {
+                        "capability": key,
+                        "path": str(endpoint.get("readiness_path") or "") or None,
+                    }
+                )
         compose = compose_file(source)
         if compose is None and provisioned and provisioned.compose_file:
             compose = Path(provisioned.compose_file)
@@ -375,7 +485,15 @@ def export_session_bundle(
             except ValueError:
                 # Managed Compose is generated into the session, not the repository.
                 document = "compose.json"
-                shutil.copy2(compose, staging / document)
+                portable = _portable_managed_compose(
+                    compose,
+                    source=source,
+                    session=session,
+                    generated_context=generated_context,
+                )
+                (staging / document).write_text(
+                    json.dumps(portable, indent=2), encoding="utf-8"
+                )
                 generated.append(document)
             runtime = BundleRuntime(kind=RuntimeKind.COMPOSE, document=document)
 
@@ -389,11 +507,7 @@ def export_session_bundle(
                 key: value.model_dump(mode="json", exclude_none=True)
                 for key, value in capabilities.items()
             },
-            "readiness": (
-                [{"capability": "agent_tools", "path": "/health"}]
-                if provisioned and provisioned.overrides
-                else []
-            ),
+            "readiness": readiness,
             "provenance": {
                 "source_kind": "repository",
                 "repository": source.name,

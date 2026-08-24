@@ -49,15 +49,32 @@ def blockers(contract: AgentContract, source_root: str = "") -> list[str]:
             "the agent source path was not preserved; reopen the session with the repository "
             "path (or pass --path) so its shipped implementation can be run"
         )
+    # A voice worker is itself the runnable seam. Frameworks commonly create function tools as
+    # closures that capture session state; forcing those closures to also be importable outside
+    # the worker rejects valid agents or encourages the harness to rewrite their behavior. The
+    # provisioning stage still has to prove that the submitted worker can actually be packaged.
+    runtime_owned = bool(
+        contract.modality == "voice"
+        and contract.runtime
+        and (
+            contract.runtime.command
+            or contract.runtime.dockerfile
+            or contract.runtime.install
+        )
+    )
     entries = {entry.tool: entry for entry in contract.tool_entrypoints}
     for tool in contract.tools:
         entry = entries.get(tool.name)
         if entry is None or entry.mode in ("", "generate", "unreachable"):
+            if runtime_owned:
+                continue
             problems.append(
                 f"{tool.name}: no runnable shipped entrypoint was identified; expose the real "
                 "implementation as an importable callable or an HTTP service, then point the "
                 "harness at that seam"
             )
+            continue
+        if runtime_owned:
             continue
         if entry.mode in ("import", "construct") and not (
             entry.module and entry.callable
@@ -109,11 +126,15 @@ def open_stage(
         service_tools = [
             entry.tool for entry in contract.tool_entrypoints if entry.mode == "service"
         ]
-        runtime_tools = [
-            entry.tool
-            for entry in contract.tool_entrypoints
-            if entry.mode in ("import", "construct")
-        ]
+        runtime_tools = (
+            contract.tool_names()
+            if provisioned.runtime_services and contract.modality == "voice"
+            else [
+                entry.tool
+                for entry in contract.tool_entrypoints
+                if entry.mode in ("import", "construct")
+            ]
+        )
         environment_note = (
             "\n\n## Already provisioned from the agent's repository\n\n"
             f"Compose project: {provisioned.project}\n"
@@ -146,8 +167,13 @@ def open_stage(
             "invent or replace schema, migrations, services, or tool behavior. Avoid placeholder "
             "names/addresses and predictable secrets such as 123456. Scenario-specific people, "
             "credentials and edge states belong in scenario setup rather than the shared base. "
-            "Your remaining work is the simulator prompt, observable sub-goals/world checks, one "
-            "truthful service-backed sequence, check_world, and save_world."
+            "Your remaining work is the simulator prompt, observable sub-goals/world checks, "
+            + (
+                "check_world, and save_world. Do not declare a build-time sequence for "
+                "runtime-internal tools: their stateful ordering is proven by real calls."
+                if provisioned.runtime_services and contract.modality == "voice"
+                else "one truthful service-backed sequence, check_world, and save_world."
+            )
         )
     server, _world = world_tools(contract, destination, source_root=source_root)
     allowed = [
@@ -188,6 +214,13 @@ def opening(contract: AgentContract, *, provisioned: bool = False) -> str:
             "agent — you are building what it connects to, not a copy of it."
         )
     if provisioned:
+        sequence_instruction = (
+            "Do not declare or smoke-call runtime-internal tools outside their voice session; "
+            "the real scenarios prove their stateful ordering. "
+            if contract.modality == "voice" and contract.runtime
+            else "Declare one sequence using already-bound service endpoints with real required "
+            "arguments. "
+        )
         return (
             f"Finish the already-provisioned source-backed world for {contract.agent!r}.\n\n"
             "The submitted Compose services, seed data, HTTP service-tool bindings, and "
@@ -196,8 +229,9 @@ def opening(contract: AgentContract, *, provisioned: bool = False) -> str:
             "baseline records into existing collections when the world would otherwise be too "
             "empty to exercise the contract. Use varied realistic values, never demo placeholders "
             "or predictable credentials. Write the simulator prompt, add "
-            "observable sub-goals and world checks, declare one sequence using already-bound "
-            "service endpoints with real required arguments, then check_world and save_world. "
+            "observable sub-goals and world checks. "
+            + sequence_instruction
+            + "Then check_world and save_world. "
             "Do not read source, run shell commands, or investigate runtime-internal tools."
         )
     return (

@@ -332,9 +332,20 @@ def world_tools(
             # A harness-managed dependency-only environment (for example a Dockerfile plus
             # Postgres) has no HTTP tool service to forward to. Its real database is still the
             # world store; import/construct bindings execute the submitted tool code normally.
-            world = GeneratedWorld(
-                store=attached_postgres_store(destination), kind=named
+            has_postgres = bool(
+                provisioned
+                and any("postgres" in service.lower() for service in provisioned.services)
             )
+            world = (
+                GeneratedWorld(store=attached_postgres_store(destination), kind=named)
+                if has_postgres
+                else GeneratedWorld(":memory:", kind=named)
+            )
+        if provisioned and provisioned.runtime_services and contract.modality == "voice":
+            # These tools execute only through a real call to the submitted worker. They need no
+            # harness-authored handler and must not be smoke-called outside their captured RTC
+            # session state while the world is being constructed.
+            world.runtime_tools = set(contract.tool_names())
     else:
         world = GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
@@ -1152,7 +1163,11 @@ def world_tools(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
             )
-        if not sequences:
+        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
+            runtime_tools
+        )
+        if not sequences and not runtime_only:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."

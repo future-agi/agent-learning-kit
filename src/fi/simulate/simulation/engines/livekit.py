@@ -111,6 +111,7 @@ def _voice_max_case_concurrency() -> int:
         return _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
     return value if value >= 1 else _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
 
+
 _silero_vad: Any | None = None
 _silero_vad_guard = threading.Lock()
 
@@ -1521,9 +1522,7 @@ class LiveKitEngine(BaseEngine):
                     else None
                 ),
                 "retell_call_id": (
-                    provider_call_id
-                    if profile.evidence_provider == "retell"
-                    else None
+                    provider_call_id if profile.evidence_provider == "retell" else None
                 ),
                 "simulator_model_usage": (
                     customer_agent.model_usage
@@ -1730,7 +1729,7 @@ def _find_target_audio(
     excluded_identities: set[str],
     target_identity: str | None,
 ) -> _TargetParticipant | None:
-    candidates: list[tuple[int, _TargetParticipant]] = []
+    candidates: list[tuple[int, int, _TargetParticipant]] = []
     agent_kind = getattr(
         rtc.ParticipantKind,
         "PARTICIPANT_KIND_AGENT",
@@ -1746,10 +1745,22 @@ def _find_target_audio(
         for publication in participant.track_publications.values():
             if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
                 continue
+            # Agents may publish ambient music/noise alongside their synthesized speech. The
+            # first LiveKit publication is not necessarily the conversational track (the
+            # official drive-thru example publishes ``background_audio``). Prefer ordinary
+            # speech/microphone tracks so STT, transcription filtering, and recording all bind
+            # to the same semantic stream.
+            track_name = str(getattr(publication, "name", "") or "").lower()
+            background = any(
+                marker in track_name
+                for marker in ("background", "ambient", "music", "sound_effect")
+            )
+            track_priority = 1 if background else 0
             attrs = dict(getattr(participant, "attributes", {}) or {})
             candidates.append(
                 (
                     priority,
+                    track_priority,
                     _TargetParticipant(
                         identity=identity,
                         sid=str(participant.sid),
@@ -1762,7 +1773,15 @@ def _find_target_audio(
             )
     if not candidates:
         return None
-    return sorted(candidates, key=lambda item: (item[0], item[1].identity))[0][1]
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2].identity,
+            item[2].audio_track_sid,
+        ),
+    )[0][2]
 
 
 # A run ends naturally when the simulator calls ``endCall``; this is only the
@@ -2042,14 +2061,11 @@ def _session_messages(session: AgentSession) -> list[dict[str, Any]]:
                     or current["stopped_speaking_at"]
                 )
             elif previous.get("interrupted") or interrupted:
-                previous["content"] = (
-                    f"{previous_text} {current['content']}".strip()
-                )
+                previous["content"] = f"{previous_text} {current['content']}".strip()
                 previous["interrupted"] = interrupted
-                previous["stopped_speaking_at"] = (
-                    current["stopped_speaking_at"]
-                    or previous.get("stopped_speaking_at")
-                )
+                previous["stopped_speaking_at"] = current[
+                    "stopped_speaking_at"
+                ] or previous.get("stopped_speaking_at")
             else:
                 messages.append(current)
             continue
@@ -2263,12 +2279,10 @@ def _conversation_outcome(
                 "Conversation session closed before a natural end condition"
             ),
             "no_conversation": (
-                "No conversation turns were committed before the inactivity "
-                "deadline"
+                "No conversation turns were committed before the inactivity deadline"
             ),
             "monitor_failed": (
-                "Conversation end monitoring failed before a natural end "
-                "condition"
+                "Conversation end monitoring failed before a natural end condition"
             ),
         }[stop_reason]
         return _failure_outcome(
@@ -2447,9 +2461,7 @@ def _attach_recordings(
     if recorder.recording_started_at is not None and speech_starts:
         outcome.metadata["recording_offset_ms"] = max(
             0,
-            round(
-                (min(speech_starts) - recorder.recording_started_at) * 1000
-            ),
+            round((min(speech_starts) - recorder.recording_started_at) * 1000),
         )
 
 

@@ -27,8 +27,12 @@ async def _run(job_path: Path, source: Path, output: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="alk-harness-worker")
     parser.add_argument("job", type=Path, help="typed HarnessJob JSON")
-    parser.add_argument("--source", required=True, type=Path, help="sandbox-owned source checkout")
-    parser.add_argument("--output", required=True, type=Path, help="job artifact directory")
+    parser.add_argument(
+        "--source", required=True, type=Path, help="sandbox-owned source checkout"
+    )
+    parser.add_argument(
+        "--output", required=True, type=Path, help="job artifact directory"
+    )
     args = parser.parse_args(argv)
     return asyncio.run(_run(args.job, args.source, args.output))
 

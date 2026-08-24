@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 import pytest
 from fi.alk.harness.cli import build_parser
@@ -177,6 +178,7 @@ services:
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     environment = provisioning.provision(source, output)
 
     assert environment.services == ["postgres", "tools-api"]
@@ -185,6 +187,83 @@ services:
     assert (output / "environment.json").exists()
     up = next(call for call in calls if call and call[0] == "up")
     assert "agent" not in up
+
+
+def test_saved_contract_resumes_compose_when_repository_env_file_is_external(
+    tmp_path, monkeypatch
+):
+    """A job-scoped env upload replaces, rather than materializes, a missing .env file."""
+    from fi.alk.harness import provision as provisioning
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        """
+services:
+  postgres:
+    image: postgres:16
+  agent:
+    profiles: ["full"]
+    build: .
+    env_file: .env.local
+""".strip(),
+        encoding="utf-8",
+    )
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    contract = AgentContract(
+        agent="resumable-agent",
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(
+            compose_file="docker-compose.yml",
+            dockerfile="Dockerfile",
+        ),
+    )
+    output.mkdir()
+    (output / "job.json").write_text(
+        json.dumps(
+            {
+                "agent": {
+                    "secret_refs": {
+                        "LIVEKIT_API_KEY": {
+                            "manager": "mounted",
+                            "key": "opaque-job-key",
+                        }
+                    }
+                },
+                "metadata": {
+                    "environment_value_names": ["LIVEKIT_URL", "DEEPGRAM_API_KEY"]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = {
+        "services": {
+            "postgres": {},
+            "agent": {"profiles": ["full"], "build": {"context": "."}},
+        }
+    }
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(config)
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
+
+    environment = provisioning.provision(source, output, contract)
+
+    assert environment.compose_file == str(source / "docker-compose.yml")
+    assert environment.services == ["postgres"]
+    assert {"LIVEKIT_API_KEY", "LIVEKIT_URL", "DEEPGRAM_API_KEY"} <= set(
+        environment.runtime_configuration_names
+    )
+    assert (output / "compose.harness.override.yaml").read_text() == (
+        'services:\n  "agent":\n    env_file: !reset []\n'
+    )
 
 
 def test_source_environment_uses_configured_docker_gateway(tmp_path, monkeypatch):
@@ -212,6 +291,55 @@ def test_source_environment_uses_configured_docker_gateway(tmp_path, monkeypatch
     assert provisioning._overrides(environment, config) == {
         "TOOLS_API_URL": "http://host.docker.internal:42123"
     }
+
+
+def test_profiled_infrastructure_tools_are_not_mistaken_for_agent_runtimes():
+    from fi.alk.harness.provision import _runtime_services
+
+    config = {
+        "services": {
+            "postgres": {},
+            "pgadmin": {"profiles": ["tools"]},
+            "redis-commander": {"profiles": ["tools"]},
+        }
+    }
+
+    assert _runtime_services(config) == []
+
+
+def test_chat_ingress_selects_a_default_compose_agent_without_starting_it_as_infra():
+    from fi.alk.harness.contract import AgentContract, Runtime
+    from fi.alk.harness.provision import _runtime_services, _started_services
+
+    config = {
+        "services": {
+            "api": {
+                "build": {"context": "."},
+                "ports": [{"target": 8080, "published": "8080"}],
+            },
+            "postgres": {"image": "postgres:16"},
+            "redis-commander": {
+                "image": "rediscommander/redis-commander",
+                "profiles": ["tools"],
+            },
+        }
+    }
+    contract = AgentContract(
+        agent="support",
+        tools=[{"name": "lookup", "args": ["id"]}],
+        real_use_cases=["look up a record"],
+        runtime=Runtime(
+            interface={
+                "kind": "http",
+                "port": 8080,
+                "path": "/chat",
+            }
+        ),
+    )
+
+    runtimes = _runtime_services(config, contract)
+    assert runtimes == ["api"]
+    assert _started_services(config, runtimes) == ["postgres"]
 
 
 def test_runtime_trace_uses_job_scoped_exchange_volume(monkeypatch):
@@ -302,6 +430,7 @@ def test_source_environment_is_reused_instead_of_rebuilt(tmp_path, monkeypatch):
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     assert provisioning.provision(source, output).project == "fagi-harness-existing"
     assert calls == [
         ("ps", "--status", "running", "--quiet"),
@@ -356,6 +485,7 @@ def test_postgres_and_runtime_are_generated_when_source_has_no_compose(
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     environment = provisioning.provision_if_present(source, output, contract)
 
     assert environment is not None and environment.managed
@@ -364,6 +494,453 @@ def test_postgres_and_runtime_are_generated_when_source_has_no_compose(
     generated = json.loads((output / "managed-compose.json").read_text())
     runtime = generated["services"]["agent-runtime"]
     assert runtime["environment"]["DATABASE_URL"].startswith("postgresql://")
+
+
+def test_compose_wins_when_contract_also_records_its_service_dockerfile(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("Dockerfile").write_text("FROM python:3.12-slim\n")
+    source.joinpath("docker-compose.yml").write_text(
+        """services:
+  database:
+    image: postgres:16
+  agent:
+    profiles: [full]
+    build: .
+    env_file: .env.local
+"""
+    )
+    contract = _contract(
+        runtime=Runtime(compose_file="docker-compose.yml", dockerfile="Dockerfile")
+    )
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "database": {},
+                        "agent": {"profiles": ["full"], "build": {"context": "."}},
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
+    monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", "LIVEKIT_URL")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_LIVEKIT_URL", "wss://example.invalid")
+    environment = provisioning.provision(source, output, contract)
+
+    assert Path(environment.compose_file) == source / "docker-compose.yml"
+    assert environment.runtime_services == ["agent"]
+    override = Path(environment.compose_override_file).read_text()
+    assert "env_file: !reset []" in override
+    assert not source.joinpath(".env.local").exists()
+
+
+def test_submitted_compose_gets_one_clean_retry_when_published_ports_are_transient(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("docker-compose.yml").write_text(
+        "services:\n  api:\n    image: example/api\n    ports: ['8080:8080']\n"
+    )
+    calls: list[tuple[str, ...]] = []
+    waits = 0
+    waited_endpoints: list[dict[str, int]] = []
+
+    def rendered_port(environment):
+        override = Path(environment.compose_override_file or "")
+        if not override.is_file():
+            return "8080"
+        match = re.search(r'published: ["\']?(\d+)', override.read_text())
+        return match.group(1) if match else "8080"
+
+    def run(environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments and "--format" in arguments:
+            published = rendered_port(environment)
+            return json.dumps(
+                {
+                    "services": {
+                        "api": {
+                            "image": "example/api",
+                            "ports": [{"target": 8080, "published": published}],
+                        }
+                    }
+                }
+            )
+        if arguments and arguments[0] == "port":
+            return f"0.0.0.0:{rendered_port(environment)}"
+        return ""
+
+    def wait(endpoints, *_args, **_kwargs):
+        nonlocal waits
+        waits += 1
+        waited_endpoints.append(
+            {item["service"]: int(item["host_port"]) for item in endpoints}
+        )
+        if waits == 1:
+            raise provisioning.ProvisionError(
+                "environment endpoints did not become ready: api:18080"
+            )
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", wait)
+    ports = iter((18080, 18081))
+    monkeypatch.setattr(provisioning, "_free_port", lambda: next(ports))
+    environment = provisioning.provision(source, output)
+
+    assert environment.running
+    assert waits == 2
+    assert waited_endpoints == [
+        {"api": 18080},
+        {"api": 18081},
+    ]
+    assert ("down", "--volumes", "--remove-orphans") in calls
+    assert any(call[:4] == ("up", "--detach", "--no-build", "--wait") for call in calls)
+
+
+def test_containerized_runner_probes_private_service_address(tmp_path, monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "docker-compose.yml"),
+        project="private-readiness",
+        services=["postgres"],
+        service_endpoints=[
+            {
+                "service": "postgres",
+                "protocol": "postgres",
+                "container_port": 5432,
+                "host_port": 59939,
+            }
+        ],
+    )
+    probes: list[tuple[str, int]] = []
+
+    monkeypatch.setenv("ALK_RUNNER_CONTAINER", "runner")
+    monkeypatch.setattr(
+        provisioning,
+        "_attach_runner_network",
+        lambda current: setattr(current, "runner_network", "private_default"),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_endpoint_ready",
+        lambda endpoint, host: probes.append((host, endpoint["host_port"])) or True,
+    )
+
+    provisioning._wait_for_environment_endpoints(environment, 0.1, 0.0)
+
+    assert environment.runner_network == "private_default"
+    assert probes == [("postgres", 5432)]
+
+
+def test_dockerfile_only_agent_is_built_without_inventing_infrastructure(
+    tmp_path, monkeypatch
+):
+    """A real standalone agent is a complete Case 2 even when it needs no database."""
+    from fi.alk.harness.contract import AgentContract, Runtime, ToolSpec
+
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "standalone-agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    contract = AgentContract(
+        agent="standalone-voice-agent",
+        tools=[ToolSpec(name="answer_call")],
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    config = {
+        "services": {
+            "agent-runtime": {
+                "build": {"context": str(source), "dockerfile": "Dockerfile"},
+                "profiles": ["harness-runtime"],
+                "environment": {},
+            }
+        }
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(config)
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision_if_present(source, output, contract)
+
+    assert environment is not None and environment.managed and environment.running
+    assert environment.services == []
+    assert environment.runtime_services == ["agent-runtime"]
+    assert ("build", "agent-runtime") in calls
+    assert not any(arguments and arguments[0] == "up" for arguments in calls)
+    generated = json.loads((output / "managed-compose.json").read_text())
+    assert set(generated["services"]) == {"agent-runtime"}
+    assert generated["services"]["agent-runtime"]["environment"] == {}
+    assert provisioning.healthy(output)
+
+
+def test_packaging_preflight_reports_missing_dockerfile_input_before_docker(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "broken-agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text(
+        "FROM python:3.12\nRUN --mount=type=bind,source=uv.lock,target=uv.lock true\n",
+        encoding="utf-8",
+    )
+    contract = AgentContract(
+        agent="broken-agent",
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("Docker must not start"),
+    )
+
+    with pytest.raises(
+        provisioning.ProvisionError, match="missing build input: uv.lock"
+    ):
+        provisioning.provision(source, tmp_path / "out", contract)
+
+
+def test_managed_runtime_preserves_repository_platform_hint(tmp_path, monkeypatch):
+    from fi.alk.harness.contract import AgentContract, Runtime
+
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM ubuntu:22.04\n", encoding="utf-8")
+    (source / "docker-compose.yml").write_text(
+        "services:\n  dev:\n    build: .\n    tty: true\n    platform: linux/amd64\n",
+        encoding="utf-8",
+    )
+    contract = AgentContract(
+        agent="architecture-specific-agent",
+        real_use_cases=["answer a caller"],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+    config = {
+        "services": {
+            "agent-runtime": {
+                "profiles": ["harness-runtime"],
+                "platform": "linux/amd64",
+            }
+        }
+    }
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(config)
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision(source, tmp_path / "out", contract)
+
+    generated = json.loads((tmp_path / "out" / "managed-compose.json").read_text())
+    assert environment.managed
+    assert generated["services"]["agent-runtime"]["platform"] == "linux/amd64"
+
+
+def test_large_docker_failure_keeps_start_and_actionable_tail():
+    from fi.alk.harness.provision import _command_failure_output
+
+    output = (
+        "BUILD START\n" + ("dependency installed\n" * 2000) + "fatal: bun exited 132"
+    )
+
+    shown = _command_failure_output(output, limit=1000)
+
+    assert shown.startswith("BUILD START")
+    assert "characters omitted" in shown
+    assert shown.endswith("fatal: bun exited 132")
+    assert len(shown) < 1100
+
+
+def test_runtime_only_environment_reset_does_not_start_an_empty_service_set(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        "services:\n  agent-runtime:\n    image: example\n    profiles: [harness-runtime]\n",
+        encoding="utf-8",
+    )
+    provisioning.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-runtime-only",
+        services=[],
+        runtime_services=["agent-runtime"],
+        running=True,
+    ).save(output)
+    calls: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "image": "example",
+                            "profiles": ["harness-runtime"],
+                        }
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.reset(output)
+
+    assert environment.running and environment.services == []
+    assert calls[0] == ("down", "--volumes", "--remove-orphans")
+    assert not any(arguments and arguments[0] == "up" for arguments in calls)
+
+
+def test_runtime_credentials_are_not_serialized_into_docker_arguments(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        "services:\n  agent-runtime:\n    image: example\n    profiles: [harness-runtime]\n",
+        encoding="utf-8",
+    )
+    provisioning.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-secure-runtime",
+        services=[],
+        runtime_services=["agent-runtime"],
+        running=True,
+    ).save(output)
+    invocations: list[tuple[tuple[str, ...], dict]] = []
+
+    def run(_environment, *arguments, **kwargs):
+        invocations.append((arguments, kwargs))
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "image": "example",
+                            "profiles": ["harness-runtime"],
+                            "environment": {},
+                        }
+                    }
+                }
+            )
+        return ""
+
+    def docker(*arguments, **_kwargs):
+        return "running healthy" if arguments and arguments[0] == "inspect" else ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_docker", docker)
+    secret = "must-never-appear-in-argv"
+    provisioning.start_runtime(
+        output,
+        overrides={"LIVEKIT_API_SECRET": secret},
+    )
+
+    run_arguments, run_kwargs = next(
+        invocation for invocation in invocations if invocation[0][0] == "run"
+    )
+    assert secret not in repr(run_arguments)
+    assert ("--env", "LIVEKIT_API_SECRET") == run_arguments[-3:-1]
+    assert run_kwargs["process_overrides"]["LIVEKIT_API_SECRET"] == secret
+
+
+def test_runtime_chat_port_is_ephemeral_and_recorded(tmp_path, monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    source = tmp_path / "agent"
+    output = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        "services:\n  agent-runtime:\n    image: example\n    profiles: [harness-runtime]\n",
+        encoding="utf-8",
+    )
+    provisioning.ProvisionedEnvironment(
+        source=str(source.resolve()),
+        compose_file=str(compose),
+        project="fagi-harness-chat-runtime",
+        runtime_services=["agent-runtime"],
+        running=True,
+    ).save(output)
+    invocations: list[tuple[str, ...]] = []
+
+    def run(_environment, *arguments, **_kwargs):
+        invocations.append(arguments)
+        if "config" in arguments:
+            return json.dumps(
+                {
+                    "services": {
+                        "agent-runtime": {
+                            "image": "example",
+                            "profiles": ["harness-runtime"],
+                            "environment": {},
+                        }
+                    }
+                }
+            )
+        return ""
+
+    def docker(*arguments, **_kwargs):
+        if arguments and arguments[0] == "inspect":
+            return "running healthy"
+        if arguments and arguments[0] == "port":
+            return "127.0.0.1:49123"
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_docker", docker)
+    environment = provisioning.start_runtime(
+        output, publish_ports=[8080], stable_seconds=0.25
+    )
+
+    run_arguments = next(
+        arguments for arguments in invocations if arguments[0] == "run"
+    )
+    assert ("--publish", "127.0.0.1::8080") == run_arguments[5:7]
+    assert environment.runtime_endpoints == {"8080": "127.0.0.1:49123"}
+    assert provisioning.runtime_endpoint(output, 8080) == "http://127.0.0.1:49123"
 
 
 def test_source_change_replaces_the_old_project_instead_of_reusing_it(
@@ -394,6 +971,7 @@ def test_source_change_replaces_the_old_project_instead_of_reusing_it(
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     environment = provisioning.provision(source, output)
 
     assert environment.project != "fagi-harness-old"
@@ -430,6 +1008,7 @@ def test_environment_reset_recreates_only_recorded_services_without_building(
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(provisioning, "_wait_for_endpoints", lambda *_args: None)
     provisioning.reset(output)
 
     assert calls[0] == ("down", "--volumes", "--remove-orphans")
@@ -464,7 +1043,7 @@ def test_runtime_replaces_a_placeholder_google_credential_mount(tmp_path, monkey
         (
             "GOOGLE_APPLICATION_CREDENTIALS",
             credential.resolve(),
-            "/etc/vertex/creds.json",
+            f"/run/harness-secrets/{credential.name}",
         )
     ]
 
@@ -533,6 +1112,89 @@ def test_repository_agent_is_not_reconstructed_by_the_local_target():
     try:
         with pytest.raises(RuntimeError, match="shipped runtime"):
             LocalAgent(contract, world)
+    finally:
+        world.close()
+
+
+def test_chat_runtime_interface_is_normalized_and_requires_a_real_route():
+    from pydantic import ValidationError
+
+    from fi.alk.harness.contract import Runtime
+
+    runtime = Runtime(
+        interface={
+            "kind": "openai-compatible",
+            "protocol": "chat-completions",
+            "port": 8080,
+            "path": "v1/chat/completions",
+            "health_path": "health",
+        }
+    )
+    assert runtime.interface is not None
+    assert runtime.interface.kind == "http"
+    assert runtime.interface.protocol == "openai_chat"
+    assert runtime.interface.path == "/v1/chat/completions"
+    assert runtime.interface.health_path == "/health"
+
+    with pytest.raises(ValidationError, match="requires_path"):
+        Runtime(interface={"kind": "http", "port": 8080})
+
+
+def test_repository_chat_target_executes_returned_tools_in_the_scenario_world():
+    import asyncio
+
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness.run.targets import RepositoryChatTarget
+    from fi.simulate.agent.wrapper import AgentResponse
+
+    world, contract = _cart_world()
+    contract.runtime = Runtime(
+        language="python",
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+        },
+    )
+    target = RepositoryChatTarget(
+        contract, world, world_root=".", scenario_name="order-fries"
+    )
+
+    class Endpoint:
+        def __init__(self):
+            self.calls = 0
+
+        async def call(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                return AgentResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "tool-1",
+                            "type": "function",
+                            "function": {
+                                "name": "add",
+                                "arguments": json.dumps({"item_id": "big_mac"}),
+                            },
+                        }
+                    ],
+                    metadata={"external_agent": {"success": True}},
+                )
+            assert request.messages[-1]["role"] == "tool"
+            return AgentResponse(
+                content="I added the fries.",
+                metadata={"external_agent": {"success": True}},
+            )
+
+    endpoint = Endpoint()
+    target._wrapper = endpoint
+    try:
+        said = asyncio.run(target.say("Please add fries"))
+        assert said == "I added the fries."
+        assert endpoint.calls == 2
+        assert [call.name for call in world.calls] == ["add"]
     finally:
         world.close()
 
@@ -940,6 +1602,29 @@ def test_pointing_at_a_github_url_clones_it_into_the_session(tmp_path, monkeypat
     assert called["command"][:4] == ["git", "clone", "--depth", "1"]
     assert found["source"].root == source_dir
     assert found["source"].kind == "github"
+
+
+def test_pointing_at_a_github_branch_url_clones_that_branch(tmp_path, monkeypatch):
+    from fi.alk.harness.reception import point_at
+
+    called = {}
+
+    def clone(command, **kwargs):
+        called["command"] = command
+        Path(command[-1]).mkdir(parents=True)
+        return type("Completed", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr("fi.alk.harness.sources.subprocess.run", clone)
+    accepted = point_at(
+        "demo-agent",
+        "https://github.com/acme/demo-agent/tree/feat/harness",
+        "github",
+        {},
+        source_dir=tmp_path / "source",
+    )
+
+    assert not accepted.get("is_error")
+    assert called["command"][4:6] == ["--branch", "feat/harness"]
 
 
 @pytest.mark.parametrize(
@@ -2042,6 +2727,70 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
     assert calls[0].result == {"booking_ref": "UBR-71904"}
 
 
+def test_semantic_worker_trace_collapses_only_local_telemetry_mirror(tmp_path):
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run.simulation import _semantic_calls
+
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    records = [
+        {
+            "name": "confirm_address",
+            "arguments": {"place_id": "place-1"},
+            "output": {
+                "observed": True,
+                "execution": "submitted_agent_runtime",
+            },
+            "is_error": False,
+        },
+        {
+            "name": "confirm_address",
+            "arguments": '{"place_id": "place-1"}',
+            "output": "{'confirmed': True}",
+            "is_error": False,
+        },
+        {
+            "name": "get_payment_link_status",
+            "arguments": {"phone": "+14155550102"},
+            "output": {"status": "pending"},
+            "is_error": False,
+        },
+        {
+            "name": "get_payment_link_status",
+            "arguments": {"phone": "+14155550102"},
+            "output": {"status": "ready"},
+            "is_error": False,
+        },
+    ]
+    trace.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    contract = AgentContract(
+        agent="ride",
+        tools=[{"name": "check_payment_link_status", "args": []}],
+        tool_entrypoints=[
+            {
+                "tool": "check_payment_link_status",
+                "mode": "construct",
+                "module": "agent",
+                "callable": "RideAgent.check_payment_link_status",
+                "endpoint": "get_payment_link_status",
+            }
+        ],
+        real_use_cases=["book a ride"],
+    )
+    calls = _semantic_calls(trace, contract=contract)
+
+    assert [call.name for call in calls] == [
+        "confirm_address",
+        "check_payment_link_status",
+        "check_payment_link_status",
+    ]
+    assert calls[0].result == "{'confirmed': True}"
+    assert [call.result["status"] for call in calls[1:]] == ["pending", "ready"]
+
+
 def test_a_store_that_is_not_sqlite_needs_nothing_above_it_to_change(tmp_path):
     """The harness writes the schema, the seed and the changes in whatever its agent's store
     speaks. What it cannot do from a prompt is execute them, freeze the result and put it back, so
@@ -2678,9 +3427,11 @@ def test_source_livekit_calls_follow_the_workers_agent_first_greeting(
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setenv("HARNESS_CONVERSATION_DIRECTION", "simulator_first")
+    monkeypatch.delenv("LIVEKIT_TARGET_AGENT_NAME", raising=False)
 
     assert run_tools.configure_source_voice(tmp_path)
     assert os.environ["HARNESS_CONVERSATION_DIRECTION"] == "agent_first"
+    assert os.environ["LIVEKIT_TARGET_AGENT_NAME"] == "harness-agent"
 
 
 def test_sdk_voice_spec_keeps_canonical_and_engine_direction_aligned(monkeypatch):
@@ -4218,6 +4969,29 @@ def test_a_tool_that_cannot_be_reached_stops_with_an_actionable_problem(tmp_path
     assert "importable callable or an HTTP service" in problems[0]
 
 
+def test_voice_runtime_owns_session_closure_tools(tmp_path):
+    """A real RTC worker is the seam for closures that cannot be imported independently."""
+    from fi.alk.harness.build import blockers
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="voice-worker",
+        modality="voice",
+        tools=[{"name": "place_order", "args": ["item"]}],
+        real_use_cases=["place an order over a call"],
+        runtime={"language": "python", "command": ["python", "agent.py", "start"]},
+        tool_entrypoints=[
+            {
+                "tool": "place_order",
+                "mode": "unreachable",
+                "notes": "closure captures the LiveKit RunContext",
+            }
+        ],
+    )
+
+    assert blockers(contract, str(tmp_path)) == []
+
+
 def test_a_refusal_convention_written_with_escaped_quotes_still_matches():
     """A convention written for people gets quoted the way people quote, and a model writing JSON
     escapes those quotes. Left in, the backslash lands inside the marker, so "Error:" is looked for
@@ -4686,6 +5460,39 @@ def test_a_failed_voice_room_without_a_target_turn_is_infrastructure_not_agent()
     assert not _voice_infrastructure_failure(0, only_caller)
 
 
+def test_simulation_marks_pre_call_exception_as_unrunnable(tmp_path, monkeypatch):
+    """A provisioning exception is terminal evidence, but never an agent grade."""
+    import asyncio
+
+    from fi.alk.harness.run import simulation
+
+    async def failed_before_call(*args, **kwargs):
+        raise RuntimeError("credential mount is unavailable")
+
+    monkeypatch.setattr(simulation, "_run_one", failed_before_call)
+    monkeypatch.setattr(
+        "fi.alk.harness.run.models.for_roles",
+        lambda model=None: {"agent": "a", "user": "u", "judge": "j"},
+    )
+    summary = asyncio.run(
+        simulation.simulate(
+            [Scenario(name="cannot-call", instruction="attempt a call")],
+            _contract(modality="voice"),
+            tmp_path,
+            destination=tmp_path,
+            run_id="run-unrunnable",
+        )
+    )
+
+    assert summary["passed"] == 0
+    assert summary["unrunnable"] == 1
+    result = json.loads(
+        (tmp_path / "runs/run-unrunnable/cannot-call/result.json").read_text()
+    )
+    assert result["ended"] == "failed"
+    assert result["problems"] == ["RuntimeError: credential mount is unavailable"]
+
+
 def test_live_voice_exchange_roles_match_the_saved_transcript():
     from fi.alk.harness.run.simulation import _normalize_live_exchange
 
@@ -4979,6 +5786,65 @@ def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
     )
 
 
+def test_task_completion_eval_is_reconciled_to_authoritative_scenario_checks():
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.run.grade import Judgement, reconcile_task_completion
+
+    suite = [
+        Judgement(
+            claim="customer_agent_task_completion",
+            kind="customer_agent_task_completion",
+            holds=False,
+            why="The wording did not sound complete.",
+            by="builtin",
+        ),
+        Judgement(
+            claim="customer_agent_conversation_quality",
+            kind="customer_agent_conversation_quality",
+            holds=True,
+            why="Good conversation.",
+            by="builtin",
+        ),
+    ]
+    settled = [Outcome(name="ride_cancelled", held=True)]
+    scenario = [
+        Judgement(
+            claim="fee disclosed",
+            kind="fee_disclosed",
+            holds=True,
+        )
+    ]
+
+    reconciled = reconcile_task_completion(suite, settled, scenario)
+
+    assert reconciled[0].holds
+    assert "authoritative scenario checks" in reconciled[0].why
+    assert reconciled[1].holds
+
+
+def test_task_completion_cannot_pass_when_authoritative_state_failed():
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.run.grade import Judgement, reconcile_task_completion
+
+    suite = [
+        Judgement(
+            claim="customer_agent_task_completion",
+            kind="customer_agent_task_completion",
+            holds=True,
+            why="The agent claimed it was done.",
+        )
+    ]
+
+    reconciled = reconcile_task_completion(
+        suite,
+        [Outcome(name="ride_booked", held=False, said="No booking exists")],
+        [],
+    )
+
+    assert not reconciled[0].holds
+    assert "at least one required scenario outcome failed" in reconciled[0].why
+
+
 def test_webhook_binds_where_the_environment_says(monkeypatch):
     from fi.alk.harness.run.voice import WorldWebhook
 
@@ -5117,6 +5983,11 @@ def test_sub_goals_travel_named_so_a_page_can_show_one_per_column():
     assert payload["call_metadata"]["harness_of"] == 2
     assert "evaluations" not in payload
     assert payload["call_metadata"]["harness_evaluations"]
+    assert payload["result_digest"].startswith("sha256:")
+    assert (
+        platform.result_of(_reported_result())["result_digest"]
+        == payload["result_digest"]
+    )
 
 
 def test_a_scenario_that_never_ran_is_not_reported_as_one_the_agent_failed():

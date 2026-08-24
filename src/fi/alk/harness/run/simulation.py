@@ -10,10 +10,11 @@ as many turns of the chat as it had scenarios, and the simulator driving it was 
 product ships. Handing over means the suite runs the same way whether a person triggered it from
 the UI, a script did, or nobody did.
 
-Chat and voice are one path here, and they differ in exactly one respect the harness never sees:
-a chat agent runs in this process and reaches the world as an object, while a hosted voice agent
-runs in somebody else's cloud and reaches the same world over HTTP. Same world, same setup, same
-checks, same report. Only the wire differs, and the spec's ``world_kind`` decides it.
+Chat and voice are one path here. A contract-only chat spec may run as an in-process target; a
+repository-backed chat agent runs its submitted service and is reached through its declared HTTP
+or WebSocket ingress; a voice agent is reached through its declared realtime transport. All three
+receive the same isolated world, setup, checks and report. Only the target adapter differs, and a
+repository-backed agent is never reconstructed from its extracted prompt.
 
 A run is a folder. One simulation over a suite is one run, kept whole, so a session accumulates
 runs that can be compared rather than one result file that the next run overwrites.
@@ -239,7 +240,13 @@ async def simulate(
             except Exception as failed:  # noqa: BLE001 - one bad scenario never stops the suite
                 result = Result(
                     scenario=scenario.name,
+                    tests=scenario.tests,
                     problems=[f"{type(failed).__name__}: {failed}"],
+                    # This is a terminal outcome for the attempted scenario, but it is not an
+                    # agent result.  Keeping an explicit ending prevents downstream artifact
+                    # readers from confusing an exception-shaped partial record with a call
+                    # that is still in progress.
+                    ended="failed",
                 )
             result.seconds = round(time.monotonic() - began, 1)
             _write_case(folder, result)
@@ -264,6 +271,10 @@ async def simulate(
         "models": roles,
         "scenarios": len(results),
         "passed": sum(1 for one in results if one.passed),
+        # A scenario that could not be executed is an infrastructure/harness outcome, not a
+        # weak-agent grade.  The CLI and hosted worker use this count to keep those two result
+        # classes distinct all the way to the platform.
+        "unrunnable": sum(1 for one in results if one.problems),
         "spent_usd": round(sum(one.spent_usd for one in results), 4),
         # Averaged across the scenarios that reported them, so a suite has one line per metric
         # rather than a number nobody compares. Only over the runs that actually measured it:
@@ -413,10 +424,28 @@ async def _typed_to(
     """
     from ..catalogue import load_catalogue
     from . import converse
-    from .grade import checkpoints, grade_sub_goals, judge, judge_suite_evals
+    from .grade import (
+        checkpoints,
+        grade_sub_goals,
+        judge,
+        judge_suite_evals,
+        reconcile_task_completion,
+    )
     from .targets import resolve
 
-    agent = resolve("local")(contract, world, model=roles["agent"])
+    repository_backed = bool(
+        contract.runtime or contract.tool_entrypoints or contract.implementation
+    )
+    if repository_backed:
+        agent = resolve("repository")(
+            contract,
+            world,
+            world_root=world_root,
+            trace_path=folder / "agent-tool-calls.jsonl",
+            scenario_name=scenario.name,
+        )
+    else:
+        agent = resolve("local")(contract, world, model=roles["agent"])
     transcript = await converse(
         agent, scenario, contract, world_root=world_root, model=roles["user"]
     )
@@ -429,9 +458,10 @@ async def _typed_to(
     judgements, judged_cost = await judge(
         scenario, transcript, contract, catalogue, model=roles["judge"], ending=ending
     )
-    judgements += judge_suite_evals(
+    suite_judgements = judge_suite_evals(
         catalogue.suite_evals, scenario, transcript, contract, ending=ending
     )
+    judgements += reconcile_task_completion(suite_judgements, settled, judgements)
     result = Result(
         scenario=scenario.name,
         tests=scenario.tests,
@@ -497,7 +527,13 @@ async def _spoken_to(
     from .call import place_the_call
     from .conversation import Exchange, Transcript
     from .evidence import measured, newest_report, spoken_times, tracks_in
-    from .grade import checkpoints, grade_sub_goals, judge, judge_suite_evals
+    from .grade import (
+        checkpoints,
+        grade_sub_goals,
+        judge,
+        judge_suite_evals,
+        reconcile_task_completion,
+    )
     from .live import wire
     from .tools import configure_source_voice, missing_prerequisites
 
@@ -593,7 +629,7 @@ async def _spoken_to(
         # attempt before retrying so only the attempt whose transcript is graded can contribute.
         world.calls = []
         code, case = await asyncio.to_thread(placed_once)
-        attempt_calls = _semantic_calls(trace_path)
+        attempt_calls = _semantic_calls(trace_path, contract=contract)
         if (
             not _voice_attempt_should_retry(
                 code, case, has_agent_calls=bool(attempt_calls or world.calls)
@@ -607,7 +643,7 @@ async def _spoken_to(
             attempt + 2,
             attempts,
         )
-    semantic = _semantic_calls(trace_path)
+    semantic = _semantic_calls(trace_path, contract=contract)
     # A worker trace includes semantic/local actions that never cross HTTP and is preferred when
     # available. In a hosted Docker runner, however, the job artifacts can live in a named volume
     # whose container path cannot be bind-mounted by the host daemon into the submitted runtime.
@@ -669,7 +705,7 @@ async def _spoken_to(
         ),
     )
     _require_action_evidence(judgements, scenario, world.calls)
-    judgements += judge_suite_evals(
+    suite_judgements = judge_suite_evals(
         catalogue.suite_evals,
         scenario,
         spoken_transcript,
@@ -679,6 +715,7 @@ async def _spoken_to(
             for name, rows in sorted(world.observe().state.items())
         ),
     )
+    judgements += reconcile_task_completion(suite_judgements, settled, judgements)
     result = Result(
         scenario=scenario.name,
         tests=scenario.tests,
@@ -811,10 +848,15 @@ def _voice_attempt_should_retry(
     )
 
 
-def _semantic_calls(path: Path) -> list[Call]:
+def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> list[Call]:
     """Read the submitted worker's agent-facing tool trace, tolerating a killed final line."""
     if not path.exists():
         return []
+    endpoint_names = {
+        entry.endpoint.strip("/"): entry.tool
+        for entry in (contract.tool_entrypoints if contract is not None else [])
+        if entry.endpoint.strip("/")
+    }
     calls: list[Any] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
@@ -838,18 +880,38 @@ def _semantic_calls(path: Path) -> list[Call]:
         if not isinstance(arguments, dict):
             arguments = {"value": arguments}
         failed = bool(record.get("is_error"))
-        calls.append(
-            Call(
-                name=str(record["name"]),
-                arguments=arguments,
-                result=output,
-                ok=not failed,
-                refused=failed,
-                error=str(output) if failed else "",
-                at=float(record.get("at") or 0.0),
-            )
+        recorded_name = str(record["name"]).strip("/")
+        call = Call(
+            name=endpoint_names.get(recorded_name, recorded_name),
+            arguments=arguments,
+            result=output,
+            ok=not failed,
+            refused=failed,
+            error=str(output) if failed else "",
+            at=float(record.get("at") or 0.0),
         )
+        # A harness-aware worker may mirror a local state-machine action to the world for
+        # observability and then emit the authoritative function-completion event. They are one
+        # logical action. Prefer the completion result, but never collapse ordinary identical
+        # retries (payment-status polling is a legitimate example).
+        if calls and _telemetry_mirror(calls[-1], call):
+            calls[-1] = call
+        else:
+            calls.append(call)
     return calls
+
+
+def _telemetry_mirror(previous: Call, current: Call) -> bool:
+    if previous.name != current.name or previous.arguments != current.arguments:
+        return False
+    result = previous.result
+    if isinstance(result, dict):
+        if result.get("execution") == "submitted_agent_runtime":
+            return True
+        text = str(result.get("result") or "").lower()
+    else:
+        text = str(result or "").lower()
+    return "submitted service has no endpoint" in text
 
 
 def _timed_exchanges(

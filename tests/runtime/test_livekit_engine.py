@@ -395,6 +395,39 @@ def test_target_audio_selection_uses_explicit_identity() -> None:
     assert selected.audio_track_sid == "track-target"
 
 
+def test_target_audio_selection_ignores_background_track_from_same_agent() -> None:
+    audio_kind = livekit.rtc.TrackKind.KIND_AUDIO
+    room = SimpleNamespace(
+        remote_participants={
+            "target": SimpleNamespace(
+                identity="drive-thru-agent",
+                sid="participant-target",
+                track_publications={
+                    "ambient": SimpleNamespace(
+                        sid="track-ambient",
+                        name="background_audio",
+                        kind=audio_kind,
+                    ),
+                    "speech": SimpleNamespace(
+                        sid="track-speech",
+                        name="roomio_audio",
+                        kind=audio_kind,
+                    ),
+                },
+            )
+        }
+    )
+
+    selected = livekit._find_target_audio(
+        room,
+        excluded_identities=set(),
+        target_identity="drive-thru-agent",
+    )
+
+    assert selected is not None
+    assert selected.audio_track_sid == "track-speech"
+
+
 def test_recording_mix_uses_only_explicit_paths(tmp_path: Path) -> None:
     first = tmp_path / "simulator.wav"
     second = tmp_path / "target.wav"
@@ -860,9 +893,7 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     agent._session = FakeSession()
     speech_handle = FakeSpeechHandle()
 
-    result = asyncio.run(
-        agent.end_call(SimpleNamespace(speech_handle=speech_handle))
-    )
+    result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=speech_handle)))
     asyncio.run(agent.wait_for_end_speech())
 
     assert result == "Conversation ended."
@@ -1995,9 +2026,7 @@ def test_case_crash_yields_dense_failed_result_without_shifting_order(
     statuses = [r.metadata["status"] for r in report.results]
     assert statuses[2] == CaseStatus.FAILED.value
     assert report.results[2].metadata["failure"]["code"] == "case_execution_error"
-    assert all(
-        statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4)
-    )
+    assert all(statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4))
 
 
 def test_on_case_complete_streams_every_index_including_failed_slot(
@@ -2066,7 +2095,9 @@ def test_dispatch_metadata_empty_by_default():
     # A real target agent flips to outbound/no-greet on any dispatch metadata,
     # so the default must be an empty string (not our simulation context).
     assert livekit._dispatch_metadata_json(_agent()) == ""
-    assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    assert (
+        livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    )
     assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata={})) == ""
 
 
@@ -2283,13 +2314,26 @@ def test_merge_patches_target_turn_missing_stop_timing() -> None:
     # Native target turns reach history via generate_reply(user_input=) with no
     # audio metrics, so stop == start (zero duration) -> bot WPM/latency dead.
     messages = [
-        {"role": "user", "content": "hi", "started_speaking_at": 1.0,
-         "stopped_speaking_at": 2.0},
-        {"role": "assistant", "content": "hello there how can i help",
-         "started_speaking_at": 3.0, "stopped_speaking_at": 3.0},
+        {
+            "role": "user",
+            "content": "hi",
+            "started_speaking_at": 1.0,
+            "stopped_speaking_at": 2.0,
+        },
+        {
+            "role": "assistant",
+            "content": "hello there how can i help",
+            "started_speaking_at": 3.0,
+            "stopped_speaking_at": 3.0,
+        },
     ]
-    captured = [{"content": "hello there how can i help",
-                 "started_speaking_at": 2.5, "stopped_speaking_at": 5.0}]
+    captured = [
+        {
+            "content": "hello there how can i help",
+            "started_speaking_at": 2.5,
+            "stopped_speaking_at": 5.0,
+        }
+    ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert len(merged) == 2  # patched in place, not appended
     agent = next(m for m in merged if m["role"] == "assistant")
@@ -2300,14 +2344,24 @@ def test_merge_patches_target_turn_missing_stop_timing() -> None:
 def test_merge_aggregates_partial_target_emissions() -> None:
     # One turn arrives as several partial/extended emissions -> min-start/max-stop.
     messages = [
-        {"role": "assistant", "content": "can we look at options for that",
-         "started_speaking_at": 10.0, "stopped_speaking_at": 10.0},
+        {
+            "role": "assistant",
+            "content": "can we look at options for that",
+            "started_speaking_at": 10.0,
+            "stopped_speaking_at": 10.0,
+        },
     ]
     captured = [
-        {"content": "can we look", "started_speaking_at": 9.0,
-         "stopped_speaking_at": 9.5},
-        {"content": "can we look at options for that",
-         "started_speaking_at": 9.2, "stopped_speaking_at": 12.0},
+        {
+            "content": "can we look",
+            "started_speaking_at": 9.0,
+            "stopped_speaking_at": 9.5,
+        },
+        {
+            "content": "can we look at options for that",
+            "started_speaking_at": 9.2,
+            "stopped_speaking_at": 12.0,
+        },
     ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert merged[0]["started_speaking_at"] == 9.0
@@ -2316,21 +2370,41 @@ def test_merge_aggregates_partial_target_emissions() -> None:
 
 def test_merge_does_not_override_real_target_timing() -> None:
     messages = [
-        {"role": "assistant", "content": "genuine turn",
-         "started_speaking_at": 4.0, "stopped_speaking_at": 6.0},
+        {
+            "role": "assistant",
+            "content": "genuine turn",
+            "started_speaking_at": 4.0,
+            "stopped_speaking_at": 6.0,
+        },
     ]
-    captured = [{"content": "genuine turn", "started_speaking_at": 1.0,
-                 "stopped_speaking_at": 99.0}]
+    captured = [
+        {
+            "content": "genuine turn",
+            "started_speaking_at": 1.0,
+            "stopped_speaking_at": 99.0,
+        }
+    ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert merged[0]["started_speaking_at"] == 4.0
     assert merged[0]["stopped_speaking_at"] == 6.0
 
 
 def test_merge_appends_trailing_target_turn_with_real_timing() -> None:
-    messages = [{"role": "user", "content": "bye", "started_speaking_at": 5.0,
-                 "stopped_speaking_at": 6.0}]
-    captured = [{"content": "take care now", "started_speaking_at": 7.0,
-                 "stopped_speaking_at": 8.0}]
+    messages = [
+        {
+            "role": "user",
+            "content": "bye",
+            "started_speaking_at": 5.0,
+            "stopped_speaking_at": 6.0,
+        }
+    ]
+    captured = [
+        {
+            "content": "take care now",
+            "started_speaking_at": 7.0,
+            "stopped_speaking_at": 8.0,
+        }
+    ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert len(merged) == 2
     trailing = merged[-1]
@@ -2374,9 +2448,7 @@ def test_room_disconnect_ends_conversation() -> None:
     # A native target commonly hangs up by deleting the room; the simulator
     # sees a room disconnect, not a participant_disconnected, and the case
     # idled through the silence backstop before ending.
-    room = _FakeEventRoom(
-        participants={"t": SimpleNamespace(identity="target-agent")}
-    )
+    room = _FakeEventRoom(participants={"t": SimpleNamespace(identity="target-agent")})
 
     class FakeSession:
         history = _BALANCED_HISTORY

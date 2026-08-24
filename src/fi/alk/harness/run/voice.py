@@ -183,22 +183,10 @@ class WorldWebhook:
                 default=str,
             )
 
-        if hasattr(world, "forward"):
-            endpoint = getattr(world, "endpoint_for", {}).get(name, name)
-            done_call = world.forward(
-                endpoint,
-                arguments,
-                record_as=name,
-                session_id=session_id,
-            )
-            if done_call.ok:
-                return (
-                    done_call.result
-                    if isinstance(done_call.result, str)
-                    else json.dumps(done_call.result, default=str)
-                )
-            return done_call.error
-
+        # ``world.call`` distinguishes real dependency endpoints from actions executed inside
+        # the submitted worker and mirrored here only for evidence. Bypassing it through
+        # ``forward`` made a valid local action look like a missing HTTP endpoint and caused the
+        # agent to retry or abort after it had already updated its own state.
         done = world.handle_tool_call({"name": name, "arguments": dict(arguments)})
         if done is None:
             return f"there is no tool called {name}"

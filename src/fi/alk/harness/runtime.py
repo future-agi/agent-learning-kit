@@ -100,12 +100,31 @@ class LocalComposeRuntimeProvider:
                 address = overrides.get(definition.configuration_name, "")
             if not address and len(overrides) == 1:
                 address = next(iter(overrides.values()))
+            discovered = next(
+                (
+                    endpoint
+                    for endpoint in environment.service_endpoints
+                    if endpoint["service"] == definition.service
+                    and endpoint["container_port"] == definition.container_port
+                ),
+                None,
+            )
+            if not address and discovered:
+                address = str(discovered["external_address"])
             if address:
                 endpoints[capability] = RuntimeEndpoint(
                     capability=capability,
                     protocol=definition.protocol.value,
                     address=address,
                     configuration_name=definition.configuration_name,
+                    metadata=(
+                        {
+                            "service": str(discovered["service"]),
+                            "kind": str(discovered["kind"]),
+                        }
+                        if discovered
+                        else {}
+                    ),
                 )
         return EnvironmentRuntime(
             runtime_id=environment.project,

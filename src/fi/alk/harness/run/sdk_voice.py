@@ -52,9 +52,11 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
     }
 
     def model(kind: str, provider: str) -> str:
-        return os.environ.get(f"SIMULATOR_{kind.upper()}_MODEL", "").strip() or defaults[
-            kind
-        ].get(provider.lower(), next(iter(defaults[kind].values())))
+        return os.environ.get(
+            f"SIMULATOR_{kind.upper()}_MODEL", ""
+        ).strip() or defaults[kind].get(
+            provider.lower(), next(iter(defaults[kind].values()))
+        )
 
     return simulate.SimulatorAgentDefinition(
         llm={
@@ -116,7 +118,8 @@ def _scenario() -> simulate.Scenario:
                 persona=persona,
                 situation=_required("HARNESS_INSTRUCTION"),
                 outcome=os.environ.get(
-                    "HARNESS_OUTCOME", "Complete the requested task and close naturally."
+                    "HARNESS_OUTCOME",
+                    "Complete the requested task and close naturally.",
                 ),
                 knowledge=knowledge,
                 behavior_policy={
@@ -188,7 +191,9 @@ def build_spec(run_id: str) -> SimulationSpec:
 
 
 def _output_root() -> Path:
-    return Path(os.environ.get("HARNESS_VOICE_OUTPUT_ROOT", "artifacts/simulation-acceptance"))
+    return Path(
+        os.environ.get("HARNESS_VOICE_OUTPUT_ROOT", "artifacts/simulation-acceptance")
+    )
 
 
 async def _run(run_id: str) -> int:

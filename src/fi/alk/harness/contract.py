@@ -12,9 +12,10 @@ rather than a bad contract reaching disk.
 from __future__ import annotations
 
 import json
+import shlex
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
@@ -213,14 +214,110 @@ class Reached(BaseModel):
         )
 
 
+class RuntimeInterface(BaseModel):
+    """The submitted runtime's existing conversational ingress.
+
+    This is connection metadata, not generated agent behavior. The harness may publish the
+    declared container port and translate its request/response envelope, but it never adds an
+    endpoint the repository does not already implement.
+    """
+
+    kind: str = ""
+    protocol: str = "fi.alk"
+    port: int | None = Field(default=None, ge=1, le=65535)
+    path: str = ""
+    health_path: str = ""
+    include_tools: bool = True
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower().replace("-", "_")
+        aliases = {"openai": "http", "openai_compatible": "http"}
+        return aliases.get(normalized, normalized)
+
+    @field_validator("protocol")
+    @classmethod
+    def _known_protocol(cls, value: str) -> str:
+        normalized = str(value or "fi.alk").strip().lower().replace("-", "_")
+        aliases = {
+            "openai": "openai_chat",
+            "openai_compatible": "openai_chat",
+            "chat_completions": "openai_chat",
+            "http": "fi.alk",
+        }
+        return aliases.get(normalized, normalized)
+
+    @field_validator("path", "health_path")
+    @classmethod
+    def _absolute_http_path(cls, value: str) -> str:
+        path = str(value or "").strip()
+        if path and not path.startswith("/"):
+            path = "/" + path
+        return path
+
+    @model_validator(mode="after")
+    def _complete(self) -> "RuntimeInterface":
+        if self.kind in {"http", "websocket"}:
+            if self.port is None:
+                raise ValueError(f"runtime_{self.kind}_interface_requires_port")
+            if not self.path:
+                raise ValueError(f"runtime_{self.kind}_interface_requires_path")
+        if self.kind == "http":
+            if self.protocol not in {"fi.alk", "openai_chat"}:
+                raise ValueError(
+                    "runtime_http_protocol_unsupported: expected fi.alk or openai_chat"
+                )
+        if self.kind == "websocket" and self.protocol != "fi.alk":
+            raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
+        return self
+
+
 class Runtime(BaseModel):
     """What it takes to run the agent's code."""
 
-    language: str = "python"
+    # Empty means detect from the submitted dependency manifest. Defaulting this to Python makes
+    # an otherwise unambiguous Node repository fail the generated-runtime admission path.
+    language: str = ""
     version: str = ""
     install: str = ""
+    # Optional dependency groups declared by the repository itself (for example ``voice`` in
+    # pyproject.toml). Generated packaging validates these names against the manifest.
+    extras: list[str] = Field(default_factory=list)
     workdir: str = ""
+    # Select one submitted Compose file when a repository contains multiple runnable stacks.
+    compose_file: str = ""
     dockerfile: str = ""
+    # For repositories without container metadata, this is an argv vector for the submitted
+    # process. It is optional when one conventional entrypoint can be proven from source.
+    command: list[str] = Field(default_factory=list)
+    # Repository-relative generated-build exclusions selected during understanding. This is for
+    # large checked-in outputs or documentation, never for dependency manifests or source code.
+    context_excludes: list[str] = Field(default_factory=list)
+    # Preserve a repository-declared target architecture (for example linux/amd64 on an ARM
+    # runner). This is execution metadata, not a change to the submitted application.
+    platform: str = ""
+
+    # How a turn-based simulator reaches the submitted process after it starts. Voice has a
+    # standard rendezvous (LiveKit dispatch); chat repositories do not. Recording this seam is
+    # what lets the harness start the real runtime instead of reconstructing the agent from its
+    # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
+    # repository.
+    interface: RuntimeInterface | None = None
+
+    @field_validator("command", mode="before")
+    @classmethod
+    def _normalize_command(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return shlex.split(value)
+        return value
+
+    @field_validator("extras", mode="before")
+    @classmethod
+    def _normalize_extras(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
 
 class Dependency(BaseModel):
@@ -452,11 +549,23 @@ class AgentContract(BaseModel):
             run = self.runtime
             parts.append(
                 "RUNNING ITS CODE:\n"
-                f"  {run.language} {run.version}, install with {run.install or 'unknown'}"
+                f"  {run.language or 'language unspecified'} {run.version}, "
+                f"install with {run.install or 'unknown'}"
                 + (f", imports resolve from {run.workdir}" if run.workdir else "")
+                + (
+                    f", its own Compose file at {run.compose_file}"
+                    if run.compose_file
+                    else ""
+                )
                 + (
                     f", its own Dockerfile at {run.dockerfile}"
                     if run.dockerfile
+                    else ""
+                )
+                + (
+                    f", reached over {run.interface.kind} {run.interface.protocol} on "
+                    f"port {run.interface.port}{run.interface.path}"
+                    if run.interface
                     else ""
                 )
             )

@@ -1,5 +1,10 @@
 # ALK harness execution architecture
 
+Implementation and test evidence are tracked in
+[`IMPLEMENTATION_AND_VALIDATION_STATUS.md`](IMPLEMENTATION_AND_VALIDATION_STATUS.md). Repository
+packaging behavior and the conformance matrix are documented in
+[`ENVIRONMENT_CONFORMANCE.md`](ENVIRONMENT_CONFORMANCE.md).
+
 ## Ownership
 
 ALK owns all execution behavior. The Future AGI platform is a control and data plane only.
@@ -69,8 +74,9 @@ The current local provider follows this order:
 4. Build and wait for declared health checks once.
 5. Derive only the endpoint configuration the agent already reads.
 6. Reuse a healthy build only when its complete source fingerprint matches.
-7. If no Compose file exists, generate the required Postgres/runtime definition from the
-   contract where the repository supplies enough schema/runtime evidence.
+7. If no Compose file exists but a Dockerfile does, generate only supported infrastructure
+   declared by the contract (currently Postgres, ClickHouse and Redis) and compose it around the
+   submitted runtime. Never generate agent tools or proprietary service behavior.
 8. Reset between scenarios from a verified snapshot or isolated lifecycle reset.
 9. Remove the exact project and its test volumes during cleanup.
 
@@ -90,6 +96,33 @@ drift and mutation gates before scenarios may use it.
   to artifact policy.
 - Agent behavior failures are valid RL results; harness/infrastructure failures are not scored as
   agent failures.
+
+## Repository-backed chat execution
+
+Chat and voice share the same autonomous lifecycle. Voice has a standard realtime rendezvous;
+chat runtimes instead declare the conversational ingress they already implement in the grounded
+agent contract. Today a repository runtime can expose either:
+
+- HTTP using ALK's turn envelope; or
+- HTTP using an OpenAI Chat Completions-compatible envelope; or
+- a JSON turn exchange over WebSocket.
+
+For every scenario ALK binds the restored world, starts the submitted Compose/Dockerfile/generated
+runtime with the environment's private endpoint overrides, exposes the declared container port on
+an ephemeral loopback port locally (or only the private project network in a hosted runner), waits
+for readiness, drives the conversation, records tool effects and removes the runtime. A default
+Compose API is identified by its declared ingress port and excluded from infrastructure startup;
+ambiguous services fail admission rather than being guessed.
+
+If the submitted agent returns model-facing tool calls, ALK executes them against the same world
+and continues the turn with tool results. If the agent executes tools itself through the injected
+environment endpoints, the world records those calls at the service boundary. Either way, setup
+activity remains separate from agent evidence.
+
+An agent with no external HTTP/WebSocket ingress is not silently reconstructed. Callable/CLI-only
+repository runtimes need a sandbox-side process adapter in a later extension; until then admission
+reports the missing interface explicitly. This preserves the invariant that ALK runs submitted
+agent behavior rather than inventing it.
 
 ## Data and scenario quality
 
@@ -143,3 +176,56 @@ production controls are:
 
 Adding an environment engine, agent connector, source type or scheduler should be one adapter;
 it must not add a branch to scenario generation or grading.
+
+## Agent/tool ownership boundary
+
+ALK provisions the environment around submitted agent code; it never supplies missing agent
+behavior. The submitted repository remains authoritative for prompts, tool schemas, tool
+implementations, orchestration and business rules. Environment adaptation is limited to:
+
+- starting declared infrastructure such as databases, queues, object stores and media services;
+- injecting non-secret endpoints through configuration seams the submitted code already reads;
+- resolving referenced credentials at runtime;
+- seeding and resetting test-owned dependency state; and
+- capturing calls, tool evidence and generated artifacts without changing their meaning.
+
+A customer-specific API or missing tool implementation is not infrastructure. If its
+implementation is absent, admission fails with an unsupported/missing dependency result. The
+harness must not generate a substitute, proxy invented behavior, or grade against its own
+replacement. A code-execution service follows the same rule: ALK may provide an isolated runtime
+when the agent already declares that dependency, but the customer's tool decides what code to
+execute and how its outputs are used.
+
+## Admission, credentials and source trust
+
+Repository admission is a read-only static preflight. It does not import or execute submitted
+code. The scanner ignores dependencies, tests, generated output, symlinks and oversized files;
+recognizes Python, JavaScript, env-template and Compose declarations; and emits only names,
+purposes and statuses. It models provider alternatives explicitly, so one Gemini API key or one
+complete Vertex credential route satisfies model authentication without asking for every option.
+
+Public GitHub source is cloned anonymously. Private source carries a GitHub App installation
+reference; the sandbox's credential broker resolves the short-lived token only for clone and
+injects it through Git configuration environment variables, never process arguments or the job.
+The resolved commit is verified when a commit SHA is supplied. Source fingerprinting hashes
+symlink metadata without following links outside the repository, and the supervisor rejects a
+source tree that changes during execution.
+
+Non-secret connector configuration and secret references have separate contracts. Inline secret-
+like configuration keys are rejected by the platform. The worker builds a fresh allowlisted
+environment, resolves only the job's `SecretRef` entries, and does not inherit the supervisor's
+model, cloud, repository or customer credentials.
+
+## Retry and ingestion invariants
+
+The supervisor retries only structured failures marked retryable in the infrastructure,
+connectivity or platform-sync domains. Each failed worker attempt is archived separately before
+a clean attempt starts. Agent behavior and grading outcomes are never retried to manufacture a
+pass. GitHub clone uses the same bounded exponential-backoff policy.
+
+Before terminal success, the artifact directory is sealed with a content-addressed manifest. The
+seal requires a terminal result and non-empty transcript per scenario, validates referenced
+recordings, rejects secret material and unsafe links, enforces the byte budget, and records every
+retained file's SHA-256, media type and size. Platform result payloads and recording uploads carry
+digests. Ingestion locks the call row, accepts identical retries idempotently, rejects conflicting
+evidence, and stores combined, stereo, customer and assistant recordings as distinct artifacts.

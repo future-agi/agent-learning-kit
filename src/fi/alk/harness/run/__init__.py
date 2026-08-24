@@ -33,7 +33,14 @@ from .grade import (
     judge_suite_evals,
     summarise,
 )
-from .targets import LocalAgent, Target, register_target, resolve, supported
+from .targets import (
+    LocalAgent,
+    RepositoryChatTarget,
+    Target,
+    register_target,
+    resolve,
+    supported,
+)
 
 
 def _cases(report: Any) -> list[Any]:
@@ -117,6 +124,7 @@ __all__ = [
     "Checkpoint",
     "Exchange",
     "LocalAgent",
+    "RepositoryChatTarget",
     "Result",
     "Target",
     "Transcript",
