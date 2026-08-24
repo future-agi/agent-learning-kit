@@ -1,4 +1,5 @@
-"""`futureagi.environment-bundle.v2` — the hosted provisioner's manifest shape.
+"""`futureagi.environment-bundle.v2` — the hosted provisioner's manifest shape (`hosted-execution-
+seams.md` v1.7).
 
 v1 (`bundle.py`) describes a `command`-per-service compose world and embeds the repository
 source. v2 describes `/work/source` as already present and a job that starts plain processes on
@@ -26,7 +27,7 @@ import re
 from collections import Counter
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Literal, Sequence, Union
+from typing import Annotated, Any, Literal, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
@@ -254,6 +255,13 @@ class Seed(BaseModel):
 # --- §2d capabilities, readiness, files, provenance -----------------------------------------
 
 
+# §2b's closed placeholder vocabulary, mirrored here (not imported from `process_preflight.py`,
+# which imports this module) so a `configuration_name` can never shadow a builtin token — the
+# reverse dependency direction is preflight -> model, not model -> preflight.
+_RESERVED_CONFIGURATION_NAMES = {"WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
+_RESERVED_CONFIGURATION_PREFIX = re.compile(r"^(PORT|HOST)_")
+
+
 class CapabilityV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -261,6 +269,18 @@ class CapabilityV2(BaseModel):
     service: str = Field(min_length=1)
     container_port: int | None = Field(default=None, ge=1, le=65535)
     configuration_name: str | None = None
+
+    @model_validator(mode="after")
+    def _configuration_name_not_reserved(self) -> "CapabilityV2":
+        # A `configuration_name` colliding with a fixed placeholder or a `{{PORT_/HOST_}}` prefix
+        # would render the builtin token instead of this capability's address, with no error and
+        # no way for the producer to spell the intended value (F8, p4-round1-review).
+        name = self.configuration_name
+        if name and (
+            name in _RESERVED_CONFIGURATION_NAMES or _RESERVED_CONFIGURATION_PREFIX.match(name)
+        ):
+            raise ValueError(f"configuration_name_reserved: {name}")
+        return self
 
 
 class ReadinessProbeV2(BaseModel):
@@ -360,21 +380,55 @@ class EnvironmentBundleV2(BaseModel):
         if duplicated_names:
             raise ValueError("process_name_duplicate: " + ", ".join(duplicated_names))
         known_names = set(process_names)
+        processes_by_name = {process.name: process for process in self.processes}
 
-        service_unresolved = {
-            slug: capability.service
-            for slug, capability in self.capabilities.items()
-            if capability.service not in known_names
-        }
-        if service_unresolved:
-            detail = ", ".join(
-                f"{slug}: {service}" for slug, service in sorted(service_unresolved.items())
-            )
-            raise ValueError(f"service_unresolved: {detail}")
+        # B3 (p3-round2-review): only `kind: process` has a `processes` array to resolve against —
+        # `external` omits `processes` entirely (§2a) and `compose` addresses services through its
+        # own `document`, not this array. Gating here, rather than by emptying `known_names`,
+        # keeps the duplicate-name check above meaningful for every runtime kind.
+        if self.runtime.kind is RuntimeKindV2.PROCESS:
+            service_unresolved = {
+                slug: capability.service
+                for slug, capability in self.capabilities.items()
+                if capability.service not in known_names
+            }
+            if service_unresolved:
+                detail = ", ".join(
+                    f"{slug}: {service}" for slug, service in sorted(service_unresolved.items())
+                )
+                raise ValueError(f"service_unresolved: {detail}")
 
-        control_service = self.runtime.control_service
-        if control_service is not None and control_service not in known_names:
-            raise ValueError(f"control_service_unresolved: {control_service}")
+            control_service = self.runtime.control_service
+            if control_service is not None and control_service not in known_names:
+                raise ValueError(f"control_service_unresolved: {control_service}")
+            if control_service is not None and isinstance(
+                processes_by_name[control_service], ManagedProcess
+            ):
+                # §2a: control_service is the agent-side service the world handle and evidence
+                # seam attach to — a datastore in that role is incoherent, and would otherwise
+                # silently resolve and take svc-agent below (N9, p4-round2-review).
+                raise ValueError(
+                    f"control_service_unresolved: {control_service} is a managed engine, not a "
+                    "source process"
+                )
+
+            # §2b/§0 (v1.6): the snapshot's SERVICE users are assigned by role, not authored —
+            # the control service gets svc-agent, every other source process svc-tools, every
+            # managed engine svc-data. Decidable from the manifest's own fields alone once
+            # `control_service` is resolved, which is why it lands here rather than in preflight
+            # (F5, p4-round1-review).
+            for process in self.processes:
+                if isinstance(process, ManagedProcess):
+                    expected_user = ProcessUser.SVC_DATA
+                elif process.name == control_service:
+                    expected_user = ProcessUser.SVC_AGENT
+                else:
+                    expected_user = ProcessUser.SVC_TOOLS
+                if process.user is not expected_user:
+                    raise ValueError(
+                        f"user_assignment_invalid: {process.name} must be "
+                        f"{expected_user.value}, got {process.user.value}"
+                    )
 
         names_to_slugs: dict[str, list[str]] = {}
         for slug, capability in self.capabilities.items():
@@ -399,14 +453,47 @@ class EnvironmentBundleV2(BaseModel):
         if unresolved:
             raise ValueError("capability_unresolved: " + ", ".join(sorted(unresolved)))
 
+        # B1 (p3-round2-review): a capability's *declared* protocol can disagree with the process
+        # actually backing it. F19 (p4-round1-review) widened this from "only capabilities with a
+        # seed store" to every capability whose protocol names a managed engine — a redis
+        # capability with no store entry at all (used only for a `{{...}}` address, never seeded)
+        # was previously never checked, and could point `service` at a postgres process silently.
+        for slug, capability in self.capabilities.items():
+            engine = _STORE_ENGINE_BY_PROTOCOL.get(capability.protocol)
+            if engine is None:
+                continue
+            backing = processes_by_name.get(capability.service)
+            if isinstance(backing, ManagedProcess) and backing.engine is not engine:
+                raise ValueError(
+                    f"capability_engine_mismatch: {slug}: protocol {capability.protocol.value} "
+                    f"resolves to {engine.value}, but {capability.service} is a "
+                    f"{backing.engine.value} process"
+                )
+
         if self.seed is not None:
             # Every store's capability resolved above, so its protocol is known — that protocol,
             # not the sentinel's own shape, is the authoritative engine (§2c classifies stores by
             # capability protocol; the sentinel only proves that engine, it doesn't select it).
             for store in self.seed.stores:
-                engine = _STORE_ENGINE_BY_PROTOCOL.get(self.capabilities[store.capability].protocol)
+                capability = self.capabilities[store.capability]
+                engine = _STORE_ENGINE_BY_PROTOCOL.get(capability.protocol)
                 if engine is None:
-                    continue
+                    # B2 (p3-round2-review): a store on a capability outside the three protocols
+                    # this module knows how to seed (http, mongodb, ...) has no engine to check
+                    # its sentinel/strategy against — a producer error, not a silent pass-through.
+                    raise ValueError(
+                        f"store_protocol_unsupported: {store.capability}: protocol "
+                        f"{capability.protocol.value} cannot host a seed store"
+                    )
+                backing = processes_by_name.get(capability.service)
+                if not isinstance(backing, ManagedProcess):
+                    # F19 (p4-round1-review): a store on a capability backed by a `SourceProcess`
+                    # has no managed engine to migrate or seed at all — the all-capabilities
+                    # engine pass above only fires for a *wrong* managed engine, not a missing one.
+                    raise ValueError(
+                        f"store_service_not_managed: {store.capability}: service "
+                        f"{capability.service!r} is not a managed engine"
+                    )
                 if store.sentinel.implied_engine is not engine:
                     raise ValueError(
                         f"sentinel_shape_mismatch: {store.capability}: sentinel implies "
@@ -480,6 +567,40 @@ def compute_inputs_digest(
     return "sha256:" + digest.hexdigest()
 
 
+# --- §2d bundle digest ------------------------------------------------------------------------
+
+
+def _canonical_json(value: dict[str, Any]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+
+
+def seal_bundle_v2(manifest: EnvironmentBundleV2) -> str:
+    """The byte-exact `digest` construction from §2d (v1.7) — the single normative
+    implementation; producers call this, never reimplement it.
+
+    sha256 over the canonical dump of the manifest with ``digest`` and ``files`` removed, then for
+    each ``files[]`` record, IN LISTED ORDER, the canonical dump of ``{path, sha256, size}``
+    prefixed by its byte length as 8 bytes big-endian. "Canonical" = ``json.dumps(...,
+    sort_keys=True, separators=(",", ":"), ensure_ascii=False)``, both times. Operates on
+    `BundleFileV2` and `EnvironmentBundleV2.model_dump(mode="json")` directly — v1's `BundleFile`
+    never enters this construction, so a field added to v1's model cannot silently rekey a v2
+    bundle's digest (F4, p4-round1-review). The hash covers the NORMALIZED dump, so adding an
+    optional field to `EnvironmentBundleV2` re-keys every previously sealed bundle — sealer and
+    verifier must ship together, which is exactly why there is only one implementation.
+    """
+    core = manifest.model_dump(mode="json")
+    core.pop("digest", None)
+    core.pop("files", None)
+    digest = hashlib.sha256(_canonical_json(core))
+    for record in manifest.files:
+        encoded = _canonical_json(record.model_dump(mode="json"))
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return "sha256:" + digest.hexdigest()
+
+
 def load_bundle_v2(path: str | Path) -> EnvironmentBundleV2:
     """Parse and validate one `futureagi.environment-bundle.v2` manifest.
 
@@ -532,4 +653,5 @@ __all__ = [
     "StoreEntry",
     "compute_inputs_digest",
     "load_bundle_v2",
+    "seal_bundle_v2",
 ]

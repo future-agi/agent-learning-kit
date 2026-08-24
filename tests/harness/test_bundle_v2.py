@@ -1,12 +1,14 @@
-"""`futureagi.environment-bundle.v2` model validation, per `hosted-execution-seams.md` v1.6 §2.
+"""`futureagi.environment-bundle.v2` model validation, per `hosted-execution-seams.md` v1.7 §2.
 
 Two lanes: the spec's own §2a/§2b/§2c example structures, transcribed here and proven to parse
 (the model-layer accept side), against the rejections the model is responsible for on its own —
-wrong schema version, an unknown process kind, a store with no sentinel, a sentinel shape that
-disagrees with its capability's protocol, a strategy the capability's protocol-implied engine does
-not support, unresolved `service`/`control_service`/capability references, a duplicate process
-name, and a resolved secret value anywhere in the manifest. `compute_inputs_digest` is checked
-against a hand-computed vector, not by calling back into itself.
+wrong schema version, an unknown process kind, a store with no sentinel, a capability whose
+protocol disagrees with the engine actually backing it, a sentinel shape that disagrees with its
+capability's protocol, a strategy the capability's protocol-implied engine does not support, a
+store on a capability protocol this module cannot seed at all, unresolved
+`service`/`control_service`/capability references (scoped to `kind: process`, per p3-round2's B3),
+a duplicate process name, and a resolved secret value anywhere in the manifest.
+`compute_inputs_digest` is checked against a hand-computed vector, not by calling back into itself.
 
 Rules that need a repo checkout, the job the bundle will run under, or the §2e checklist
 (`compose_not_hosted`, `engine_unsupported`, `no_sql_store`, `depends_on` cycles, placeholder
@@ -32,6 +34,7 @@ from fi.alk.harness.bundle_v2 import (
     StoreEntry,
     compute_inputs_digest,
     load_bundle_v2,
+    seal_bundle_v2,
 )
 
 # --- §2a/§2b/§2c: the spec's own examples, transcribed verbatim -----------------------------
@@ -246,18 +249,128 @@ def test_a_strategy_the_capabilitys_engine_does_not_support_is_rejected(
         EnvironmentBundleV2.model_validate(manifest)
 
 
+def test_postgres_excludes_the_empty_strategy() -> None:
+    """The one row of §2b's catalog table with no dedicated param above: postgres supports only
+    `template_database`/`datadir_copy`, unlike redis and rabbitmq which both accept a store with
+    no baseline state at all. Reuses the base manifest's own postgres/database pairing rather than
+    adding a process, since postgres already backs its only seed store."""
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "seed": {
+            "stores": [
+                {
+                    **SEED_STORE_EXAMPLE,
+                    "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "a" * 64},
+                }
+            ]
+        },
+    }
+    with pytest.raises(ValidationError, match="seed_strategy_unsupported"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
 def test_a_redis_capability_with_a_postgres_shaped_sentinel_is_rejected() -> None:
     """The capability's protocol decides the engine, not the sentinel's own shape — a redis
     capability paired with a postgres-shaped sentinel is a shape mismatch even though the sentinel
-    is internally well-formed and the strategy is one postgres would have accepted."""
+    is internally well-formed and the strategy is one postgres would have accepted. The backing
+    process is genuinely redis (B1, p3-round2-review, requires protocol/engine agreement before
+    this check runs), so this stays isolated to the sentinel-shape question alone."""
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "processes": [*FULL_MANIFEST_EXAMPLE["processes"], REDIS_PROCESS_EXAMPLE],
+        "capabilities": {
+            **FULL_MANIFEST_EXAMPLE["capabilities"],
+            "database": {
+                **FULL_MANIFEST_EXAMPLE["capabilities"]["database"],
+                "protocol": "redis",
+                "service": "cache",
+            },
+        },
+    }
+    with pytest.raises(ValidationError, match="sentinel_shape_mismatch"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_capability_protocol_that_disagrees_with_its_backing_process_engine_is_rejected() -> None:
+    """B1 (p3-round2-review): the sentinel and strategy below are both self-consistent with the
+    *declared* protocol (redis) — which is exactly what let this accept an invalid bundle before
+    the fix. The capability's `service` actually names the postgres process; only comparing the
+    protocol against `ManagedProcess.engine` catches it, since neither the sentinel shape nor the
+    strategy pairing is wrong on its own terms."""
     manifest = {
         **FULL_MANIFEST_EXAMPLE,
         "capabilities": {
             **FULL_MANIFEST_EXAMPLE["capabilities"],
             "database": {**FULL_MANIFEST_EXAMPLE["capabilities"]["database"], "protocol": "redis"},
         },
+        "seed": {
+            "stores": [
+                {
+                    "capability": "database",
+                    "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
+                    "sentinel": {"key": "warm", "expected": "1"},
+                }
+            ]
+        },
     }
-    with pytest.raises(ValidationError, match="sentinel_shape_mismatch"):
+    with pytest.raises(ValidationError, match="capability_engine_mismatch"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_store_on_an_unmapped_protocol_capability_is_rejected() -> None:
+    """B2 (p3-round2-review): before the fix, a store on a capability outside the
+    postgres/redis/amqp map made the engine lookup return `None` and the loop `continue`d,
+    skipping the sentinel and strategy checks entirely — a store on the `http` `tools` capability
+    validated with any sentinel and any strategy. It must now be rejected explicitly."""
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "seed": {
+            "stores": [
+                SEED_STORE_EXAMPLE,
+                {
+                    "capability": "tools",
+                    "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "a" * 64},
+                    "sentinel": {"key": "anything", "expected": "1"},
+                },
+            ]
+        },
+    }
+    with pytest.raises(ValidationError, match="store_protocol_unsupported"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_capability_engine_mismatch_is_caught_even_with_no_seed_store_at_all() -> None:
+    """F19 (p4-round1-review): before the fix, `capability_engine_mismatch` only ran inside the
+    `seed.stores` loop — a capability with no store entry at all (used only for a `{{...}}`
+    address, never seeded) was never compared, and could silently point `service` at the wrong
+    engine."""
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "capabilities": {
+            **FULL_MANIFEST_EXAMPLE["capabilities"],
+            "cache": {
+                "protocol": "redis", "service": "postgres", "configuration_name": "CACHE_URL"
+            },
+        },
+    }
+    with pytest.raises(ValidationError, match="capability_engine_mismatch"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_store_whose_capability_service_is_a_source_process_is_rejected() -> None:
+    """F19 (p4-round1-review): a postgres-protocol store backed by a source process has no
+    managed engine to migrate or seed at all — previously accepted, since only a *wrong* managed
+    engine was checked, never a missing one."""
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "capabilities": {
+            **FULL_MANIFEST_EXAMPLE["capabilities"],
+            "database": {
+                **FULL_MANIFEST_EXAMPLE["capabilities"]["database"], "service": "tools-api"
+            },
+        },
+    }
+    with pytest.raises(ValidationError, match="store_service_not_managed"):
         EnvironmentBundleV2.model_validate(manifest)
 
 
@@ -285,7 +398,7 @@ def test_a_sentinel_mixing_two_protocol_shapes_is_rejected() -> None:
 
 
 def test_unknown_field_on_a_process_entry_is_rejected() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="extra_forbidden"):
         ManagedProcess.model_validate({**POSTGRES_PROCESS_EXAMPLE, "mounts": ["/data"]})
 
 
@@ -349,6 +462,98 @@ def test_an_unresolved_control_service_is_rejected() -> None:
         EnvironmentBundleV2.model_validate(manifest)
 
 
+def test_a_control_service_resolving_to_a_managed_engine_is_rejected() -> None:
+    """N9 (p4-round2-review): `control_service` names the agent-side service the world handle and
+    evidence seam attach to (§2a) — a datastore in that role is incoherent. Before this check, the
+    `ManagedProcess` branch of the user-assignment loop below ran first and expected `svc-data`
+    for it, which `postgres` already has, so the bundle silently loaded."""
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "runtime": {**RUNTIME_EXAMPLE, "control_service": "postgres"},
+    }
+    with pytest.raises(ValidationError, match="control_service_unresolved"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+# --- §2b/§0 user assignment (F5, p4-round1-review): control service -> svc-agent, other source ->
+# svc-tools, managed engine -> svc-data. Decidable from the manifest's own fields once
+# `control_service` is resolved. --------------------------------------------------------------
+
+
+def test_the_control_service_process_with_the_wrong_user_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "processes": [
+            POSTGRES_PROCESS_EXAMPLE,
+            TOOLS_API_PROCESS_EXAMPLE,
+            {**AGENT_PROCESS_EXAMPLE, "user": "svc-tools"},
+        ],
+    }
+    with pytest.raises(ValidationError, match="user_assignment_invalid"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_non_control_source_process_claiming_svc_agent_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "processes": [
+            POSTGRES_PROCESS_EXAMPLE,
+            {**TOOLS_API_PROCESS_EXAMPLE, "user": "svc-agent"},
+            AGENT_PROCESS_EXAMPLE,
+        ],
+    }
+    with pytest.raises(ValidationError, match="user_assignment_invalid"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_managed_engine_with_a_non_svc_data_user_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "processes": [
+            {**POSTGRES_PROCESS_EXAMPLE, "user": "svc-tools"},
+            TOOLS_API_PROCESS_EXAMPLE,
+            AGENT_PROCESS_EXAMPLE,
+        ],
+    }
+    with pytest.raises(ValidationError, match="user_assignment_invalid"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+# --- §2d configuration_name must not collide with the fixed placeholder vocabulary (F8,
+# p4-round1-review) — a collision would render the builtin token instead of the capability's
+# address, with no error and no way to spell the intended value. -------------------------------
+
+
+def test_a_configuration_name_matching_a_fixed_placeholder_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "capabilities": {
+            **FULL_MANIFEST_EXAMPLE["capabilities"],
+            "database": {
+                **FULL_MANIFEST_EXAMPLE["capabilities"]["database"],
+                "configuration_name": "WORLD_DIR",
+            },
+        },
+    }
+    with pytest.raises(ValidationError, match="configuration_name_reserved"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_configuration_name_matching_the_port_host_prefix_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "capabilities": {
+            **FULL_MANIFEST_EXAMPLE["capabilities"],
+            "database": {
+                **FULL_MANIFEST_EXAMPLE["capabilities"]["database"],
+                "configuration_name": "PORT_DB",
+            },
+        },
+    }
+    with pytest.raises(ValidationError, match="configuration_name_reserved"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
 def test_a_resolved_secret_value_in_process_environment_is_rejected() -> None:
     """v1's manifest-level guard, reapplied: `environment`/`build_environment` are new in v2 and
     are exactly where a resolved credential lands if an authoring stage inlines one instead of
@@ -369,6 +574,66 @@ def test_a_resolved_secret_value_in_process_environment_is_rejected() -> None:
     }
     with pytest.raises(ValidationError, match="resolved_secret_forbidden"):
         EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_an_external_runtime_with_a_capability_is_accepted() -> None:
+    """B3 (p3-round2-review): `kind: external` has no `processes` array to resolve capability
+    `service`/`control_service` against (§2a omits `processes` for it entirely) — the F5
+    resolution checks must not run for it, or every external bundle carrying any capability at all
+    would be unloadable, which §2a never intended."""
+    manifest = {
+        "schema_version": BUNDLE_V2_SCHEMA_VERSION,
+        "digest": "sha256:" + "0" * 64,
+        "name": "external-demo",
+        "runtime": {"kind": "external"},
+        "capabilities": {
+            "target": {
+                "protocol": "http",
+                "service": "customer-endpoint",
+                "configuration_name": "TARGET_URL",
+            },
+        },
+        "provenance": {"source_kind": "remote", "source_digest": "c" * 64},
+    }
+    bundle = EnvironmentBundleV2.model_validate(manifest)
+    assert bundle.runtime.kind.value == "external"
+    assert bundle.capabilities["target"].service == "customer-endpoint"
+
+
+# --- F7 / B6: the digest-shape regexes, exercised on their rejection side too ----------------
+
+
+def test_a_non_hex_file_sha256_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "files": [{"path": "db/schema.sql", "sha256": "not-hex", "size": 10}],
+    }
+    with pytest.raises(ValidationError, match="file_sha256_invalid"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_non_hex_source_digest_is_rejected() -> None:
+    manifest = {
+        **FULL_MANIFEST_EXAMPLE,
+        "provenance": {**FULL_MANIFEST_EXAMPLE["provenance"], "source_digest": "not-hex"},
+    }
+    with pytest.raises(ValidationError, match="source_digest_invalid"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_malformed_bundle_digest_is_rejected() -> None:
+    manifest = {**FULL_MANIFEST_EXAMPLE, "digest": "not-a-digest"}
+    with pytest.raises(ValidationError, match="bundle_digest_invalid"):
+        EnvironmentBundleV2.model_validate(manifest)
+
+
+def test_a_malformed_inputs_digest_is_rejected() -> None:
+    store = {
+        **SEED_STORE_EXAMPLE,
+        "baseline": {"strategy": "template_database", "inputs_digest": "not-a-digest"},
+    }
+    with pytest.raises(ValidationError, match="inputs_digest_invalid"):
+        StoreEntry.model_validate(store)
 
 
 # --- §2c inputs_digest: byte-exact construction, checked against a hand-computed vector -----
@@ -420,6 +685,76 @@ def test_compute_inputs_digest_is_order_sensitive_not_sorted(tmp_path) -> None:
         tmp_path, ["b.sql", "a.sql"], [], engine=ManagedEngine.POSTGRES, version="16"
     )
     assert forward != backward
+
+
+# --- §2d bundle digest: byte-exact construction, checked against a hand-computed vector (F4,
+# p4-round1-review) — the single normative implementation, `seal_bundle_v2`, over `BundleFileV2`
+# directly, with no v1 model conversion. -------------------------------------------------------
+
+
+def test_seal_bundle_v2_matches_a_hand_computed_vector() -> None:
+    """Built from §2d's own words (v1.7), not by calling back into `seal_bundle_v2` or into
+    `json.dumps` with the same settings: sha256 over the canonical dump of the manifest minus
+    `digest`/`files`, then for each `files[]` record, in listed order, the canonical dump of
+    `{path, sha256, size}` prefixed by its byte length as 8 bytes big-endian. "Canonical" =
+    `json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. The literal core
+    JSON below is transcribed from a minimal, otherwise-empty manifest's own normalized field set
+    (a hand-verified constant, not a derived one) — a real, if trivial, `external`-kind bundle
+    with no processes, no seed, no capabilities, and two files. A non-ASCII `name` pins
+    `ensure_ascii=False` (an `ensure_ascii=True` implementation would diverge here), and listing
+    `b.txt` before `a.txt` pins IN LISTED ORDER against an implementation that silently sorts
+    (N6, p4-round2-review)."""
+    file_sha_a = "b" * 64
+    file_sha_b = "c" * 64
+    manifest = EnvironmentBundleV2.model_validate(
+        {
+            "schema_version": BUNDLE_V2_SCHEMA_VERSION,
+            "digest": "sha256:" + "0" * 64,
+            "name": "café",
+            "runtime": {"kind": "external"},
+            "provenance": {"source_kind": "remote", "source_digest": "a" * 64},
+            "files": [
+                {"path": "b.txt", "sha256": file_sha_b, "size": 5},
+                {"path": "a.txt", "sha256": file_sha_a, "size": 3},
+            ],
+        }
+    )
+
+    core_json = (
+        '{"capabilities":{},"metadata":{},"name":"café","processes":[],"provenance":'
+        '{"adopted_files":[],"commit":null,"generated_files":[],"generator":'
+        '"fi.alk.harness","generator_version":"1","repository":null,"source_digest":"'
+        + "a" * 64
+        + '","source_kind":"remote"},"readiness":[],"runtime":'
+        '{"control_service":null,"document":null,"evidence_seam":null,"kind":"external"},'
+        '"schema_version":"futureagi.environment-bundle.v2","seed":null}'
+    )
+    record_b_json = '{"path":"b.txt","sha256":"' + file_sha_b + '","size":5}'
+    record_a_json = '{"path":"a.txt","sha256":"' + file_sha_a + '","size":3}'
+
+    expected = hashlib.sha256(core_json.encode("utf-8"))
+    for record_json in (record_b_json, record_a_json):
+        encoded = record_json.encode("utf-8")
+        expected.update(len(encoded).to_bytes(8, "big"))
+        expected.update(encoded)
+
+    assert seal_bundle_v2(manifest) == "sha256:" + expected.hexdigest()
+
+
+def test_seal_bundle_v2_ignores_the_manifests_own_digest_field() -> None:
+    """§2d: the digest is computed over the manifest minus `digest` and `files` — a manifest
+    whose only difference is its own (placeholder or stale) `digest` value must seal identically."""
+    body = {
+        **FULL_MANIFEST_EXAMPLE,
+        "runtime": {"kind": "external"},
+        "processes": [],
+        "seed": None,
+        "capabilities": {},
+        "readiness": [],
+    }
+    a = EnvironmentBundleV2.model_validate({**body, "digest": "sha256:" + "0" * 64})
+    b = EnvironmentBundleV2.model_validate({**body, "digest": "sha256:" + "1" * 64})
+    assert seal_bundle_v2(a) == seal_bundle_v2(b)
 
 
 # --- load_bundle_v2 --------------------------------------------------------------------------
