@@ -6,11 +6,17 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
 from ..contract import AgentContract
-from ..provision import ProvisionedEnvironment, ProvisionError, attached_postgres_store
+from ..provision import (
+    ProvisionedEnvironment,
+    ProvisionError,
+    attached_postgres_store,
+    reachable_overrides,
+)
 from .runtime import Call, GeneratedWorld
 
 
@@ -27,21 +33,30 @@ class ProvisionedWorld(GeneratedWorld):
         environment = ProvisionedEnvironment.load(destination)
         if environment is None or not environment.running:
             raise ProvisionError(f"no running source environment at {destination}")
-        if not environment.overrides:
+        overrides = reachable_overrides(environment)
+        http_overrides = {
+            name: value
+            for name, value in overrides.items()
+            if urlsplit(value).scheme.lower() in {"http", "https"}
+        }
+        if not http_overrides:
             raise ProvisionError(
                 "the source environment publishes no HTTP endpoint that the agent can be "
                 "pointed at"
             )
-        if len(environment.overrides) != 1:
+        http_endpoints = {value.rstrip("/") for value in http_overrides.values()}
+        if len(http_endpoints) != 1:
             raise ProvisionError(
-                "more than one source endpoint was discovered; each service-backed tool must "
-                "name which configuration variable reaches its service"
+                "more than one HTTP source endpoint was discovered ("
+                + ", ".join(sorted(http_overrides))
+                + "); each service-backed tool must name which configuration variable reaches "
+                "its service"
             )
         super().__init__(store=attached_postgres_store(destination))
         self.name = contract.agent
         self.destination = Path(destination)
         self.source_root = str(source_root)
-        self.base_url = next(iter(environment.overrides.values())).rstrip("/")
+        self.base_url = next(iter(http_endpoints))
         self.refusal_signature = contract.refusal_signature
         self.endpoints = self._discover_endpoints()
         self.endpoint_for: dict[str, str] = {}

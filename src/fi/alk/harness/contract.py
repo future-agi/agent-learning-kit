@@ -226,10 +226,15 @@ class Runtime(BaseModel):
     # pyproject.toml). Generated packaging validates these names against the manifest.
     extras: list[str] = Field(default_factory=list)
     workdir: str = ""
+    # Select one submitted Compose file when a repository contains multiple runnable stacks.
+    compose_file: str = ""
     dockerfile: str = ""
     # For repositories without container metadata, this is an argv vector for the submitted
     # process. It is optional when one conventional entrypoint can be proven from source.
     command: list[str] = Field(default_factory=list)
+    # Repository-relative generated-build exclusions selected during understanding. This is for
+    # large checked-in outputs or documentation, never for dependency manifests or source code.
+    context_excludes: list[str] = Field(default_factory=list)
     # Preserve a repository-declared target architecture (for example linux/amd64 on an ARM
     # runner). This is execution metadata, not a change to the submitted application.
     platform: str = ""
@@ -481,6 +486,11 @@ class AgentContract(BaseModel):
                 f"  {run.language or 'language unspecified'} {run.version}, "
                 f"install with {run.install or 'unknown'}"
                 + (f", imports resolve from {run.workdir}" if run.workdir else "")
+                + (
+                    f", its own Compose file at {run.compose_file}"
+                    if run.compose_file
+                    else ""
+                )
                 + (
                     f", its own Dockerfile at {run.dockerfile}"
                     if run.dockerfile

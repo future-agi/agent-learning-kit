@@ -22,21 +22,219 @@ from fi.alk.harness.bundle import export_session_bundle
 from fi.alk.harness.provision import (
     ProvisionError,
     ProvisionedEnvironment,
+    _build_runtime,
     _internal_overrides,
     _endpoint_ready,
     _managed_compose,
+    _runner_service_address,
     _start_managed_services,
     _overrides,
     _validate_compose_security,
     _write_port_override,
     healthy,
     provision,
+    reachable_overrides,
     reset,
     start_runtime,
     stop,
     stop_runtime,
 )
 from fi.alk.harness.service_catalog import profile_for
+from fi.alk.harness.world.provisioned import ProvisionedWorld
+
+
+def test_hosted_runner_uses_unique_container_dns_instead_of_shared_service_alias(
+    monkeypatch,
+):
+    environment = ProvisionedEnvironment(
+        source="/source",
+        compose_file="/source/compose.yml",
+        project="fagi-harness-run-123",
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.provision._run",
+        lambda *_args, **_kwargs: "container-id\n",
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.provision._docker",
+        lambda *_args, **_kwargs: "/fagi-harness-run-123-postgres-1\n",
+    )
+
+    address = _runner_service_address(
+        environment,
+        "postgresql://user:pass@postgres:5432/database",
+        "postgres",
+    )
+
+    assert address == (
+        "postgresql://user:pass@fagi-harness-run-123-postgres-1:5432/database"
+    )
+
+
+def test_stopping_worker_keeps_runner_network_for_post_call_grading(
+    monkeypatch, tmp_path
+):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="fagi-harness-grading",
+        runtime_container="runtime-id",
+        runner_network="fagi-harness-grading_default",
+        running=True,
+    )
+    environment.save(tmp_path)
+    docker_calls = []
+    monkeypatch.setattr(
+        "fi.alk.harness.provision._docker",
+        lambda *args, **_kwargs: docker_calls.append(args) or "",
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.provision._detach_runner_network",
+        lambda _environment: pytest.fail(
+            "worker shutdown detached the runner before post-call grading"
+        ),
+    )
+
+    assert stop_runtime(tmp_path)
+    saved = ProvisionedEnvironment.load(tmp_path)
+    assert saved is not None
+    assert saved.runtime_container == ""
+    assert saved.runner_network == "fagi-harness-grading_default"
+    assert docker_calls == [("rm", "--force", "runtime-id")]
+
+
+def test_runtime_build_retries_transient_registry_transport_failure(monkeypatch):
+    environment = ProvisionedEnvironment(
+        source="/source",
+        compose_file="/source/compose.yml",
+        project="fagi-harness-build-retry",
+        runtime_services=["agent"],
+    )
+    calls = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        if len(calls) == 1:
+            raise ProvisionError(
+                "failed to fetch anonymous token from ghcr.io: unexpected EOF"
+            )
+        return ""
+
+    monkeypatch.setattr("fi.alk.harness.provision._run", run)
+    monkeypatch.setattr("fi.alk.harness.provision.time.sleep", lambda _delay: None)
+
+    _build_runtime(environment)
+
+    assert calls == [("build", "agent"), ("build", "agent")]
+
+
+def test_runtime_build_does_not_retry_submitted_dockerfile_failure(monkeypatch):
+    environment = ProvisionedEnvironment(
+        source="/source",
+        compose_file="/source/compose.yml",
+        project="fagi-harness-build-failure",
+        runtime_services=["agent"],
+    )
+    calls = []
+
+    def run(_environment, *arguments, **_kwargs):
+        calls.append(arguments)
+        raise ProvisionError("RUN uv sync failed: lockfile is inconsistent")
+
+    monkeypatch.setattr("fi.alk.harness.provision._run", run)
+
+    with pytest.raises(ProvisionError, match="lockfile is inconsistent"):
+        _build_runtime(environment)
+
+    assert calls == [("build", "agent")]
+
+
+def test_hosted_world_uses_private_http_and_postgres_endpoints(
+    monkeypatch, tmp_path
+):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="fagi-harness-private-world",
+        overrides={
+            "DATABASE_URL": "postgresql://user:pass@host.docker.internal:41001/db",
+            "TOOLS_API_URL": "http://host.docker.internal:41002",
+        },
+        internal_overrides={
+            "DATABASE_URL": "postgresql://user:pass@postgres:5432/db",
+            "TOOLS_API_URL": "http://tools-api:8080",
+        },
+        runner_network="fagi-harness-private-world_default",
+        running=True,
+    )
+    environment.save(tmp_path)
+    monkeypatch.setenv("ALK_RUNNER_CONTAINER", "harness-sandbox-runner")
+
+    class Store:
+        def start(self):
+            return None
+
+    seen = {}
+
+    def store(destination):
+        seen["overrides"] = reachable_overrides(
+            ProvisionedEnvironment.load(destination)
+        )
+        return Store()
+
+    monkeypatch.setattr(
+        "fi.alk.harness.world.provisioned.attached_postgres_store", store
+    )
+    monkeypatch.setattr(ProvisionedWorld, "_discover_endpoints", lambda self: set())
+
+    world = ProvisionedWorld(
+        AgentContract(agent="ride", tools=[], real_use_cases=["book a ride"]),
+        tmp_path,
+        source_root=str(tmp_path),
+    )
+
+    assert world.base_url == "http://tools-api:8080"
+    assert seen["overrides"]["DATABASE_URL"].endswith("@postgres:5432/db")
+
+
+def test_world_rejects_only_genuinely_distinct_http_endpoints(monkeypatch, tmp_path):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="fagi-harness-ambiguous-world",
+        overrides={
+            "PRIMARY_API_URL": "http://127.0.0.1:41001",
+            "PRIMARY_API_ALIAS": "http://127.0.0.1:41001/",
+            "DATABASE_URL": "postgresql://user:pass@127.0.0.1:41002/db",
+        },
+        running=True,
+    )
+    environment.save(tmp_path)
+
+    class Store:
+        def start(self):
+            return None
+
+    monkeypatch.setattr(
+        "fi.alk.harness.world.provisioned.attached_postgres_store",
+        lambda _destination: Store(),
+    )
+    monkeypatch.setattr(ProvisionedWorld, "_discover_endpoints", lambda self: set())
+    world = ProvisionedWorld(
+        AgentContract(agent="agent", tools=[], real_use_cases=["help"]),
+        tmp_path,
+        source_root=str(tmp_path),
+    )
+    assert world.base_url == "http://127.0.0.1:41001"
+
+    environment.overrides["SECONDARY_API_URL"] = "http://127.0.0.1:41003"
+    environment.save(tmp_path)
+    with pytest.raises(ProvisionError, match="PRIMARY_API_ALIAS.*SECONDARY_API_URL"):
+        ProvisionedWorld(
+            AgentContract(agent="agent", tools=[], real_use_cases=["help"]),
+            tmp_path,
+            source_root=str(tmp_path),
+        )
 
 
 def test_harness_owned_service_boot_gets_one_clean_retry(monkeypatch, tmp_path):
@@ -184,6 +382,24 @@ def test_clickhouse_connectors_are_injected_from_python_js_and_dotenv(
     }
 
 
+def test_multi_endpoint_dsn_does_not_abort_override_discovery(tmp_path):
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services:\n  api:\n    image: example/api\n")
+    (tmp_path / ".env.example").write_text(
+        "REDIS_URI=redis://127.0.0.1:7001,redis://127.0.0.1:7002\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(compose),
+        project="cluster-dsn",
+        services=["api"],
+        service_endpoints=[],
+    )
+
+    assert _overrides(environment, {"services": {"api": {}}}) == {}
+    assert _internal_overrides(environment, {"services": {"api": {}}}) == {}
+
+
 def test_unknown_customer_service_uses_its_existing_javascript_configuration_seam(
     tmp_path,
 ):
@@ -241,6 +457,25 @@ def test_static_ports_receive_a_job_scoped_compose_override(tmp_path, monkeypatc
     assert 'host_ip: "127.0.0.1"' in generated
 
 
+def test_fixed_container_name_is_reset_for_project_isolation(tmp_path):
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  mongodb:\n    image: mongo:8\n    container_name: chat-mongodb\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+
+    _write_port_override(
+        tmp_path / "session",
+        environment,
+        {"services": {"mongodb": {"container_name": "chat-mongodb"}}},
+    )
+
+    generated = Path(environment.compose_override_file).read_text()
+    assert "container_name: !reset null" in generated
+
+
 def test_profile_gated_service_ports_are_not_allocated(tmp_path, monkeypatch):
     compose = tmp_path / "compose.yml"
     compose.write_text(
@@ -280,6 +515,30 @@ def test_profile_gated_service_ports_are_not_allocated(tmp_path, monkeypatch):
     assert '"api"' in generated
     assert "coturn" not in generated
     assert "49152" not in generated
+
+
+def test_empty_compose_profile_remains_active_by_default(tmp_path, monkeypatch):
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  postgres:\n    image: postgres:16\n    profiles: ['', postgresql]\n"
+        "    ports: ['5432:5432']\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+    monkeypatch.setattr("fi.alk.harness.provision._free_port", lambda: 45432)
+    config = {
+        "services": {
+            "postgres": {
+                "profiles": ["", "postgresql"],
+                "ports": [{"target": 5432, "published": "5432"}],
+            }
+        }
+    }
+
+    _write_port_override(tmp_path / "session", environment, config)
+
+    assert 'published: "45432"' in Path(environment.compose_override_file).read_text()
 
 
 def test_authenticated_redis_response_counts_as_protocol_ready(monkeypatch):

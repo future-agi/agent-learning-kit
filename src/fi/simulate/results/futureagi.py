@@ -452,7 +452,13 @@ def _open_client(
     headers: dict[str, str] = {}
     if api_key and secret_key:
         headers.update({"x-api-key": api_key, "x-secret-key": secret_key})
-    if internal_secret:
+    # These are alternative authentication modes.  A developer/hosted-runner
+    # environment can legitimately contain both sets of variables; sending
+    # both lets the backend's bearer authenticator win and loses the customer
+    # organization carried by the API-key pair.  Prefer the explicit customer
+    # identity whenever it is complete, and use the internal token only as the
+    # service-to-service fallback.
+    elif internal_secret:
         headers["Authorization"] = f"Bearer {internal_secret}"
     return httpx.Client(
         base_url=base_url.rstrip("/"),

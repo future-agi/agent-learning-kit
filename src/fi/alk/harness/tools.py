@@ -517,6 +517,11 @@ def contract_tools(destination: Path) -> Any:
                             "description": "Where in the source imports resolve from, if not the "
                             "root.",
                         },
+                        "compose_file": {
+                            "type": "string",
+                            "description": "Exact path to the submitted Compose file to run "
+                            "when the repository contains more than one. Never invent one.",
+                        },
                         "dockerfile": {
                             "type": "string",
                             "description": "Path to its own Dockerfile, if it has one. Theirs is "
@@ -528,6 +533,13 @@ def contract_tools(destination: Path) -> Any:
                             "description": "Exact argv for the submitted process when the "
                             "repository has no container entrypoint. Leave empty only when one "
                             "conventional entrypoint is unambiguous in source.",
+                        },
+                        "context_excludes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Repository-relative large generated outputs or "
+                            "documentation to omit from a generated build context. Never omit "
+                            "runtime source, dependency manifests, seed data, or tool data.",
                         },
                         "platform": {
                             "type": "string",

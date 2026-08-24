@@ -1,8 +1,16 @@
 from fastapi.testclient import TestClient
 
+import asyncio
 import json
+import os
 
-from fi.alk.harness.sandbox_server import _worker_failure_retryable, create_app
+from fi.alk.harness.sandbox_server import (
+    LocalSandbox,
+    LocalSandboxRequest,
+    _worker_failure_retryable,
+    create_app,
+)
+from fi.alk.harness.secrets import resolve_worker_secrets
 
 
 def test_local_sandbox_rejects_source_outside_allowed_root(tmp_path, monkeypatch):
@@ -140,6 +148,160 @@ def test_preflight_accepts_non_secret_connector_configuration(tmp_path, monkeypa
     assert "agent-42" not in response.text
 
 
+def test_preflight_accepts_uploaded_environment_without_returning_values(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    (source / "worker.py").write_text(
+        'import os\nkey = os.environ["OPENAI_API_KEY"]\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/preflight",
+        json={
+            "source_path": str(source),
+            "environment_values": {"OPENAI_API_KEY": "never-persist-this"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["credentials"]["requirements"][0]["status"] == "configured"
+    assert "never-persist-this" not in response.text
+
+
+def test_uploaded_environment_is_mounted_for_worker_but_not_persisted(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    sandbox = LocalSandbox(tmp_path / "state")
+    observed = {}
+
+    async def capture(job, _source):
+        observed.update(
+            resolve_worker_secrets(
+                job.agent.secret_refs,
+                environment={
+                    **os.environ,
+                    **sandbox._ephemeral_secrets[job.job_id],
+                },
+            )
+        )
+        sandbox._ephemeral_secrets.pop(job.job_id, None)
+
+    sandbox._execute = capture
+
+    async def submit():
+        response = sandbox.submit(
+            LocalSandboxRequest(
+                source_path=str(source),
+                environment_values={"OPENAI_API_KEY": "never-persist-this"},
+            )
+        )
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    persisted = (
+        tmp_path / "state" / "jobs" / response.job.job_id / "job.json"
+    ).read_text()
+
+    assert observed == {"OPENAI_API_KEY": "never-persist-this"}
+    assert "never-persist-this" not in persisted
+    reference = response.job.agent.secret_refs["OPENAI_API_KEY"]
+    assert reference.manager == "mounted"
+    assert reference.key.startswith("ALK_JOB_")
+
+
+def test_uploaded_environment_rejects_runner_control_and_reference_conflicts(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    client = TestClient(create_app(tmp_path / "state"))
+
+    reserved = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "environment_values": {"DOCKER_HOST": "host-escape"},
+        },
+    )
+    conflict = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "environment_values": {"OPENAI_API_KEY": "raw"},
+            "secret_refs": {
+                "OPENAI_API_KEY": {
+                    "manager": "environment",
+                    "key": "OPENAI_API_KEY",
+                    "purpose": "existing reference",
+                }
+            },
+        },
+    )
+
+    assert reserved.status_code == 422
+    assert conflict.status_code == 422
+
+
+def test_uploaded_folder_becomes_sandbox_owned_source(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    uploaded = client.post(
+        "/v1/sources",
+        files=[
+            ("files", ("agent.py", b"print('ready')\n", "text/x-python")),
+            ("files", ("requirements.txt", b"fastapi\n", "text/plain")),
+            ("paths", (None, "agent.py")),
+            ("paths", (None, "requirements.txt")),
+            ("name", (None, "customer-agent")),
+        ],
+    )
+
+    assert uploaded.status_code == 201
+    body = uploaded.json()
+    assert body["name"] == "customer-agent"
+    assert body["file_count"] == 2
+    source_id = body["source_id"]
+    source = tmp_path / "state" / "uploads" / source_id
+    assert source.joinpath("agent.py").read_text() == "print('ready')\n"
+
+    preflight = client.post("/v1/preflight", json={"source_id": source_id})
+    assert preflight.status_code == 200
+    assert preflight.json()["source_kind"] == "archive"
+    assert preflight.json()["source_label"] == "customer-agent"
+
+
+def test_uploaded_folder_rejects_traversal_and_embedded_env(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    traversal = client.post(
+        "/v1/sources",
+        files=[
+            ("files", ("escape.py", b"bad", "text/plain")),
+            ("paths", (None, "../escape.py")),
+        ],
+    )
+    secret_file = client.post(
+        "/v1/sources",
+        files=[
+            ("files", (".env", b"API_KEY=secret", "text/plain")),
+            ("paths", (None, ".env")),
+        ],
+    )
+
+    assert traversal.status_code == 400
+    assert secret_file.status_code == 400
+    assert not tmp_path.joinpath("escape.py").exists()
+
+
 def test_preflight_does_not_call_infrastructure_only_compose_execution_ready(
     tmp_path, monkeypatch
 ):
@@ -185,6 +347,22 @@ def test_preflight_accepts_public_github_url_and_requires_app_for_private_repo(
     assert private.json()["ready_to_submit"] is False
     requirement = private.json()["credentials"]["requirements"][0]
     assert requirement["accepted_secret_types"] == ["github_app_installation"]
+
+
+def test_public_github_branch_url_populates_job_ref(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "github_repository": "https://github.com/acme/agent/tree/feat/harness",
+        },
+    )
+
+    assert response.status_code == 200
+    source = response.json()["job"]["source"]
+    assert source["repository"] == "acme/agent"
+    assert source["ref"] == "feat/harness"
 
 
 def test_private_github_submission_becomes_hosted_job(tmp_path):

@@ -502,7 +502,12 @@ async def _simulate(args: argparse.Namespace) -> int:
         for problem in reported.problems:
             print(f"platform reporting problem: {problem}", file=sys.stderr)
         print(f"reported to the platform: {reported.url}")
-    return 0
+    # Exit 1 means the environment/call lane could not execute at least one scenario. Exit 2
+    # means every scenario ran and the submitted agent failed one or more checks.  Hosted
+    # execution retries/classifies the former and preserves the latter as valid RL evidence.
+    if summary.get("unrunnable"):
+        return 1
+    return 0 if summary["passed"] == summary["scenarios"] else 2
 
 
 def _load_connection_env(source: Path) -> list[str]:
@@ -662,20 +667,46 @@ async def _auto(args: argparse.Namespace) -> int:
             ),
         ),
     )
-    for label, operation, stage_args in stages:
-        print(f"\n=== {label} ===", flush=True)
-        emit("harness.stage.started", label)
-        status = await operation(stage_args)
-        # A completed call suite returns 2 when the submitted agent fails one or more checks.
-        # That is a valid RL result. Earlier stages returning non-zero are harness failures.
-        if status and label != "calls":
-            emit("harness.stage.failed", label, status=status)
-            print(f"\nautomatic run stopped: {label} failed", file=sys.stderr)
-            return status
-        if label == "calls" and status not in (0, 2):
-            emit("harness.stage.failed", label, status=status)
-            return status
-        emit("harness.stage.completed", label, status=status)
+    from .provision import ProvisionError, stop
+
+    cleanup_failed: ProvisionError | None = None
+    try:
+        for label, operation, stage_args in stages:
+            print(f"\n=== {label} ===", flush=True)
+            emit("harness.stage.started", label)
+            status = await operation(stage_args)
+            # A completed call suite returns 2 when the submitted agent fails one or more checks.
+            # That is a valid RL result. Earlier stages returning non-zero are harness failures.
+            if status and label != "calls":
+                emit("harness.stage.failed", label, status=status)
+                print(f"\nautomatic run stopped: {label} failed", file=sys.stderr)
+                return status
+            if label == "calls" and status not in (0, 2):
+                emit("harness.stage.failed", label, status=status)
+                return status
+            emit("harness.stage.completed", label, status=status)
+    finally:
+        # The source environment exists only for this run. This boundary covers normal stage
+        # failures and exceptions raised by world/scenario construction. Cleanup happens before
+        # sealing so environment.json's terminal state is part of the immutable manifest.
+        emit("harness.stage.started", "cleaning_up")
+        try:
+            await asyncio.to_thread(stop, destination)
+        except ProvisionError as exc:
+            cleanup_failed = exc
+            emit(
+                "harness.stage.failed",
+                "cleaning_up",
+                status=1,
+                code="environment_cleanup_failed",
+                detail=str(exc),
+            )
+            print(f"\nautomatic run cleanup failed: {exc}", file=sys.stderr)
+        else:
+            emit("harness.stage.completed", "cleaning_up", status=0)
+
+    if cleanup_failed is not None:
+        return 1
 
     from .artifacts import ArtifactIntegrityError, seal_artifacts
 

@@ -239,7 +239,13 @@ async def simulate(
             except Exception as failed:  # noqa: BLE001 - one bad scenario never stops the suite
                 result = Result(
                     scenario=scenario.name,
+                    tests=scenario.tests,
                     problems=[f"{type(failed).__name__}: {failed}"],
+                    # This is a terminal outcome for the attempted scenario, but it is not an
+                    # agent result.  Keeping an explicit ending prevents downstream artifact
+                    # readers from confusing an exception-shaped partial record with a call
+                    # that is still in progress.
+                    ended="failed",
                 )
             result.seconds = round(time.monotonic() - began, 1)
             _write_case(folder, result)
@@ -264,6 +270,10 @@ async def simulate(
         "models": roles,
         "scenarios": len(results),
         "passed": sum(1 for one in results if one.passed),
+        # A scenario that could not be executed is an infrastructure/harness outcome, not a
+        # weak-agent grade.  The CLI and hosted worker use this count to keep those two result
+        # classes distinct all the way to the platform.
+        "unrunnable": sum(1 for one in results if one.problems),
         "spent_usd": round(sum(one.spent_usd for one in results), 4),
         # Averaged across the scenarios that reported them, so a suite has one line per metric
         # rather than a number nobody compares. Only over the runs that actually measured it:

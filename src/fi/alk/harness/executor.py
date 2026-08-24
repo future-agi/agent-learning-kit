@@ -143,10 +143,18 @@ class HarnessExecutor:
 
         output = output.expanduser().resolve()
         source = source.expanduser().resolve()
+        # Source acquisition has already materialized GitHub/archive/local inputs as a local
+        # checkout.  The understanding registry describes how to inspect that materialized
+        # content (``repo``), while the immutable job retains its original source provenance.
+        # Passing transport kinds such as ``archive`` into source resolution makes a valid
+        # uploaded repository fail before its code is inspected.
+        understanding_kind = str(job.metadata.get("source_kind") or "repo")
+        if understanding_kind not in {"repo", "spec"}:
+            understanding_kind = "repo"
         args = argparse.Namespace(
             path=str(source),
             name=str(job.metadata.get("agent_name") or source.name),
-            kind=str(job.metadata.get("source_kind") or "repo"),
+            kind=understanding_kind,
             out=str(output),
             count=job.scenario_count,
             model=model,
@@ -220,6 +228,10 @@ def _failure_from_events(output: Path) -> HarnessFailure:
             FailureDomain.SIMULATOR,
         ),
         "calls": (HarnessStage.RUNNING, FailureDomain.CONNECTIVITY),
+        "cleaning_up": (
+            HarnessStage.CLEANING_UP,
+            FailureDomain.INFRASTRUCTURE,
+        ),
         "uploading_artifacts": (
             HarnessStage.UPLOADING_ARTIFACTS,
             FailureDomain.INFRASTRUCTURE,

@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
+from .github import parse_github_location
+
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
 
 
@@ -50,6 +52,12 @@ class RepositorySource(BaseModel):
 
     @model_validator(mode="after")
     def _required_locator(self) -> "RepositorySource":
+        if self.kind is SourceKind.GITHUB and self.repository:
+            location = parse_github_location(self.repository)
+            if self.ref and location.ref and self.ref != location.ref:
+                raise ValueError("github_ref_conflicts_with_repository_url")
+            object.__setattr__(self, "repository", location.repository)
+            object.__setattr__(self, "ref", location.ref or self.ref)
         required = {
             SourceKind.LOCAL_REPOSITORY: self.local_path,
             SourceKind.GITHUB: self.repository

@@ -12,7 +12,6 @@ registering one class, not editing any stage.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -103,24 +102,27 @@ class GitHubSource(RepoSource):
         )
 
 
-_GITHUB_REPOSITORY = re.compile(
-    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$"
-)
-
-
 def clone_github_repository(url: str, destination: Path) -> Path:
     """Shallow-clone one public GitHub repository into a session-owned directory."""
-    url = url.strip().rstrip("/")
-    if not _GITHUB_REPOSITORY.fullmatch(url):
+    from .github import parse_github_location
+
+    try:
+        location = parse_github_location(url)
+    except ValueError as exc:
         raise ValueError(
-            "use a public HTTPS GitHub repository URL such as https://github.com/owner/repo"
-        )
+            "use a public HTTPS GitHub repository or branch URL, such as "
+            "https://github.com/owner/repo/tree/branch"
+        ) from exc
     if destination.exists():
         raise ValueError(f"the session source directory already exists: {destination}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    command = ["git", "clone", "--depth", "1"]
+    if location.ref:
+        command.extend(["--branch", location.ref])
+    command.extend([location.clone_url, str(destination)])
     completed = subprocess.run(
-        ["git", "clone", "--depth", "1", url, str(destination)],
+        command,
         capture_output=True,
         check=False,
         text=True,
