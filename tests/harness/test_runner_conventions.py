@@ -83,7 +83,7 @@ def test_setup_returning_any_other_value_stays_advisory(returning: str) -> None:
     """The widened rule is keyed on entry == "ready", not on the value alone — setup() keeps its
     own untouched convention for every one of these values too."""
     outcome = _run(f"def setup(world):\n    return {returning}\n", "s/setup.py", "setup", None)
-    assert not outcome.broken
+    assert not outcome.broken and not outcome.ok
 
 
 def test_check_ready_reports_bare_false_as_broken() -> None:

@@ -268,6 +268,19 @@ def test_bare_state_raises_when_every_table_is_over_the_cap() -> None:
         world.state()
 
 
+def test_bare_state_names_both_causes_when_nothing_survives_the_exclusion() -> None:
+    """The widened message covers the mixed case too: one baseline table over the cap plus one
+    table the agent created since construction — excluding both would leave the snapshot `{}`,
+    so the raised message must name both `orders` (over-cap) and `late_table` (never measured),
+    not just whichever cause the wording happens to lead with."""
+    world = _world({"orders": [{"id": 1}]}, baseline={"orders": STATE_ROW_CAP + 1})
+    world._store.tables["late_table"] = [{"id": 1}]
+    with pytest.raises(WorldStateTooLarge) as raised:
+        world.state()
+    assert "never measured" in str(raised.value)
+    assert "late_table" in str(raised.value) and "orders" in str(raised.value)
+
+
 def test_a_table_missing_from_the_baseline_dict_is_unavailable_not_under_cap() -> None:
     """A missing entry used to default to a row count of 0 and read as under the cap; the cap
     cannot be decided for a table nobody measured at freeze. The check runs once, at

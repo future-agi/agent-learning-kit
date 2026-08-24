@@ -69,7 +69,7 @@ def run_check(
         return Outcome(
             name,
             False,
-            f"the check raised {type(failed).__name__}: {failed}",
+            f"the check raised {type(failed).__name__}: {str(failed)[:200]}",
             broken=True,
         )
 
@@ -81,8 +81,8 @@ def run_check(
         return Outcome(
             name,
             False,
-            f"the check returned {type(said).__name__} {said!r}; a check returns a sentence "
-            "naming what is wrong, or None when it held.",
+            f"the check returned {type(said).__name__} {repr(said)[:200]}; a check returns a "
+            "sentence naming what is wrong, or None when it held.",
             broken=True,
         )
     return Outcome(name, False, said)
