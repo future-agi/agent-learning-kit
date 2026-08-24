@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,7 +21,32 @@ def main() -> int:
     parser.add_argument("case_id", choices=sorted(CASES))
     parser.add_argument("--output-root", default="artifacts/simulation-acceptance")
     parser.add_argument("--dry-run", action="store_true")
+    # A generated scenario brings its own caller, its own mocked tools and its own checks.
+    # Supplying one turns this into a graded test rather than a transport check.
+    parser.add_argument(
+        "--scenario",
+        default=os.environ.get("ALK_SCENARIO", ""),
+        help="path to a generated scenario; drives the caller, the mocks and the checks",
+    )
+    parser.add_argument(
+        "--agent",
+        default=os.environ.get("ALK_AGENT", ""),
+        help="registered agent whose assistant serves the scenario's tools",
+    )
+    parser.add_argument(
+        "--no-mock-tools",
+        action="store_true",
+        help="do not serve the scenario's tools; the agent's own tools answer instead",
+    )
+    parser.add_argument(
+        "--no-grade", action="store_true", help="skip the scenario's checkpoints"
+    )
+    parser.add_argument(
+        "--no-trace", action="store_true", help="skip writing the run trace"
+    )
     args = parser.parse_args()
+    if args.scenario:
+        os.environ["ALK_SCENARIO"] = args.scenario
 
     case = CASES[args.case_id]
     missing = missing_env(case)
@@ -81,33 +108,86 @@ def main() -> int:
         )
         return 0
 
+    record = None
+    if args.scenario:
+        with open(args.scenario, encoding="utf-8") as fh:
+            record = json.load(fh)
+
     trigger = _start_livekit_outbound_trigger(case.case_id)
+    tools = contextlib.nullcontext(None)
+    if record is not None and not args.no_mock_tools:
+        from fi.alk.generation.live_run import tool_session
+
+        tools = tool_session(record, agent=args.agent)
     try:
-        report = asyncio.run(
-            simulate.run_voice_simulation(
-                agent_definition=inputs.agent_definition,
-                livekit_runtime=inputs.livekit_runtime,
-                scenario=inputs.scenario,
-                simulator=inputs.simulator,
-                simulation_run_id=run_id,
-                record_audio=True,
-                recording_root=output_dir / "recordings",
-                recording_case_directory=output_dir / "recordings",
-                min_turn_messages=6,
-                max_seconds=inputs.max_seconds,
-                connect_timeout=60,
-                readiness_timeout=120,
-                cleanup_timeout=30,
-                conversation_direction=inputs.conversation_direction,
-                agent_first_silence_timeout_seconds=30,
+        with tools as tool_state:
+            report = asyncio.run(
+                simulate.run_voice_simulation(
+                    agent_definition=inputs.agent_definition,
+                    livekit_runtime=inputs.livekit_runtime,
+                    scenario=inputs.scenario,
+                    simulator=inputs.simulator,
+                    simulation_run_id=run_id,
+                    record_audio=True,
+                    recording_root=output_dir / "recordings",
+                    recording_case_directory=output_dir / "recordings",
+                    min_turn_messages=6,
+                    max_seconds=inputs.max_seconds,
+                    connect_timeout=60,
+                    readiness_timeout=120,
+                    cleanup_timeout=30,
+                    conversation_direction=inputs.conversation_direction,
+                    agent_first_silence_timeout_seconds=30,
+                )
             )
-        )
-        evaluation = evaluate_agent_report(report, attach=True)
+            evaluation = evaluate_agent_report(report, attach=True)
+            recorded_calls = tool_state.calls() if tool_state is not None else []
+            final_state = tool_state.final_state if tool_state is not None else {}
     finally:
         _finish_livekit_outbound_trigger(trigger)
     report_path = output_dir / "report.json"
     report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     result = report.results[0]
+
+    grading = None
+    trace_path = None
+    if record is not None:
+        messages = [
+            m if isinstance(m, dict) else m.model_dump()
+            for m in (result.messages or [])
+        ]
+        # Provider evidence keeps only a count, so the mock server's record is the tool truth.
+        calls = recorded_calls or _provider_tool_calls(result)
+        if not args.no_grade:
+            from fi.alk.generation.live_run import grade
+
+            grading = grade(
+                record,
+                messages=messages,
+                tool_calls=calls,
+                final_state=final_state,
+            )
+            (output_dir / "checks.json").write_text(
+                json.dumps(grading, indent=2), encoding="utf-8"
+            )
+        if not args.no_trace:
+            from fi.alk.generation.live_run import write_trace
+
+            trace_path = write_trace(
+                str(output_dir),
+                record=record,
+                messages=messages,
+                tool_calls=calls,
+                final_state=final_state,
+                grading=grading,
+                metadata={
+                    "case_id": case.case_id,
+                    "run_id": run_id,
+                    "stop_reason": result.metadata.get("stop_reason"),
+                    "status": result.metadata.get("status"),
+                    "message_count": len(messages),
+                },
+            )
     status = str(result.metadata.get("status") or "unknown")
     print(
         json.dumps(
@@ -119,16 +199,35 @@ def main() -> int:
                 "failure": result.metadata.get("failure"),
                 "evaluation_passed": evaluation.passed,
                 "evaluation_score": evaluation.score,
+                **(
+                    {
+                        "scenario": grading.get("scenario_id"),
+                        "checks_passed": grading.get("passed"),
+                        "checks_failed": grading.get("failed"),
+                        "checks_skipped": grading.get("skipped"),
+                        "scenario_verdict": grading.get("verdict"),
+                    }
+                    if grading
+                    else {}
+                ),
+                **({"trace": trace_path} if trace_path else {}),
                 "manifest": str(manifest_path),
                 "report": str(report_path),
             },
             indent=2,
         )
     )
+    if grading and grading.get("verdict") == "fail":
+        return 1
     return _result_exit_code(
         status=status,
         evaluation_passed=evaluation.passed,
     )
+
+
+def _provider_tool_calls(result) -> list[dict]:
+    raw = getattr(result, "tool_calls", None) or []
+    return [r if isinstance(r, dict) else r.model_dump() for r in raw]
 
 
 def _result_exit_code(*, status: str, evaluation_passed: bool) -> int:
