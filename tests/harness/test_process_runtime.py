@@ -1736,16 +1736,16 @@ def test_healthy_transitions_follow_section_3_and_never_promote() -> None:
 # --- default probers: real postgres/http exercise, no fakes --------------------------------------
 
 
-def test_default_capability_prober_falls_back_to_tcp_when_psycopg_is_absent() -> None:
-    """`psycopg` is not installed in this test lane (import-guarded) — the postgres branch must
-    fall back to a bare TCP probe rather than raising `ImportError`.
-
-    T1, p5-round1-review: the premise itself is asserted, so if `psycopg` is ever installed in
-    this lane the test fails LOUDLY instead of silently exercising a real-connect code path under
-    the same name and passing for the wrong reason."""
-    assert importlib.util.find_spec("psycopg") is None, (
-        "psycopg is installed in this test lane — this test's fallback premise no longer holds"
-    )
+def test_default_capability_prober_falls_back_to_tcp_when_psycopg_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The postgres branch must fall back to a bare TCP probe rather than raising
+    `ImportError` on hosts without `psycopg`. Absence is simulated by blocking the
+    module in `sys.modules` — the prober imports at call time, so the import genuinely
+    fails and the real fallback branch runs regardless of what this venv has installed
+    (an environment premise check would flip whenever another lane needs `psycopg`
+    present)."""
+    monkeypatch.setitem(sys.modules, "psycopg", None)
     import socket as socket_module
 
     server = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
