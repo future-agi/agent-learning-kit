@@ -1,110 +1,28 @@
-"""The behaviour guidance the platform already uses for a simulated caller.
+"""The persona values the platform understands.
 
-A persona profile names what somebody is like: impatient and direct, cautious and skeptical. It
-does not say how that should sound turn by turn, and a model handed only the label improvises
-one, which is how "in a hurry" became a caller who says it every turn instead of a caller who
-cuts in once and accepts the first workable answer.
+A persona field is only useful if the platform recognises what is in it: an accent it knows
+selects a voice, a personality it knows attaches a sentence of behaviour guidance. A value
+written in words of its own renders fine and then does nothing, which is how a suite ends up
+with callers who all behave the same.
 
-The platform solved that with lookup tables mapping each value to a sentence of guidance, and
-voice simulation has run on them for months. They are read from there rather than restated here,
-because two copies of the same wording drift and then a caller behaves one way on the platform
-and another way through the harness, for reasons nobody can see.
-
-Read, not imported: the tables live inside a Django app this package cannot import, but they are
-plain literals, so they are parsed out of the file. Absent, every lookup answers with nothing and
-a persona still renders, one without guidance, never a crash.
+The values are read from the platform's own model when it is mounted, and from the copy carried
+with the harness when it is not, so a writer is always offered real ones. The behaviour guidance
+itself lives with the prompt builder, next to the code that applies it.
 """
 
 from __future__ import annotations
 
 import ast
-import logging
 import json
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
 
-# Where the platform's tables are mounted. Colon-separated so voice and chat guides can both be
-# offered; the first file defining a table wins, so voice takes precedence when both are present.
-GUIDES_ENV = "HARNESS_PERSONA_GUIDES"
-
-WANTED = (
-    "VOICE_PERSONALITY_GUIDES",
-    "VOICE_COMMUNICATION_STYLE_GUIDES",
-    "CHAT_PERSONALITY_GUIDES",
-    "CHAT_COMMUNICATION_STYLE_GUIDES",
-    "CHAT_TONE_GUIDES",
-    "CHAT_VERBOSITY_GUIDES",
-)
-
-
-def _tables_in(path: Path) -> dict[str, dict[str, str]]:
-    """Every guidance table defined in one file, by name.
-
-    Parsed rather than executed. The file sits in an app with imports this process cannot
-    satisfy, and running it to read a dictionary would fail for reasons that have nothing to do
-    with the dictionary.
-    """
-    found: dict[str, dict[str, str]] = {}
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError):
-        return found
-    for node in tree.body:
-        targets = (
-            [node.target] if isinstance(node, ast.AnnAssign) else getattr(node, "targets", [])
-        )
-        for target in targets:
-            name = getattr(target, "id", "")
-            if name not in WANTED or node.value is None:
-                continue
-            try:
-                value = ast.literal_eval(node.value)
-            except ValueError:
-                continue
-            if isinstance(value, dict) and value:
-                found[name] = {str(k).lower(): str(v) for k, v in value.items()}
-    return found
-
-
-@lru_cache(maxsize=1)
-def guides() -> dict[str, dict[str, str]]:
-    """Every table the platform offers this harness, merged."""
-    merged: dict[str, dict[str, str]] = {}
-    for raw in (os.environ.get(GUIDES_ENV) or "").split(":"):
-        if not raw.strip():
-            continue
-        for name, table in _tables_in(Path(raw.strip())).items():
-            merged.setdefault(name, table)
-    return merged
-
-
-def guidance_for(kind: str, value: str, *, voice: bool = True) -> str:
-    """The platform's sentence for one persona value, or nothing.
-
-    ``kind`` is ``personality``, ``communication_style``, ``tone`` or ``verbosity``. Voice tables
-    are preferred for a spoken call and the chat table is the fallback, because the two describe
-    the same disposition and only one of them is written for speech.
-    """
-    if not value.strip():
-        return ""
-    tables = guides()
-    order = ("VOICE", "CHAT") if voice else ("CHAT", "VOICE")
-    for prefix in order:
-        table = tables.get(f"{prefix}_{kind.upper()}_GUIDES") or {}
-        found = table.get(value.strip().lower())
-        if found:
-            return found
-    return ""
-
-
-def available() -> bool:
-    """Whether any guidance was found, so a build can say so rather than silently omitting it."""
-    return bool(guides())
-
-
 logger = logging.getLogger(__name__)
 
+# Where the platform's tables are mounted. Colon-separated so voice and chat guides can both be
+# offered; the first file defining a table wins, so voice takes precedence when both are present.
 # Where the platform's persona model is mounted, for the values it accepts.
 VOCABULARY_ENV = "HARNESS_PERSONA_VOCABULARY"
 
