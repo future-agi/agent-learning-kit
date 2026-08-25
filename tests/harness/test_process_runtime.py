@@ -1,5 +1,5 @@
 """The execution half of the provisioner (`process_runtime.py`), per `hosted-execution-seams.md`
-v1.8 §2b/§3/§4. Manifests here are built directly through `EnvironmentBundleV2.model_validate` —
+v1.12 §2b/§3/§4/§5. Manifests here are built directly through `EnvironmentBundleV2.model_validate` —
 no digest sealing, no on-disk bundle — since every rule under test needs nothing but the parsed
 model's own field values plus the job-supplied inputs (instances, secrets, credentials). Digest
 and file-content verification are `test_process_preflight.py`'s job, not this module's.
@@ -16,15 +16,26 @@ being fixed. `os.chown`/`Popen(user=...)` to a FOREIGN uid needs root, which thi
 have and must not require — those paths are verified STRUCTURALLY: a fake `chown`/`user_resolver`
 is injected and the call it WOULD make is asserted, rather than performing the real privileged
 syscall.
+
+Phase 6 (seed/baseline/worlds/reset/conformance/provision/close) adds `SqlSpy` below: a fake
+`SqlRunner` that records every `(dbname, statement)` call in order and simulates just enough
+postgres semantics (CREATE/DROP/ALTER DATABASE, `to_regclass`, row counts) for the baseline-freeze
+and reset state machines to run against — no real postgres anywhere, same rule as everything
+above. `asyncio.run` drives every `async def` seam (`ProcessRuntimeProvider.provision`/`reset`/
+`close`) directly; there is no event loop fixture here, matching this repo's existing async test
+style elsewhere in the harness suite.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import json
 import subprocess
 import sys
 import time
 import types
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -140,11 +151,17 @@ def _solo_port_plan(process_name: str, *, ordinal: int = 0) -> pr.PortPlan:
 
 
 class FakeHandle:
-    """A `SpawnedProcess` fake: no real subprocess, just a captured-output buffer."""
+    """A `SpawnedProcess` fake: no real subprocess, just a captured-output buffer. `wait()`
+    reports the fake as exited the instant `terminate()`/`interrupt()`/`kill()` has been called —
+    no real process to actually wait on — which is enough for `_terminate_and_wait` (M7) to take
+    its happy path without ever escalating to `kill()` in a test. `StubbornHandle` (below,
+    N13-specific) is the deliberately-does-not-cooperate counterpart used to reach the kill branch."""
 
     def __init__(self, output: str = "") -> None:
         self._output = output
         self.terminated = False
+        self.interrupted = False
+        self.killed = False
 
     def is_running(self) -> bool:
         return not self.terminated
@@ -153,6 +170,20 @@ class FakeHandle:
         return self._output
 
     def terminate(self) -> None:
+        self.terminated = True
+
+    def interrupt(self) -> None:
+        # N12, p6-review-r2: same instant-exit fake shape as `terminate()` — this fake exists to
+        # prove WHICH signal a caller preferred (`self.interrupted`), not to model postgres's own
+        # shutdown semantics.
+        self.interrupted = True
+        self.terminated = True
+
+    def wait(self, timeout: float) -> bool:
+        return self.terminated
+
+    def kill(self) -> None:
+        self.killed = True
         self.terminated = True
 
 
@@ -1020,6 +1051,39 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(tmp_path: Pa
     assert any(uid == 2222 and gid == 3333 and path.endswith(".pwfile") for path, uid, gid in chowned)
 
 
+def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(tmp_path: Path) -> None:
+    """B6, p6-review-r1: `data_dir` is empty on the very FIRST spawn (`initdb` itself creates
+    everything under it as the already-correct user), but `freeze_baseline`'s `datadir_copy`
+    snapshot and `_seal_world_store`'s restore both populate it via a COPY that runs as the
+    provisioner — every file underneath is provisioner-owned, and postgres refuses to start
+    unless the data directory AND ITS CONTENTS are owned by the effective user. Simulates that by
+    pre-populating nested content before the spawn call, same as a restored `datadir_copy` world
+    would look like at this point, and asserts every path underneath was chowned, not only the
+    top-level directory a single non-recursive `chown` call would have caught."""
+    manifest = _manifest()
+    postgres = manifest.processes[0]
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    data_dir = tmp_path / "pg"
+    (data_dir / "base" / "1").mkdir(parents=True)
+    (data_dir / "PG_VERSION").write_text("16\n")  # already looks bootstrapped; initdb is skipped.
+    (data_dir / "base" / "1" / "1234").write_text("data")
+    chowned: list[tuple[str, int, int]] = []
+
+    pr.spawn_managed_process(
+        postgres, port=14000, data_dir=data_dir, credentials=creds,
+        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+        user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
+        chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
+    )
+    chowned_paths = {path for path, _, _ in chowned}
+    assert str(data_dir) in chowned_paths
+    assert str(data_dir / "base") in chowned_paths
+    assert str(data_dir / "base" / "1") in chowned_paths
+    assert str(data_dir / "base" / "1" / "1234") in chowned_paths
+    assert all(uid == 2222 and gid == 3333 for _, uid, gid in chowned)
+    assert (data_dir.stat().st_mode & 0o777) == 0o700
+
+
 def test_default_process_runner_forwards_user_and_group_to_popen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1819,3 +1883,2389 @@ def test_probe_http_reports_not_ready_when_nothing_listens() -> None:
     assert pr.default_capability_prober(
         protocol=CapabilityProtocol.HTTP, host="localhost", port=1, path="/health"
     ) is False
+
+
+# =================================================================================================
+# Phase 6: seed application, baseline freeze, world clone, reset, conformance gate, provision/close
+# =================================================================================================
+#
+# `_manifest()` above already carries one postgres store (`template_database`, job-shared,
+# sentinel `SELECT 1` = `"1"`) — reused everywhere below unless a test needs a different strategy,
+# in which case a `mutate` callback swaps `seed.stores[0].baseline` (and, where the row content
+# under test matters, `migrations`/`seed_files`). `fake_sync_run`/`SqlSpy` below are this section's
+# own `ProcessRunner`/`CapabilityProber`-equivalent fakes — no real postgres/redis/rabbitmq/docker
+# anywhere, per the module docstring.
+
+
+def _fake_sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+def _recording_sync_run(calls: list[Any]) -> Callable[..., subprocess.CompletedProcess]:
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    return run
+
+
+def _pg_spy_row(value: Any) -> list[tuple[Any, ...]]:
+    return [(value,)]
+
+
+def _recording_prober(*, fail_times: int = 0) -> Callable[..., bool]:
+    """t1/N2, p6-review-r2: the promote-path fixtures used to inject `prober=lambda **kwargs:
+    True` — a fast pass that made `provision()`'s PREPARING->READY promotion and `reset()`'s
+    post-sentinel probe structurally unable to observe whether either one actually POLLED (N2) or
+    merely sampled once, the exact class of gap t1 was raised about for `_wait_for_store_ready`.
+    `fail_times=0` (the default) keeps every EXISTING test's prior instant-pass behavior
+    unchanged; a test proving the poll passes `fail_times=N` and asserts `len(prober.calls) > 1`
+    or that state ends up correct only after N+1 calls."""
+    calls: list[dict[str, Any]] = []
+    remaining = [fail_times]
+
+    def prober(**kwargs: Any) -> bool:
+        calls.append(kwargs)
+        if remaining[0] > 0:
+            remaining[0] -= 1
+            return False
+        return True
+
+    prober.calls = calls  # type: ignore[attr-defined]
+    return prober
+
+
+class SqlSpy:
+    """A fake `SqlRunner`: records every `(dbname, statement)` call, in order — the "SQL spy" the
+    task calls for — and simulates just enough real postgres semantics for the baseline-freeze /
+    world-clone / reset / conformance-gate state machines to run against without a real server:
+    `CREATE`/`DROP`/`ALTER ... TEMPLATE` database bookkeeping, `to_regclass` existence checks,
+    `pg_tables`/`COUNT(*)` row counts, and a fixed answer for any `sentinel.query` a test seeds via
+    `answers`. `canary_leaks` deliberately makes the conformance canary visible across databases,
+    for the gate's FAIL-path test.
+    """
+
+    def __init__(
+        self, *, answers: dict[str, list[tuple[Any, ...]]] | None = None, canary_leaks: bool = False,
+        seeded_tables: dict[str, set[str]] | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.databases: dict[str, set[str]] = {}
+        self.row_data: dict[tuple[str, str], int] = {}
+        self.answers = answers or {}
+        self.canary_leaks = canary_leaks
+        # What a freshly `CREATE DATABASE`'d name starts with — simulates "the seed already
+        # landed" (a real `psql -f ...` would have populated it; the fake `sync_run` this spy
+        # runs alongside is a structural no-op, per the module docstring).
+        self.seeded_tables = seeded_tables or {}
+
+    def __call__(
+        self, *, host: str, port: int, user: str, password: str, dbname: str, statement: str,
+        read_only: bool = False,
+    ) -> list[tuple[Any, ...]]:
+        self.calls.append((dbname, statement))
+        body = statement.strip()
+        if read_only:
+            # N8, p6-review-r2: simulates postgres's own `SET default_transaction_read_only = on`
+            # rejecting a non-SELECT statement on a read-only session — the exact class of driver
+            # error `_call_sql` converts to `store_statement_failed`. Checked PER STATEMENT, not
+            # just the string's own prefix — psycopg3's simple-query protocol runs every `;`-
+            # separated statement in one unparameterized `execute()` call, which is exactly how a
+            # sentinel like `"SELECT 1; DROP TABLE riders"` smuggles a write past a naive
+            # starts-with-SELECT check while still LOOKING like a read at a glance.
+            for sub_statement in body.split(";"):
+                sub = sub_statement.strip()
+                if sub and not sub.upper().startswith(("SELECT", "WITH")):
+                    raise RuntimeError(f"cannot execute {sub!r} in a read-only transaction")
+        if body in self.answers:
+            return self.answers[body]
+        if body == "SELECT 1":
+            return [(1,)]  # `_manifest()`'s own default sentinel query.
+        if body.startswith("CREATE DATABASE") and "TEMPLATE" not in body:
+            name = body.split('"')[1]
+            self.databases[name] = set(self.seeded_tables.get(name, set()))
+            return []
+        if "TEMPLATE" in body and body.startswith("CREATE DATABASE"):
+            source, target = body.split('"')[1], body.split('"')[3]
+            self.databases[source] = set(self.databases.get(target, set()))
+            return []
+        if body.startswith("ALTER DATABASE") and "RENAME TO" in body:
+            old, new = body.split('"')[1], body.split('"')[3]
+            self.databases[new] = self.databases.pop(old, set())
+            return []
+        if body.startswith("DROP DATABASE"):
+            name = body.split('"')[-2]
+            self.databases.pop(name, None)
+            return []
+        if body.startswith("CREATE TABLE") and "_alk_conformance" in body:
+            self.databases.setdefault(dbname, set()).add("_alk_conformance")
+            if self.canary_leaks:
+                leaked = "w1" if dbname == "w0" else "w0"
+                self.databases.setdefault(leaked, set()).add("_alk_conformance")
+            return []
+        if body.startswith("SELECT to_regclass"):
+            present = "_alk_conformance" in self.databases.get(dbname, set())
+            return [(present,)]
+        if body.startswith("SELECT tablename FROM pg_tables"):
+            return [(table,) for table in sorted(self.databases.get(dbname, set()))]
+        if body.startswith("SELECT COUNT(*)"):
+            table = body.split('"')[1]
+            return [(self.row_data.get((dbname, table), 0),)]
+        return []
+
+
+def _postgres_creds(m: EnvironmentBundleV2) -> dict[str, pr.EngineCredentials]:
+    return pr.generate_engine_credentials(m, token=lambda: "PW")
+
+
+def _spawn_context(
+    manifest: EnvironmentBundleV2, *, instances: int = 2, bundle_dir: Path, sql_runner: Any = None,
+    redis_runner: Any = None, rabbitmq_inspector: Any = None, rabbitmq_declare: Any = None,
+    rabbitmq_delete: Any = None, rabbitmq_import: Any = None, runner: Any = None,
+    sync_run: Any = None, prober: Any = None, work_directory: Path,
+) -> pr.SpawnContext:
+    port_plan = pr.plan_ports(manifest, instances=instances)
+    credentials = _postgres_creds(manifest)
+    return pr.SpawnContext(
+        work_directory=work_directory, port_plan=port_plan, credentials=credentials,
+        secret_values={}, secret_purposes={}, runner=runner or (lambda *a, **k: FakeHandle()),
+        sync_run=sync_run or _fake_sync_run, sql_runner=sql_runner or SqlSpy(),
+        redis_runner=redis_runner or (lambda **kwargs: None),
+        rabbitmq_inspector=rabbitmq_inspector or (lambda **kwargs: 0),
+        # m8, p6-review-r1: `SpawnContext`'s real defaults for these two now make an actual HTTP
+        # call — every test lane here must fake them explicitly, same rule as every other engine
+        # seam in this fixture, so a test that never overrides them never risks a real network
+        # call regardless of which store the conformance canary ends up preferring.
+        rabbitmq_declare=rabbitmq_declare or (lambda **kwargs: None),
+        rabbitmq_delete=rabbitmq_delete or (lambda **kwargs: None),
+        # N17, p6-review-r2: same rule — seeding now goes over HTTP too.
+        rabbitmq_import=rabbitmq_import or (lambda **kwargs: None),
+        bundle_dir=bundle_dir,
+        # Declared `readiness` probes are P5's own concern (`wait_for_dependency`/`healthy`
+        # already cover them elsewhere in this file) — a fast-pass fake here so Phase 6's own
+        # tests, which reuse `_manifest()`'s `tools` readiness entry incidentally, never block on
+        # a real HTTP probe against a `FakeHandle` that never actually opened a port. Also what
+        # B4's own `_wait_for_store_ready` polls — fast-pass here means every EXISTING freeze/
+        # world-clone test keeps its prior (instant, no-wait) behavior unless it opts into a
+        # slower fake explicitly (t1's own observability test does exactly that; N2's new
+        # observability tests do the same one layer up, at the promote sites).
+        prober=prober or _recording_prober(),
+    )
+
+
+# --- §2c seed application ------------------------------------------------------------------------
+
+
+def test_postgres_seed_argv_shape() -> None:
+    argv = pr.postgres_seed_argv(port=14000, dbname="alk_baseline_postgres", user="harness", file=Path("db/schema.sql"))
+    assert argv == [
+        "psql", "-h", "localhost", "-p", "14000", "-U", "harness", "-d", "alk_baseline_postgres",
+        "-v", "ON_ERROR_STOP=1", "-f", "db/schema.sql",
+    ]
+
+
+def test_redis_seed_argv_has_no_file_flag_stdin_carries_the_commands() -> None:
+    assert pr.redis_seed_argv(port=15003) == ["redis-cli", "-h", "localhost", "-p", "15003"]
+
+
+def test_default_rabbitmq_definitions_importer_posts_the_file_to_the_definitions_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """N17, p6-review-r2: `rabbitmqadmin import` is dropped entirely — seeding now POSTs the raw
+    definitions file straight to the management API's own `/api/definitions` endpoint, the same
+    HTTP-only seam every other rabbitmq call in this module already uses. No `rabbitmqadmin`
+    argv/binary anywhere in this path."""
+    definitions_file = tmp_path / "mq" / "defs.json"
+    definitions_file.parent.mkdir(parents=True)
+    definitions_file.write_bytes(b'{"queues": []}')
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    requests: list[Any] = []
+
+    def fake_urlopen(request: Any, timeout: float | None = None) -> Any:
+        requests.append(request)
+
+        class _Response:
+            def __enter__(self) -> "_Response":
+                return self
+
+            def __exit__(self, *exc: Any) -> None:
+                return None
+
+        return _Response()
+
+    monkeypatch.setattr(pr.urllib.request, "urlopen", fake_urlopen)
+    pr.default_rabbitmq_definitions_importer(
+        host="localhost", port=14002, credentials=creds, file=definitions_file,
+    )
+    assert len(requests) == 1
+    assert requests[0].full_url == "http://localhost:24002/api/definitions"
+    assert requests[0].data == b'{"queues": []}'
+    assert requests[0].get_header("Authorization") is not None
+
+
+def test_apply_store_seed_runs_migrations_then_seed_files_in_listed_order(tmp_path: Path) -> None:
+    calls: list[Any] = []
+    store = pr.StoreEntry.model_validate({
+        "capability": "database", "migrations": ["db/001.sql", "db/002.sql"],
+        "seed_files": ["db/seed_a.sql", "db/seed_b.sql"],
+        "baseline": {"strategy": "template_database", "inputs_digest": "sha256:" + "a" * 64},
+        "sentinel": {"query": "SELECT 1", "expected": "1"},
+    })
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    pr.apply_store_seed(
+        store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=14000, dbname="x",
+        credentials=creds, process_name="postgres", sync_run=_recording_sync_run(calls),
+    )
+    files_in_order = [argv[argv.index("-f") + 1] for argv, _ in calls]
+    assert files_in_order == [
+        str(tmp_path / "db/001.sql"), str(tmp_path / "db/002.sql"),
+        str(tmp_path / "db/seed_a.sql"), str(tmp_path / "db/seed_b.sql"),
+    ]
+
+
+def test_apply_seed_file_postgres_env_keeps_path_and_adds_pgpassword(tmp_path: Path) -> None:
+    """A real bug caught by manual exercise before this test existed: `env=` REPLACES a child's
+    environment, not extends it — passing bare `{"PGPASSWORD": ...}` would drop `PATH` and make
+    `psql` unfindable outside `subprocess`'s narrow POSIX fallback."""
+    calls: list[Any] = []
+    creds = pr.EngineCredentials(username="harness", password="s3cr3t")
+    pr.apply_seed_file(
+        pr.ManagedEngine.POSTGRES, tmp_path / "db/schema.sql", port=14000, dbname="x",
+        credentials=creds, process_name="postgres", sync_run=_recording_sync_run(calls),
+    )
+    _, kwargs = calls[0]
+    assert kwargs["env"]["PGPASSWORD"] == "s3cr3t"
+    assert "PATH" in kwargs["env"]
+
+
+def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> None:
+    seed_file = tmp_path / "cache" / "seed.txt"
+    seed_file.parent.mkdir(parents=True)
+    seed_file.write_text("SET greeting hi\n")
+    calls: list[Any] = []
+    pr.apply_seed_file(
+        pr.ManagedEngine.REDIS, seed_file, port=15003, dbname="", credentials=None,
+        process_name="cache", sync_run=_recording_sync_run(calls),
+    )
+    argv, kwargs = calls[0]
+    assert argv == ["redis-cli", "-h", "localhost", "-p", "15003"]
+    assert kwargs["input"] == "SET greeting hi\n"
+
+
+def test_apply_seed_file_raises_seed_failed_on_nonzero_exit(tmp_path: Path) -> None:
+    def failing_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="syntax error")
+
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES, tmp_path / "db/broken.sql", port=14000, dbname="x",
+            credentials=creds, process_name="postgres", sync_run=failing_run,
+        )
+    assert excinfo.value.code == "seed_failed"
+    assert excinfo.value.stage == "seed"
+    assert "syntax error" in str(excinfo.value)
+
+
+# --- §2c sentinel checking ------------------------------------------------------------------------
+
+
+def test_check_sentinel_postgres_pass_and_fail() -> None:
+    store = _manifest().seed.stores[0]  # {query: "SELECT 1", expected: "1"}
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    passing = pr.check_sentinel(
+        store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
+        credentials=creds, sql_runner=lambda **kwargs: _pg_spy_row(1),
+        redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+    )
+    assert passing is True
+    failing = pr.check_sentinel(
+        store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
+        credentials=creds, sql_runner=lambda **kwargs: _pg_spy_row(0),
+        redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+    )
+    assert failing is False
+
+
+def test_check_sentinel_passes_read_only_true_to_the_sql_runner() -> None:
+    """N8, p6-review-r2 (MAJOR): the sentinel is customer-authored content from an untrusted repo,
+    executed as `harness` — the role `initdb -U harness` makes the postgres SUPERUSER — over a
+    plain autocommit session. `check_sentinel` must mark this call `read_only=True` so `default_
+    sql_runner` puts the session into a read-only transaction before running it."""
+    store = _manifest().seed.stores[0]
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    seen: dict[str, Any] = {}
+
+    def recording_sql_runner(**kwargs: Any) -> list[tuple[Any, ...]]:
+        seen.update(kwargs)
+        return _pg_spy_row(1)
+
+    pr.check_sentinel(
+        store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
+        credentials=creds, sql_runner=recording_sql_runner,
+        redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+    )
+    assert seen["read_only"] is True
+
+
+def test_a_sentinel_query_attempting_a_write_fails(tmp_path: Path) -> None:
+    """N8, p6-review-r2 (MAJOR, task-required verification): the door B2 closed for `psql -f`
+    (dropping privilege for customer-authored SQL) was still open for `sentinel.query` — arbitrary
+    multi-statement SQL executed as the postgres superuser on a read-write session. `SqlSpy`
+    (`read_only=True`) rejects a non-`SELECT` statement exactly as a real `SET default_
+    transaction_read_only = on` session would; a sentinel that tries to write must surface as a
+    typed `store_statement_failed`, not silently succeed.
+    """
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0],
+            "sentinel": {
+                "query": "SELECT 1; DROP TABLE riders", "expected": "1",
+            },
+        }]}}
+    )
+    store = manifest.seed.stores[0]
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    sql_spy = SqlSpy()
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.check_sentinel(
+            store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
+            credentials=creds, sql_runner=sql_spy,
+            redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+        )
+    assert excinfo.value.code == "store_statement_failed"
+
+
+def test_measure_postgres_row_counts_passes_read_only_true(tmp_path: Path) -> None:
+    """N8, p6-review-r2: the baseline row-count reads (`pg_tables`, `COUNT(*)`) are the other
+    read call site named in the fix — pinned directly rather than only indirectly through a
+    freeze-baseline integration test."""
+    seen: list[bool] = []
+
+    def recording_sql_runner(**kwargs: Any) -> list[tuple[Any, ...]]:
+        seen.append(kwargs["read_only"])
+        if kwargs["statement"].startswith("SELECT tablename"):
+            return [("riders",)]
+        return [(3,)]
+
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    counts = pr._measure_postgres_row_counts(
+        host="localhost", port=14000, credentials=creds, dbname="w0",
+        sql_runner=recording_sql_runner, process_name="postgres",
+    )
+    assert counts == {"riders": 3}
+    assert seen == [True, True]  # both the table listing AND the COUNT(*) itself.
+
+
+def test_check_sentinel_redis_pass_and_fail() -> None:
+    store = pr.StoreEntry.model_validate({
+        "capability": "cache", "migrations": [], "seed_files": [],
+        "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+        "sentinel": {"key": "greeting", "expected": "hi"},
+    })
+    passing = pr.check_sentinel(
+        store, engine=pr.ManagedEngine.REDIS, host="localhost", port=15003, dbname=None,
+        credentials=None, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: b"hi",
+        rabbitmq_inspector=lambda **kwargs: 0,
+    )
+    assert passing is True
+    failing = pr.check_sentinel(
+        store, engine=pr.ManagedEngine.REDIS, host="localhost", port=15003, dbname=None,
+        credentials=None, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 0,
+    )
+    assert failing is False
+
+
+def test_check_sentinel_rabbitmq_pass_and_fail() -> None:
+    store = pr.StoreEntry.model_validate({
+        "capability": "queue", "migrations": [], "seed_files": [],
+        "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "c" * 64},
+        "sentinel": {"queue": "jobs", "expected_depth": 5},
+    })
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    passing = pr.check_sentinel(
+        store, engine=pr.ManagedEngine.RABBITMQ, host="localhost", port=15003, dbname=None,
+        credentials=creds, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 5,
+    )
+    assert passing is True
+    failing = pr.check_sentinel(
+        store, engine=pr.ManagedEngine.RABBITMQ, host="localhost", port=15003, dbname=None,
+        credentials=creds, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 0,
+    )
+    assert failing is False
+
+
+# --- §5.3 baseline freeze -------------------------------------------------------------------------
+
+
+def test_freeze_baseline_requires_bundle_dir() -> None:
+    manifest = _manifest()
+    ctx = pr.SpawnContext(
+        work_directory=Path("/x"), port_plan=pr.plan_ports(manifest, instances=1),
+        credentials={}, secret_values={}, secret_purposes={}, bundle_dir=None,
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    assert excinfo.value.code == "internal_invariant_violated"
+
+
+def test_freeze_baseline_waits_for_readiness_before_the_first_statement(tmp_path: Path) -> None:
+    """t1, p6-review-r1: B4's fix is structurally UNOBSERVABLE with a prober that always answers
+    `True` on the first call (`_spawn_context`'s own fast-pass default) — this pins that the wait
+    is REAL. A prober that fails twice before succeeding must be polled through all of them; the
+    manifest declares a `database` readiness entry with a tiny interval so the real `time.sleep`
+    between polls stays in the low milliseconds rather than the 30s/0.25s fallback default.
+    """
+    manifest = _manifest(
+        lambda body: {**body, "readiness": [
+            *body["readiness"],
+            {"capability": "database", "timeout_seconds": 5, "interval_seconds": 0.01},
+        ]}
+    )
+    probe_calls: list[dict[str, Any]] = []
+    remaining_failures = [2]
+
+    def flaky_prober(**kwargs: Any) -> bool:
+        probe_calls.append(kwargs)
+        if remaining_failures[0] > 0:
+            remaining_failures[0] -= 1
+            return False
+        return True
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, prober=flaky_prober, work_directory=tmp_path,
+    )
+    pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    # 2 failures + the passing call — proves `_wait_for_store_ready` actually looped rather than
+    # accepting the first `False` as good enough, or skipping the probe entirely.
+    assert len(probe_calls) >= 3
+    assert remaining_failures[0] == 0
+    assert all(call["protocol"] is pr.CapabilityProtocol.POSTGRES for call in probe_calls)
+
+
+def test_freeze_baseline_readiness_timeout_is_a_typed_depends_on_timeout(tmp_path: Path) -> None:
+    """B4, p6-review-r1: a store that never becomes ready must fail typed (`depends_on_timeout`,
+    §2f — `infrastructure`, retryable), not hang forever or let the next statement run anyway."""
+    manifest = _manifest(
+        lambda body: {**body, "readiness": [
+            *body["readiness"],
+            {"capability": "database", "timeout_seconds": 0.05, "interval_seconds": 0.01},
+        ]}
+    )
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, prober=lambda **kwargs: False, work_directory=tmp_path,
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    assert excinfo.value.code == "depends_on_timeout"
+
+
+def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0], "migrations": ["db/schema.sql"],
+            "seed_files": ["db/seed.sql"],
+        }]}}
+    )
+    # `seeded_tables` tells the spy what `CREATE DATABASE "alk_baseline_postgres"` should start
+    # with — simulating "the seed already landed," since the fake `sync_run` for `psql -f ...`
+    # below is a structural no-op (same rule as every other engine-binary call in this file).
+    sql_spy = SqlSpy(seeded_tables={"alk_baseline_postgres": {"riders"}})
+    sql_spy.row_data[("alk_baseline_postgres", "riders")] = 3
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, sync_run=_fake_sync_run,
+        work_directory=tmp_path,
+    )
+    result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    assert "postgres" in result.job_shared_handles  # stays running — job-shared for the job.
+    record = result.build_output.stores[0]
+    assert record.strategy is pr.BaselineStrategy.TEMPLATE_DATABASE
+    assert record.baseline_reference == "alk_baseline_postgres"
+    assert record.row_counts == {"riders": 3}
+
+    statements = [statement for _, statement in sql_spy.calls]
+    assert any(s.startswith("CREATE DATABASE") and "TEMPLATE" not in s for s in statements)
+    # migrations/seed_files apply via `sync_run`, not `sql_runner` — nothing to find in `statements`
+    # for them; asserting the CREATE precedes the ALTER is what is left to check here.
+    create_index = next(i for i, s in enumerate(statements) if s.startswith("CREATE DATABASE"))
+    alter_index = next(i for i, s in enumerate(statements) if "IS_TEMPLATE" in s)
+    assert create_index < alter_index
+    assert statements[alter_index] == (
+        'ALTER DATABASE "alk_baseline_postgres" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false'
+    )
+
+
+def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(tmp_path: Path) -> None:
+    """t4 / B2, p6-review-r1: migration/seed files are customer-authored content applied through
+    `psql -f`, which honors backslash meta-commands (`\\!`, `\\copy ... program`) — must run under
+    the store's declared `svc-data` identity, never the provisioner's own uid, the same privilege
+    drop every other untrusted-content execution path in this module already gets
+    (`build_commands`, the managed-engine daemon itself)."""
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0], "migrations": ["db/schema.sql"], "seed_files": [],
+        }]}}
+    )
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text("-- schema\n")
+    seed_calls: list[Any] = []
+
+    def recording_sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        seed_calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sync_run=recording_sync_run, work_directory=tmp_path,
+    )
+    from dataclasses import replace as dc_replace
+    ctx = dc_replace(
+        ctx, user_resolver=_fake_user_resolver({"svc-data": (4444, 5555)}),
+        chown=lambda path, uid, gid: None,  # a fake uid needs no real os.chown to prove the point.
+    )
+
+    pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    psql_calls = [(argv, kwargs) for argv, kwargs in seed_calls if argv and argv[0] == "psql"]
+    assert psql_calls, "expected a psql -f seed invocation"
+    _, kwargs = psql_calls[0]
+    assert kwargs.get("user") == 4444
+    assert kwargs.get("group") == 5555
+
+
+def test_freeze_baseline_datadir_copy_terminates_the_bootstrap_and_snapshots_the_datadir(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0],
+            "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
+        }]}}
+    )
+    handles: list[FakeHandle] = []
+
+    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+        handle = FakeHandle()
+        handles.append(handle)
+        return handle
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, runner=runner, work_directory=tmp_path,
+    )
+    result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    assert result.job_shared_handles == {}  # datadir_copy is never job-shared.
+    assert len(handles) == 1
+    assert handles[0].terminated is True  # the bootstrap instance is stopped after the copy.
+    record = result.build_output.stores[0]
+    assert record.strategy is pr.BaselineStrategy.DATADIR_COPY
+    assert Path(record.baseline_reference) == tmp_path / "managed" / "postgres.baseline"
+
+
+def test_freeze_baseline_datadir_copy_redis_issues_save_before_terminating(
+    tmp_path: Path,
+) -> None:
+    """Q1, p6-review-r3 (MAJOR): `redis_daemon_argv` disables save points (`--save ""`) — a bare
+    SIGTERM shutdown persists nothing, so `_freeze_one_store`'s `DATADIR_COPY` branch must issue
+    an explicit synchronous `SAVE` immediately before terminating, or the copied data dir every
+    world clones/resets from is an empty baseline."""
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "cache", "migrations": [], "seed_files": [],
+             "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "greeting", "expected": "hi"}},
+        ]}}
+    )
+    events: list[str] = []
+
+    class RecordingHandle(FakeHandle):
+        def terminate(self) -> None:
+            events.append("TERMINATE")
+            super().terminate()
+
+    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+        return RecordingHandle()
+
+    def redis_runner(*, host: str, port: int, command: Any) -> Any:
+        events.append(command[0])
+        return "hi" if command[0] == "GET" else None
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, runner=runner, redis_runner=redis_runner,
+        work_directory=tmp_path,
+    )
+    pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    # only "cache" (redis, datadir_copy) is ever terminated at freeze time — postgres stays
+    # running (template_database, job-shared), so this is unambiguously the redis command order.
+    assert events[-2:] == ["SAVE", "TERMINATE"]
+
+
+def test_freeze_baseline_empty_strategy_is_a_no_op_capture(tmp_path: Path) -> None:
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
+             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "greeting", "expected": "hi"}},
+        ]}}
+    )
+    spawned_names: list[str] = []
+
+    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+        return FakeHandle()
+
+    def sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        spawned_names.append(argv[0])
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, runner=runner, sync_run=sync_run, work_directory=tmp_path,
+    )
+    result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    cache_record = next(r for r in result.build_output.stores if r.process_name == "cache")
+    assert cache_record.strategy is pr.BaselineStrategy.EMPTY
+    assert cache_record.baseline_reference == ""
+    assert cache_record.row_counts == {}
+    assert "redis-cli" not in spawned_names  # nothing seeded at freeze time for `empty`.
+    assert "cache" not in result.job_shared_handles
+
+
+def test_write_build_output_shape(tmp_path: Path) -> None:
+    build_output = pr.BuildOutput(
+        bundle_digest="sha256:" + "0" * 64,
+        stores=[pr.StoreBaselineRecord(
+            capability="database", process_name="postgres", engine=pr.ManagedEngine.POSTGRES,
+            strategy=pr.BaselineStrategy.TEMPLATE_DATABASE, inputs_digest="sha256:" + "a" * 64,
+            baseline_reference="alk_baseline_postgres", row_counts={"riders": 3},
+        )],
+        conformance=True, conformance_reason=None,
+    )
+    target = pr.write_build_output(tmp_path, build_output)
+    assert target == tmp_path / "artifacts" / "build.json"
+    payload = json.loads(target.read_text())
+    assert payload["bundle_digest"] == build_output.bundle_digest
+    assert payload["conformance"] is True
+    assert payload["stores"] == [{
+        "capability": "database", "process_name": "postgres", "engine": "postgres",
+        "strategy": "template_database", "inputs_digest": "sha256:" + "a" * 64,
+        "baseline_reference": "alk_baseline_postgres", "row_counts": {"riders": 3},
+    }]
+
+
+# --- §4.2 world clone + reset ----------------------------------------------------------------------
+
+
+def _frozen_template_database(
+    manifest: EnvironmentBundleV2, tmp_path: Path,
+) -> tuple[pr.FreezeResult, pr.SpawnContext, SqlSpy]:
+    sql_spy = SqlSpy()
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    sql_spy.calls.clear()
+    return result, ctx, sql_spy
+
+
+def test_world_clone_template_database_issues_terminate_drop_create_template(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    freeze_result, ctx, sql_spy = _frozen_template_database(manifest, tmp_path)
+
+    result = pr._clone_or_reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    assert set(result.handles) == {"postgres", "tools-api", "agent"}
+    assert result.handles["postgres"] is freeze_result.job_shared_handles["postgres"]  # reused.
+
+    statements = [statement for _, statement in sql_spy.calls]
+    assert statements == [
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+        "WHERE datname = 'w0' AND pid <> pg_backend_pid()",
+        'DROP DATABASE IF EXISTS "w0"',
+        'CREATE DATABASE "w0" TEMPLATE "alk_baseline_postgres"',
+    ]
+
+
+def test_world_clone_datadir_copy_copies_the_baseline_then_renames_to_wn(tmp_path: Path) -> None:
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0],
+            "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
+        }]}}
+    )
+    sql_spy = SqlSpy()
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    baseline_dir = Path(freeze_result.build_output.stores[0].baseline_reference)
+    assert baseline_dir.is_dir()
+    sql_spy.calls.clear()
+
+    copy_calls: list[tuple[Path, Path]] = []
+    real_copy = pr._copytree_preserving_symlinks
+
+    def recording_copy(src: Path, dst: Path) -> None:
+        copy_calls.append((src, dst))
+        real_copy(src, dst)
+
+    ctx2 = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path,
+    )
+    from dataclasses import replace as dc_replace
+    ctx2 = dc_replace(ctx2, copy=recording_copy)
+
+    result = pr._clone_or_reset_world(
+        manifest, 0, context=ctx2, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    assert copy_calls == [(baseline_dir, tmp_path / "worlds" / "w0" / "postgres")]
+    statements = [statement for _, statement in sql_spy.calls]
+    assert statements == ['ALTER DATABASE "alk_baseline_postgres" RENAME TO "w0"']
+    assert "postgres" in result.handles
+
+
+def test_world_clone_empty_strategy_reseeds_on_every_clone(tmp_path: Path) -> None:
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
+             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "greeting", "expected": "hi"}},
+        ]}}
+    )
+    (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cache" / "seed.txt").write_text("SET greeting hi\n")
+    seed_calls: list[Any] = []
+
+    def sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        seed_calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sync_run=sync_run, work_directory=tmp_path,
+    )
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    assert not any("redis-cli" in argv for argv in seed_calls)  # nothing at freeze time.
+
+    pr._clone_or_reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    assert any("redis-cli" in argv for argv in seed_calls)  # (re)established at clone time.
+
+
+def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
+    tmp_path: Path,
+) -> None:
+    """t4 / B2, p6-review-r1: the `empty`-strategy reseed path (`_seal_world_store`'s fallback
+    branch) is a SEPARATE call site from `freeze_baseline`'s own seed application — both must
+    drop privilege, not just the one exercised by the freeze-time test above."""
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
+             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "greeting", "expected": "hi"}},
+        ]}}
+    )
+    (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cache" / "seed.txt").write_text("SET greeting hi\n")
+    seed_calls: list[Any] = []
+
+    def sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        seed_calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sync_run=sync_run, work_directory=tmp_path,
+    )
+    from dataclasses import replace as dc_replace
+    ctx = dc_replace(
+        ctx, user_resolver=_fake_user_resolver({"svc-data": (6666, 7777)}),
+        chown=lambda path, uid, gid: None,  # a fake uid needs no real os.chown to prove the point.
+    )
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    pr._clone_or_reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    redis_calls = [(argv, kwargs) for argv, kwargs in seed_calls if "redis-cli" in argv]
+    assert redis_calls
+    _, kwargs = redis_calls[-1]
+    assert kwargs.get("user") == 6666
+    assert kwargs.get("group") == 7777
+
+
+def test_world_clone_empty_strategy_requires_bundle_dir_to_reseed(tmp_path: Path) -> None:
+    """Mirrors `freeze_baseline`'s own `bundle_dir` guard: an empty-strategy store re-seeded on
+    every clone must fail typed if the context somehow carries no bundle directory, never silently
+    resolve `seed_files` against the wrong (cwd) directory."""
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
+             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "greeting", "expected": "hi"}},
+        ]}}
+    )
+    (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cache" / "seed.txt").write_text("SET greeting hi\n")
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    from dataclasses import replace as dc_replace
+    ctx_no_bundle_dir = dc_replace(ctx, bundle_dir=None)
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr._clone_or_reset_world(
+            manifest, 0, context=ctx_no_bundle_dir, baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        )
+    assert excinfo.value.code == "internal_invariant_violated"
+
+
+def test_reset_world_terminates_only_per_world_handles(tmp_path: Path) -> None:
+    manifest = _manifest()
+    freeze_result, ctx, sql_spy = _frozen_template_database(manifest, tmp_path)
+    world0 = pr._clone_or_reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    old_tools_api = world0.handles["tools-api"]
+    old_agent = world0.handles["agent"]
+    shared_postgres = world0.handles["postgres"]
+
+    handles, healthy = pr.reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles=world0.handles,
+    )
+    assert old_tools_api.handle.terminated is True
+    assert old_agent.handle.terminated is True
+    assert shared_postgres.handle.terminated is False  # job-shared — stays up across a reset.
+    assert healthy is True  # SqlSpy answers `SELECT 1` -> 1 by default (no `answers` override).
+
+
+def test_reset_world_sentinel_failure_reports_unhealthy_without_raising(tmp_path: Path) -> None:
+    manifest = _manifest()
+    sql_spy = SqlSpy()  # passes at freeze time (default "SELECT 1" -> 1) — m3's own freeze-time
+    # sentinel check must NOT be what fails this test; only `reset_world`'s is under test here.
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    world0 = pr._clone_or_reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    # Corrupted AFTER the (passing) freeze-time check, simulating something breaking the world's
+    # own state before its reset — never matches the sentinel's "1" from here on.
+    sql_spy.answers["SELECT 1"] = [(0,)]
+    handles, healthy = pr.reset_world(
+        manifest, 0, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles=world0.handles,
+    )
+    assert healthy is False  # §4.2: a sentinel failure is reported, never raised.
+
+
+# --- §4 conformance gate -------------------------------------------------------------------------
+
+
+def test_first_canary_store_prefers_postgres_over_redis_and_rabbitmq() -> None:
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            {"capability": "cache", "migrations": [], "seed_files": [],
+             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "k", "expected": "v"}},
+            body["seed"]["stores"][0],
+        ]}}
+    )
+    store = pr._first_canary_store(manifest)
+    assert store is not None
+    assert store.capability == "database"  # postgres, even though redis is listed first.
+
+
+def test_first_canary_store_is_none_with_no_seed_block() -> None:
+    manifest = _manifest(lambda body: {**body, "runtime": {**body["runtime"], "kind": "external"},
+                                        "processes": [], "seed": None})
+    assert pr._first_canary_store(manifest) is None
+
+
+def _manifest_with_rabbitmq_store() -> EnvironmentBundleV2:
+    return _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "queue", "kind": "managed", "engine": "rabbitmq", "version": "3.13",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "queue": {"protocol": "amqp", "service": "queue", "configuration_name": "QUEUE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "queue", "migrations": [], "seed_files": [],
+             "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "d" * 64},
+             "sentinel": {"queue": "jobs", "expected_depth": 0}},
+        ]}}
+    )
+
+
+def test_run_canary_probe_rabbitmq_declares_publishes_and_inspects_without_deleting(
+    tmp_path: Path,
+) -> None:
+    """m8, p6-review-r1: previously only ever INSPECTED a queue nobody had declared — a vacuous
+    pass regardless of real isolation. Pins the real sequence: declare+publish in world 0, inspect
+    world 1 — real HTTP calls faked, never skipped.
+
+    N15, p6-review-r2 (MINOR): no delete anymore. The delete used to run HERE, before `run_
+    conformance_gate`'s own `reset_world` calls for both worlds — by the time `_verify_canary_
+    absent` later re-checked world 0, the queue was already gone from THIS unrelated step,
+    proving nothing about whether the reset itself actually worked. Cleanup is now the reset's
+    job (world 0's rabbitmq is always `datadir_copy`, wiped and restarted from the pristine
+    baseline snapshot on every reset), the same mechanism postgres/redis's own canary already
+    relied on."""
+    manifest = _manifest_with_rabbitmq_store()
+    store = manifest.seed.stores[1]  # the rabbitmq store.
+    declare_calls: list[dict[str, Any]] = []
+    delete_calls: list[dict[str, Any]] = []
+    inspected_ports: list[int] = []
+
+    def rabbitmq_declare(**kwargs: Any) -> None:
+        declare_calls.append(kwargs)
+
+    def rabbitmq_delete(**kwargs: Any) -> None:
+        delete_calls.append(kwargs)
+
+    def rabbitmq_inspector(**kwargs: Any) -> int:
+        inspected_ports.append(kwargs["port"])
+        return 0  # world 1 never saw the canary — real isolation.
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, work_directory=tmp_path,
+        rabbitmq_declare=rabbitmq_declare, rabbitmq_delete=rabbitmq_delete,
+        rabbitmq_inspector=rabbitmq_inspector,
+    )
+    result = pr._run_canary_probe(manifest, store, pr.ManagedEngine.RABBITMQ, context=ctx)
+    assert result is True
+    assert len(declare_calls) == 1
+    assert declare_calls[0]["queue"] == "_alk_conformance"
+    assert delete_calls == []  # N15: cleanup deferred to the subsequent reset, not done here.
+    port0 = ctx.port_plan.port_for("queue", 0)
+    port1 = ctx.port_plan.port_for("queue", 1)
+    assert declare_calls[0]["port"] == port0  # declared in world 0.
+    assert inspected_ports == [port1]  # inspected in world 1.
+
+
+def test_run_canary_probe_rabbitmq_fails_when_the_queue_leaks_to_world_1(tmp_path: Path) -> None:
+    """m8: a leaked canary (world 1's inspector reports a message that should not be there) must
+    fail the probe, proving the check is not vacuous in the other direction either."""
+    manifest = _manifest_with_rabbitmq_store()
+    store = manifest.seed.stores[1]
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, work_directory=tmp_path,
+        rabbitmq_declare=lambda **kwargs: None, rabbitmq_delete=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 1,  # world 1 sees a message: a real leak.
+    )
+    result = pr._run_canary_probe(manifest, store, pr.ManagedEngine.RABBITMQ, context=ctx)
+    assert result is False
+
+
+def test_default_rabbitmq_queue_inspector_treats_404_as_zero_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """m8, p6-review-r1: a 404 for a nonexistent queue IS "empty" for the canary/sentinel's own
+    purposes — the management API's way of saying so, not an error the gate's 'never raises'
+    promise should have had to survive only by luck (unreachable via postgres-first preference)."""
+    import urllib.error
+
+    def fake_urlopen(request: Any, timeout: float | None = None) -> Any:
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", None, None)
+
+    monkeypatch.setattr(pr.urllib.request, "urlopen", fake_urlopen)
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    depth = pr.default_rabbitmq_queue_inspector(
+        host="localhost", port=15003, credentials=creds, queue="_alk_conformance",
+    )
+    assert depth == 0
+
+
+def test_conformance_gate_passes_when_worlds_are_really_isolated(tmp_path: Path) -> None:
+    manifest = _manifest()
+    sql_spy = SqlSpy()  # `canary_leaks=False` — the default; a real isolation bug would leak.
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    world_handles = {
+        index: pr._clone_or_reset_world(
+            manifest, index, context=ctx, baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        ).handles
+        for index in (0, 1)
+    }
+    passed, reason = pr.run_conformance_gate(
+        manifest, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+    )
+    assert (passed, reason) == (True, None)
+
+
+def test_conformance_gate_fails_and_never_raises_when_isolation_is_broken(tmp_path: Path) -> None:
+    manifest = _manifest()
+    sql_spy = SqlSpy(canary_leaks=True)  # simulates a real cross-world isolation bug.
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    world_handles = {
+        index: pr._clone_or_reset_world(
+            manifest, index, context=ctx, baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        ).handles
+        for index in (0, 1)
+    }
+    passed, reason = pr.run_conformance_gate(
+        manifest, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+    )
+    assert (passed, reason) == (False, "conformance_gate_failed")
+
+
+def test_conformance_gate_is_vacuously_true_with_no_canary_store(tmp_path: Path) -> None:
+    manifest = _manifest(lambda body: {**body, "runtime": {**body["runtime"], "kind": "external"},
+                                        "processes": [], "seed": None})
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, work_directory=tmp_path)
+    build_output = pr.BuildOutput(bundle_digest=manifest.digest, stores=[])
+    passed, reason = pr.run_conformance_gate(
+        manifest, context=ctx, baseline=build_output, job_shared_handles={}, world_handles={},
+    )
+    assert (passed, reason) == (True, None)
+
+
+# --- §4 provision / reset / close: ProcessRuntimeProvider -------------------------------------------
+
+
+def _sql_spy_provider(**overrides: Any) -> pr.ProcessRuntimeProvider:
+    kwargs: dict[str, Any] = dict(
+        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run, sql_runner=SqlSpy(),
+        prober=_recording_prober(),  # N2, p6-review-r2: see `_spawn_context`'s own comment.
+        rabbitmq_declare=lambda **kwargs: None, rabbitmq_delete=lambda **kwargs: None,
+        rabbitmq_import=lambda **kwargs: None,
+    )
+    kwargs.update(overrides)
+    return pr.ProcessRuntimeProvider(**kwargs)
+
+
+def _provision_dirs(tmp_path: Path) -> tuple[Path, Path]:
+    """B1, p6-review-r1: `source` (the untrusted checkout) and `bundle_dir` (the verified bundle
+    root) are now GENUINELY DISTINCT directories, never the same path passed twice — a regression
+    back to conflating them would be invisible if every test fixture kept them identical (t2)."""
+    source = tmp_path / "source"
+    (source / "services" / "tools-api").mkdir(parents=True)
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir(parents=True)
+    return source, bundle_dir
+
+
+def test_provision_reconciles_to_exactly_w_ready_worlds(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    assert [runtime.world_index for runtime in runtimes] == [0, 1, 2]
+    assert len({runtime.runtime_id for runtime in runtimes}) == 3  # never duplicated.
+    # t3, p6-review-r1: §4.1 says `provision` "reconciles to exactly `instances` READY worlds" —
+    # previously true only of the COUNT, never checked that a returned world is actually `ready`
+    # (it was `preparing`, forever, until some OTHER caller happened to call `healthy()`).
+    assert all(runtime.state is pr.RuntimeState.READY for runtime in runtimes)
+    ports = {runtime.endpoints["tools"].address for runtime in runtimes}
+    assert len(ports) == 3  # each world's own tools-api port, all distinct.
+    build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_output["conformance"] is True
+    # m1, p6-review-r1: both degrade causes now land on build.json, not just the gate's own.
+    assert build_output["requested_parallelism"] == 3
+    assert build_output["effective_parallelism"] == 3
+    assert build_output["degrade_reason"] is None
+
+
+def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -> None:
+    """B1, p6-review-r1: §2c seed/migration paths are bundle-relative and must resolve against
+    the VERIFIED bundle directory, never the untrusted checkout — a bundle declares `migrations:
+    ["db/schema.sql"]`; preflight hashes/scans `<bundle_dir>/db/schema.sql`, so reading the same
+    relative path from `source` instead would execute bytes nothing ever verified. `source` and
+    `bundle_dir` are genuinely different directories and the seed file exists ONLY under
+    `bundle_dir` (t2) — a regression back to `bundle_dir=source` is caught by asserting the
+    RECORDED `-f` argument, not merely that the fake `sync_run` returned success (which it always
+    does regardless of the path)."""
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0], "migrations": ["db/schema.sql"], "seed_files": [],
+        }]}}
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (bundle_dir / "db").mkdir(parents=True)
+    (bundle_dir / "db" / "schema.sql").write_text("-- schema\n")
+
+    calls: list[Any] = []
+    provider = _sql_spy_provider(
+        sync_run=_recording_sync_run(calls), secrets_path=tmp_path / "secrets.json",
+    )
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    seed_calls = [argv for argv, _ in calls if argv and argv[0] == "psql"]
+    assert seed_calls, "expected a psql -f seed invocation"
+    applied_file = seed_calls[0][seed_calls[0].index("-f") + 1]
+    assert applied_file == str(bundle_dir / "db" / "schema.sql")
+
+
+def test_provision_is_idempotent_for_the_same_job_identity(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    spawn_count: list[int] = [0]
+
+    def counting_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        spawn_count[0] += 1
+        return FakeHandle()
+
+    provider = _sql_spy_provider(runner=counting_runner, secrets_path=tmp_path / "secrets.json")
+    first = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    count_after_first = spawn_count[0]
+    second = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    assert [r.runtime_id for r in first] == [r.runtime_id for r in second]
+    assert spawn_count[0] == count_after_first  # nothing re-spawned; every world already `ready`.
+
+
+def test_provision_hosted_mode_require_declared_user_true_fails_typed_when_unresolvable(
+    tmp_path: Path,
+) -> None:
+    """P5 ledger carry-forward, exercised end to end through `provision()` rather than only at
+    `build_process_tree`/`spawn_source_process` directly: the hosted path passes
+    `require_declared_user=True`, and a snapshot that somehow lacks a declared `svc-*` user must
+    fail typed, never silently fall back to running unprivileged. M2, p6-review-r1: `True` is now
+    `provision()`'s own DEFAULT (fail-closed) — passed explicitly here anyway so the test still
+    reads as pinning the behavior on its own, not merely relying on the default not having moved."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        user_resolver=lambda name: None, secrets_path=tmp_path / "secrets.json",
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.provision(
+            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+            require_declared_user=True,
+        ))
+    assert excinfo.value.code == "spawn_failed"
+
+
+def test_provision_require_declared_user_defaults_to_true(tmp_path: Path) -> None:
+    """M2, p6-review-r1: `ProcessRuntimeProvider` is hosted-only — a caller that omits the keyword
+    entirely must still fail closed, not silently fall back to running everything unprivileged as
+    the harness's own `svc-control`. Mirrors the test above but never passes the argument."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        user_resolver=lambda name: None, secrets_path=tmp_path / "secrets.json",
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.provision(
+            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        ))
+    assert excinfo.value.code == "spawn_failed"
+
+
+def test_provision_conformance_degrade_persists_across_a_later_reconcile_call(
+    tmp_path: Path,
+) -> None:
+    """A real bug caught by manual exercise before this test existed: `effective` is recomputed
+    fresh from `port_plan` on every call, so a gate failure decided on call 1 was silently
+    forgotten on call 2 — worlds beyond index 0 came back even though the gate never re-ran."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        sql_runner=SqlSpy(canary_leaks=True), secrets_path=tmp_path / "secrets.json",
+    )
+    first = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    assert [r.world_index for r in first] == [0]
+    second = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    assert [r.world_index for r in second] == [0]
+    assert first[0].runtime_id == second[0].runtime_id
+    build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_output["degrade_reason"] == "conformance_gate_failed"  # m1
+
+
+def test_provision_tears_down_before_rebuilding_on_a_bundle_digest_change(tmp_path: Path) -> None:
+    """M6, p6-review-r1: a bundle-digest change (a re-sealed bundle mid-attempt) used to reassign
+    this instance's own identity straight over the PREVIOUS job's still-running processes and
+    still-allocated ports — §4.1's "never duplicates" broken in the one case this branch exists
+    for. Every previously-live handle (job-shared and per-world) must be terminated BEFORE the new
+    manifest's own build/freeze ever runs."""
+    manifest_a = _manifest()
+    manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+
+    first = asyncio.run(provider.provision(
+        manifest_a, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    old_world_handles = [h for world in provider._world_handles.values() for h in world.values()]
+    old_shared_handles = list(provider._job_shared_handles.values())
+    assert old_world_handles or old_shared_handles  # something is actually running to tear down.
+
+    second = asyncio.run(provider.provision(
+        manifest_b, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert all(h.handle.terminated for h in old_world_handles)
+    assert all(h.handle.terminated for h in old_shared_handles)
+    assert second[0].bundle_digest == manifest_b.digest
+    assert second[0].bundle_digest != first[0].bundle_digest
+
+
+def test_provision_recovers_a_sick_world_via_re_call(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    first = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    runtime = first[0]
+    old_agent_handle = provider._world_handles[0]["agent"]
+    old_runtime_id = runtime.runtime_id  # N1, p6-review-r2: snapshotted BEFORE mutation — after
+    # N1, `second[0]` and `runtime` are the SAME object, so comparing `second[0].runtime_id !=
+    # runtime.runtime_id` post-rebuild would compare an attribute against itself.
+    runtime.state = pr.RuntimeState.UNHEALTHY
+
+    second = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert second[0] is runtime  # N1: mutated in place, never replaced.
+    assert second[0].runtime_id != old_runtime_id  # rebuilt, not left unhealthy.
+    # t3, p6-review-r1: `provision()` now promotes a freshly-(re)built world out of `PREPARING`
+    # before returning (the same declared-readiness probe `healthy()` uses) — was `PREPARING`
+    # before this fix pass, unconditionally.
+    assert second[0].state is pr.RuntimeState.READY
+    assert old_agent_handle.handle.terminated is True
+
+
+def test_reset_transitions_ready_or_unhealthy_per_sentinel(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    runtime = runtimes[0]
+    asyncio.run(provider.reset(runtime, work_directory=tmp_path))
+    assert runtime.state is pr.RuntimeState.READY
+
+
+def test_ensure_world_mutates_the_same_environment_runtime_object_across_rebuilds(
+    tmp_path: Path,
+) -> None:
+    """N1, p6-review-r2 (BLOCKER), superseding m5's own test: v1.12 §4.5b's live-object model
+    ("providers hand out live `EnvironmentRuntime` objects") reads as ONE object per world for
+    the provider's whole life. `_ensure_world` used to mint a brand-new `EnvironmentRuntime` on
+    every rebuild (m5's own fixture exercised exactly that, holding a deliberately STALE,
+    replaced object) — under that shape, a caller holding an EARLIER reference (e.g. `hosted_
+    scheduler.py`'s own pool entry, captured right after the first `provision()` call) could never
+    see a later rebuild's state land anywhere it could observe. Pins that a sick-world recovery
+    rebuild MUTATES the object a caller is already holding, in place — fresh `runtime_id`/
+    `endpoints`/`state`, same Python object, visible through the ORIGINAL reference with no
+    re-fetch required. `reset()`'s own state write (m5) is a trivial consequence once there is
+    only one object to write to.
+    """
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    first = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    held = first[0]
+    old_runtime_id = held.runtime_id
+    held.state = pr.RuntimeState.UNHEALTHY  # simulate the scheduler demoting it (§4.5b).
+
+    second = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert second[0] is held  # the SAME object — never replaced.
+    assert held.runtime_id != old_runtime_id  # rebuilt: a fresh identity...
+    assert held.state is pr.RuntimeState.READY  # ...and promoted — both visible through `held`.
+
+    asyncio.run(provider.reset(held, work_directory=tmp_path))
+    assert provider._runtimes[0] is held  # reset() writes through the SAME object too.
+    assert held.state is pr.RuntimeState.READY
+
+
+def test_close_is_idempotent_and_removes_secrets_and_data_directories(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "run-secrets.json"
+    secrets_path.write_text("{}")
+    provider = _sql_spy_provider(secrets_path=secrets_path)
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
+        require_declared_user=False,
+    ))
+    handles = [handle for world in provider._world_handles.values() for handle in world.values()]
+    assert handles  # something is actually running before close().
+    # B3, p6-review-r1: the secrets file is gone the moment `provision()` loaded it — long before
+    # `close()` ever runs (t5). `close()`'s own unlink is the "if still present" backstop only.
+    assert not secrets_path.exists()
+
+    asyncio.run(provider.close(work_directory=tmp_path))
+    assert all(handle.handle.terminated for handle in handles)
+    assert not secrets_path.exists()
+    assert not (tmp_path / "build").exists()
+    assert not (tmp_path / "worlds").exists()
+    assert not (tmp_path / "managed").exists()
+    for runtime in runtimes:
+        assert runtime.state is pr.RuntimeState.STOPPED
+
+    asyncio.run(provider.close(work_directory=tmp_path))  # must not raise the second time.
+
+
+# --- B3/§0.3, p6-review-r1: secrets lifetime and injection through provision() -----------------
+
+
+def test_secrets_are_loaded_and_the_file_is_gone_before_the_first_process_spawns(
+    tmp_path: Path,
+) -> None:
+    """t5: pins §0.3's lifetime rule end to end — "the provisioner loads this file into memory at
+    startup and deletes it immediately after loading, BEFORE ANY CUSTOMER PROCESS STARTS." Records
+    whether the secrets file still existed at the moment of the FIRST spawn call (build step,
+    managed engine, or source process — whichever the provisioner reaches first)."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "abc123"}))
+    existed_at_first_spawn: list[bool] = []
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        existed_at_first_spawn.append(secrets_path.exists())
+        return FakeHandle()
+
+    def sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        existed_at_first_spawn.append(secrets_path.exists())
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    provider = _sql_spy_provider(runner=runner, sync_run=sync_run, secrets_path=secrets_path)
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert existed_at_first_spawn, "expected at least one spawn/sync_run call"
+    assert not any(existed_at_first_spawn), "secrets.json must be gone before the FIRST spawn"
+    assert not secrets_path.exists()
+
+
+def test_secrets_are_re_injected_from_memory_on_reset(tmp_path: Path) -> None:
+    """t5: §0.3 — "the in-memory map lives for the whole job — `reset` restarts... re-inject from
+    memory." The file is deleted after the first `provision()`, so a `reset()` that still lands
+    the secret in the agent's env can only be reading it from the in-memory map, not the disk."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "abc123"}))
+    envs_by_argv0: dict[str, dict[str, str]] = {}
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        envs_by_argv0[tuple(argv)] = env
+        return FakeHandle()
+
+    provider = _sql_spy_provider(
+        runner=runner, secrets_path=secrets_path,
+        # N10, p6-review-r2: no `/work/job.json` exists in this fixture's `tmp_path` — the
+        # constructor override stands in for it, the same way a local/test lane would.
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
+    )
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert not secrets_path.exists()  # gone after the first provision() — nothing left to re-read.
+
+    envs_by_argv0.clear()
+    asyncio.run(provider.reset(runtimes[0], work_directory=tmp_path))
+    agent_envs = [env for argv, env in envs_by_argv0.items() if argv == ("python3", "agent.py")]
+    assert agent_envs, "expected the agent process to be respawned by reset()"
+    assert agent_envs[0].get("LIVEKIT_API_KEY") == "abc123"
+
+
+def test_secret_injection_end_to_end_through_provision(tmp_path: Path) -> None:
+    """t6: no prior test covered secret injection through `provision()` at all — `select_process_
+    secrets` was only ever tested in isolation. A real (on-disk) secrets.json, loaded by a real
+    `provision()` call, must land the claimed alias in the claiming process's env and must NOT
+    land in a process that never claimed `target_provider`."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "abc123"}))
+    envs_by_argv0: dict[tuple[str, ...], dict[str, str]] = {}
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        envs_by_argv0[tuple(argv)] = env
+        return FakeHandle()
+
+    provider = _sql_spy_provider(
+        runner=runner, secrets_path=secrets_path,
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},  # N10, p6-review-r2.
+    )
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    agent_env = envs_by_argv0[("python3", "agent.py")]  # claims `target_provider` in `_manifest()`.
+    assert agent_env.get("LIVEKIT_API_KEY") == "abc123"
+    tools_env = envs_by_argv0[("node", "server.js")]  # claims no purpose in `_manifest()`.
+    assert "LIVEKIT_API_KEY" not in tools_env
+
+
+# --- N10, p6-review-r2 (MAJOR): secret purposes come from the job, not invented ------------------
+
+
+def test_secrets_with_no_matching_job_purpose_are_dropped_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """N10, p6-review-r2: every alias used to be relabelled `target_provider` unconditionally,
+    which silently defeats `select_process_secrets`'s own `SOURCE_CHECKOUT` exclusion (F13) the
+    moment such an alias ever reaches `secrets.json`. An alias with no matching `job.json`/
+    `secret_purpose_map` entry must be DROPPED (never injected under a guessed purpose), not
+    silently relabelled — and the drop must be logged so a real injection gap is diagnosable."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "abc123", "UNCLAIMED_ALIAS": "xyz"}))
+    envs_by_argv0: dict[tuple[str, ...], dict[str, str]] = {}
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        envs_by_argv0[tuple(argv)] = env
+        return FakeHandle()
+
+    provider = _sql_spy_provider(
+        runner=runner, secrets_path=secrets_path,
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},  # UNCLAIMED_ALIAS has no entry.
+    )
+    with caplog.at_level("WARNING", logger="fi.alk.harness.process_runtime"):
+        asyncio.run(provider.provision(
+            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+            require_declared_user=False,
+        ))
+    agent_env = envs_by_argv0[("python3", "agent.py")]
+    assert agent_env.get("LIVEKIT_API_KEY") == "abc123"  # the matched alias still lands.
+    assert "UNCLAIMED_ALIAS" not in agent_env  # the unmatched one is never injected anywhere.
+    assert any("UNCLAIMED_ALIAS" in record.message for record in caplog.records)
+
+
+def test_read_job_secret_purposes_reads_agent_secret_refs_from_job_json(tmp_path: Path) -> None:
+    """N10, p6-review-r2: the REAL hosted-path source — `/work/job.json`'s own `agent.secret_refs`
+    (§1: `{alias: {manager, key, version, purpose}}`) — not just the constructor override."""
+    (tmp_path / "job.json").write_text(json.dumps({
+        "agent": {"secret_refs": {
+            "LIVEKIT_API_KEY": {
+                "manager": "platform-vault", "key": "k", "version": None,
+                "purpose": "target_provider",
+            },
+        }},
+    }))
+    purposes = pr._read_job_secret_purposes(tmp_path)
+    assert purposes == {"LIVEKIT_API_KEY": "target_provider"}
+
+
+def test_read_job_secret_purposes_absent_file_returns_empty_and_logs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING", logger="fi.alk.harness.process_runtime"):
+        purposes = pr._read_job_secret_purposes(tmp_path)
+    assert purposes == {}
+    assert any("job.json" in record.message for record in caplog.records)
+
+
+def test_load_and_delete_secrets_malformed_job_json_is_typed_not_attribute_error(
+    tmp_path: Path,
+) -> None:
+    """N10, p6-review-r2: `read_text`/`json.loads` failures and a non-dict payload used to escape
+    `provision()` untyped (N9's own class of gap) — a non-dict `job.json` used to raise
+    `AttributeError` from `raw.items()` deep inside, not the typed failure this pins."""
+    (tmp_path / "job.json").write_text(json.dumps(["not", "a", "dict"]))
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr._read_job_secret_purposes(tmp_path)
+    assert excinfo.value.code == "spawn_failed"
+
+
+def test_load_and_delete_secrets_malformed_secrets_json_is_typed(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text("not valid json{{{")
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr._load_and_delete_secrets(secrets_path, work_directory=tmp_path)
+    assert excinfo.value.code == "spawn_failed"
+
+
+# --- N2, p6-review-r2 (BLOCKER): promote-path polling ---------------------------------------------
+
+
+def _manifest_with_fast_readiness_poll(*, timeout_seconds: float = 0.3) -> EnvironmentBundleV2:
+    """A tiny declared readiness timeout/interval so the poll tests below run in milliseconds, not
+    up to `_DEFAULT_STORE_READY_TIMEOUT_SECONDS`'s 30s floor."""
+    return _manifest(
+        lambda body: {**body, "readiness": [
+            {**body["readiness"][0], "timeout_seconds": timeout_seconds, "interval_seconds": 0.01},
+        ]}
+    )
+
+
+def _recording_selective_prober(*, protocol: CapabilityProtocol, fail_times: int) -> Any:
+    """Like `_recording_prober`, but only ever fails for calls matching `protocol` — every other
+    protocol passes immediately. Isolates which call site actually needed to retry, since a bare
+    `_recording_prober` shared across the whole `SpawnContext` would also be consumed by `_wait_
+    for_store_ready`'s own postgres readiness check at freeze time."""
+    calls: list[dict[str, Any]] = []
+    remaining = [fail_times]
+
+    def prober(**kwargs: Any) -> bool:
+        calls.append(kwargs)
+        if kwargs.get("protocol") is protocol and remaining[0] > 0:
+            remaining[0] -= 1
+            return False
+        return True
+
+    prober.calls = calls  # type: ignore[attr-defined]
+    return prober
+
+
+def test_provision_promotion_polls_the_declared_probe_rather_than_sampling_once(
+    tmp_path: Path,
+) -> None:
+    """N2, p6-review-r2 (BLOCKER): `provision()`'s PREPARING->READY promotion used to call
+    `probe_runtime_health` exactly once, immediately, with no wait — nothing waits for the DAG's
+    TERMINAL process (`spawn_world` only waits on `depends_on` edges), so a bundle whose
+    readiness-bearing process is terminal was marked `UNHEALTHY` on every provision regardless of
+    how quickly it actually came up. A prober that fails twice before passing proves the
+    promotion actually POLLS.
+
+    Q3, p6-review-r3: `_manifest_with_terminal_readiness`, not `_manifest_with_fast_readiness_
+    poll` — the latter kept the `tools` readiness entry, backed by `tools-api`, which `agent`'s
+    own `depends_on` wait also polls during `spawn_world` and silently ate the scripted failures
+    BEFORE the promote-time poll ever ran, so `len(http_calls) >= 3` passed even with a reverted,
+    single-sample `_poll_runtime_health` (verified empirically). The terminal-readiness manifest's
+    only probe is backed by `agent` itself, which nothing `depends_on` — every HTTP call recorded
+    is unambiguously the promote-site poll."""
+    manifest = _manifest_with_terminal_readiness(timeout_seconds=0.3)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    prober = _recording_selective_prober(protocol=CapabilityProtocol.HTTP, fail_times=2)
+    provider = _sql_spy_provider(prober=prober, secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert runtimes[0].state is pr.RuntimeState.READY
+    http_calls = [c for c in prober.calls if c.get("protocol") is CapabilityProtocol.HTTP]
+    assert len(http_calls) >= 3  # 2 failures + the passing call.
+
+
+def test_reset_promotion_polls_the_declared_probe_rather_than_sampling_once(
+    tmp_path: Path,
+) -> None:
+    """N2, p6-review-r2 (BLOCKER): same fix, the OTHER promote site — `reset()`'s post-sentinel
+    probe. `template_database` postgres skips `_wait_for_store_ready` entirely on reset (the
+    job-shared engine is already running).
+
+    Q3, p6-review-r3: `_manifest_with_terminal_readiness`, same reasoning as the provision-side
+    test above — its only readiness probe is backed by `agent`, the DAG's terminal process, which
+    nothing `depends_on`, so nothing else on the reset path can consume the flaky prober's failure
+    budget before the promotion poll itself runs."""
+    manifest = _manifest_with_terminal_readiness(timeout_seconds=0.3)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    runtime = runtimes[0]
+    flaky = _recording_selective_prober(protocol=CapabilityProtocol.HTTP, fail_times=2)
+    provider._context = dc_replace(provider._context, prober=flaky)
+
+    asyncio.run(provider.reset(runtime, work_directory=tmp_path))
+    assert runtime.state is pr.RuntimeState.READY
+    http_calls = [c for c in flaky.calls if c.get("protocol") is CapabilityProtocol.HTTP]
+    assert len(http_calls) >= 3
+
+
+def _manifest_with_terminal_readiness(*, timeout_seconds: float = 0.05) -> EnvironmentBundleV2:
+    """§2a's own documented shape: a readiness-bearing capability backed by the DAG's TERMINAL
+    process (`agent` — nothing in `_manifest()`'s topology ever names it in a `depends_on`).
+    `wait_for_dependency` never checks it during build; only `probe_runtime_health`'s promote-time
+    sweep of `manifest.readiness` does. The pre-existing `tools` entry is dropped so `tools-api`'s
+    own depends_on wait (from `agent`) has nothing to poll and returns immediately — build must
+    succeed regardless of what the promote-time prober does."""
+    return _manifest(
+        lambda body: {**body, "readiness": [
+            {"capability": "control", "path": "/health", "timeout_seconds": timeout_seconds,
+             "interval_seconds": 0.01},
+        ], "capabilities": {
+            **body["capabilities"],
+            "control": {"protocol": "http", "service": "agent", "configuration_name": None},
+        }}
+    )
+
+
+def test_provision_promotion_exhausts_the_poll_and_returns_unhealthy_never_raises(
+    tmp_path: Path,
+) -> None:
+    """N2, p6-review-r2 (BLOCKER): exhaustion is a state DECISION, not a provisioning failure —
+    `provision()` must return the world `UNHEALTHY`, never raise, when the declared probe never
+    passes within its own timeout — pinned against the exact §2a "terminal process" shape N2
+    itself names."""
+    manifest = _manifest_with_terminal_readiness(timeout_seconds=0.05)
+    source, bundle_dir = _provision_dirs(tmp_path)
+
+    def always_fails_http(**kwargs: Any) -> bool:
+        return kwargs.get("protocol") is not CapabilityProtocol.HTTP
+
+    provider = _sql_spy_provider(
+        prober=always_fails_http, secrets_path=tmp_path / "secrets.json",
+    )
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert runtimes[0].state is pr.RuntimeState.UNHEALTHY
+
+
+# --- N3, p6-review-r2 (MAJOR): a failed first provision() must not poison the provider -----------
+
+
+def test_provision_failed_first_freeze_resets_identity_so_a_retry_retries_the_build(
+    tmp_path: Path,
+) -> None:
+    """N3, p6-review-r2: the job identity (`_manifest`/`_bundle_digest`) used to be committed
+    BEFORE `freeze_baseline` ran — a failure there left the instance claiming an identity with no
+    build output, so an in-process retry with the SAME bundle took the RECONCILE branch and
+    raised `internal_invariant_violated` instead of retrying the build and surfacing the real,
+    often-retryable cause. A `sql_runner` that raises only on its FIRST call (freeze's own `CREATE
+    DATABASE` for the template) then behaves normally proves the retry re-attempts the build."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    call_count = [0]
+    real_spy = SqlSpy()
+
+    def flaky_sql_runner(**kwargs: Any) -> list[tuple[Any, ...]]:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise RuntimeError("connection reset by peer")
+        return real_spy(**kwargs)
+
+    provider = _sql_spy_provider(
+        sql_runner=flaky_sql_runner, secrets_path=tmp_path / "secrets.json",
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.provision(
+            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+            require_declared_user=False,
+        ))
+    assert excinfo.value.code == "store_statement_failed"  # the REAL cause, not a bogus invariant.
+    assert provider._manifest is None  # identity reset, not left claiming a half-built job.
+
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert runtimes[0].state is pr.RuntimeState.READY
+
+
+# --- N4, p6-review-r2 (MAJOR): no spawn path may orphan a live engine on a partial failure --------
+
+
+def _manifest_with_two_postgres_stores() -> EnvironmentBundleV2:
+    return _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "postgres2", "kind": "managed", "engine": "postgres", "version": "16",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "database2": {
+                "protocol": "postgres", "service": "postgres2",
+                "configuration_name": "DATABASE2_URL",
+            },
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "database2", "migrations": [], "seed_files": [],
+             "baseline": {"strategy": "template_database", "inputs_digest": "sha256:" + "e" * 64},
+             "sentinel": {"query": "SELECT 1", "expected": "1"}},
+        ]}}
+    )
+
+
+def test_freeze_baseline_terminates_an_earlier_stores_handle_on_a_later_stores_failure(
+    tmp_path: Path,
+) -> None:
+    """N4, p6-review-r2 (MAJOR): a raise partway through `freeze_baseline`'s per-store loop used
+    to leave every EARLIER store's own job-shared engine live and referenced NOWHERE — `self.
+    _job_shared_handles` is only ever assigned once this function RETURNS. Store 1 (`postgres`)
+    succeeds and is sealed `template_database`; store 2 (`postgres2`) fails its own seed — store
+    1's handle must be terminated, not orphaned holding its formula port.
+    """
+    manifest = _manifest_with_two_postgres_stores()
+    real_spy = SqlSpy()
+
+    def flaky_sql_runner(**kwargs: Any) -> list[tuple[Any, ...]]:
+        statement = kwargs["statement"]
+        if statement.startswith("CREATE DATABASE") and "alk_baseline_postgres2" in statement:
+            raise RuntimeError("simulated store-2 seed failure")
+        return real_spy(**kwargs)
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=flaky_sql_runner, work_directory=tmp_path,
+    )
+    handles: list[Any] = []
+    original_runner = ctx.runner
+
+    def recording_runner(*args: Any, **kwargs: Any) -> Any:
+        handle = original_runner(*args, **kwargs)
+        handles.append(handle)
+        return handle
+
+    ctx = dc_replace(ctx, runner=recording_runner)
+
+    with pytest.raises(pr.ProcessRuntimeError):
+        pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+
+    assert len(handles) == 2  # both postgres/postgres2 were actually spawned.
+    assert all(handle.terminated for handle in handles)  # neither orphaned.
+
+
+def test_ensure_world_publishes_partial_handles_so_close_can_terminate_them(
+    tmp_path: Path,
+) -> None:
+    """N4, p6-review-r2 (MAJOR): a mid-clone failure (here: `agent`'s own `depends_on` wait on
+    `tools-api` timing out) used to drop `tools-api`'s already-spawned handle on the floor — `self.
+    _world_handles[world_index]` was only ever assigned on `_ensure_world`'s SUCCESS path.
+    `close()` (or the next reconcile) must be able to terminate it instead of orphaning it.
+    """
+    manifest = _manifest_with_fast_readiness_poll(timeout_seconds=0.05)
+    source, bundle_dir = _provision_dirs(tmp_path)
+
+    def failing_http_prober(**kwargs: Any) -> bool:
+        return kwargs.get("protocol") is not CapabilityProtocol.HTTP
+
+    provider = _sql_spy_provider(
+        prober=failing_http_prober, secrets_path=tmp_path / "secrets.json",
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.provision(
+            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+            require_declared_user=False,
+        ))
+    assert excinfo.value.code == "depends_on_timeout"
+    tools_handle = provider._world_handles[0]["tools-api"]
+    assert tools_handle.handle.terminated is False  # not yet — close() has not run.
+
+    asyncio.run(provider.close(work_directory=tmp_path))
+    assert tools_handle.handle.terminated is True  # N4: reachable, and now cleaned up.
+
+
+# --- N9, p6-review-r2 (MAJOR): filesystem failures must not escape untyped -----------------------
+
+
+def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(tmp_path: Path) -> None:
+    """N9, p6-review-r2: §4.6 — filesystem failures during provisioning are `infrastructure`.
+    mkdir/chmod/chown for a (re)spawned engine's own data directory used to raise bare, giving
+    `provision()`'s caller nothing to map."""
+    manifest = _manifest()
+    postgres = manifest.processes[0]
+    creds = pr.EngineCredentials(username="harness", password="pw")
+
+    def failing_chown(path: Path, uid: int, gid: int) -> None:
+        raise PermissionError("simulated: svc-control cannot chown this path")
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.spawn_managed_process(
+            postgres, port=14000, data_dir=tmp_path / "pg", credentials=creds,
+            runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+            user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
+            chown=failing_chown,
+        )
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.stage == "spawn"
+
+
+def test_run_conformance_gate_never_raises_on_a_filesystem_fault_during_reset(
+    tmp_path: Path,
+) -> None:
+    """N9, p6-review-r2: M3's own "TRULY never raises" promise used to hold only for
+    `ProcessRuntimeError` — `reset_world` beneath the gate runs `rmtree`/`copytree` (`_seal_world_
+    store`'s own `datadir_copy` work), and a filesystem fault there must still degrade the gate,
+    never crash the job."""
+    manifest = _manifest(
+        lambda body: {**body, "seed": {"stores": [{
+            **body["seed"]["stores"][0],
+            "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
+        }]}}
+    )
+    sql_spy = SqlSpy()
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    world_handles = {
+        index: pr._clone_or_reset_world(
+            manifest, index, context=ctx, baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        ).handles
+        for index in (0, 1)
+    }
+
+    def failing_copy(src: Path, dst: Path) -> None:
+        raise OSError("simulated: disk full mid-copy")
+
+    broken_ctx = dc_replace(ctx, copy=failing_copy)
+    passed, reason = pr.run_conformance_gate(
+        manifest, context=broken_ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+    )
+    assert (passed, reason) == (False, "conformance_gate_failed")
+
+
+# --- N5/N6, p6-review-r2 (MAJOR): rabbitmq.conf carries credentials; env var matches on disk ------
+
+
+def _rabbitmq_process() -> Any:
+    return pr.ManagedProcess.model_validate({
+        "name": "queue", "kind": "managed", "engine": "rabbitmq", "version": "3.13",
+        "user": "svc-data", "depends_on": [],
+    })
+
+
+def test_spawn_managed_process_rabbitmq_conf_carries_credentials(
+    tmp_path: Path,
+) -> None:
+    """N5, p6-review-r2 (MAJOR): a BARE `rabbitmq-server` (no Docker, §0) reads `default_user`/
+    `default_pass` from the generated `rabbitmq.conf`, not from `RABBITMQ_DEFAULT_USER`/
+    `RABBITMQ_DEFAULT_PASS` (a Docker-entrypoint-only convention) — without this the node
+    initializes with the built-in `guest` account and every rabbitmq call this module makes
+    (harness-authenticated) 401s. Q4, p6-review-r3: no `loopback_users` assertion — that line
+    widened `guest`'s reach instead of narrowing it and was dropped from the generated conf."""
+    creds = pr.EngineCredentials(username="harness", password="s3cr3t")
+    data_dir = tmp_path / "queue"
+    pr.spawn_managed_process(
+        _rabbitmq_process(), port=15003, data_dir=data_dir, credentials=creds,
+        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+    )
+    conf_path = data_dir / "rabbitmq.conf"
+    conf_text = conf_path.read_text(encoding="utf-8")
+    assert "default_user = harness" in conf_text
+    assert "default_pass = s3cr3t" in conf_text
+    assert "loopback_users" not in conf_text
+    assert (conf_path.stat().st_mode & 0o777) == 0o600  # carries the password in cleartext.
+
+
+def test_spawn_managed_process_rabbitmq_config_file_env_matches_the_on_disk_filename_exactly(
+    tmp_path: Path,
+) -> None:
+    """N6, p6-review-r2 (MAJOR): `RABBITMQ_CONFIG_FILE` must carry the FULL path, extension
+    included — the pre-3.7 "the server appends .conf itself" behavior this used to depend on is
+    not how the catalog's 3.13 works, and the failure is silent (falls back to the default
+    management port, 15672 — inside §2b's own per-world port band)."""
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    data_dir = tmp_path / "queue"
+    captured_env: dict[str, str] = {}
+
+    def recording_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured_env.update(env)
+        return FakeHandle()
+
+    pr.spawn_managed_process(
+        _rabbitmq_process(), port=15003, data_dir=data_dir, credentials=creds,
+        runner=recording_runner, sync_run=_fake_sync_run,
+    )
+    conf_path = data_dir / "rabbitmq.conf"
+    assert captured_env["RABBITMQ_CONFIG_FILE"] == str(conf_path)
+    assert Path(captured_env["RABBITMQ_CONFIG_FILE"]).name == "rabbitmq.conf"
+    assert conf_path.exists()
+
+
+def test_spawn_managed_process_rabbitmq_conf_overwrites_a_datadir_copy_style_pre_populated_file(
+    tmp_path: Path,
+) -> None:
+    """N5, p6-review-r2: a `datadir_copy` restore legitimately copies a PRIOR `rabbitmq.conf` in
+    before this function ever runs (M8's own note) — the write must overwrite it (fresh
+    credentials/port every spawn), never fail `FileExistsError` the way an `O_EXCL` create would."""
+    data_dir = tmp_path / "queue"
+    data_dir.mkdir(parents=True)
+    (data_dir / "rabbitmq.conf").write_text("stale content from a copied baseline\n")
+    creds = pr.EngineCredentials(username="harness", password="fresh-pw")
+    pr.spawn_managed_process(
+        _rabbitmq_process(), port=15003, data_dir=data_dir, credentials=creds,
+        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+    )
+    conf_text = (data_dir / "rabbitmq.conf").read_text(encoding="utf-8")
+    assert "fresh-pw" in conf_text
+    assert "stale content" not in conf_text
+
+
+# --- Q2, p6-review-r3 (MAJOR): rabbitmq's mnesia data path must not depend on the node name -------
+
+
+def test_rabbitmq_daemon_env_mnesia_dir_is_node_name_free(tmp_path: Path) -> None:
+    """Q2, p6-review-r3 (MAJOR): the port-derived `RABBITMQ_NODENAME` must not leak into the mnesia
+    DATA path — `RABBITMQ_MNESIA_DIR` is a fixed path under `data_dir`, independent of port/node
+    name. R2, p6-review-r4: `RABBITMQ_MNESIA_BASE` stays set alongside it (rabbitmq derives OTHER
+    paths — e.g. `RABBITMQ_PLUGINS_EXPAND_DIR` — from the base, not the dir), so every path-valued
+    key the env names, `MNESIA_BASE` included, must still resolve under `data_dir`."""
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    env = pr.rabbitmq_daemon_env(data_dir=tmp_path, port=15003, credentials=creds)
+    assert env["RABBITMQ_MNESIA_DIR"] == str(tmp_path / "mnesia")
+    assert "15003" not in env["RABBITMQ_MNESIA_DIR"]  # not derived from the port/node name.
+    for key in ("RABBITMQ_MNESIA_DIR", "RABBITMQ_MNESIA_BASE", "RABBITMQ_LOG_BASE"):
+        assert Path(env[key]).is_relative_to(tmp_path), f"{key} escapes data_dir: {env[key]}"
+
+
+def test_rabbitmq_daemon_env_names_the_same_relative_mnesia_path_in_every_world(
+    tmp_path: Path,
+) -> None:
+    """Q2, p6-review-r3 (MAJOR): world 0's bootstrap and world 1's restored instance boot on
+    DIFFERENT ports (rabbitmq is never job-shared, §2b), yet both name `<their own data_dir>/
+    mnesia` for `RABBITMQ_MNESIA_DIR` — the port/node name no longer changes which relative path
+    the daemon looks under. This is necessary, not sufficient, for the copied baseline to actually
+    load past world 0 — see p6-review-r4 R1 (mnesia's on-disk schema is still node-name-bound)."""
+    manifest = _manifest_with_rabbitmq_store()
+    envs: list[dict[str, str]] = []
+
+    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+        envs.append(env)
+        return FakeHandle()
+
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, runner=runner, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    bootstrap_env = next(e for e in envs if "RABBITMQ_MNESIA_DIR" in e)
+
+    envs.clear()
+    pr._clone_or_reset_world(
+        manifest, 1, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+    )
+    world1_env = next(e for e in envs if "RABBITMQ_MNESIA_DIR" in e)
+
+    bootstrap_data_dir = tmp_path / "managed" / "queue"
+    world1_data_dir = tmp_path / "worlds" / "w1" / "queue"
+    assert bootstrap_env["RABBITMQ_MNESIA_DIR"] == str(bootstrap_data_dir / "mnesia")
+    assert world1_env["RABBITMQ_MNESIA_DIR"] == str(world1_data_dir / "mnesia")
+    # different ports still mean different node names (epmd registration) — only the DATA path,
+    # not the identity, had to stop depending on it.
+    assert world1_env["RABBITMQ_NODENAME"] != bootstrap_env["RABBITMQ_NODENAME"]
+
+
+# --- N7, p6-review-r2 (MAJOR): rabbitmq readiness must probe BOTH listeners -----------------------
+
+
+def test_wait_for_store_ready_probes_both_amqp_and_management_listeners_for_rabbitmq(
+    tmp_path: Path,
+) -> None:
+    """N7, p6-review-r2: the AMQP listener comes up during CORE boot; the management plugin's HTTP
+    listener comes up in the PLUGIN boot step that follows — the same B4 race, unfixed until now
+    for the one engine whose seed/sentinel/canary statements all travel over the listener that was
+    never probed."""
+    manifest = _manifest_with_rabbitmq_store()
+    process = next(p for p in manifest.processes if p.name == "queue")
+    probed: list[tuple[Any, int, str | None]] = []
+
+    def recording_prober(**kwargs: Any) -> bool:
+        probed.append((kwargs["protocol"], kwargs["port"], kwargs.get("path")))
+        return True
+
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, prober=recording_prober, work_directory=tmp_path,
+    )
+    port = ctx.port_plan.port_for("queue", 0)
+    pr._wait_for_store_ready(manifest, process, port=port, context=ctx)
+
+    seen = {(protocol, p) for protocol, p, _ in probed}
+    assert (pr.CapabilityProtocol.AMQP, port) in seen
+    management_port = pr._rabbitmq_management_port(port)
+    assert (CapabilityProtocol.HTTP, management_port) in seen
+    http_paths = [path for protocol, _, path in probed if protocol is CapabilityProtocol.HTTP]
+    assert "/api/overview" in http_paths
+
+
+# --- N11, p6-review-r2 (MAJOR): a dead job-shared engine must be respawned + every world resealed -
+
+
+def test_reset_respawns_a_dead_job_shared_engine_and_reseals_every_tracked_world(
+    tmp_path: Path,
+) -> None:
+    """N11, p6-review-r2 (MAJOR): a job-shared `template_database` engine (postgres, in
+    `_manifest()`) that dies mid-job used to be carried forward as if healthy — every subsequent
+    `reset()`/reconcile then raised `store_statement_failed` against a data directory sitting
+    right there on disk. Respawned from that surviving data directory, then EVERY world this
+    provider currently tracks (not just the one being reset) has its logical DB re-sealed from the
+    template — `reset()` is only called for world 0 here; world 1's own reseal can only have come
+    from the respawn's own multi-world loop.
+    """
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    sql_spy = SqlSpy()
+    provider = _sql_spy_provider(sql_runner=sql_spy, secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
+        require_declared_user=False,
+    ))
+    old_shared = provider._job_shared_handles["postgres"]
+    old_shared.handle.terminated = True  # simulate the shared postgres dying (e.g. OOM-killed).
+    sql_spy.calls.clear()
+
+    asyncio.run(provider.reset(runtimes[0], work_directory=tmp_path))
+
+    new_shared = provider._job_shared_handles["postgres"]
+    assert new_shared is not old_shared  # respawned, not silently reused dead.
+    statements = [statement for _, statement in sql_spy.calls]
+    assert 'CREATE DATABASE "w0" TEMPLATE "alk_baseline_postgres"' in statements
+    assert 'CREATE DATABASE "w1" TEMPLATE "alk_baseline_postgres"' in statements  # never the
+    # `reset()` TARGET — only reachable via the respawn's own reseal-every-tracked-world loop.
+    assert runtimes[0].state is pr.RuntimeState.READY
+
+
+def test_dead_job_shared_engine_respawn_failure_is_typed_naming_the_engine(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    old_shared = provider._job_shared_handles["postgres"]
+    old_shared.handle.terminated = True
+
+    def failing_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        raise OSError("no such device")
+
+    provider._context = dc_replace(provider._context, runner=failing_runner)
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.reset(runtimes[0], work_directory=tmp_path))
+    assert excinfo.value.code == "store_statement_failed"
+    assert excinfo.value.process == "postgres"
+
+
+# --- N12/N13, p6-review-r2 (MINOR): termination order, SIGINT for postgres, kill escalation -------
+
+
+def test_close_terminates_in_reverse_topological_order(tmp_path: Path) -> None:
+    """N12, p6-review-r2: dependency-first termination (`spawn_world`'s own insertion order) sends
+    SIGTERM to a per-world engine while its own dependents may still hold open connections,
+    guaranteeing the full escalation wait every time. Reversed so dependents (`agent`, `tools-api`)
+    are torn down BEFORE the engine they depend on (`postgres`)."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    terminate_order: list[str] = []
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        handle = FakeHandle()
+        name = Path(cwd).name
+
+        def recording_terminate(_name: str = name, _handle: FakeHandle = handle) -> None:
+            terminate_order.append(_name)
+            _handle.terminated = True
+
+        handle.terminate = recording_terminate  # type: ignore[method-assign]
+        return handle
+
+    provider = _sql_spy_provider(runner=runner, secrets_path=tmp_path / "secrets.json")
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    terminate_order.clear()
+    asyncio.run(provider.close(work_directory=tmp_path))
+    per_world_order = [name for name in terminate_order if name in ("tools-api", "agent")]
+    assert per_world_order == ["agent", "tools-api"]
+
+
+def test_close_prefers_sigint_over_sigterm_for_postgres(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    interrupted: list[str] = []
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        handle = FakeHandle()
+        name = Path(cwd).name
+
+        def recording_interrupt(_name: str = name, _handle: FakeHandle = handle) -> None:
+            interrupted.append(_name)
+            _handle.interrupted = True
+            _handle.terminated = True
+
+        handle.interrupt = recording_interrupt  # type: ignore[method-assign]
+        return handle
+
+    provider = _sql_spy_provider(runner=runner, secrets_path=tmp_path / "secrets.json")
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    asyncio.run(provider.close(work_directory=tmp_path))
+    assert "postgres" in interrupted  # SIGINT (fast shutdown), never SIGTERM, for postgres.
+
+
+def test_terminate_and_wait_escalates_to_kill_when_the_process_ignores_terminate() -> None:
+    """N13, p6-review-r2: `FakeHandle.wait` used to report the fake as exited the instant
+    `terminate()` was called, so no test ever reached the `kill()` branch — M7's escalation half
+    had zero coverage. A handle that ignores `terminate()`/`interrupt()` entirely (`wait()` only
+    reports exited once `kill()` has actually run) forces the real escalation path."""
+
+    class StubbornHandle:
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+
+        def is_running(self) -> bool:
+            return not self.killed
+
+        def captured_output(self) -> str:
+            return ""
+
+        def terminate(self) -> None:
+            self.terminated = True  # acknowledges the signal but does NOT actually exit.
+
+        def interrupt(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: float) -> bool:
+            return self.killed
+
+        def kill(self) -> None:
+            self.killed = True
+
+    handle = StubbornHandle()
+    pr._terminate_and_wait(handle, timeout=0.01)
+    assert handle.terminated is True
+    assert handle.killed is True  # escalation actually happened.
+    assert handle.is_running() is False  # reaped.
+
+
+def test_terminate_and_wait_logs_when_the_process_survives_even_kill(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """N13, p6-review-r2: the post-`kill()` `wait()` return used to be discarded — a child that
+    STILL had not exited after SIGKILL (a wedged kernel wait, nothing left to escalate to) left no
+    trace anywhere. Now logged."""
+
+    class UnkillableHandle:
+        def is_running(self) -> bool:
+            return True
+
+        def captured_output(self) -> str:
+            return ""
+
+        def terminate(self) -> None:
+            pass
+
+        def interrupt(self) -> None:
+            pass
+
+        def wait(self, timeout: float) -> bool:
+            return False  # never reports exited, even after kill() below.
+
+        def kill(self) -> None:
+            pass
+
+    with caplog.at_level("WARNING", logger="fi.alk.harness.process_runtime"):
+        pr._terminate_and_wait(UnkillableHandle(), timeout=0.01)
+    assert any("did not exit even after kill" in record.message for record in caplog.records)
+
+
+# --- N14, p6-review-r2 (MINOR): chmod before chown -------------------------------------------------
+
+
+def test_spawn_managed_process_chmods_before_chowning_the_data_dir(tmp_path: Path) -> None:
+    """N14, p6-review-r2: `chmod` after `chown` cannot succeed once ownership has moved — `svc-
+    control` still owns `data_dir` at chmod time and it is free; after chown, a non-root `svc-
+    control` that can chown but not re-chmod a path it no longer owns would raise
+    `PermissionError`. Pinned by recording the directory's OWN mode at the moment `chown` fires."""
+    manifest = _manifest()
+    postgres = manifest.processes[0]
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    data_dir = tmp_path / "pg"
+    mode_at_chown_time: list[int] = []
+
+    def recording_chown(path: Path, uid: int, gid: int) -> None:
+        if path == data_dir:
+            mode_at_chown_time.append(data_dir.stat().st_mode & 0o777)
+
+    pr.spawn_managed_process(
+        postgres, port=14000, data_dir=data_dir, credentials=creds,
+        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+        user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
+        chown=recording_chown,
+    )
+    assert mode_at_chown_time == [0o700]
+
+
+# --- N16, p6-review-r2 (MINOR): terminate backends before dropping a world's shared logical DB ----
+
+
+def test_drop_world_shared_databases_terminates_backends_before_dropping(tmp_path: Path) -> None:
+    """N16, p6-review-r2: mirrors `_reset_template_database`'s own sibling call — a lingering
+    backend connection on the world's logical DB otherwise blocks this DROP exactly the way it
+    would block a reuse-time one, silently re-opening the space leak m4 closed."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    sql_spy = SqlSpy()
+    provider = _sql_spy_provider(sql_runner=sql_spy, secrets_path=tmp_path / "secrets.json")
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
+        require_declared_user=False,
+    ))
+    sql_spy.calls.clear()
+    provider._drop_world_shared_databases(1)
+    statements = [statement for _, statement in sql_spy.calls]
+    assert len(statements) == 2
+    assert statements[0].startswith("SELECT pg_terminate_backend")
+    assert statements[1] == 'DROP DATABASE IF EXISTS "w1"'
+
+
+# --- healthy() port method (task 2c) ---------------------------------------------------------------
+
+
+def test_provider_healthy_port_never_promotes_from_preparing_or_unhealthy(tmp_path: Path) -> None:
+    """Task 2c / p6-review-r2: unlike the module-level `healthy()`, the PORT method must never
+    promote from ANY state — not even `preparing`, which only `provision()`'s own poll (N2)
+    promotes out of."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    runtime = runtimes[0]
+
+    runtime.state = pr.RuntimeState.PREPARING
+    ok = asyncio.run(provider.healthy(runtime, work_directory=tmp_path))
+    assert ok is True
+    assert runtime.state is pr.RuntimeState.PREPARING  # never promoted, even on a pass.
+
+    runtime.state = pr.RuntimeState.UNHEALTHY
+    ok = asyncio.run(provider.healthy(runtime, work_directory=tmp_path))
+    assert ok is True
+    assert runtime.state is pr.RuntimeState.UNHEALTHY  # still never promoted.
+
+
+def test_provider_healthy_port_demotes_ready_to_unhealthy_on_a_failing_probe(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    runtime = runtimes[0]
+    assert runtime.state is pr.RuntimeState.READY
+
+    provider._prober = lambda **kwargs: False
+    ok = asyncio.run(provider.healthy(runtime, work_directory=tmp_path))
+    assert ok is False
+    assert runtime.state is pr.RuntimeState.UNHEALTHY
+
+
+def test_provider_healthy_port_demotes_both_the_providers_record_and_the_callers_object(
+    tmp_path: Path,
+) -> None:
+    """After N1 these are the SAME object, but the port method must not silently rely on that —
+    pinned by checking both references independently."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    runtime = runtimes[0]
+    provider._prober = lambda **kwargs: False
+    asyncio.run(provider.healthy(runtime, work_directory=tmp_path))
+    assert runtime.state is pr.RuntimeState.UNHEALTHY
+    assert provider._runtimes[0].state is pr.RuntimeState.UNHEALTHY
+    assert provider._runtimes[0] is runtime  # N1: one object per world for the provider's life.
+
+
+def test_provider_healthy_port_raises_typed_before_provision(tmp_path: Path) -> None:
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    fake_runtime = pr.EnvironmentRuntime(
+        runtime_id="x", world_index=0, bundle_digest="sha256:" + "0" * 64,
+        state=pr.RuntimeState.PREPARING,
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.healthy(fake_runtime, work_directory=tmp_path))
+    assert excinfo.value.code == "internal_invariant_violated"

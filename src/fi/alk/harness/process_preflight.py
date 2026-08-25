@@ -1,4 +1,4 @@
-"""The §2e pre-provision checklist — `hosted-execution-seams.md` v1.8 — as a single gate the
+"""The §2e pre-provision checklist — `hosted-execution-seams.md` v1.9 — as a single gate the
 in-sandbox provisioner runs before starting anything.
 
 `bundle_v2.py` validates everything decidable from the manifest's own field values alone; this
@@ -52,14 +52,12 @@ _SECRET_PURPOSE_VALUES = {member.value for member in SecretPurpose}
 class PreflightError(RuntimeError):
     """A §2e checklist rule rejected the bundle.
 
-    ``code`` is one of §2e's failure-code table (v1.8): "contract-rule" codes, each named by a
+    ``code`` is one of §2e's failure-code table (v1.9): "contract-rule" codes, each named by a
     numbered checklist item's prose, and "mechanical" codes for plumbing failures the contract
     describes but does not formalize as a rule (a missing bundle file, an out-of-range
-    ``parallelism``). Every code this module raises is in that table, with one open exception:
-    ``fixed_port_reserved`` (F11, p5-round1-review) has no §2e entry yet — the collision it
-    guards against is real (a `fixed_port` aliasing the provisioner's own port-formula bands) but
-    the frozen v1.8 table predates the rule; flagged for the owner to add in the next amendment,
-    not silently worked around.
+    ``parallelism``). Every code this module raises is in that table — including
+    ``fixed_port_reserved`` (F11, p5-round1-review; added to the table by v1.9), which guards
+    against a `fixed_port` aliasing the provisioner's own port-formula bands.
     """
 
     def __init__(self, code: str, message: str) -> None:

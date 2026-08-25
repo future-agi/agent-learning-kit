@@ -1,5 +1,5 @@
 """`futureagi.environment-bundle.v2` — the hosted provisioner's manifest shape (`hosted-execution-
-seams.md` v1.8).
+seams.md` v1.9).
 
 v1 (`bundle.py`) describes a `command`-per-service compose world and embeds the repository
 source. v2 describes `/work/source` as already present and a job that starts plain processes on

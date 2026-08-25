@@ -130,7 +130,7 @@ def run_world_check(
         return Outcome(
             name,
             False,
-            f"the check raised {type(failed).__name__}: {failed}",
+            f"the check raised {type(failed).__name__}: {str(failed)[:200]}",
             broken=True,
         )
     return Outcome(name, said is None, "" if said is None else str(said))

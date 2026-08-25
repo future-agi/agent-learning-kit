@@ -1,4 +1,4 @@
-"""The §2e pre-provision checklist (`process_preflight.py`), per `hosted-execution-seams.md` v1.8.
+"""The §2e pre-provision checklist (`process_preflight.py`), per `hosted-execution-seams.md` v1.9.
 
 Every checklist item gets at least one rejection test carrying its named code, plus one clean
 accept-lane run of the full checklist. Bundles are built as real directories under `tmp_path` with
@@ -495,9 +495,8 @@ def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(
     """F11, p5-round1-review: `fixed_port` forces effective parallelism to 1, but the literal
     value was never checked against the provisioner's own port-formula bands — a bundle declaring
     `fixed_port: 14000` collides with a job-shared engine at ordinal 0, and the failure mode is an
-    opaque bind error inside a customer process, not a bundle rejection. `fixed_port_reserved` has
-    no §2e table entry yet (flagged for the owner in `PreflightError`'s own docstring) — the
-    S3 containment test below carries the same flag."""
+    opaque bind error inside a customer process, not a bundle rejection. `fixed_port_reserved` is
+    in §2e's closed failure-code table as of v1.9."""
 
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["fixed_port"] = colliding_port
@@ -878,16 +877,9 @@ def _raised_codes(source_text: str, callee_name: str, *, whole_first_argument: b
     return codes
 
 
-# §2e's closed failure-code table (v1.8), transcribed verbatim — the single source of truth every
+# §2e's closed failure-code table (v1.9), transcribed verbatim — the single source of truth every
 # raised code is checked against. Split exactly as the contract text splits it, purely for
 # reviewability against the spec; the test below treats it as one flat set.
-#
-# `fixed_port_reserved` (F11, p5-round1-review) is the one entry NOT actually in the frozen v1.8
-# table — flagged identically in `PreflightError`'s own docstring. The rule it guards (a
-# `fixed_port` aliasing the provisioner's own port-formula bands) is real; the table predates it.
-# Recorded here, transcribed alongside the real entries rather than hidden in a second set, so
-# this test still does its job for every OTHER code — the one exception is a known, owner-facing
-# gap, not silent drift.
 _SECTION_2E_CONTRACT_RULE_CODES = frozenset({
     "compose_not_hosted", "engine_unsupported", "no_sql_store", "seed_missing",
     "seed_strategy_unsupported", "sentinel_shape_mismatch", "store_protocol_unsupported",
@@ -898,7 +890,7 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset({
     "configuration_name_reserved", "sentinel_shape_invalid", "capability_unresolved",
     "service_unresolved", "control_service_unresolved", "process_name_duplicate",
     "inputs_digest_mismatch",
-    "fixed_port_reserved",  # NOT in the frozen v1.8 table yet — see the note above.
+    "fixed_port_reserved",  # §2e, v1.9.
 })
 _SECTION_2E_MECHANICAL_CODES = frozenset({
     "bundle_schema_unsupported", "bundle_manifest_invalid", "bundle_manifest_drifted",
@@ -988,19 +980,35 @@ def _raised_codes_at_index(source_text: str, callee_name: str, *, index: int) ->
     return codes
 
 
-# §2f's closed table (v1.8), transcribed verbatim.
+# §2f's closed table (v1.8), transcribed verbatim, plus v1.10's two additions below.
 _SECTION_2F_CODES = frozenset({
     "source_tree_unavailable", "build_failed", "runtime_unsupported", "spawn_failed",
     "depends_on_timeout", "unsupported_capability_protocol",
+    # `seed_failed` (v1.10, §2f): a §2c migration/seed step exited nonzero against the freshly
+    # started store — customer-authored content, deterministic, `environment` domain (never
+    # retried). Landed in the frozen table this version; no longer an out-of-vocabulary flag.
+    "seed_failed",
+    # `store_statement_failed` (v1.10, §2f): a managed store errored or rejected a provisioner-
+    # ISSUED statement (CREATE/DROP/ALTER DATABASE, sentinel or canary probe) after passing
+    # readiness — the harness's own statements, so a deterministic failure here is a harness/
+    # engine fault, `infrastructure` domain (retryable), never `seed_failed` (that code is
+    # reserved for the customer's own migration/seed content).
+    "store_statement_failed",
 })
 # `ProcessRuntimeError` also raises codes that are deliberately INTERNAL-only — each marks a
 # precondition `preflight_bundle` should already have made impossible (a placeholder token or a
 # missing credential preflight itself should have caught), so by the module's own docstring these
 # "never cross the outbound seam directly" and have no §2f entry to begin with. Excluded from
 # CONTAINMENT, not from extraction — a genuinely new internal code still surfaces in the raised
-# set for a human to classify, since only these two documented names are exempted.
+# set for a human to classify, since only these documented names are exempted.
 _INTERNAL_ONLY_RUNTIME_CODES = frozenset({
     "internal_unknown_placeholder", "internal_missing_credentials",
+    # Phase 6: marks a bundle-shape/state invariant an earlier layer (the model layer, or this
+    # module's own baseline-freeze-before-clone ordering) should already guarantee — e.g.
+    # `reset()` called before `provision()`, or a store's backing service turning out not to be a
+    # `ManagedProcess` despite `bundle_v2`'s `store_service_not_managed` check. A bug to fix here,
+    # never a bundle defect the outbound seam needs a name for — same status as the other two.
+    "internal_invariant_violated",
 })
 
 
