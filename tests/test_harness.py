@@ -173,9 +173,7 @@ services:
             return json.dumps(config)
         if arguments and arguments[0] == "port":
             return (
-                "127.0.0.1:42123"
-                if arguments[1] == "tools-api"
-                else "127.0.0.1:42122"
+                "127.0.0.1:42123" if arguments[1] == "tools-api" else "127.0.0.1:42122"
             )
         return ""
 
@@ -968,9 +966,7 @@ def test_stop_never_removes_an_attached_or_non_harness_network(monkeypatch):
     monkeypatch.setattr(provisioning, "_docker", docker)
 
     assert not provisioning._remove_empty_project_default_network("futureagi")
-    assert not provisioning._remove_empty_project_default_network(
-        "fagi-harness-active"
-    )
+    assert not provisioning._remove_empty_project_default_network("fagi-harness-active")
     assert removed == []
 
 
@@ -6107,9 +6103,10 @@ def _reported_result(**over):
             Checkpoint(name="user_authenticated", kind="code", passed=True),
             Checkpoint(
                 name="confirmation_obtained",
-                kind="judged",
+                kind="eval",
                 passed=False,
                 detail="never asked",
+                by="support-agent-confirmation_obtained (turing_large)",
             ),
         ],
     )
@@ -6161,6 +6158,10 @@ def test_sub_goals_travel_named_so_a_page_can_show_one_per_column():
     assert payload["call_metadata"]["harness_of"] == 2
     assert "evaluations" not in payload
     assert payload["call_metadata"]["harness_evaluations"]
+    assert (
+        payload["call_metadata"]["harness_evaluations"][1]["platform_template"]
+        == "support-agent-confirmation_obtained"
+    )
     assert payload["result_digest"].startswith("sha256:")
     assert (
         platform.result_of(_reported_result())["result_digest"]

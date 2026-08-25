@@ -148,9 +148,15 @@ class Platform:
         )
 
     def start(
-        self, run_test_id: str, scenario_ids: list[str] | None = None
+        self,
+        run_test_id: str,
+        scenario_ids: list[str] | None = None,
+        *,
+        harness_job_id: str = "",
     ) -> dict[str, Any]:
         payload = {"scenario_ids": scenario_ids} if scenario_ids else {}
+        if harness_job_id:
+            payload["harness_job_id"] = harness_job_id
         return self._call(f"/run-tests/{run_test_id}/test-executions/", payload)
 
     def batch(self, test_execution_id: str, count: int) -> dict[str, Any]:
@@ -292,12 +298,20 @@ def evaluations_of(result: Any) -> list[dict[str, Any]]:
     """
     judged: list[dict[str, Any]] = []
     for check in getattr(result, "checkpoints", None) or []:
+        decided_by = str(getattr(check, "by", "") or "")
+        # Platform-backed judgements carry ``<template name> (<model>)`` in
+        # ``by``. Keep the exact template name on the wire so ingestion can
+        # attach the already-computed result to that template/config instead of
+        # merely leaving a second, disconnected EvalTemplate in the library.
+        platform_template = decided_by.rsplit(" (", 1)[0] if decided_by else ""
         judged.append(
             {
                 "name": getattr(check, "name", ""),
                 "kind": getattr(check, "kind", "") or "checkpoint",
                 "passed": bool(getattr(check, "passed", False)),
                 "reason": str(getattr(check, "detail", ""))[:2000],
+                "decided_by": decided_by[:2000],
+                "platform_template": platform_template[:2000],
             }
         )
     for metric in (getattr(result, "measured", None) or {}).get("metrics") or []:
@@ -431,7 +445,18 @@ def begin(
     if not reported.run_test_id:
         raise PlatformError("the platform returned no run test to report against")
 
-    started = api.start(reported.run_test_id, provisioned_scenario_ids)
+    harness_job_id = os.getenv("ALK_HARNESS_JOB_ID", "").strip()
+    if harness_job_id:
+        started = api.start(
+            reported.run_test_id,
+            provisioned_scenario_ids,
+            harness_job_id=harness_job_id,
+        )
+    else:
+        # Keep the long-standing Platform-compatible call shape for local SDK and
+        # third-party implementations. The hosted ownership reference is additive
+        # and only exists inside a sandbox worker.
+        started = api.start(reported.run_test_id, provisioned_scenario_ids)
     reported.test_execution_id = str(started.get("test_execution_id", ""))
     if not reported.test_execution_id:
         raise PlatformError("the platform returned no test execution for this run")
