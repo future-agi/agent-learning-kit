@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import re
 import shutil
 import signal
 import sys
+import time
 from typing import Any
 import uuid
 
@@ -56,6 +58,9 @@ from .job import (
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import resolve_worker_secrets, worker_environment
+
+
+_CONTROLLER_TOKEN = uuid.uuid4().hex
 
 
 class LocalSandboxRequest(BaseModel):
@@ -146,6 +151,7 @@ class SandboxJobResponse(BaseModel):
     job: HarnessJob
     status: HarnessJobStatus
     events: list[dict[str, Any]] = Field(default_factory=list)
+    stage_outputs: list[dict[str, Any]] = Field(default_factory=list)
     artifact_path: str | None = None
     credentials: CredentialManifest | None = None
 
@@ -157,6 +163,14 @@ class UploadedSourceResponse(BaseModel):
     total_bytes: int
 
 
+class UploadedSecretFileResponse(BaseModel):
+    """Opaque handle for a file that is materialized only at the worker boundary."""
+
+    environment_name: str
+    secret_ref: SecretRef
+    size: int
+
+
 class LocalSandbox:
     def __init__(
         self,
@@ -164,6 +178,7 @@ class LocalSandbox:
         *,
         max_concurrency: int = 2,
         upload_root: Path | None = None,
+        secret_file_root: Path | None = None,
     ) -> None:
         self.root = root.expanduser().resolve()
         self.jobs_root = self.root / "jobs"
@@ -181,13 +196,151 @@ class LocalSandbox:
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
         self.uploads_root.mkdir(parents=True, exist_ok=True)
+        self.secret_files_root = (
+            (
+                secret_file_root
+                or Path(
+                    os.getenv(
+                        "ALK_SANDBOX_SECRET_FILE_ROOT",
+                        str(self.root / "secret-files"),
+                    )
+                )
+            )
+            .expanduser()
+            .resolve()
+        )
+        # A sandbox-service restart orphans every in-flight worker. Secret files therefore have
+        # no legitimate consumer after restart and must fail closed instead of lingering on disk.
+        shutil.rmtree(self.secret_files_root, ignore_errors=True)
+        (self.secret_files_root / "pending").mkdir(parents=True, mode=0o700)
+        (self.secret_files_root / "jobs").mkdir(parents=True, mode=0o700)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         # Values supplied through the platform's .env flow live only for the lifetime of the
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
         self._ephemeral_secrets: dict[str, dict[str, str]] = {}
+        self._ephemeral_secret_file_names: dict[str, set[str]] = {}
         self._recover_orphans()
+
+    async def upload_secret_file(
+        self, uploaded: UploadFile, environment_name: str
+    ) -> UploadedSecretFileResponse:
+        """Stage one credential file and return a bearer-style opaque reference.
+
+        Contents never enter a request JSON, job, bundle, event, log or artifact. The upload is
+        claimed by exactly one job and removed at that job's terminal boundary.
+        """
+        name = str(environment_name).strip()
+        if not _ENVIRONMENT_NAME.fullmatch(name):
+            raise HTTPException(status_code=400, detail="environment_name is invalid")
+        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
+            raise HTTPException(status_code=400, detail="environment_name is reserved")
+        self._purge_stale_secret_files()
+        identifier = str(uuid.uuid4())
+        name_digest = hashlib.sha256(name.encode()).hexdigest()[:12].upper()
+        internal_key = (
+            f"ALK_SECRET_FILE_{identifier.replace('-', '').upper()}_{name_digest}"
+        )
+        destination = self.secret_files_root / "pending" / identifier
+        total = 0
+        try:
+            with destination.open("xb") as handle:
+                while chunk := await uploaded.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > 5 * 1024 * 1024:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="credential file may not exceed 5 MiB",
+                        )
+                    handle.write(chunk)
+            destination.chmod(0o600)
+            if total == 0:
+                raise HTTPException(status_code=400, detail="credential file is empty")
+            if name == "GOOGLE_APPLICATION_CREDENTIALS":
+                try:
+                    document = json.loads(destination.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Google application credentials must be a valid JSON object",
+                    ) from exc
+                if not isinstance(document, dict) or not document:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Google application credentials must be a valid JSON object",
+                    )
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+        return UploadedSecretFileResponse(
+            environment_name=name,
+            secret_ref=SecretRef(
+                manager="mounted",
+                key=internal_key,
+                purpose=f"job-scoped credential file for {name}",
+            ),
+            size=total,
+        )
+
+    def _claim_secret_files(
+        self, job_id: str, references: dict[str, SecretRef]
+    ) -> tuple[dict[str, str], set[str]]:
+        """Atomically move provider uploads into one job-private directory."""
+        self._purge_stale_secret_files()
+        candidates: list[tuple[str, str, Path]] = []
+        for environment_name, reference in references.items():
+            if reference.manager != "mounted" or not reference.key.startswith(
+                "ALK_SECRET_FILE_"
+            ):
+                continue
+            suffix = reference.key.removeprefix("ALK_SECRET_FILE_")
+            match = re.fullmatch(r"([0-9A-F]{32})_([0-9A-F]{12})", suffix)
+            expected_digest = (
+                hashlib.sha256(environment_name.encode()).hexdigest()[:12].upper()
+            )
+            if match is None or match.group(2) != expected_digest:
+                raise HTTPException(
+                    status_code=400, detail="secret_file_reference_invalid"
+                )
+            identifier = str(uuid.UUID(hex=match.group(1).lower()))
+            source = self.secret_files_root / "pending" / identifier
+            if not source.is_file():
+                raise HTTPException(
+                    status_code=400,
+                    detail="secret_file_reference_unavailable_or_consumed",
+                )
+            candidates.append((environment_name, reference.key, source))
+        if not candidates:
+            return {}, set()
+        job_root = self.secret_files_root / "jobs" / job_id
+        job_root.mkdir(mode=0o700)
+        claimed: dict[str, str] = {}
+        names: set[str] = set()
+        try:
+            for environment_name, internal_key, source in candidates:
+                target = job_root / environment_name
+                source.replace(target)
+                target.chmod(0o400)
+                claimed[internal_key] = str(target)
+                names.add(environment_name)
+        except Exception:
+            shutil.rmtree(job_root, ignore_errors=True)
+            raise
+        return claimed, names
+
+    def _delete_job_secret_files(self, job_id: str) -> None:
+        shutil.rmtree(self.secret_files_root / "jobs" / job_id, ignore_errors=True)
+
+    def _purge_stale_secret_files(self) -> None:
+        ttl = max(60, int(os.getenv("ALK_SECRET_FILE_TTL_SECONDS", "900")))
+        cutoff = time.time() - ttl
+        for path in (self.secret_files_root / "pending").iterdir():
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except FileNotFoundError:
+                continue
 
     async def upload_source(
         self, files: list[UploadFile], paths: list[str], name: str
@@ -270,6 +423,20 @@ class LocalSandbox:
         for path in self.jobs_root.glob("*/state.json"):
             state = _read_json(path)
             if state.get("stage") not in _TERMINAL_STAGES:
+                controller_pid = int(state.get("controller_pid", 0) or 0)
+                controller_identity = str(state.get("controller_identity") or "")
+                controller_token = str(state.get("controller_token") or "")
+                if (
+                    controller_pid == os.getpid()
+                    and controller_token == _CONTROLLER_TOKEN
+                ) or (
+                    controller_pid > 0
+                    and controller_identity
+                    and _process_identity(controller_pid) == controller_identity
+                ):
+                    # Another app object or health process may inspect the same provider root.
+                    # It must not declare a job orphaned while the owning controller still exists.
+                    continue
                 state.update(
                     stage=HarnessStage.FAILED.value,
                     detail="sandbox service restarted while the job was running",
@@ -303,76 +470,97 @@ class LocalSandbox:
                 purpose=f"job-scoped environment value for {name}",
             )
             mounted_values[internal_key] = value.get_secret_value()
-        source_spec = (
-            RepositorySource(
-                kind=SourceKind.ARCHIVE,
-                archive_artifact_id=request.source_id,
-            )
-            if request.source_id
-            else RepositorySource(
-                kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
-            )
-            if source
-            else RepositorySource(
-                kind=SourceKind.GITHUB,
-                repository=github_repository,
-                ref=(github_location.ref if github_location else None)
-                or request.github_ref,
-                commit_sha=request.github_commit_sha,
-                visibility=request.github_visibility,
-                installation_id=request.github_installation_id,
-            )
+        claimed_files, secret_file_names = self._claim_secret_files(
+            identifier, request.secret_refs
         )
-        job = HarnessJob(
-            job_id=identifier,
-            run_id=run_id,
-            execution=(
-                ExecutionMode.HOSTED
-                if request.source_id or request.github_repository
-                else ExecutionMode.LOCAL
-            ),
-            source=source_spec,
-            agent=AgentConnection(
-                connector=request.connector,
-                config=request.connector_config,
-                secret_refs={**request.secret_refs, **mounted_refs},
-            ),
-            scenario_count=request.scenario_count,
-            seed=request.seed,
-            artifacts=HarnessArtifactPolicy(level="full", allow_bundle_download=True),
-            platform_run_id=request.platform_run_id,
-            metadata={
-                **request.metadata,
-                "agent_name": request.agent_name
-                or (
-                    _uploaded_source_name(source)
-                    if request.source_id and source
-                    else source.name
-                    if source
-                    else str(github_repository).split("/")[-1]
+        mounted_values.update(claimed_files)
+        try:
+            source_spec = (
+                RepositorySource(
+                    kind=SourceKind.ARCHIVE,
+                    archive_artifact_id=request.source_id,
+                )
+                if request.source_id
+                else RepositorySource(
+                    kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
+                )
+                if source
+                else RepositorySource(
+                    kind=SourceKind.GITHUB,
+                    repository=github_repository,
+                    ref=(github_location.ref if github_location else None)
+                    or request.github_ref,
+                    commit_sha=request.github_commit_sha,
+                    visibility=request.github_visibility,
+                    installation_id=request.github_installation_id,
+                )
+            )
+            job = HarnessJob(
+                job_id=identifier,
+                run_id=run_id,
+                execution=(
+                    ExecutionMode.HOSTED
+                    if request.source_id or request.github_repository
+                    else ExecutionMode.LOCAL
                 ),
-                "source_kind": source_spec.kind.value,
-                "environment_value_names": sorted(mounted_refs),
-            },
-        )
-        directory = self.jobs_root / identifier
-        directory.mkdir()
-        _write_json(directory / "job.json", job.model_dump(mode="json"))
-        _write_json(
-            directory / "state.json",
-            {
-                "job_id": identifier,
-                "run_id": run_id,
-                "stage": HarnessStage.QUEUED.value,
-                "updated_at": _now(),
-                "detail": "waiting for a local sandbox slot",
-                "completed_scenarios": 0,
-                "total_scenarios": request.scenario_count,
-                "attempt": 1,
-            },
-        )
+                source=source_spec,
+                agent=AgentConnection(
+                    connector=request.connector,
+                    config=request.connector_config,
+                    secret_refs={**request.secret_refs, **mounted_refs},
+                ),
+                scenario_count=request.scenario_count,
+                seed=request.seed,
+                artifacts=HarnessArtifactPolicy(
+                    level="full", allow_bundle_download=True
+                ),
+                platform_run_id=request.platform_run_id,
+                metadata={
+                    **request.metadata,
+                    "agent_name": request.agent_name
+                    or (
+                        _uploaded_source_name(source)
+                        if request.source_id and source
+                        else source.name
+                        if source
+                        else str(github_repository).split("/")[-1]
+                    ),
+                    "source_kind": source_spec.kind.value,
+                    # Both dotenv values and credential-file paths are runtime configuration. Only
+                    # their names are persisted; values and provider-local paths remain ephemeral.
+                    "environment_value_names": sorted(
+                        {*mounted_refs, *secret_file_names}
+                    ),
+                    "secret_file_names": sorted(secret_file_names),
+                },
+            )
+            directory = self.jobs_root / identifier
+            directory.mkdir()
+            _write_json(directory / "job.json", job.model_dump(mode="json"))
+            _write_json(
+                directory / "state.json",
+                {
+                    "job_id": identifier,
+                    "run_id": run_id,
+                    "stage": HarnessStage.QUEUED.value,
+                    "updated_at": _now(),
+                    "detail": "waiting for a local sandbox slot",
+                    "completed_scenarios": 0,
+                    "total_scenarios": request.scenario_count,
+                    "attempt": 1,
+                    "controller_pid": os.getpid(),
+                    "controller_identity": _process_identity(os.getpid()),
+                    "controller_token": _CONTROLLER_TOKEN,
+                },
+            )
+        except Exception:
+            self._delete_job_secret_files(identifier)
+            shutil.rmtree(self.jobs_root / identifier, ignore_errors=True)
+            raise
         if mounted_values:
             self._ephemeral_secrets[identifier] = mounted_values
+        if secret_file_names:
+            self._ephemeral_secret_file_names[identifier] = secret_file_names
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
@@ -403,9 +591,20 @@ class LocalSandbox:
             name: value.get_secret_value()
             for name, value in request.environment_values.items()
         }
-        resolved = resolve_worker_secrets(request.secret_refs, environment=os.environ)
+        claimed_files, secret_file_names = self._claim_secret_files(
+            job_id, request.secret_refs
+        )
+        try:
+            resolved = resolve_worker_secrets(
+                request.secret_refs,
+                environment={**os.environ, **claimed_files},
+            )
+        except Exception:
+            self._delete_job_secret_files(job_id)
+            raise
         runtime_configuration.update(resolved)
         self._ephemeral_secrets[job_id] = dict(runtime_configuration)
+        self._ephemeral_secret_file_names[job_id] = secret_file_names
 
         state_path = self.jobs_root / job_id / "state.json"
         state = _read_json(state_path)
@@ -433,6 +632,13 @@ class LocalSandbox:
         directory = self.jobs_root / job.job_id
         state_path = directory / "state.json"
         output = self.artifacts_root / job.run_id
+        # The local runner controls a host Docker daemon. Paths in Compose bind mounts are
+        # therefore resolved by that daemon, not inside this service container. Artifacts live
+        # on the runner's private volume, so replaying a bundle directly from ``output`` makes
+        # repository seed/config files invisible to Docker. Materialize a disposable copy in
+        # the provider's Docker-visible upload workspace. Hosted providers must offer the same
+        # workspace guarantee even when their implementation is not a nested Docker daemon.
+        replay_root = self.uploads_root / ".reruns" / job.job_id
         async with self._semaphore:
             state = _read_json(state_path)
             if state.get("stage") == HarnessStage.CANCELED.value:
@@ -445,6 +651,9 @@ class LocalSandbox:
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
             try:
+                shutil.rmtree(replay_root, ignore_errors=True)
+                replay_root.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(output / "environment-bundle", replay_root)
                 runtime_configuration = self._ephemeral_secrets.get(job.job_id, {})
                 child_environment = worker_environment(
                     {}, runtime_configuration=runtime_configuration
@@ -452,7 +661,14 @@ class LocalSandbox:
                 child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                     sorted(runtime_configuration)
                 )
+                child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
+                    sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
+                )
+                child_environment["ALK_HOSTED_EXECUTION"] = (
+                    "1" if job.execution is ExecutionMode.HOSTED else "0"
+                )
                 child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
+
                 async def run_stage(command: list[str]) -> int:
                     process = await asyncio.create_subprocess_exec(
                         *command,
@@ -471,7 +687,7 @@ class LocalSandbox:
                     "environment",
                     "up",
                     "--bundle",
-                    str(output / "environment-bundle"),
+                    str(replay_root),
                     "--out",
                     str(output),
                 ]
@@ -517,6 +733,13 @@ class LocalSandbox:
                     if cleanup_code != 0
                     else "simulation"
                 )
+                failure_stage = (
+                    HarnessStage.BUILDING_ENVIRONMENT.value
+                    if up_code != 0
+                    else HarnessStage.CLEANING_UP.value
+                    if cleanup_code != 0
+                    else HarnessStage.RUNNING.value
+                )
                 return_code = (
                     up_code
                     if up_code != 0
@@ -544,7 +767,7 @@ class LocalSandbox:
                         if successful_execution
                         else {
                             "domain": "environment",
-                            "stage": failed_stage,
+                            "stage": failure_stage,
                             "code": "saved_session_rerun_failed",
                             "message": f"{failed_stage} exited {return_code}",
                             "retryable": False,
@@ -572,6 +795,9 @@ class LocalSandbox:
                 self._processes.pop(job.job_id, None)
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
+                self._ephemeral_secret_file_names.pop(job.job_id, None)
+                self._delete_job_secret_files(job.job_id)
+                shutil.rmtree(replay_root, ignore_errors=True)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
         if request.source_path or request.source_id:
@@ -807,6 +1033,12 @@ class LocalSandbox:
                     child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                         sorted(runtime_configuration)
                     )
+                    child_environment["ALK_RUNTIME_SECRET_FILE_NAMES"] = ",".join(
+                        sorted(self._ephemeral_secret_file_names.get(job.job_id, set()))
+                    )
+                    child_environment["ALK_HOSTED_EXECUTION"] = (
+                        "1" if job.execution is ExecutionMode.HOSTED else "0"
+                    )
                     child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
                     process = await asyncio.create_subprocess_exec(
                         sys.executable,
@@ -910,6 +1142,8 @@ class LocalSandbox:
                 self._processes.pop(job.job_id, None)
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
+                self._ephemeral_secret_file_names.pop(job.job_id, None)
+                self._delete_job_secret_files(job.job_id)
 
     def get(self, job_id: str) -> SandboxJobResponse:
         directory = self.jobs_root / job_id
@@ -980,13 +1214,23 @@ class LocalSandbox:
                     raw_state.get("total_scenarios", job.scenario_count),
                     max(completed_scenarios, committed),
                 )
+        failure = raw_state.get("failure")
+        if isinstance(failure, dict):
+            legacy_stage = str(failure.get("stage") or "")
+            normalized_stage = {
+                "environment_up": HarnessStage.BUILDING_ENVIRONMENT.value,
+                "environment_down": HarnessStage.CLEANING_UP.value,
+                "simulation": HarnessStage.RUNNING.value,
+            }.get(legacy_stage)
+            if normalized_stage:
+                failure = {**failure, "stage": normalized_stage}
         status_value = HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
             stage=stage,
             updated_at=updated_at,
             detail=detail,
-            failure=raw_state.get("failure"),
+            failure=failure,
             completed_scenarios=completed_scenarios,
             total_scenarios=raw_state.get("total_scenarios", job.scenario_count),
             attempt=raw_state.get("attempt", 1),
@@ -995,6 +1239,7 @@ class LocalSandbox:
             job=job,
             status=status_value,
             events=events,
+            stage_outputs=_stage_outputs(self.artifacts_root / job.run_id),
             artifact_path=str(self.artifacts_root / job.run_id),
             credentials=(
                 CredentialManifest.model_validate(
@@ -1057,6 +1302,8 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
         self._ephemeral_secrets.pop(job_id, None)
+        self._ephemeral_secret_file_names.pop(job_id, None)
+        self._delete_job_secret_files(job_id)
         return self.get(job_id)
 
 
@@ -1247,11 +1494,134 @@ def _stage_from_events(events: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _process_identity(pid: int) -> str:
+    """Return a PID-reuse-safe Linux process identity for orphan ownership."""
+    try:
+        # Field 22 is process start time in clock ticks since boot. ``comm`` may contain spaces,
+        # so split only after the final closing parenthesis instead of indexing the whole line.
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = stat.rsplit(")", 1)[1].strip().split()
+        start_ticks = fields[19]
+        boot_id = (
+            Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        )
+        return f"{boot_id}:{pid}:{start_ticks}"
+    except (OSError, IndexError, ValueError):
+        return ""
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def _read_json_value(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
+    """Return bounded, secret-safe snapshots for the platform's live run UI."""
+    outputs: list[dict[str, Any]] = []
+    contract = _read_json_value(run_root / "contract.json")
+    if isinstance(contract, dict):
+        tools = [
+            {"name": str(tool.get("name") or "")}
+            for tool in contract.get("tools", [])
+            if isinstance(tool, dict) and tool.get("name")
+        ]
+        data = {
+            "one_liner": str(contract.get("one_liner") or ""),
+            "modality": str(contract.get("modality") or "unknown"),
+            "runtime": contract.get("runtime") or {},
+            "tools": tools,
+            "hard_constraints": [
+                str(item) for item in contract.get("hard_constraints", [])
+            ],
+        }
+        outputs.append(
+            {
+                "id": "contract",
+                "kind": "contract",
+                "title": "Agent contract",
+                "summary": f"{len(tools)} tools · {data['modality']} modality",
+                "data": data,
+            }
+        )
+
+    environment = _read_json_value(run_root / "environment.json")
+    if isinstance(environment, dict):
+        services = [str(item) for item in environment.get("services", [])]
+        # Endpoint values are useful operational feedback, but credentials embedded in a URI
+        # must never reach the platform response.
+        overrides = {
+            str(name): re.sub(r"(://)[^/@]+@", r"\1***@", str(value))
+            for name, value in dict(environment.get("overrides") or {}).items()
+        }
+        outputs.append(
+            {
+                "id": "environment",
+                "kind": "environment",
+                "title": "Execution environment",
+                "summary": f"{len(services)} services ready",
+                "data": {
+                    "services": services,
+                    "project": str(environment.get("project") or ""),
+                    "managed": bool(environment.get("managed")),
+                    "overrides": overrides,
+                },
+            }
+        )
+
+    scenarios = _read_json_value(run_root / "scenarios.json")
+    if isinstance(scenarios, list):
+        data = [
+            {
+                "name": str(item.get("name") or "scenario"),
+                "instruction": str(item.get("instruction") or ""),
+                "use_case": str(item.get("use_case") or ""),
+            }
+            for item in scenarios
+            if isinstance(item, dict)
+        ]
+        outputs.append(
+            {
+                "id": "scenarios",
+                "kind": "scenarios",
+                "title": "Generated scenarios",
+                "summary": f"{len(data)} grounded scenarios",
+                "data": data,
+            }
+        )
+
+    platform = _read_json_value(run_root / "platform.json")
+    if isinstance(platform, dict):
+        run_test_id = str(platform.get("run_test_id") or "").strip()
+        execution_id = str(platform.get("test_execution_id") or "").strip()
+        if run_test_id:
+            url = (
+                f"/dashboard/simulate/test/{run_test_id}/{execution_id}"
+                if execution_id
+                else f"/dashboard/simulate/test/{run_test_id}/runs"
+            )
+            outputs.append(
+                {
+                    "id": "simulation",
+                    "kind": "simulation",
+                    "title": "Simulation results",
+                    "summary": "Open this run in the simulation view",
+                    "data": {
+                        "url": url,
+                        "run_test_id": run_test_id,
+                        "test_execution_id": execution_id,
+                    },
+                }
+            )
+    return outputs
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -1304,6 +1674,18 @@ def create_app(root: Path | None = None) -> FastAPI:
         name: str = Form(default="uploaded-agent"),
     ) -> UploadedSourceResponse:
         return await sandbox.upload_source(files, paths, name)
+
+    @app.post(
+        "/v1/secret-files",
+        response_model=UploadedSecretFileResponse,
+        dependencies=[Depends(_authorize)],
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def upload_secret_file(
+        file: UploadFile = File(...),
+        environment_name: str = Form(...),
+    ) -> UploadedSecretFileResponse:
+        return await sandbox.upload_secret_file(file, environment_name)
 
     @app.post(
         "/v1/preflight",

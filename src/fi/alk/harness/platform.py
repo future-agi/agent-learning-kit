@@ -21,10 +21,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -85,12 +87,40 @@ class Reported:
 
     @property
     def url(self) -> str:
-        """Where this run is on the platform, for anyone wanting to look at it."""
-        return (
-            f"/dashboard/simulate/test/{self.run_test_id}/runs"
-            if self.run_test_id
-            else ""
-        )
+        """Where this exact execution is on the platform."""
+        if not self.run_test_id:
+            return ""
+        if self.test_execution_id:
+            return (
+                f"/dashboard/simulate/test/{self.run_test_id}/{self.test_execution_id}"
+            )
+        return f"/dashboard/simulate/test/{self.run_test_id}/runs"
+
+
+def display_run_name(agent: str, *, now: datetime | None = None) -> str:
+    """A readable, unique platform name without exposing a harness UUID."""
+    words = re.sub(r"[-_]+", " ", str(agent or "agent")).strip()
+    title = " ".join(
+        word if word.isupper() else word.capitalize() for word in words.split()
+    )
+    timestamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return f"{title or 'Agent'} · {timestamp:%d %b %Y %H:%M UTC}"[:255]
+
+
+def display_scenario_name(scenario: Any) -> str:
+    """Prefer the scenario's behavior over an internal slug or repeated run prefix."""
+    for value in (
+        getattr(scenario, "use_case", ""),
+        getattr(scenario, "tests", ""),
+        getattr(scenario, "name", ""),
+    ):
+        text = str(value or "").strip().rstrip(".")
+        if text:
+            if value == getattr(scenario, "name", ""):
+                text = re.sub(r"[-_]+", " ", text)
+                text = text[:1].upper() + text[1:]
+            return text[:255]
+    return "Scenario"
 
 
 def configured() -> str:
@@ -142,9 +172,15 @@ class Platform:
     def provision(
         self, name: str, personas: list[dict[str, Any]], modality: str = "text"
     ) -> dict[str, Any]:
+        agent_name = name.split(" · ", 1)[0].strip() or "ALK agent"
         return self._call(
             "/run-tests/provision/",
-            {"name": name, "personas": personas, "modality": modality},
+            {
+                "name": name,
+                "agent_name": agent_name,
+                "personas": personas,
+                "modality": modality,
+            },
         )
 
     def start(
@@ -153,10 +189,13 @@ class Platform:
         scenario_ids: list[str] | None = None,
         *,
         harness_job_id: str = "",
+        scenario_selectors: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         payload = {"scenario_ids": scenario_ids} if scenario_ids else {}
         if harness_job_id:
             payload["harness_job_id"] = harness_job_id
+        if scenario_selectors:
+            payload["scenario_selectors"] = scenario_selectors
         return self._call(f"/run-tests/{run_test_id}/test-executions/", payload)
 
     def batch(self, test_execution_id: str, count: int) -> dict[str, Any]:
@@ -167,6 +206,14 @@ class Platform:
     def result(self, call_execution_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._call(
             f"/call-executions/{call_execution_id}/result/", payload, method="PATCH"
+        )
+
+    def ongoing(self, call_execution_id: str) -> dict[str, Any]:
+        """Mark one pre-allocated call as started using the established ingestion route."""
+        return self._call(
+            f"/call-executions/{call_execution_id}/status/",
+            {"status": "ongoing"},
+            method="PATCH",
         )
 
     def recording(self, call_execution_id: str, audio: Path) -> dict[str, Any]:
@@ -228,6 +275,8 @@ def persona_of(scenario: Any) -> dict[str, Any]:
         "name": str(persona.get("name") or getattr(scenario, "name", "") or "caller")[
             :255
         ],
+        "scenario_key": str(getattr(scenario, "name", "") or "")[:255],
+        "scenario_name": display_scenario_name(scenario),
         "role": str(persona.get("role") or persona.get("occupation") or "")[:255],
         "situation": str(getattr(scenario, "instruction", "") or ""),
         "outcome": str(getattr(scenario, "tests", "") or ""),
@@ -446,17 +495,30 @@ def begin(
         raise PlatformError("the platform returned no run test to report against")
 
     harness_job_id = os.getenv("ALK_HARNESS_JOB_ID", "").strip()
+    selectors = [
+        {
+            "scenario_key": str(getattr(one, "name", "") or "")[:255],
+            "persona_name": str(persona_of(one).get("name") or "")[:255],
+        }
+        for one in scenarios
+    ]
+    selector_kwargs = {"scenario_selectors": selectors} if selectors else {}
     if harness_job_id:
         started = api.start(
             reported.run_test_id,
             provisioned_scenario_ids,
             harness_job_id=harness_job_id,
+            **selector_kwargs,
         )
     else:
         # Keep the long-standing Platform-compatible call shape for local SDK and
         # third-party implementations. The hosted ownership reference is additive
         # and only exists inside a sandbox worker.
-        started = api.start(reported.run_test_id, provisioned_scenario_ids)
+        started = api.start(
+            reported.run_test_id,
+            provisioned_scenario_ids,
+            **selector_kwargs,
+        )
     reported.test_execution_id = str(started.get("test_execution_id", ""))
     if not reported.test_execution_id:
         raise PlatformError("the platform returned no test execution for this run")
@@ -484,6 +546,26 @@ def send_result(
                 reported.problems.append(f"recording not sent: {refused}")
     except PlatformError as failed:
         reported.problems.append(f"{getattr(result, 'scenario', '?')}: {failed}")
+
+
+def mark_ongoing(
+    reported: Reported,
+    call_execution_id: str,
+    *,
+    platform: Platform | None = None,
+) -> None:
+    """Best-effort PENDING -> ONGOING transition when a scenario actually starts.
+
+    A status ping is presentation state, not result evidence. The backend applies it only to a
+    pending call, so a duplicate or late ping cannot overwrite a terminal result. Failure here
+    must not fail the call or enter result-reconciliation bookkeeping.
+    """
+    if not call_execution_id:
+        return
+    try:
+        (platform or Platform()).ongoing(call_execution_id)
+    except PlatformError:
+        pass
 
 
 def deliver(

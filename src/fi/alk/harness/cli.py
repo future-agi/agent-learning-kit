@@ -489,7 +489,7 @@ async def _simulate(args: argparse.Namespace) -> int:
         try:
             reported, allocated = platform.begin(
                 chosen,
-                name=destination.name,
+                name=platform.display_run_name(args.name),
                 run_test_id=platform.remembered(destination),
                 modality=contract.modality or "text",
             )
@@ -518,12 +518,18 @@ async def _simulate(args: argparse.Namespace) -> int:
             return
         platform.send_result(reported, call_id, result)
 
+    def show_started(scenario: Any) -> None:
+        if reported is None:
+            return
+        platform.mark_ongoing(reported, call_ids.get(scenario.name, ""))
+
     summary = await simulate(
         chosen,
         contract,
         destination,
         destination=destination,
         model=args.model,
+        on_case_start=show_started,
         on_case_done=show,
     )
     print(
