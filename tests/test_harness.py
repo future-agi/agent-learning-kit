@@ -6265,3 +6265,54 @@ def test_new_platform_execution_preserves_submitted_scenario_order():
     )
     assert api.started_with == ["sid-a", "sid-b"]
     assert reported.calls == {"a": "ce-a", "b": "ce-b"}
+
+
+def test_scenario_carries_the_identity_the_hosted_scheduler_reads():
+    """The guest scheduler reads ``scenario_key`` and ``scenario_id`` off every scenario.
+
+    Both are plain attributes rather than optional extras: a pydantic model raises AttributeError
+    for a field it never declared, so a missing one fails at the first read rather than degrading.
+    """
+    one = Scenario(name="dana-books-uberx-saved-card")
+    assert one.scenario_key == "dana-books-uberx-saved-card"
+    # Assigned by the platform at pre-allocation, never written at generation.
+    assert one.scenario_id == ""
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("Dana Books - Café", "dana-books-caf"),
+        ("already-a-slug", "already-a-slug"),
+        ("  Spaced  Out  ", "spaced-out"),
+    ],
+)
+def test_scenario_key_is_ascii_and_slugged(name, expected):
+    assert Scenario(name=name).scenario_key == expected
+
+
+def test_scenario_key_never_empties_onto_a_shared_idempotency_key():
+    """A name with nothing ASCII in it still gets its own key rather than an empty one."""
+    keys = {Scenario(name=name).scenario_key for name in ("日本語", "中文", "한국어")}
+    assert all(key.startswith("scenario-") for key in keys)
+    assert len(keys) == 3
+
+
+def test_background_noise_is_decided_the_same_way_twice():
+    """A coin flip here made a seeded run unreproducible; the name decides it instead."""
+    assert Scenario(name="a-b-c").background_noise == Scenario(name="a-b-c").background_noise
+    assert Scenario(name="x", background_noise="street").background_noise == "street"
+
+
+def test_a_transcript_line_keeps_one_speaker_not_two():
+    """``agent: assistant: ...`` reached the judges as two speakers deep for every turn."""
+    from fi.alk.harness.run.simulation import _said
+
+    def said(line):
+        turn = _said(line)
+        return turn.speaker, turn.text
+
+    assert said("assistant: Hi Dana.") == ("agent", "Hi Dana.")
+    assert said("user: I need a ride.") == ("customer", "I need a ride.")
+    # A colon inside speech is not a speaker label.
+    assert said("assistant: Call at 3:30 PM.") == ("agent", "Call at 3:30 PM.")
