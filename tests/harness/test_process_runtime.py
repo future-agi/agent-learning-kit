@@ -2167,6 +2167,26 @@ def test_apply_seed_file_raises_seed_failed_on_nonzero_exit(tmp_path: Path) -> N
     assert "syntax error" in str(excinfo.value)
 
 
+def test_apply_seed_file_rabbitmq_import_failure_is_seed_failed(tmp_path: Path) -> None:
+    """rabbitmq's own definitions-import failure is customer-authored seed CONTENT
+    (§2f `seed_failed`, deterministic, NOT retried), never `store_statement_failed` (the
+    harness's own statement seam, `infrastructure`, retryable) — the two domains carry opposite
+    retry semantics, so a code swap here either retries a broken definitions file forever or
+    gives up on what might have been a transient import blip."""
+    creds = pr.EngineCredentials(username="harness", password="pw")
+
+    def failing_import(*, host: str, port: int, credentials: Any, file: Path) -> None:
+        raise RuntimeError("malformed definitions")
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.apply_seed_file(
+            pr.ManagedEngine.RABBITMQ, tmp_path / "mq" / "defs.json", port=14002, dbname="",
+            credentials=creds, process_name="mq", sync_run=_fake_sync_run,
+            rabbitmq_import=failing_import,
+        )
+    assert excinfo.value.code == "seed_failed"
+
+
 # --- §2c sentinel checking ------------------------------------------------------------------------
 
 
@@ -2232,6 +2252,55 @@ def test_a_sentinel_query_attempting_a_write_fails(tmp_path: Path) -> None:
             store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
             credentials=creds, sql_runner=sql_spy,
             redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+        )
+    assert excinfo.value.code == "store_statement_failed"
+
+
+def test_call_redis_driver_exception_is_store_statement_failed() -> None:
+    """`_call_redis` wraps a provisioner-ISSUED command (sentinel/canary probes —
+    never customer seed content, which goes through `apply_seed_file` instead) — a driver
+    exception there is the harness's own statement seam, §2f `store_statement_failed`
+    (`infrastructure`, retryable), never `seed_failed` (`environment`, NOT retried). Swapped, a
+    transient redis blip during a sentinel check would never retry."""
+    def failing_redis_runner(*, host: str, port: int, command: Any) -> Any:
+        raise RuntimeError("connection reset")
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr._call_redis(
+            failing_redis_runner, stage="conformance", process_name="cache",
+            host="localhost", port=15003, command=["GET", "x"],
+        )
+    assert excinfo.value.code == "store_statement_failed"
+
+
+def test_call_rabbitmq_driver_exception_is_store_statement_failed() -> None:
+    """`_call_rabbitmq` wraps a provisioner-ISSUED queue inspection (sentinel/canary probes —
+    never customer seed content) — a driver exception there is the harness's own statement seam,
+    §2f `store_statement_failed` (`infrastructure`, retryable), never `seed_failed`
+    (`environment`, NOT retried). Swapped, a transient rabbitmq blip during a sentinel check would
+    never retry."""
+    def failing_inspector(*, host: str, port: int, credentials: Any, queue: str) -> int:
+        raise RuntimeError("connection reset")
+
+    creds = pr.EngineCredentials(username="harness", password="pw")
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr._call_rabbitmq(
+            failing_inspector, stage="conformance", process_name="mq",
+            host="localhost", port=14002, credentials=creds, queue="canary",
+        )
+    assert excinfo.value.code == "store_statement_failed"
+
+
+def test_call_rabbitmq_action_driver_exception_is_store_statement_failed() -> None:
+    """`_call_rabbitmq_action` wraps the write-side canary declare/publish call — same B5 typing
+    as `_call_rabbitmq`, against a store that has already passed readiness. A driver exception
+    there is also §2f `store_statement_failed`, never `seed_failed`."""
+    def failing_action(**kwargs: Any) -> None:
+        raise RuntimeError("connection reset")
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr._call_rabbitmq_action(
+            failing_action, stage="conformance", process_name="mq", action="declare",
         )
     assert excinfo.value.code == "store_statement_failed"
 
@@ -2991,6 +3060,89 @@ def test_conformance_gate_is_vacuously_true_with_no_canary_store(tmp_path: Path)
     assert (passed, reason) == (True, None)
 
 
+class _StickyCanarySqlSpy(SqlSpy):
+    """Simulates a RESET that runs (DROP/CREATE TEMPLATE are still recorded
+    normally, so the isolation probe's own w0-vs-w1 read is unaffected) but fails to actually
+    clear the conformance canary from the world it was planted in — `_alk_conformance` stays
+    `to_regclass`-visible in that one database no matter how many times it gets dropped and
+    recreated. Proves `_verify_canary_absent` is load-bearing, not redundant with the per-world
+    declared-sentinel check (`SELECT 1`), which never queries the canary table at all."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._sticky_dbname: str | None = None
+
+    def __call__(self, **kwargs: Any) -> list[tuple[Any, ...]]:
+        statement = kwargs["statement"].strip()
+        if statement.startswith("CREATE TABLE") and "_alk_conformance" in statement:
+            self._sticky_dbname = kwargs["dbname"]
+        rows = super().__call__(**kwargs)
+        if statement.startswith("SELECT to_regclass") and kwargs["dbname"] == self._sticky_dbname:
+            return [(True,)]
+        return rows
+
+
+def test_conformance_gate_fails_when_reset_leaves_the_canary_behind(tmp_path: Path) -> None:
+    """A reset that (for whatever reason) fails to actually clear the reserved
+    `_alk_conformance` object must fail the gate via `_verify_canary_absent` — this is the
+    project's own named CRITICAL calibration example, "vacuous canary pass" (severity-grading.md).
+    Isolation and both worlds' own declared sentinels pass; only the post-reset canary-absence
+    check catches it."""
+    manifest = _manifest()
+    sql_spy = _StickyCanarySqlSpy()
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    world_handles = {
+        index: pr._clone_or_reset_world(
+            manifest, index, context=ctx, baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        ).handles
+        for index in (0, 1)
+    }
+    passed, reason = pr.run_conformance_gate(
+        manifest, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+    )
+    assert (passed, reason) == (False, "conformance_gate_failed")
+
+
+class _BadResetSentinelSqlSpy(SqlSpy):
+    """The store's OWN declared sentinel (`SELECT 1`) answers correctly at freeze
+    time (queried against the baseline database) but wrong against either world database
+    (`w0`/`w1`) — simulating a reset whose reseal left the declared state broken, which
+    `reset_world`'s `_check_all_sentinels` is supposed to catch and the gate is supposed to
+    escalate via `sentinel_ok`, distinct from (and reached before) the canary-absence check."""
+
+    def __call__(self, **kwargs: Any) -> list[tuple[Any, ...]]:
+        if kwargs["statement"].strip() == "SELECT 1" and kwargs["dbname"] in ("w0", "w1"):
+            return [(0,)]
+        return super().__call__(**kwargs)
+
+
+def test_conformance_gate_fails_when_a_worlds_own_sentinel_fails_after_reset(
+    tmp_path: Path,
+) -> None:
+    """`sentinel_ok` from the gate's own per-world `reset_world` calls must actually
+    gate the result — a broken reset that fails the store's declared sentinel must degrade
+    parallelism, not be silently overridden by an otherwise-clean canary-absence check."""
+    manifest = _manifest()
+    sql_spy = _BadResetSentinelSqlSpy()
+    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    world_handles = {
+        index: pr._clone_or_reset_world(
+            manifest, index, context=ctx, baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        ).handles
+        for index in (0, 1)
+    }
+    passed, reason = pr.run_conformance_gate(
+        manifest, context=ctx, baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+    )
+    assert (passed, reason) == (False, "conformance_gate_failed")
+
+
 # --- §4 provision / reset / close: ProcessRuntimeProvider -------------------------------------------
 
 
@@ -3040,6 +3192,59 @@ def test_provision_reconciles_to_exactly_w_ready_worlds(tmp_path: Path) -> None:
     assert build_output["degrade_reason"] is None
 
 
+def test_provision_fixed_port_at_w1_records_no_degrade(tmp_path: Path) -> None:
+    """`fixed_port` forces `effective_instances=1` regardless of `instances` —
+    at `instances=1` that's not a degrade, since requested==effective already. A prior bug copied
+    `PortPlan.degraded_reason` verbatim onto `build.json` here, so a job that asked for W=1 and
+    got W=1 reported a parallelism degrade that never happened (crashes `hosted_entrypoint`'s
+    `parallelism_degraded` emission downstream, whose payload requires `effective < requested`)."""
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0], {**body["processes"][1], "fixed_port": 8081},
+                body["processes"][2],
+            ],
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert [runtime.world_index for runtime in runtimes] == [0]
+    build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_output["requested_parallelism"] == 1
+    assert build_output["effective_parallelism"] == 1
+    assert build_output["degrade_reason"] is None
+
+
+def test_provision_fixed_port_above_w1_records_degrade(tmp_path: Path) -> None:
+    """Companion to the test above: at `instances>1` the same `fixed_port` constraint IS a real
+    degrade (`effective=1 < requested=3`), so `build.json` must still report it."""
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0], {**body["processes"][1], "fixed_port": 8081},
+                body["processes"][2],
+            ],
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    assert [runtime.world_index for runtime in runtimes] == [0]
+    build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_output["requested_parallelism"] == 3
+    assert build_output["effective_parallelism"] == 1
+    assert build_output["degrade_reason"] == "fixed_port"
+
+
 def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -> None:
     """B1, p6-review-r1: §2c seed/migration paths are bundle-relative and must resolve against
     the VERIFIED bundle directory, never the untrusted checkout — a bundle declares `migrations:
@@ -3070,6 +3275,54 @@ def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -
     assert seed_calls, "expected a psql -f seed invocation"
     applied_file = seed_calls[0][seed_calls[0].index("-f") + 1]
     assert applied_file == str(bundle_dir / "db" / "schema.sql")
+
+
+def test_provision_empty_strategy_first_clone_reads_seed_files_from_bundle_dir_not_work_directory(
+    tmp_path: Path,
+) -> None:
+    """Mirrors the test above for the OTHER `apply_store_seed` call site — `_seal_world_store`'s
+    `empty`-strategy branch, reached on every world clone/reset, not just `freeze_baseline`'s
+    once-per-job seed. `strategy: empty` never seeds at freeze (§5.3's own no-op capture; postgres
+    itself does not support it, so a redis `cache` store — the same shape the pre-existing
+    empty-strategy fixtures use — isolates this second call site cleanly). Every existing
+    `empty`-strategy fixture used `bundle_dir == work_directory`, so a regression swapping the two
+    there was invisible — genuinely distinct directories here, same proof technique as the
+    freeze-path test above. A decoy file of the SAME NAME is planted under `work_directory` too,
+    with different content — asserting content, not just presence, is what actually proves the
+    code read from `bundle_dir` rather than merely finding a same-named file wherever it looked."""
+    manifest = _manifest(
+        lambda body: {**body, "processes": [
+            body["processes"][0],
+            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
+             "user": "svc-data", "depends_on": []},
+            *body["processes"][1:],
+        ], "capabilities": {
+            **body["capabilities"],
+            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
+        }, "seed": {"stores": [
+            body["seed"]["stores"][0],
+            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
+             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+             "sentinel": {"key": "greeting", "expected": "hi"}},
+        ]}}
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (bundle_dir / "cache").mkdir(parents=True)
+    (bundle_dir / "cache" / "seed.txt").write_text("SET greeting hi\n")
+    (tmp_path / "cache").mkdir(parents=True)
+    (tmp_path / "cache" / "seed.txt").write_text("SET greeting DECOY\n")
+
+    calls: list[Any] = []
+    provider = _sql_spy_provider(
+        sync_run=_recording_sync_run(calls), secrets_path=tmp_path / "secrets.json",
+    )
+    asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    redis_calls = [(argv, kwargs) for argv, kwargs in calls if argv and "redis-cli" in argv]
+    assert redis_calls, "expected a redis-cli seed invocation from the empty-strategy RESET path"
+    assert redis_calls[0][1]["input"] == "SET greeting hi\n"
 
 
 def test_provision_is_idempotent_for_the_same_job_identity(tmp_path: Path) -> None:
@@ -3157,6 +3410,37 @@ def test_provision_conformance_degrade_persists_across_a_later_reconcile_call(
     assert first[0].runtime_id == second[0].runtime_id
     build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build_output["degrade_reason"] == "conformance_gate_failed"  # m1
+
+
+def test_provision_reconcile_at_w1_after_gate_failure_records_no_degrade(tmp_path: Path) -> None:
+    """A sick-world recovery re-call can legitimately pass a smaller `instances` than the job's
+    original request (the module's own comment above the reconcile branch). The sticky
+    conformance-degrade branch does not know the current call's `requested` — at `instances=1`,
+    `effective == requested == 1` already, so re-surfacing the earlier gate failure there would
+    write `build.json` a `parallelism_degraded`-shaped record with no valid payload
+    (`effective < requested` is required, and 1 < 1 is false)."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        sql_runner=SqlSpy(canary_leaks=True), secrets_path=tmp_path / "secrets.json",
+    )
+    first = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
+        require_declared_user=False,
+    ))
+    assert [r.world_index for r in first] == [0]
+    build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_output["degrade_reason"] == "conformance_gate_failed"
+
+    second = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+        require_declared_user=False,
+    ))
+    assert [r.world_index for r in second] == [0]
+    build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_output["requested_parallelism"] == 1
+    assert build_output["effective_parallelism"] == 1
+    assert build_output["degrade_reason"] is None
 
 
 def test_provision_tears_down_before_rebuilding_on_a_bundle_digest_change(tmp_path: Path) -> None:
@@ -3294,6 +3578,31 @@ def test_close_is_idempotent_and_removes_secrets_and_data_directories(tmp_path: 
         assert runtime.state is pr.RuntimeState.STOPPED
 
     asyncio.run(provider.close(work_directory=tmp_path))  # must not raise the second time.
+
+
+def test_close_removes_a_secrets_file_left_behind_by_a_failed_load(tmp_path: Path) -> None:
+    """`_load_and_delete_secrets` only unlinks `secrets.json` AFTER `json.loads` succeeds — a
+    malformed file raises `secrets/spawn_failed` with the file still on disk. Every OTHER test
+    that reaches `close()` does so via a successful load, where the file is already gone by the
+    time `close()` runs, so its own unlink line is otherwise a no-op across the whole suite;
+    plaintext secrets surviving on the sandbox filesystem after a failed provision is exactly what
+    that unlink exists to prevent."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text("{not valid json")
+    provider = _sql_spy_provider(secrets_path=secrets_path)
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(provider.provision(
+            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
+            require_declared_user=False,
+        ))
+    assert excinfo.value.code == "spawn_failed"
+    assert secrets_path.exists()  # the failed load raised before its own unlink ran.
+
+    asyncio.run(provider.close(work_directory=tmp_path))
+    assert not secrets_path.exists()
 
 
 # --- B3/§0.3, p6-review-r1: secrets lifetime and injection through provision() -----------------

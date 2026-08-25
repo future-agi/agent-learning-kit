@@ -202,7 +202,7 @@ def plan_ports(manifest: EnvironmentBundleV2, *, instances: int) -> PortPlan:
         job_shared=job_shared,
         fixed_ports=fixed_ports,
         effective_instances=1 if fixed_ports else instances,
-        degraded_reason="fixed_port" if fixed_ports else None,
+        degraded_reason="fixed_port" if fixed_ports and instances > 1 else None,
     )
 
 
@@ -3563,7 +3563,13 @@ class ProcessRuntimeProvider:
             )
 
         requested = instances
-        degrade_reason = port_plan.degraded_reason  # "fixed_port", or None (m1, p6-review-r1).
+        # At requested=1 nothing can degrade (effective=1 too, so no valid
+        # `parallelism_degraded` payload exists; outbound-channels.md's `1 <= effective <
+        # requested` bound is empty at requested=1). `port_plan.degraded_reason` is already
+        # None at instances=1, but that alone is not sufficient — see the
+        # `build_output.degrade_reason` write below, which is what actually enforces it
+        # against the conformance-gate paths that reassign `degrade_reason` further down.
+        degrade_reason = port_plan.degraded_reason if effective < requested else None
 
         if effective > 1 and not self._conformance_checked:
             self._ensure_world(0)
@@ -3587,7 +3593,10 @@ class ProcessRuntimeProvider:
 
         build_output.requested_parallelism = requested
         build_output.effective_parallelism = effective
-        build_output.degrade_reason = degrade_reason
+        # The conformance-gate branches above reassign `degrade_reason` unconditionally (they
+        # only know a gate result, not this call's `requested`) — re-checking the invariant here,
+        # at the single write site, covers those paths too instead of only the fixed_port input.
+        build_output.degrade_reason = degrade_reason if effective < requested else None
         write_build_output(work_directory, build_output)
 
         # Reconcile down first — a prior call may have over-provisioned (the canary's own 2-world
