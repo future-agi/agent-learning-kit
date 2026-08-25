@@ -6,24 +6,12 @@ FROM rabbitmq:3.13.7-management AS rabbitmq313
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG DOCKER_APT_VERSION="5:27.5.1-1~ubuntu.24.04~noble"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       ca-certificates curl ffmpeg git gnupg iptables libcap2-bin \
       postgresql-16 procps python3-pip python3.12 python3.12-venv \
       redis-server slirp4netns socat uidmap xz-utils \
-    && install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-      -o /etc/apt/keyrings/docker.asc \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
-      > /etc/apt/sources.list.d/docker.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-      docker-ce-cli=${DOCKER_APT_VERSION} \
-      docker-ce-rootless-extras=${DOCKER_APT_VERSION} \
-      docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node20 /usr/local/bin/node /opt/node20/bin/node
@@ -32,6 +20,7 @@ COPY --from=node22 /usr/local/bin/node /opt/node22/bin/node
 COPY --from=node22 /usr/local/lib/node_modules/npm /opt/node22/lib/node_modules/npm
 COPY --from=python311 /usr/local /opt/python311
 COPY --from=rabbitmq313 /opt/rabbitmq /opt/rabbitmq
+RUN rm -f /opt/rabbitmq/etc/rabbitmq/enabled_plugins /etc/rabbitmq/enabled_plugins || true
 COPY --from=rabbitmq313 /opt/erlang /opt/erlang
 
 RUN python3.12 -m venv /opt/alk-venv \
@@ -57,7 +46,8 @@ RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2003 --gid 2003 --create-home --shell /usr/sbin/nologin svc-data \
     && echo 'svc-control:100000:65536' >> /etc/subuid \
     && echo 'svc-control:100000:65536' >> /etc/subgid \
-    && install -d -o svc-control -g svc-control -m 0700 /work /run/user/2000 \
+    && install -d -o svc-control -g svc-control -m 0755 /work /work/artifacts \
+    && install -d -o svc-control -g svc-control -m 0700 /run/futureagi /run/user/2000 \
     && install -d -o root -g root -m 0755 /opt/alk
 
 WORKDIR /opt/alk
@@ -74,8 +64,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
-    XDG_RUNTIME_DIR=/run/user/2000 \
-    DOCKER_HOST=unix:///run/user/2000/docker.sock
+    XDG_RUNTIME_DIR=/run/user/2000
 
 USER svc-control
 WORKDIR /work
