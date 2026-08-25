@@ -115,10 +115,12 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
             "verification code should be sent, and disclose the actual code only after the "
             "agent says it was sent and explicitly asks you to read it. Answer repair questions "
             "with the missing fact, not by restarting the request. Never repeat the same answer "
-            "more than twice. Do not end the call while the agent still has a step to finish: when "
-            "it asks to proceed, say yes and wait for it to actually complete the task and confirm "
-            "it is done. Only once the outcome is actually done and confirmed, thank the agent and "
-            "end the call."
+            "more than twice. Wait for the agent to finish the task rather than ending as soon as "
+            "it asks to proceed: say yes and let it complete and confirm the outcome. But if the "
+            "agent gives essentially the same response two or three times without making progress, "
+            "do not keep looping: say once that it is not working and that you will try again "
+            "later, then end the call. Once the outcome is actually completed and confirmed, thank "
+            "the agent and end the call."
         ),
         allow_interruptions=True,
     )

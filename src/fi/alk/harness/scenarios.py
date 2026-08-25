@@ -275,16 +275,23 @@ def callers_for(index: int, wanted: int) -> str:
     if not people:
         return ""
     picks = [people[(index + step) % len(people)] for step in range(max(1, wanted))]
-    accent = accents[index % len(accents)] if accents else ""
     said = (
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
     )
-    if accent:
+    if accents:
+        # Spread several offered accents across this writer's callers rather than naming just one,
+        # so the suite does not collapse to a single default accent and the agent's speech handling
+        # is genuinely varied.
+        spread = [
+            accents[(index + step) % len(accents)]
+            for step in range(min(len(accents), max(2, wanted)))
+        ]
         said += (
-            f" At least one of your callers has a {accent} accent. Other writers are covering "
-            "other use cases with other callers, so a suite where everyone sounds the same is "
-            "what happens when each of us picks the safest option."
+            " Give your callers varied accents from the offered set, a different one per caller "
+            f"where it fits rather than defaulting everyone to the same accent: {', '.join(spread)}. "
+            "A suite where every caller sounds the same is a missed test of the agent's speech "
+            "handling, so do not make them all American unless a scenario truly requires it."
         )
     return said
 
