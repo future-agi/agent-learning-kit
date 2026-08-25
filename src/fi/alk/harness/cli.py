@@ -261,12 +261,40 @@ async def _environment(args: argparse.Namespace) -> int:
         elif args.action == "reset":
             environment = reset(destination)
         else:
+            source_path = args.path
+            bundle_value = str(getattr(args, "bundle", "") or "")
+            if bundle_value:
+                from .bundle import BundleError, load_bundle
+                from .environment_plan import (
+                    ENVIRONMENT_PLAN_FILE,
+                    EnvironmentPlanError,
+                    load_environment_plan,
+                )
+
+                bundle_root = Path(bundle_value).expanduser().resolve()
+                try:
+                    bundle = load_bundle(bundle_root)
+                    # New bundles carry the canonical decision record. Older sealed bundles
+                    # remain rerunnable, but still receive full content verification.
+                    if (bundle_root / ENVIRONMENT_PLAN_FILE).is_file():
+                        load_environment_plan(bundle_root, bundle=bundle)
+                except (BundleError, EnvironmentPlanError) as failed:
+                    print(f"Environment bundle failed: {failed}", file=sys.stderr)
+                    return 1
+                bundled_source = bundle_root / "services" / "source"
+                if not bundled_source.is_dir():
+                    print(
+                        f"Environment bundle has no source snapshot: {bundled_source}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                source_path = str(bundled_source)
             # Resuming a saved environment must use the same repository/runtime decision as the
             # autonomous and hosted paths.  In particular, a submitted Compose runtime may name
             # a repository-local env file that is intentionally replaced by job-scoped values.
             # Without the saved contract this command can incorrectly fall back to a Dockerfile
             # and report that a previously valid Compose environment cannot be started.
-            environment = provision(args.path, destination, load(destination))
+            environment = provision(source_path, destination, load(destination))
     except ProvisionError as failed:
         print(f"Environment failed: {failed}", file=sys.stderr)
         return 1
@@ -828,6 +856,11 @@ def build_parser() -> argparse.ArgumentParser:
     environment.add_argument("action", choices=("up", "status", "reset", "down"))
     environment.add_argument(
         "--path", default="", help="agent repository (required for up)"
+    )
+    environment.add_argument(
+        "--bundle",
+        default="",
+        help="sealed environment bundle to verify and restart (preferred for reruns)",
     )
     environment.add_argument("--out", required=True, help="session artifact directory")
     environment.set_defaults(run=_environment)

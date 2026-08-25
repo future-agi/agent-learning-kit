@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -16,12 +17,17 @@ from fi.alk.harness.bundle import (
     seal_bundle,
 )
 from fi.alk.harness.events import BufferedEventSink, EventOutbox
+from fi.alk.harness.environment_plan import (
+    ENVIRONMENT_PLAN_FILE,
+    EnvironmentPlanError,
+    load_environment_plan,
+)
 from fi.alk.harness.executor import (
     GitHubSourceAcquirer,
     HarnessExecutor,
     _failure_from_events,
 )
-from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
 from fi.alk.harness.provision import source_fingerprint
 from fi.simulate.runtime.spec import RuntimeIsolation
 from fi.simulate.runtime.events import CanonicalEvent
@@ -77,6 +83,44 @@ def test_executor_understands_a_materialized_archive_as_a_repository(
 
     assert status.stage.value == "completed"
     assert observed == {"kind": "repo", "path": str(source.resolve())}
+
+
+def test_executor_freezes_the_resolved_github_commit_before_building(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    commit = "a" * 40
+    observed: dict[str, str | None] = {}
+
+    async def fake_auto(args) -> int:
+        observed["commit"] = args.job.source.commit_sha
+        return 0
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=commit + "\n", stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", fake_auto)
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", fake_run)
+    source = tmp_path / "repository"
+    source.mkdir()
+    job = HarnessJob(
+        job_id="job-github",
+        run_id="run-github",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/agent",
+            "ref": "main",
+        },
+        agent={"connector": "auto"},
+    )
+
+    status = asyncio.run(
+        HarnessExecutor().run(job, source=source, output=tmp_path / "artifacts")
+    )
+
+    assert status.stage.value == "completed"
+    assert observed["commit"] == commit
 
 
 def test_autonomous_pipeline_cleans_environment_when_a_stage_raises(
@@ -163,6 +207,143 @@ def test_exported_bundle_survives_source_as_an_internal_artifact(
     assert (root / "services/source/handler.py").exists()
     assert not (root / "services/source/.env.local").exists()
     assert load_bundle(root).digest == bundle.digest
+    plan = load_environment_plan(root, bundle=bundle)
+    assert bundle.metadata["environment_plan_digest"] == plan.digest
+    assert plan.source.source_digest == source_fingerprint(source)
+    assert plan.runtime.document == "services/source/docker-compose.yml"
+
+
+def test_environment_plan_is_reproducible_and_bound_to_its_bundle(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        "services: {tools-api: {image: busybox}}\n", encoding="utf-8"
+    )
+    (source / "handler.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    exports = [
+        export_session_bundle(
+            source, tmp_path / f"attempt-{attempt}", name="stable-environment"
+        )
+        for attempt in range(20)
+    ]
+    plan_digests = {
+        load_environment_plan(root, bundle=bundle).digest for root, bundle in exports
+    }
+    bundle_digests = {bundle.digest for _root, bundle in exports}
+
+    assert len(plan_digests) == 1
+    assert len(bundle_digests) == 1
+
+    second_root, _second_bundle = exports[-1]
+    plan_path = second_root / ENVIRONMENT_PLAN_FILE
+    raw = json.loads(plan_path.read_text(encoding="utf-8"))
+    raw["metadata"]["managed"] = not raw["metadata"]["managed"]
+    plan_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(BundleError, match="bundle_files_changed"):
+        load_bundle(second_root)
+
+
+def test_environment_plan_rejects_a_validly_shaped_but_changed_decision(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        "services: {tools-api: {image: busybox}}\n", encoding="utf-8"
+    )
+    root, bundle = export_session_bundle(source, tmp_path / "session", name="stable")
+    plan_path = root / ENVIRONMENT_PLAN_FILE
+    raw = json.loads(plan_path.read_text(encoding="utf-8"))
+    raw["services"] = ["unexpected"]
+    plan_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(EnvironmentPlanError, match="digest_mismatch"):
+        load_environment_plan(root, bundle=bundle)
+
+
+def test_environment_up_from_bundle_ignores_a_later_source_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        "services: {tools-api: {image: busybox}}\n", encoding="utf-8"
+    )
+    handler = source / "handler.py"
+    handler.write_text("VERSION = 'admitted'\n", encoding="utf-8")
+    output = tmp_path / "session"
+    bundle_root, _ = export_session_bundle(source, output, name="stable")
+    handler.write_text("VERSION = 'changed-after-admission'\n", encoding="utf-8")
+    observed: dict[str, str] = {}
+
+    def fake_provision(selected_source, _destination, _contract):
+        selected = Path(selected_source)
+        observed["source"] = str(selected)
+        observed["handler"] = (selected / "handler.py").read_text(encoding="utf-8")
+        return SimpleNamespace(
+            project="fagi-harness-frozen",
+            services=["tools-api"],
+            provision_seconds=0.1,
+            overrides={},
+        )
+
+    monkeypatch.setattr("fi.alk.harness.provision.provision", fake_provision)
+    result = asyncio.run(
+        cli._environment(
+            SimpleNamespace(
+                action="up",
+                path=str(source),
+                bundle=str(bundle_root),
+                out=str(output),
+            )
+        )
+    )
+
+    assert result == 0
+    assert observed == {
+        "source": str((bundle_root / "services/source").resolve()),
+        "handler": "VERSION = 'admitted'\n",
+    }
+
+
+def test_environment_up_rejects_a_corrupt_bundle_before_provisioning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        "services: {tools-api: {image: busybox}}\n", encoding="utf-8"
+    )
+    (source / "handler.py").write_text("VERSION = 'sealed'\n", encoding="utf-8")
+    output = tmp_path / "session"
+    bundle_root, _ = export_session_bundle(source, output, name="stable")
+    (bundle_root / "services/source/handler.py").write_text(
+        "VERSION = 'tampered'\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.provision.provision",
+        lambda *_args, **_kwargs: pytest.fail("corrupt bundle reached Docker provisioning"),
+    )
+
+    result = asyncio.run(
+        cli._environment(
+            SimpleNamespace(
+                action="up",
+                path=str(source),
+                bundle=str(bundle_root),
+                out=str(output),
+            )
+        )
+    )
+
+    assert result == 1
 
 
 def test_local_and_hosted_jobs_reject_the_other_sides_source() -> None:
@@ -334,6 +515,48 @@ def test_failed_stage_is_reported_as_structured_non_retryable_failure(tmp_path: 
     assert failure.domain.value == "simulator"
     assert failure.stage.value == "validating_scenarios"
     assert failure.retryable is False
+
+
+def test_only_agent_failures_are_owned_by_the_customer() -> None:
+    agent = HarnessFailure(
+        domain=FailureDomain.AGENT,
+        stage=HarnessStage.RUNNING,
+        code="tool_result_wrong",
+        message="The submitted agent returned the wrong record",
+    )
+    environment = HarnessFailure(
+        domain=FailureDomain.ENVIRONMENT,
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        code="readiness_failed",
+        message="internal endpoint and stack detail",
+        retryable=True,
+    )
+
+    assert agent.for_customer().model_dump() == {
+        "category": "agent_failure",
+        "owner": "customer_agent",
+        "code": "tool_result_wrong",
+        "message": "The submitted agent returned the wrong record",
+        "retryable": False,
+    }
+    public = environment.for_customer()
+    assert public.category == "system_failure"
+    assert public.owner.value == "futureagi"
+    assert "internal endpoint" not in public.message
+    assert public.retryable is True
+
+
+def test_artifact_ingestion_has_its_own_futureagi_failure_domain(tmp_path: Path):
+    (tmp_path / "harness-events.jsonl").write_text(
+        '{"type":"harness.stage.failed","payload":'
+        '{"stage":"uploading_artifacts","status":1,"detail":"hash mismatch"}}\n',
+        encoding="utf-8",
+    )
+
+    failure = _failure_from_events(tmp_path)
+
+    assert failure.domain is FailureDomain.ARTIFACT
+    assert failure.owner.value == "futureagi"
 
 
 class _Transport:

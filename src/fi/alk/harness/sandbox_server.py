@@ -453,13 +453,6 @@ class LocalSandbox:
                     sorted(runtime_configuration)
                 )
                 child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
-                session = _read_json(output / "session.json")
-                source = str(session.get("source") or "").strip()
-                if not source:
-                    raise RuntimeError(
-                        "saved harness session does not identify its submitted source"
-                    )
-
                 async def run_stage(command: list[str]) -> int:
                     process = await asyncio.create_subprocess_exec(
                         *command,
@@ -477,8 +470,8 @@ class LocalSandbox:
                     "fi.alk.harness.cli",
                     "environment",
                     "up",
-                    "--path",
-                    source,
+                    "--bundle",
+                    str(output / "environment-bundle"),
                     "--out",
                     str(output),
                 ]

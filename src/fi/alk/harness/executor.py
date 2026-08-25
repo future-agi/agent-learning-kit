@@ -18,6 +18,7 @@ from .job import (
     HarnessJob,
     HarnessJobStatus,
     HarnessStage,
+    SourceKind,
     SourceVisibility,
 )
 
@@ -143,6 +144,41 @@ class HarnessExecutor:
 
         output = output.expanduser().resolve()
         source = source.expanduser().resolve()
+        # A branch name is acquisition input, not immutable provenance. Resolve the checkout to
+        # its exact commit before job.json and the environment plan are written. The source
+        # content digest remains authoritative for uploads and non-Git sources.
+        if job.source.kind is SourceKind.GITHUB and not job.source.commit_sha:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "rev-parse", "HEAD"],
+                cwd=source,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            commit_sha = completed.stdout.strip().lower()
+            if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+                return HarnessJobStatus(
+                    job_id=job.job_id,
+                    run_id=job.run_id,
+                    stage=HarnessStage.FAILED,
+                    updated_at=datetime.now(timezone.utc),
+                    detail="could not resolve the acquired GitHub revision",
+                    failure=HarnessFailure(
+                        domain=FailureDomain.INFRASTRUCTURE,
+                        stage=HarnessStage.ACQUIRING_SOURCE,
+                        code="github_commit_resolution_failed",
+                        message="The runner could not resolve the acquired GitHub revision",
+                    ),
+                    total_scenarios=job.scenario_count,
+                )
+            job = job.model_copy(
+                update={
+                    "source": job.source.model_copy(update={"commit_sha": commit_sha})
+                }
+            )
         # Source acquisition has already materialized GitHub/archive/local inputs as a local
         # checkout.  The understanding registry describes how to inspect that materialized
         # content (``repo``), while the immutable job retains its original source provenance.
@@ -234,7 +270,7 @@ def _failure_from_events(output: Path) -> HarnessFailure:
         ),
         "uploading_artifacts": (
             HarnessStage.UPLOADING_ARTIFACTS,
-            FailureDomain.INFRASTRUCTURE,
+            FailureDomain.ARTIFACT,
         ),
     }.get(label, (HarnessStage.RUNNING, FailureDomain.INFRASTRUCTURE))
     return HarnessFailure(

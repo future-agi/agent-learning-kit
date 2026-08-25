@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ from fi.alk.harness.contract import (
     ToolSpec,
 )
 from fi.alk.harness.bundle import export_session_bundle
+from fi.alk.harness.environment_plan import load_environment_plan
 from fi.alk.harness.provision import (
     ProvisionError,
     ProvisionedEnvironment,
@@ -1652,6 +1654,64 @@ def test_real_clickhouse_and_redis_lifecycle_is_isolated_and_resettable(tmp_path
         ) as client:
             client.sendall(b"*2\r\n$3\r\nGET\r\n$5\r\nstate\r\n")
             assert client.recv(64) == b"$-1\r\n"
+    finally:
+        stop(session)
+
+
+@pytest.mark.skipif(os.environ.get("RUN_INTEGRATION") != "1", reason="requires Docker")
+def test_sealed_bundle_restarts_the_admitted_source_not_the_mutated_checkout(tmp_path):
+    """The saved-rerun boundary is proved with Docker, not only command mocks."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    compose = source / "compose.yml"
+    compose.write_text(
+        """services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+""",
+        encoding="utf-8",
+    )
+    first = provision(source, session)
+    bundle_root, bundle = export_session_bundle(source, session, name="redis-agent")
+    plan = load_environment_plan(bundle_root, bundle=bundle)
+    stop(session)
+    # If rerun consults this mutable checkout, startup must fail. The admitted bundle remains
+    # valid and contains the original redis:7-alpine Compose document.
+    compose.write_text(
+        "services: {redis: {image: definitely-invalid.invalid/mutated:latest}}\n",
+        encoding="utf-8",
+    )
+    try:
+        result = asyncio.run(
+            cli._environment(
+                SimpleNamespace(
+                    action="up",
+                    path=str(source),
+                    bundle=str(bundle_root),
+                    out=str(session),
+                )
+            )
+        )
+        restarted = ProvisionedEnvironment.load(session)
+        assert result == 0
+        assert restarted is not None
+        assert restarted.running
+        assert Path(restarted.source) == bundle_root / "services/source"
+        assert plan.source.source_digest == first.source_fingerprint
+        assert healthy(session)
+        reset(session)
+        assert healthy(session)
     finally:
         stop(session)
 
