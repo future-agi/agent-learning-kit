@@ -47,7 +47,7 @@ scenario that looks fine and measures nothing.
 
 | | What it is | What it must never contain |
 |---|---|---|
-| **instruction** | what the person on the other side is living through | the answer, the checks, or facts they could not know |
+| **instruction** | what the person on the other side is living through | the answer, the checks, facts they could not know, or anything the agent is expected to do |
 | **setup** | the world's condition | anything the person is supposed to say |
 | **checks** | the hidden pass or fail rules | anything the agent was told |
 
@@ -111,7 +111,34 @@ not exist, and no lookup will ever find them.
 **Possessing and volunteering are separate.** Whether the person offers a value unprompted is the
 scenario's business. Whether they have it at all is not optional.
 
-**Write the instruction as an objective, not a situation.** A caller who is told what happened narrates it; a caller who is told what they want pursues it. Open with the goal in their own words ("Get the cancellation fee refunded"), then give them the facts they hold, the values they can be asked for, what they will only say once asked for it, and what would count as done. Every value read out of the world, never invented.
+**Write the instruction as an objective, not a situation.** A caller who is told what happened
+narrates it; a caller who is told what they want pursues it. Open with the goal in their own words
+("Get <the thing they want> put right"), not with the history that led to it ("You were charged
+<the amount>"), then give them the facts they hold, the values they can be asked for, and what
+they will only say once asked for it. Every value read out of the world, never invented.
+
+**Never tell the caller what the agent will do.** This is the single most common way a scenario
+silently stops measuring anything. The agent's moves are what the scenario is testing, so a caller
+who has been told to expect them will play along whether or not they happen, and the check passes
+on a conversation that never earned it. Write only what this person knows before the call starts.
+
+```
+BAD    The agent will tell you about <the condition>. Accept it and say yes when
+       asked to confirm.
+       (the scenario is testing whether the agent discloses <the condition>. A caller
+        primed to accept it agrees even when the agent never says it, so the run
+        reports a pass for behaviour that did not occur)
+
+GOOD   You want <the outcome>. You will accept <the condition> if there is one, but
+       you want to know <the detail> before you agree to anything.
+       (the caller's own position. If the agent discloses, they accept; if it does
+        not, they ask, and the transcript records which happened)
+```
+
+The same rule covers every phrasing of it: "the agent will send you <a value>", "they will offer
+you <an option>", "they should transfer you". Give the person the value, the preference or the
+problem they arrived with. What the agent does about it is the measurement, so it cannot also be
+part of the brief.
 
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario

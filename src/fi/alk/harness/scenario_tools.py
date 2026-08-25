@@ -467,11 +467,14 @@ def scenario_tools(
                     "were charged a fee'. Then give them everything they need to hold the "
                     "conversation without inventing anything: the facts they know, the values "
                     "they can be asked for, and what they will only say once asked. Every value "
-                    "real and read out of the world. Write only what this person knows before "
-                    "the call. Never tell them what the agent will do, ask for, or disclose: "
-                    "that is what the scenario is testing, and a caller told to expect it will "
-                    "play along whether or not it happens. 'You want the fee waived' is theirs; "
-                    "'the agent will offer you a refund' is not.",
+                    "real and read out of the world.\n"
+                    "Write only what this person knows before the call starts. Never write what "
+                    "the agent will do, in any phrasing: not what it will send, offer, ask for, "
+                    "disclose or decide, and no closing line about what counts as done. Those "
+                    "are the behaviours under test, and a person primed to expect them plays "
+                    "along whether or not they happen, so the check passes on a conversation "
+                    "that never earned it. Give them the value, the preference or the problem "
+                    "they arrived with, and let the agent's handling of it be what is measured.",
                 },
                 "persona": {
                     "type": "object",
