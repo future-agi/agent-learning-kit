@@ -140,6 +140,28 @@ you <an option>", "they should transfer you". Give the person the value, the pre
 problem they arrived with. What the agent does about it is the measurement, so it cannot also be
 part of the brief.
 
+**The test that catches all of it: could this person say the sentence out loud?** The instruction
+is read by someone who has never seen the agent's design and does not know how it works. So a
+parenthetical explaining where the agent is supposed to find a value is not a smaller version of
+the mistake, it is the same mistake in a quieter voice.
+
+```
+BAD    Your <destination>: <value> (the agent should find this from your <record>)
+       (the caller has no idea the agent has records, let alone which one. The note is
+        written for whoever reads the scenario, not for the person on the call, and it
+        tells them the mechanism that is being tested)
+
+GOOD   Your <destination> is the same one you used last time. You do not remember the
+       exact address and would rather not look it up.
+       (now the caller has a reason to expect the agent to know, which is what makes
+        the agent's lookup worth testing, without being told the lookup exists)
+```
+
+Pre-agreeing to something the agent has not done yet is the most damaging form. "You have already
+<completed the step> that the agent will <send>" hands the agent a pass: the person confirms it
+whether or not it happened. Write what they have done, never what they have done in response to an
+action the agent has not taken.
+
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
 from a polite one only if the agent must handle that difference. Persona never contains the

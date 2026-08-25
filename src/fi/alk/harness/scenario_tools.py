@@ -51,7 +51,6 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-
 def parallel_suites() -> bool:
     """Whether a suite is written by several writers at once.
 
@@ -474,7 +473,13 @@ def scenario_tools(
                     "are the behaviours under test, and a person primed to expect them plays "
                     "along whether or not they happen, so the check passes on a conversation "
                     "that never earned it. Give them the value, the preference or the problem "
-                    "they arrived with, and let the agent's handling of it be what is measured.",
+                    "they arrived with, and let the agent's handling of it be what is measured.\n"
+                    "Test every sentence by asking whether this person could say it out loud. "
+                    "They have never seen the agent's design, so a parenthetical explaining "
+                    "where the agent should find a value fails that test just as much as a "
+                    "sentence predicting what it will say. Worst of all is agreeing in advance "
+                    "to something the agent has not done yet: that hands over a pass the "
+                    "conversation never earned.",
                 },
                 "persona": {
                     "type": "object",
