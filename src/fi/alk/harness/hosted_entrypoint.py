@@ -12,7 +12,7 @@ import asyncio
 from pathlib import Path
 
 from .executor import HarnessExecutor
-from .job import ExecutionMode, HarnessJob, HarnessStage
+from .job import ExecutionMode, HarnessJob
 
 
 async def _run(job_path: Path, source: Path, output: Path) -> int:
@@ -21,7 +21,13 @@ async def _run(job_path: Path, source: Path, output: Path) -> int:
         raise ValueError("hosted_entrypoint_requires_hosted_job")
     status = await HarnessExecutor().run(job, source=source, output=output)
     print(status.model_dump_json(exclude_none=True), flush=True)
-    return 0 if status.stage is HarnessStage.COMPLETED else 1
+    if status.failure and status.failure.code in {
+        "attempt_expired",
+        "attempt_superseded",
+        "attempt_fenced",
+    }:
+        return 3
+    return 0 if status.stage.terminal else 1
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -49,7 +49,7 @@ class RepositorySource(BaseModel):
     endpoint: str | None = None
 
     @model_validator(mode="after")
-    def _required_locator(self) -> "RepositorySource":
+    def _required_locator(self) -> RepositorySource:
         required = {
             SourceKind.LOCAL_REPOSITORY: self.local_path,
             SourceKind.GITHUB: self.repository
@@ -111,7 +111,7 @@ class HarnessRetryPolicy(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _valid_retry_policy(self) -> "HarnessRetryPolicy":
+    def _valid_retry_policy(self) -> HarnessRetryPolicy:
         allowed = {"infrastructure", "connectivity", "platform_sync"}
         unsupported = set(self.retryable_domains) - allowed
         if unsupported:
@@ -138,7 +138,7 @@ class HarnessJob(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_job(self) -> "HarnessJob":
+    def _validate_job(self) -> HarnessJob:
         if self.schema_version != HARNESS_JOB_SCHEMA_VERSION:
             raise ValueError(f"harness_job_version_unsupported: {self.schema_version}")
         if (
@@ -158,14 +158,27 @@ class HarnessJob(BaseModel):
         ):
             raise ValueError("hosted_job_cannot_use_local_path")
         if self.execution is ExecutionMode.HOSTED:
-            if self.runtime.isolation is RuntimeIsolation.SHARED_RUNNER_PROCESS:
-                object.__setattr__(
-                    self,
-                    "runtime",
-                    self.runtime.model_copy(
-                        update={"isolation": RuntimeIsolation.DEDICATED_VM}
-                    ),
-                )
+            if self.source.kind is SourceKind.IMAGE:
+                raise ValueError("image_source_not_hosted")
+            if self.source.kind is SourceKind.GITHUB and not self.source.commit_sha:
+                raise ValueError("github_commit_sha_required")
+            if self.scenario_count > 10:
+                raise ValueError("hosted_scenario_count_out_of_range")
+            if self.runtime.isolation is not RuntimeIsolation.DEDICATED_VM:
+                raise ValueError("hosted_isolation_must_be_dedicated_vm")
+            if self.runtime.parallelism > self.runtime.cpu_units:
+                raise ValueError("hosted_parallelism_exceeds_cpu")
+            if self.artifacts.level is ArtifactLevel.LOCAL_ONLY:
+                raise ValueError("local_only_not_hosted")
+            for alias, reference in self.agent.secret_refs.items():
+                if reference.manager != "platform-vault":
+                    raise ValueError(
+                        f"hosted_secret_manager_unsupported: {alias}"
+                    )
+                if reference.purpose != "target_provider":
+                    raise ValueError(
+                        f"hosted_secret_purpose_invalid: {alias}"
+                    )
             if self.security.allow_privileged:
                 raise ValueError("hosted_privileged_execution_forbidden")
             if self.security.allow_host_runtime_control:
@@ -276,14 +289,14 @@ __all__ = [
     "ExecutionMode",
     "FailureDomain",
     "HarnessArtifactPolicy",
-    "HarnessRetryPolicy",
-    "SandboxSecurityPolicy",
     "HarnessFailure",
     "HarnessJob",
     "HarnessJobStatus",
+    "HarnessRetryPolicy",
     "HarnessStage",
     "HostedHarnessPort",
     "RepositorySource",
+    "SandboxSecurityPolicy",
     "SourceKind",
     "SourceVisibility",
 ]

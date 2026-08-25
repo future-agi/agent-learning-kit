@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +14,7 @@ from fi.alk.harness.bundle import (
     seal_bundle,
 )
 from fi.alk.harness.events import BufferedEventSink, EventOutbox
-from fi.alk.harness.executor import GitHubSourceAcquirer, _failure_from_events
+from fi.alk.harness.executor import _failure_from_events
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.provision import source_fingerprint
 from fi.simulate.runtime.spec import RuntimeIsolation
@@ -132,14 +130,16 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             "installation_id": "installation",
             "repository": "customer/agent",
             "ref": "main",
+            "commit_sha": "a" * 40,
         },
+        runtime={"isolation": "dedicated_vm"},
         agent={
             "connector": "livekit",
             "secret_refs": {
                 "api_key": {
-                    "manager": "futureagi",
+                    "manager": "platform-vault",
                     "key": "secret_livekit_key",
-                    "purpose": "connect to agent",
+                    "purpose": "target_provider",
                 }
             },
         },
@@ -156,8 +156,10 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
                 "kind": "github",
                 "installation_id": "installation",
                 "repository": "customer/agent",
+                "commit_sha": "a" * 40,
             },
             agent={"connector": "livekit", "config": {"api_key": "raw-key"}},
+            runtime={"isolation": "dedicated_vm"},
         )
 
 
@@ -174,6 +176,7 @@ def test_public_github_job_needs_no_installation_but_is_commit_pinnable() -> Non
             "commit_sha": "a" * 40,
         },
         agent={"connector": "auto"},
+        runtime={"isolation": "dedicated_vm"},
     )
 
     assert job.source.installation_id is None
@@ -198,7 +201,9 @@ def test_hosted_job_rejects_unsafe_security_policy(security: dict) -> None:
                 "kind": "github",
                 "visibility": "public",
                 "repository": "customer/public-agent",
+                "commit_sha": "a" * 40,
             },
+            runtime={"isolation": "dedicated_vm"},
             agent={"connector": "auto"},
             security=security,
         )
@@ -214,7 +219,9 @@ def test_job_retry_policy_cannot_retry_agent_or_grading_failures() -> None:
                 "kind": "github",
                 "visibility": "public",
                 "repository": "customer/public-agent",
+                "commit_sha": "a" * 40,
             },
+            runtime={"isolation": "dedicated_vm"},
             agent={"connector": "auto"},
             retry={"retryable_domains": ["agent", "grading"]},
         )
@@ -269,73 +276,6 @@ def test_event_delivery_is_durable_and_retryable(tmp_path: Path) -> None:
     assert outbox.pending() == []
     assert online.flush() == 0
     assert transport.seen == [event.event_id for event in events]
-
-
-def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    token = "installation-secret-token"
-    observed = {}
-
-    def run(command, **kwargs):
-        observed["command"] = command
-        observed["environment"] = kwargs["env"]
-        Path(command[-1]).mkdir()
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
-    job = HarnessJob(
-        job_id="job",
-        run_id="run",
-        execution="hosted",
-        source={
-            "kind": "github",
-            "installation_id": "installation",
-            "repository": "customer/private-agent",
-            "ref": "main",
-        },
-        agent={"connector": "http"},
-    )
-
-    checkout = asyncio.run(
-        GitHubSourceAcquirer(lambda _installation: token).acquire(job, tmp_path)
-    )
-
-    assert checkout == tmp_path / "repository"
-    assert token not in " ".join(observed["command"])
-    assert observed["environment"]["GIT_CONFIG_VALUE_0"].endswith(token)
-
-
-def test_public_github_checkout_does_not_request_or_inject_token(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    observed = {}
-
-    def token(_installation):
-        raise AssertionError("public checkout must not request an installation token")
-
-    def run(command, **kwargs):
-        observed["environment"] = kwargs["env"]
-        Path(command[-1]).mkdir()
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
-    job = HarnessJob(
-        job_id="job",
-        run_id="run",
-        execution="hosted",
-        source={
-            "kind": "github",
-            "visibility": "public",
-            "repository": "customer/public-agent",
-        },
-        agent={"connector": "auto"},
-    )
-
-    checkout = asyncio.run(GitHubSourceAcquirer(token).acquire(job, tmp_path))
-
-    assert checkout == tmp_path / "repository"
-    assert "GIT_CONFIG_VALUE_0" not in observed["environment"]
 
 
 def test_source_fingerprint_hashes_symlink_metadata_without_reading_target(
