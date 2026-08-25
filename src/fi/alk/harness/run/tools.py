@@ -30,7 +30,6 @@ from .. import platform
 from ..catalogue import load_catalogue
 from ..config import ARTIFACTS_ROOT
 from ..scenario_tools import load_scenarios
-from ..simulator import load_simulator_prompt
 from ..tools import schema
 from ..world.snapshot import require_source_implementation
 from .call import CASE, place_the_call
@@ -465,13 +464,6 @@ def run_tools(
                 # how a simulated caller behaves is not decided in two places.
                 os.environ["HARNESS_INSTRUCTION"] = instruction
                 os.environ["HARNESS_SCENARIO"] = scenario.name
-                # The caller prompt is a template the harness fills, never prose it composes,
-                # so the generated template travels to the call with everything else.
-                _template = load_simulator_prompt(Path(world_root)) if world_root else ""
-                if _template.strip():
-                    os.environ["HARNESS_SIMULATOR_PROMPT"] = _template
-                else:
-                    os.environ.pop("HARNESS_SIMULATOR_PROMPT", None)
                 os.environ["HARNESS_OUTCOME"] = scenario.tests
                 os.environ["HARNESS_PERSONA"] = json.dumps(
                     scenario.persona.model_dump(exclude_none=True)

@@ -109,13 +109,6 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["HARNESS_SCENARIO"] = scenario.name
         # The caller prompt is a template the harness fills, never prose it composes, so
         # the generated template travels to the call with everything else.
-        from ..simulator import load_simulator_prompt
-
-        _template = load_simulator_prompt(Path(root)) if root else ""
-        if _template.strip():
-            os.environ["HARNESS_SIMULATOR_PROMPT"] = _template
-        else:
-            os.environ.pop("HARNESS_SIMULATOR_PROMPT", None)
         os.environ["HARNESS_OUTCOME"] = scenario.tests
         os.environ["HARNESS_PERSONA"] = json.dumps(
             scenario.persona.model_dump(exclude_none=True)

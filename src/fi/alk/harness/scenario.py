@@ -18,7 +18,7 @@ import random
 import re
 from collections import Counter
 from math import ceil
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -203,10 +203,20 @@ class Scenario(BaseModel):
     # suite covers both conditions rather than testing only callers in quiet rooms.
     background_noise: bool | str = Field(default_factory=lambda: random.choice((True, False)))
 
+    # Slots the caller filled by the run rather than by the scenario. Listed so a template that
+    # uses one is not rejected as unfillable at write time.
+    RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
+
     def slots(self) -> dict[str, str]:
         """Every value this scenario offers the simulator prompt."""
         persona = {"persona": self.persona.format_persona()} if self.persona else {}
-        return {"instruction": self.instruction, **self.variables, **persona}
+        runtime = {name: "" for name in self.RUNTIME_SLOTS}
+        return {
+            "instruction": self.instruction,
+            **runtime,
+            **self.variables,
+            **persona,
+        }
 
 
 def validate_scenario(

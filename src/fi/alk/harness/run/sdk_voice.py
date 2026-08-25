@@ -264,11 +264,7 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
             provider.lower(), next(iter(defaults[kind].values()))
         )
 
-    # The harness writes the caller prompt as a template; the call fills it. Absent, the SDK
-    # falls back to its shipped default so a run without one behaves as it always did.
-    template = os.environ.get("HARNESS_SIMULATOR_PROMPT", "").strip() or None
     return simulate.SimulatorAgentDefinition(
-        prompt_template=template,
         llm={
             "provider": llm_provider,
             "model": model("llm", llm_provider),
