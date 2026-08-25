@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,7 +16,11 @@ from fi.alk.harness.bundle import (
     seal_bundle,
 )
 from fi.alk.harness.events import BufferedEventSink, EventOutbox
-from fi.alk.harness.executor import _failure_from_events
+from fi.alk.harness.executor import (
+    GitHubSourceAcquirer,
+    HarnessExecutor,
+    _failure_from_events,
+)
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.provision import source_fingerprint
 from fi.simulate.runtime.spec import RuntimeIsolation
@@ -42,6 +48,71 @@ def _manifest() -> dict:
             source_kind="repository", source_digest="a" * 64
         ),
     }
+
+
+def test_executor_understands_a_materialized_archive_as_a_repository(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed: dict[str, str] = {}
+
+    async def fake_auto(args) -> int:
+        observed["kind"] = args.kind
+        observed["path"] = args.path
+        return 0
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", fake_auto)
+    source = tmp_path / "uploaded-agent"
+    source.mkdir()
+    output = tmp_path / "artifacts"
+    job = HarnessJob(
+        job_id="job-upload",
+        run_id="run-upload",
+        execution="hosted",
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={"connector": "auto"},
+        metadata={"source_kind": "archive"},
+    )
+
+    status = asyncio.run(HarnessExecutor().run(job, source=source, output=output))
+
+    assert status.stage.value == "completed"
+    assert observed == {"kind": "repo", "path": str(source.resolve())}
+
+
+def test_autonomous_pipeline_cleans_environment_when_a_stage_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    output = tmp_path / "artifacts"
+    cleaned = []
+
+    async def failed_understanding(_args) -> int:
+        raise RuntimeError("stage exploded")
+
+    monkeypatch.setattr(cli, "_understand", failed_understanding)
+    monkeypatch.setattr(
+        "fi.alk.harness.provision.stop", lambda destination: cleaned.append(destination)
+    )
+
+    with pytest.raises(RuntimeError, match="stage exploded"):
+        asyncio.run(
+            cli._auto(
+                SimpleNamespace(
+                    path=str(source),
+                    name="agent",
+                    kind="repo",
+                    out=str(output),
+                    count=1,
+                    model=None,
+                    run_model=None,
+                )
+            )
+        )
+
+    assert cleaned == [output.resolve()]
 
 
 def test_bundle_is_content_addressed_and_reproducible(tmp_path: Path) -> None:
@@ -130,16 +201,14 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             "installation_id": "installation",
             "repository": "customer/agent",
             "ref": "main",
-            "commit_sha": "a" * 40,
         },
-        runtime={"isolation": "dedicated_vm"},
         agent={
             "connector": "livekit",
             "secret_refs": {
                 "api_key": {
-                    "manager": "platform-vault",
+                    "manager": "futureagi",
                     "key": "secret_livekit_key",
-                    "purpose": "target_provider",
+                    "purpose": "connect to agent",
                 }
             },
         },
@@ -156,10 +225,8 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
                 "kind": "github",
                 "installation_id": "installation",
                 "repository": "customer/agent",
-                "commit_sha": "a" * 40,
             },
             agent={"connector": "livekit", "config": {"api_key": "raw-key"}},
-            runtime={"isolation": "dedicated_vm"},
         )
 
 
@@ -176,11 +243,43 @@ def test_public_github_job_needs_no_installation_but_is_commit_pinnable() -> Non
             "commit_sha": "a" * 40,
         },
         agent={"connector": "auto"},
-        runtime={"isolation": "dedicated_vm"},
     )
 
     assert job.source.installation_id is None
     assert job.source.commit_sha == "a" * 40
+
+
+def test_public_github_branch_url_is_normalized_into_repository_and_ref() -> None:
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "https://github.com/future-agi/future-agi/tree/feat/harness",
+        },
+        agent={"connector": "auto"},
+    )
+
+    assert job.source.repository == "future-agi/future-agi"
+    assert job.source.ref == "feat/harness"
+
+
+def test_github_branch_url_rejects_a_conflicting_explicit_ref() -> None:
+    with pytest.raises(ValueError, match="github_ref_conflicts"):
+        HarnessJob(
+            job_id="job",
+            run_id="run",
+            execution="hosted",
+            source={
+                "kind": "github",
+                "visibility": "public",
+                "repository": "https://github.com/acme/agent/tree/release",
+                "ref": "main",
+            },
+            agent={"connector": "auto"},
+        )
 
 
 @pytest.mark.parametrize(
@@ -201,9 +300,7 @@ def test_hosted_job_rejects_unsafe_security_policy(security: dict) -> None:
                 "kind": "github",
                 "visibility": "public",
                 "repository": "customer/public-agent",
-                "commit_sha": "a" * 40,
             },
-            runtime={"isolation": "dedicated_vm"},
             agent={"connector": "auto"},
             security=security,
         )
@@ -219,9 +316,7 @@ def test_job_retry_policy_cannot_retry_agent_or_grading_failures() -> None:
                 "kind": "github",
                 "visibility": "public",
                 "repository": "customer/public-agent",
-                "commit_sha": "a" * 40,
             },
-            runtime={"isolation": "dedicated_vm"},
             agent={"connector": "auto"},
             retry={"retryable_domains": ["agent", "grading"]},
         )
@@ -276,6 +371,110 @@ def test_event_delivery_is_durable_and_retryable(tmp_path: Path) -> None:
     assert outbox.pending() == []
     assert online.flush() == 0
     assert transport.seen == [event.event_id for event in events]
+
+
+def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "installation-secret-token"
+    observed = {}
+
+    def run(command, **kwargs):
+        observed["command"] = command
+        observed["environment"] = kwargs["env"]
+        Path(command[-1]).mkdir()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "installation_id": "installation",
+            "repository": "customer/private-agent",
+            "ref": "main",
+        },
+        agent={"connector": "http"},
+    )
+
+    checkout = asyncio.run(
+        GitHubSourceAcquirer(lambda _installation: token).acquire(job, tmp_path)
+    )
+
+    assert checkout == tmp_path / "repository"
+    assert token not in " ".join(observed["command"])
+    assert observed["environment"]["GIT_CONFIG_VALUE_0"].endswith(token)
+
+
+def test_public_github_checkout_does_not_request_or_inject_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = {}
+
+    def token(_installation):
+        raise AssertionError("public checkout must not request an installation token")
+
+    def run(command, **kwargs):
+        observed["environment"] = kwargs["env"]
+        Path(command[-1]).mkdir()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "customer/public-agent",
+        },
+        agent={"connector": "auto"},
+    )
+
+    checkout = asyncio.run(GitHubSourceAcquirer(token).acquire(job, tmp_path))
+
+    assert checkout == tmp_path / "repository"
+    assert "GIT_CONFIG_VALUE_0" not in observed["environment"]
+
+
+def test_public_github_branch_url_clones_the_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = {}
+
+    def run(command, **kwargs):
+        observed["command"] = command
+        Path(command[-1]).mkdir()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fi.alk.harness.executor.subprocess.run", run)
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "https://github.com/acme/agent/tree/feat/harness",
+        },
+        agent={"connector": "auto"},
+    )
+
+    asyncio.run(GitHubSourceAcquirer(lambda _: "").acquire(job, tmp_path))
+
+    assert observed["command"] == [
+        "git",
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        "feat/harness",
+        "https://github.com/acme/agent.git",
+        str(tmp_path / "repository"),
+    ]
 
 
 def test_source_fingerprint_hashes_symlink_metadata_without_reading_target(

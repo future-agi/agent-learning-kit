@@ -97,6 +97,33 @@ drift and mutation gates before scenarios may use it.
 - Agent behavior failures are valid RL results; harness/infrastructure failures are not scored as
   agent failures.
 
+## Repository-backed chat execution
+
+Chat and voice share the same autonomous lifecycle. Voice has a standard realtime rendezvous;
+chat runtimes instead declare the conversational ingress they already implement in the grounded
+agent contract. Today a repository runtime can expose either:
+
+- HTTP using ALK's turn envelope; or
+- HTTP using an OpenAI Chat Completions-compatible envelope; or
+- a JSON turn exchange over WebSocket.
+
+For every scenario ALK binds the restored world, starts the submitted Compose/Dockerfile/generated
+runtime with the environment's private endpoint overrides, exposes the declared container port on
+an ephemeral loopback port locally (or only the private project network in a hosted runner), waits
+for readiness, drives the conversation, records tool effects and removes the runtime. A default
+Compose API is identified by its declared ingress port and excluded from infrastructure startup;
+ambiguous services fail admission rather than being guessed.
+
+If the submitted agent returns model-facing tool calls, ALK executes them against the same world
+and continues the turn with tool results. If the agent executes tools itself through the injected
+environment endpoints, the world records those calls at the service boundary. Either way, setup
+activity remains separate from agent evidence.
+
+An agent with no external HTTP/WebSocket ingress is not silently reconstructed. Callable/CLI-only
+repository runtimes need a sandbox-side process adapter in a later extension; until then admission
+reports the missing interface explicitly. This preserves the invariant that ALK runs submitted
+agent behavior rather than inventing it.
+
 ## Data and scenario quality
 
 Scenario validation rejects predictable/demo fixtures such as `123456`, recycled identities,

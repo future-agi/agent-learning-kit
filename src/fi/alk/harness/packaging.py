@@ -64,7 +64,12 @@ _HOST_MOUNT = re.compile(
 )
 
 
-def inspect_packaging(root: str | Path, *, max_depth: int = 4) -> PackagingManifest:
+def inspect_packaging(
+    root: str | Path,
+    *,
+    max_depth: int = 4,
+    external_environment: bool = False,
+) -> PackagingManifest:
     """Find and validate existing container packaging without running Docker."""
     source = Path(root).expanduser().resolve()
     if not source.is_dir():
@@ -79,8 +84,14 @@ def inspect_packaging(root: str | Path, *, max_depth: int = 4) -> PackagingManif
             continue
         if path.is_symlink() or not path.is_file():
             continue
-        if path.name in _COMPOSE_NAMES:
-            candidates.append(_compose_candidate(source, path))
+        if _is_compose_file(path.name):
+            candidates.append(
+                _compose_candidate(
+                    source,
+                    path,
+                    external_environment=external_environment,
+                )
+            )
         elif _is_dockerfile(path.name):
             candidates.append(_dockerfile_candidate(source, path))
 
@@ -148,6 +159,18 @@ def _is_dockerfile(name: str) -> bool:
     if not name.startswith("Dockerfile."):
         return False
     return not name.endswith((".dockerignore", ".md", ".txt"))
+
+
+def _is_compose_file(name: str) -> bool:
+    """Recognize standard and explicitly named Compose variants."""
+    lowered = name.lower()
+    if lowered in _COMPOSE_NAMES:
+        return True
+    if not lowered.endswith((".yml", ".yaml")):
+        return False
+    return lowered.startswith(("compose.", "docker-compose.")) and not any(
+        marker in lowered for marker in (".example.", ".sample.", ".bak.")
+    )
 
 
 def _dockerfile_candidate(root: Path, path: Path) -> PackagingCandidate:
@@ -247,7 +270,12 @@ def _dockerfile_copy_sources(content: str) -> list[str]:
     return sources
 
 
-def _compose_candidate(root: Path, path: Path) -> PackagingCandidate:
+def _compose_candidate(
+    root: Path,
+    path: Path,
+    *,
+    external_environment: bool = False,
+) -> PackagingCandidate:
     content = path.read_text(encoding="utf-8", errors="replace")
     findings: list[PackagingFinding] = []
     services: dict[str, object] = {}
@@ -272,6 +300,10 @@ def _compose_candidate(root: Path, path: Path) -> PackagingCandidate:
         if isinstance(env_files, (str, dict)):
             env_files = [env_files]
         for raw_env_file in env_files:
+            optional = (
+                isinstance(raw_env_file, dict)
+                and raw_env_file.get("required") is False
+            )
             value = (
                 str(raw_env_file.get("path") or "")
                 if isinstance(raw_env_file, dict)
@@ -290,13 +322,34 @@ def _compose_candidate(root: Path, path: Path) -> PackagingCandidate:
                     )
                 )
                 continue
-            if not candidate.is_file():
+            if not candidate.is_file() and not optional:
                 findings.append(
                     PackagingFinding(
                         code="compose_env_file_missing",
-                        message=f"{service_name} requires missing env file: {value}",
+                        message=(
+                            f"{service_name} uses uploaded environment values instead of "
+                            f"repository secret file: {value}"
+                            if external_environment
+                            else f"{service_name} requires missing env file: {value}"
+                        ),
+                        blocking=not external_environment,
                     )
                 )
+    if services and all(
+        isinstance(service, dict)
+        and not service.get("image")
+        and not service.get("build")
+        for service in services.values()
+    ):
+        findings.append(
+            PackagingFinding(
+                code="compose_override_fragment",
+                message=(
+                    "Compose file only overrides existing services and cannot run "
+                    "as a standalone environment"
+                ),
+            )
+        )
     for match in _HOST_MOUNT.finditer(content):
         findings.append(
             PackagingFinding(

@@ -41,7 +41,26 @@ def test_unambiguous_python_repository_gets_a_non_root_plan(tmp_path: Path) -> N
     assert plan.install_strategy == "pip-requirements"
     assert plan.command == ("python", "agent.py")
     assert "USER 10001:10001" in plan.dockerfile
-    assert "apt-get install -y --no-install-recommends build-essential" in plan.dockerfile
+    assert (
+        "apt-get install -y --no-install-recommends build-essential" in plan.dockerfile
+    )
+
+
+def test_legacy_setup_py_repository_gets_generated_runtime(tmp_path: Path) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("setup.py").write_text(
+        "from setuptools import setup\nsetup(name='legacy-chat-agent', version='0.1')\n"
+    )
+    source.joinpath("run.py").write_text("print('ready')\n")
+
+    plan = detect_generated_runtime(
+        source, Runtime(language="python", command=["python", "run.py"])
+    )
+
+    assert plan.install_strategy == "pip-setup-project-unlocked"
+    assert plan.command == ("python", "run.py")
+    assert "RUN pip install --no-cache-dir ." in plan.dockerfile
 
 
 def test_livekit_python_entrypoint_uses_worker_start_mode(tmp_path: Path) -> None:
@@ -173,6 +192,26 @@ def test_node_repository_uses_lockfile_and_start_script(tmp_path: Path) -> None:
     assert "USER node" in plan.dockerfile
 
 
+def test_node_start_runtime_runs_declared_build_phase(tmp_path: Path) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("package.json").write_text(
+        json.dumps(
+            {
+                "scripts": {
+                    "build": "tsc",
+                    "start": "node dist/agent.js",
+                }
+            }
+        )
+    )
+    source.joinpath("package-lock.json").write_text("{}")
+
+    plan = detect_generated_runtime(source, Runtime())
+
+    assert "RUN npm run build" in plan.dockerfile
+
+
 def test_python_optional_group_is_inferred_from_grounded_entrypoint(
     tmp_path: Path,
 ) -> None:
@@ -259,6 +298,82 @@ def test_symlink_in_generated_context_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(GeneratedRuntimeError, match="symlink_forbidden"):
         prepare_generated_runtime(source, tmp_path / "session", Runtime())
+
+
+def test_internal_symlink_is_materialized_without_preserving_link(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    data = source / "data"
+    data.mkdir()
+    data.joinpath("task.json").write_text('{"task": 1}\n')
+    source.joinpath("public-data").symlink_to(data, target_is_directory=True)
+
+    plan = prepare_generated_runtime(source, tmp_path / "session", Runtime())
+    materialized = Path(plan.context_directory) / "public-data" / "task.json"
+
+    assert materialized.read_text() == '{"task": 1}\n'
+    assert not materialized.parent.is_symlink()
+
+
+def test_generated_context_omits_explicit_large_output_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    results = source / "data" / "results"
+    results.mkdir(parents=True)
+    results.joinpath("old.json").write_text("{}\n")
+
+    plan = prepare_generated_runtime(
+        source,
+        tmp_path / "session",
+        Runtime(context_excludes=["data/results"]),
+    )
+
+    assert plan.context_excludes == ("data/results",)
+    assert not Path(plan.context_directory, "data/results").exists()
+
+
+def test_generated_context_allows_excluding_not_yet_created_runtime_state(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+
+    plan = prepare_generated_runtime(
+        source,
+        tmp_path / "session",
+        Runtime(context_excludes=["fake_data/hotel.db"]),
+    )
+
+    assert plan.context_excludes == ()
+    assert Path(plan.context_directory, "agent.py").is_file()
+
+
+def test_generated_context_cannot_exclude_submitted_entrypoint(tmp_path: Path) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    scripts = source / "scripts"
+    scripts.mkdir()
+    scripts.joinpath("agent.py").write_text("print('ready')\n")
+
+    with pytest.raises(GeneratedRuntimeError, match="context_exclude_required"):
+        detect_generated_runtime(
+            source,
+            Runtime(
+                command=["python", "scripts/agent.py"],
+                context_excludes=["scripts"],
+            ),
+        )
 
 
 def test_provision_builds_generated_runtime_without_touching_source(
@@ -546,6 +661,37 @@ def test_generated_runtime_persists_only_required_credential_names(
     assert "must-never-be-persisted" not in persisted
 
 
+def test_generated_runtime_includes_ephemeral_uploaded_environment_names(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    contract = _contract(command=["python", "agent.py"])
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {"services": {"agent-runtime": {"profiles": ["harness-runtime"]}}}
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setenv(
+        "ALK_RUNTIME_CONFIGURATION_NAMES", "CUSTOM_REGION,FEATURE_FLAG,ALK_FORBIDDEN"
+    )
+    monkeypatch.setenv("CUSTOM_REGION", "must-never-be-persisted")
+    environment = provisioning.provision(source, session, contract)
+
+    assert environment.runtime_configuration_names == ["CUSTOM_REGION", "FEATURE_FLAG"]
+    assert (
+        "must-never-be-persisted"
+        not in session.joinpath("environment.json").read_text()
+    )
+
+
 def test_generated_worker_translates_loopback_livekit_without_persisting_it(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -558,7 +704,7 @@ def test_generated_worker_translates_loopback_livekit_without_persisting_it(
         running=True,
     )
     environment.save(tmp_path)
-    monkeypatch.setenv("LIVEKIT_URL", "ws://127.0.0.1:17880")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_LIVEKIT_URL", "ws://127.0.0.1:17880")
     monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
     seen: dict[str, str] = {}
 
@@ -585,6 +731,136 @@ def test_generated_worker_translates_loopback_livekit_without_persisting_it(
 
     assert seen["LIVEKIT_URL"] == "ws://host.docker.internal:17880"
     assert "127.0.0.1:17880" not in tmp_path.joinpath("environment.json").read_text()
+
+
+def test_runtime_does_not_revalidate_container_target_for_mounted_google_credentials(
+    tmp_path: Path, monkeypatch
+) -> None:
+    credential = tmp_path / "google.json"
+    credential.write_text('{"type":"service_account"}\n')
+    container_target = "/etc/vertex/creds.json"
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="mounted-google-test",
+        runtime_services=["agent-runtime"],
+        running=True,
+    )
+    environment.save(tmp_path)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        provisioning,
+        "_config",
+        lambda _environment: {
+            "services": {
+                "agent-runtime": {
+                    "environment": {
+                        "GOOGLE_APPLICATION_CREDENTIALS": container_target
+                    },
+                    "volumes": [
+                        {"source": str(credential), "target": container_target}
+                    ],
+                }
+            }
+        },
+    )
+
+    def run(_environment, *arguments, **kwargs):
+        seen["arguments"] = arguments
+        seen["injected"] = kwargs.get("process_overrides") or {}
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+
+    provisioning.start_runtime(tmp_path)
+
+    assert f"{credential.resolve()}:{container_target}:ro" in seen["arguments"]
+    assert seen["injected"]["GOOGLE_APPLICATION_CREDENTIALS"] == container_target
+
+
+def test_managed_runtime_uses_generated_private_endpoint_over_submitted_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="private-endpoint",
+        managed=True,
+        running=True,
+        runtime_services=["agent-runtime"],
+        internal_overrides={"TOOLS_API_URL": "http://tools-api:8080"},
+        runtime_configuration_names=["TOOLS_API_URL"],
+    )
+    environment.save(tmp_path)
+    monkeypatch.setenv("HARNESS_RUNTIME_STABLE_SECONDS", "0")
+    monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", "TOOLS_API_URL")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_TOOLS_API_URL", "http://harness:8787")
+    monkeypatch.setattr(
+        provisioning,
+        "_config",
+        lambda _environment: {
+            "services": {
+                "agent-runtime": {
+                    "environment": {"TOOLS_API_URL": "http://harness:8787"}
+                }
+            }
+        },
+    )
+    seen: dict[str, object] = {}
+
+    def run(_environment, *arguments, **kwargs):
+        seen["arguments"] = arguments
+        seen["injected"] = kwargs.get("process_overrides") or {}
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    monkeypatch.setattr(
+        provisioning,
+        "_docker",
+        lambda *arguments, **_kwargs: (
+            "running" if arguments and arguments[0] == "inspect" else ""
+        ),
+    )
+
+    provisioning.start_runtime(tmp_path)
+
+    assert seen["injected"]["TOOLS_API_URL"] == "http://tools-api:8080"
+    arguments = seen["arguments"]
+    assert "TOOLS_API_URL=http://tools-api:8080" in arguments
+
+
+def test_compose_process_overrides_uploaded_runtime_endpoint(tmp_path: Path, monkeypatch) -> None:
+    environment = provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.json"),
+        project="compose-precedence",
+        runtime_configuration_names=["TOOLS_API_URL"],
+    )
+    monkeypatch.setenv("ALK_RUNTIME_CONFIGURATION_NAMES", "TOOLS_API_URL")
+    monkeypatch.setenv("ALK_RUNTIME_VALUE_TOOLS_API_URL", "http://harness:8787")
+    seen: dict[str, str] = {}
+
+    def run(*_args, **kwargs):
+        seen.update(kwargs["env"])
+        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(provisioning.subprocess, "run", run)
+
+    provisioning._run(
+        environment,
+        "run",
+        process_overrides={"TOOLS_API_URL": "http://tools-api:8080"},
+    )
+
+    assert seen["TOOLS_API_URL"] == "http://tools-api:8080"
 
 
 def test_generated_runtime_bundle_is_portable_and_contains_no_host_context(

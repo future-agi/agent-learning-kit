@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import shutil
 import signal
@@ -18,8 +19,17 @@ import sys
 from typing import Any
 import uuid
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
-from pydantic import BaseModel, Field, model_validator
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -31,6 +41,7 @@ from .credentials import (
     discover_credentials,
 )
 from .executor import GitHubSourceAcquirer, SourceAcquisitionError
+from .github import parse_github_location
 from .job import (
     AgentConnection,
     ExecutionMode,
@@ -43,12 +54,13 @@ from .job import (
     SourceVisibility,
 )
 from .packaging import PackagingManifest, inspect_packaging
-from .provision import source_fingerprint
+from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import resolve_worker_secrets, worker_environment
 
 
 class LocalSandboxRequest(BaseModel):
     source_path: str | None = None
+    source_id: str | None = None
     github_repository: str | None = None
     github_ref: str | None = None
     github_commit_sha: str | None = None
@@ -60,28 +72,45 @@ class LocalSandboxRequest(BaseModel):
     connector: str = "auto"
     connector_config: dict[str, Any] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
+    environment_values: dict[str, SecretStr] = Field(default_factory=dict)
     platform_run_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _one_source(self) -> "LocalSandboxRequest":
-        if bool(self.source_path) == bool(self.github_repository):
+        if (
+            sum(
+                bool(value)
+                for value in (self.source_path, self.source_id, self.github_repository)
+            )
+            != 1
+        ):
             raise ValueError("exactly_one_source_required")
+        _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
 
 class SandboxPreflightRequest(BaseModel):
     source_path: str | None = None
+    source_id: str | None = None
     github_repository: str | None = None
     github_visibility: SourceVisibility = SourceVisibility.PUBLIC
     github_installation_id: str | None = None
     connector_config: dict[str, Any] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
+    environment_values: dict[str, SecretStr] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _one_source(self) -> "SandboxPreflightRequest":
-        if bool(self.source_path) == bool(self.github_repository):
+        if (
+            sum(
+                bool(value)
+                for value in (self.source_path, self.source_id, self.github_repository)
+            )
+            != 1
+        ):
             raise ValueError("exactly_one_source_required")
+        _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
 
@@ -103,17 +132,121 @@ class SandboxJobResponse(BaseModel):
     credentials: CredentialManifest | None = None
 
 
+class UploadedSourceResponse(BaseModel):
+    source_id: str
+    name: str
+    file_count: int
+    total_bytes: int
+
+
 class LocalSandbox:
-    def __init__(self, root: Path, *, max_concurrency: int = 2) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        max_concurrency: int = 2,
+        upload_root: Path | None = None,
+    ) -> None:
         self.root = root.expanduser().resolve()
         self.jobs_root = self.root / "jobs"
         self.artifacts_root = self.root / "artifacts"
+        self.uploads_root = (
+            (
+                upload_root
+                or Path(
+                    os.getenv("ALK_SANDBOX_UPLOAD_ROOT", str(self.root / "uploads"))
+                )
+            )
+            .expanduser()
+            .resolve()
+        )
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
+        self.uploads_root.mkdir(parents=True, exist_ok=True)
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Values supplied through the platform's .env flow live only for the lifetime of the
+        # job. Persisted job/state artifacts contain the opaque mounted references created below.
+        self._ephemeral_secrets: dict[str, dict[str, str]] = {}
         self._recover_orphans()
+
+    async def upload_source(
+        self, files: list[UploadFile], paths: list[str], name: str
+    ) -> UploadedSourceResponse:
+        if not files or len(files) != len(paths):
+            raise HTTPException(
+                status_code=400, detail="one relative path is required per file"
+            )
+        if len(files) > 5_000:
+            raise HTTPException(
+                status_code=413, detail="source may contain at most 5000 files"
+            )
+        source_id = str(uuid.uuid4())
+        staging = self.uploads_root / f".{source_id}.uploading"
+        destination = self.uploads_root / source_id
+        staging.mkdir(mode=0o700)
+        total = 0
+        seen: set[str] = set()
+        try:
+            for uploaded, raw_path in zip(files, paths, strict=True):
+                relative = _safe_uploaded_path(raw_path)
+                key = relative.as_posix()
+                if key in seen:
+                    raise HTTPException(
+                        status_code=400, detail=f"duplicate source path: {key}"
+                    )
+                seen.add(key)
+                target = staging.joinpath(*relative.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                file_size = 0
+                starts_with_shebang = False
+                with target.open("xb") as handle:
+                    while chunk := await uploaded.read(1024 * 1024):
+                        if file_size == 0:
+                            starts_with_shebang = chunk.startswith(b"#!")
+                        file_size += len(chunk)
+                        total += len(chunk)
+                        if file_size > 50 * 1024 * 1024 or total > 200 * 1024 * 1024:
+                            raise HTTPException(
+                                status_code=413,
+                                detail="source exceeds the 50 MiB file or 200 MiB bundle limit",
+                            )
+                        handle.write(chunk)
+                target.chmod(0o755 if starts_with_shebang else 0o644)
+            manifest = {
+                "source_id": source_id,
+                "name": (name or "uploaded-agent")[:255],
+                "file_count": len(files),
+                "total_bytes": total,
+                "created_at": _now(),
+            }
+            staging.replace(destination)
+            _write_json(
+                self.uploads_root / f"{source_id}.json",
+                manifest,
+            )
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(destination, ignore_errors=True)
+            (self.uploads_root / f"{source_id}.json").unlink(missing_ok=True)
+            raise
+        return UploadedSourceResponse(
+            source_id=source_id,
+            name=(name or "uploaded-agent")[:255],
+            file_count=len(files),
+            total_bytes=total,
+        )
+
+    def uploaded_source(self, source_id: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f-]{36}", source_id):
+            raise HTTPException(status_code=400, detail="source_id is invalid")
+        source = (self.uploads_root / source_id).resolve()
+        if source.parent != self.uploads_root or not source.is_dir():
+            raise HTTPException(status_code=404, detail="uploaded source was not found")
+        if not (self.uploads_root / f"{source_id}.json").is_file():
+            raise HTTPException(status_code=400, detail="uploaded source is incomplete")
+        return source
 
     def _recover_orphans(self) -> None:
         for path in self.jobs_root.glob("*/state.json"):
@@ -127,21 +260,46 @@ class LocalSandbox:
                 _write_json(path, state)
 
     def submit(self, request: LocalSandboxRequest) -> SandboxJobResponse:
-        source = _allowed_source(request.source_path) if request.source_path else None
+        source = (
+            _allowed_source(request.source_path)
+            if request.source_path
+            else self.uploaded_source(request.source_id)
+            if request.source_id
+            else None
+        )
         identifier = str(uuid.uuid4())
         run_id = f"harness-{identifier}"
-        github_repository = (
-            _github_repository(request.github_repository)
+        github_location = (
+            _github_location(request.github_repository)
             if request.github_repository
             else None
         )
+        github_repository = github_location.repository if github_location else None
+        mounted_refs: dict[str, SecretRef] = {}
+        mounted_values: dict[str, str] = {}
+        for index, (name, value) in enumerate(request.environment_values.items()):
+            internal_key = f"ALK_JOB_{identifier.replace('-', '').upper()}_{index}"
+            mounted_refs[name] = SecretRef(
+                manager="mounted",
+                key=internal_key,
+                purpose=f"job-scoped environment value for {name}",
+            )
+            mounted_values[internal_key] = value.get_secret_value()
         source_spec = (
-            RepositorySource(kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source))
+            RepositorySource(
+                kind=SourceKind.ARCHIVE,
+                archive_artifact_id=request.source_id,
+            )
+            if request.source_id
+            else RepositorySource(
+                kind=SourceKind.LOCAL_REPOSITORY, local_path=str(source)
+            )
             if source
             else RepositorySource(
                 kind=SourceKind.GITHUB,
                 repository=github_repository,
-                ref=request.github_ref,
+                ref=(github_location.ref if github_location else None)
+                or request.github_ref,
                 commit_sha=request.github_commit_sha,
                 visibility=request.github_visibility,
                 installation_id=request.github_installation_id,
@@ -152,15 +310,14 @@ class LocalSandbox:
             run_id=run_id,
             execution=(
                 ExecutionMode.HOSTED
-                if request.github_repository
-                and request.github_visibility is SourceVisibility.PRIVATE
+                if request.source_id or request.github_repository
                 else ExecutionMode.LOCAL
             ),
             source=source_spec,
             agent=AgentConnection(
                 connector=request.connector,
                 config=request.connector_config,
-                secret_refs=request.secret_refs,
+                secret_refs={**request.secret_refs, **mounted_refs},
             ),
             scenario_count=request.scenario_count,
             seed=request.seed,
@@ -169,8 +326,15 @@ class LocalSandbox:
             metadata={
                 **request.metadata,
                 "agent_name": request.agent_name
-                or (source.name if source else str(github_repository).split("/")[-1]),
+                or (
+                    _uploaded_source_name(source)
+                    if request.source_id and source
+                    else source.name
+                    if source
+                    else str(github_repository).split("/")[-1]
+                ),
                 "source_kind": source_spec.kind.value,
+                "environment_value_names": sorted(mounted_refs),
             },
         )
         directory = self.jobs_root / identifier
@@ -189,22 +353,43 @@ class LocalSandbox:
                 "attempt": 1,
             },
         )
+        if mounted_values:
+            self._ephemeral_secrets[identifier] = mounted_values
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
-        if request.source_path:
-            source = _allowed_source(request.source_path)
-            packaging = inspect_packaging(source)
+        if request.source_path or request.source_id:
+            source = (
+                _allowed_source(request.source_path)
+                if request.source_path
+                else self.uploaded_source(request.source_id or "")
+            )
+            packaging = inspect_packaging(
+                source,
+                external_environment=bool(request.environment_values),
+            )
             manifest = discover_credentials(
                 source,
                 secret_refs=request.secret_refs,
-                provided_environment=request.connector_config,
+                provided_environment={
+                    **request.connector_config,
+                    **{
+                        name: value.get_secret_value()
+                        for name, value in request.environment_values.items()
+                    },
+                },
                 scan_paths=_credential_scan_paths(packaging),
             )
             return SandboxPreflightResponse(
-                source_kind=SourceKind.LOCAL_REPOSITORY,
-                source_label=str(source),
+                source_kind=(
+                    SourceKind.ARCHIVE
+                    if request.source_id
+                    else SourceKind.LOCAL_REPOSITORY
+                ),
+                source_label=(
+                    _uploaded_source_name(source) if request.source_id else str(source)
+                ),
                 ready_to_submit=(
                     manifest.ready
                     and packaging.ready
@@ -213,7 +398,8 @@ class LocalSandbox:
                 credentials=manifest,
                 packaging=packaging,
             )
-        repository = _github_repository(request.github_repository or "")
+        location = _github_location(request.github_repository or "")
+        repository = location.repository
         requirement = CredentialRequirement(
             id="github_installation",
             environment_name="GITHUB_INSTALLATION",
@@ -291,7 +477,12 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
-                packaging_manifest = inspect_packaging(source)
+                packaging_manifest = inspect_packaging(
+                    source,
+                    external_environment=bool(
+                        job.metadata.get("environment_value_names", [])
+                    ),
+                )
                 credential_manifest = discover_credentials(
                     source,
                     secret_refs=job.agent.secret_refs,
@@ -350,7 +541,13 @@ class LocalSandbox:
                     )
                     _write_json(state_path, state)
                     return
-                resolved_secrets = resolve_worker_secrets(job.agent.secret_refs)
+                resolved_secrets = resolve_worker_secrets(
+                    job.agent.secret_refs,
+                    environment={
+                        **os.environ,
+                        **self._ephemeral_secrets.get(job.job_id, {}),
+                    },
+                )
                 submitted_source_digest = source_fingerprint(source)
                 result: dict[str, Any] = {}
                 return_code = 1
@@ -368,6 +565,33 @@ class LocalSandbox:
                         if archived.exists():
                             shutil.rmtree(archived)
                         output.replace(archived)
+                    runtime_names = {
+                        str(name)
+                        for name in job.metadata.get("environment_value_names", [])
+                    }
+                    runtime_configuration = {
+                        name: value
+                        for name, value in resolved_secrets.items()
+                        if name in runtime_names
+                    }
+                    controller_configuration = {
+                        **_configuration_environment(job.agent.config),
+                        **{
+                            name: value
+                            for name, value in resolved_secrets.items()
+                            if name not in runtime_names
+                        },
+                    }
+                    child_environment = worker_environment(
+                        controller_configuration,
+                        runtime_configuration=runtime_configuration,
+                    )
+                    # The provisioner must explicitly pass customer-provided values into
+                    # Dockerfile/generated runtime containers.  Persist names only; values stay
+                    # in this child process environment and never enter the job or bundle.
+                    child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
+                        sorted(runtime_configuration)
+                    )
                     process = await asyncio.create_subprocess_exec(
                         sys.executable,
                         "-m",
@@ -382,12 +606,7 @@ class LocalSandbox:
                         stdout=log_handle,
                         stderr=asyncio.subprocess.STDOUT,
                         start_new_session=True,
-                        env=worker_environment(
-                            {
-                                **_configuration_environment(job.agent.config),
-                                **resolved_secrets,
-                            }
-                        ),
+                        env=child_environment,
                     )
                     self._processes[job.job_id] = process
                     return_code = await process.wait()
@@ -474,6 +693,7 @@ class LocalSandbox:
                 log_handle.close()
                 self._processes.pop(job.job_id, None)
                 self._tasks.pop(job.job_id, None)
+                self._ephemeral_secrets.pop(job.job_id, None)
 
     def get(self, job_id: str) -> SandboxJobResponse:
         directory = self.jobs_root / job_id
@@ -502,6 +722,25 @@ class LocalSandbox:
             stage = raw_state["stage"]
             updated_at = raw_state.get("updated_at", updated_at)
             detail = raw_state.get("detail")
+        completed_scenarios = int(raw_state.get("completed_scenarios", 0) or 0)
+        if stage == HarnessStage.RUNNING.value:
+            # The worker writes state.json only at process boundaries, while each scenario result
+            # is committed as soon as that scenario finishes. Derive live progress from the newest
+            # campaign directory so a multi-call run does not remain at 0/N until finalization.
+            # Only immediate scenario result files count; nested SDK/debug artifacts are ignored.
+            runs_root = self.artifacts_root / job.run_id / "runs"
+            campaigns = [path for path in runs_root.glob("run-*") if path.is_dir()]
+            if campaigns:
+                latest = max(campaigns, key=lambda path: path.stat().st_mtime_ns)
+                committed = sum(
+                    1
+                    for scenario in latest.iterdir()
+                    if scenario.is_dir() and (scenario / "result.json").is_file()
+                )
+                completed_scenarios = min(
+                    raw_state.get("total_scenarios", job.scenario_count),
+                    max(completed_scenarios, committed),
+                )
         status_value = HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
@@ -509,7 +748,7 @@ class LocalSandbox:
             updated_at=updated_at,
             detail=detail,
             failure=raw_state.get("failure"),
-            completed_scenarios=raw_state.get("completed_scenarios", 0),
+            completed_scenarios=completed_scenarios,
             total_scenarios=raw_state.get("total_scenarios", job.scenario_count),
             attempt=raw_state.get("attempt", 1),
         )
@@ -566,6 +805,19 @@ class LocalSandbox:
         task = self._tasks.get(job_id)
         if task and not task.done():
             task.cancel()
+        # SIGTERM stops the worker before its async ``finally`` can reliably run.  Cancellation
+        # must therefore own the same environment boundary explicitly; otherwise every timed-out
+        # hosted job leaves its database, network and volumes behind.
+        output = self.artifacts_root / response.job.run_id
+        try:
+            await asyncio.to_thread(stop, output)
+        except ProvisionError as exc:
+            state.update(
+                detail=f"canceled; isolated environment cleanup failed: {exc}",
+                updated_at=_now(),
+            )
+            _write_json(state_path, state)
+        self._ephemeral_secrets.pop(job_id, None)
         return self.get(job_id)
 
 
@@ -580,6 +832,44 @@ def _configuration_environment(config: dict[str, Any]) -> dict[str, str]:
         elif isinstance(value, (str, int, float)):
             result[str(name)] = str(value)
     return result
+
+
+_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RUNNER_RESERVED_ENVIRONMENT = {
+    "DOCKER_HOST",
+    "FI_API_KEY",
+    "FI_BASE_URL",
+    "FI_SECRET_KEY",
+    "HARNESS_PLATFORM_API_KEY",
+    "HARNESS_PLATFORM_SECRET_KEY",
+    "HARNESS_PLATFORM_URL",
+    "HARNESS_WEBHOOK_HOST",
+    "HARNESS_WEBHOOK_PORT",
+    "HOME",
+    "PATH",
+    "PYTHONPATH",
+}
+
+
+def _validate_environment_values(
+    values: dict[str, SecretStr], references: dict[str, SecretRef]
+) -> None:
+    if len(values) > 256:
+        raise ValueError("environment_values_limit_exceeded")
+    if set(values) & set(references):
+        raise ValueError("environment_value_conflicts_with_secret_reference")
+    total = 0
+    for name, secret in values.items():
+        if not _ENVIRONMENT_NAME.fullmatch(name):
+            raise ValueError(f"environment_name_invalid: {name}")
+        if name in _RUNNER_RESERVED_ENVIRONMENT or name.startswith("ALK_"):
+            raise ValueError(f"environment_name_reserved: {name}")
+        value = secret.get_secret_value()
+        if "\x00" in value:
+            raise ValueError(f"environment_value_contains_nul: {name}")
+        total += len(name.encode()) + len(value.encode())
+    if total > 262_144:
+        raise ValueError("environment_values_size_exceeded")
 
 
 def _credential_scan_paths(packaging: PackagingManifest) -> list[str] | None:
@@ -643,15 +933,39 @@ def _allowed_source(raw: str) -> Path:
     return source
 
 
-def _github_repository(raw: str) -> str:
-    repository = raw.strip()
-    prefix = "https://github.com/"
-    if repository.startswith(prefix):
-        repository = repository[len(prefix) :]
-    repository = repository.removesuffix(".git").strip("/")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
-        raise HTTPException(status_code=400, detail="github_repository is invalid")
-    return repository
+def _safe_uploaded_path(raw: str) -> PurePosixPath:
+    normalized = str(raw).replace("\\", "/").strip("/")
+    relative = PurePosixPath(normalized)
+    if (
+        not normalized
+        or len(normalized) > 1024
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or len(relative.parts) > 64
+    ):
+        raise HTTPException(status_code=400, detail=f"unsafe source path: {raw[:200]}")
+    leaf = relative.name.lower()
+    safe_environment_templates = {".env.example", ".env.sample", ".env.template"}
+    if (
+        leaf == ".env" or leaf.startswith(".env.")
+    ) and leaf not in safe_environment_templates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{relative.as_posix()} may contain secrets; upload it through the .env control",
+        )
+    return relative
+
+
+def _uploaded_source_name(source: Path) -> str:
+    manifest = _read_json(source.parent / f"{source.name}.json")
+    return str(manifest.get("name") or "uploaded-agent")
+
+
+def _github_location(raw: str):
+    try:
+        return parse_github_location(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _github_installation_token(installation_id: str) -> str:
@@ -738,6 +1052,19 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "provider": "local-process"}
+
+    @app.post(
+        "/v1/sources",
+        response_model=UploadedSourceResponse,
+        dependencies=[Depends(_authorize)],
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def upload_source(
+        files: list[UploadFile] = File(...),
+        paths: list[str] = Form(...),
+        name: str = Form(default="uploaded-agent"),
+    ) -> UploadedSourceResponse:
+        return await sandbox.upload_source(files, paths, name)
 
     @app.post(
         "/v1/preflight",

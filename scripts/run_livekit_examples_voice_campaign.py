@@ -326,7 +326,14 @@ async def run_campaign(
     }
     provider_credentials = {
         name: os.environ[name]
-        for name in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "CARTESIA_API_KEY")
+        for name in (
+            "OPENAI_API_KEY",
+            "DEEPGRAM_API_KEY",
+            "CARTESIA_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+        )
         if os.environ.get(name)
     }
     for name in agent_names:

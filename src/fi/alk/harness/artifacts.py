@@ -73,7 +73,21 @@ _SECRET_CONTENT = (
     re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
 )
 _SECRET_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa"}
-_TERMINAL_STATUSES = {"completed", "failed", "timed_out", "cancelled", "canceled"}
+_TERMINAL_STATUSES = {
+    "completed",
+    "failed",
+    "timed_out",
+    "cancelled",
+    "canceled",
+    # Chat conversations use domain-specific endings. All three mean execution
+    # stopped and produced durable evidence; only ``finished`` implies that the
+    # simulated user achieved its conversational goal. Artifact sealing must
+    # preserve the other two as findings rather than turn them into an
+    # infrastructure failure.
+    "finished",
+    "gave-up",
+    "ran-out-of-turns",
+}
 
 
 def seal_artifacts(

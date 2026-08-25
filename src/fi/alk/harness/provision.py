@@ -27,6 +27,8 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import quote, urlsplit, urlunsplit
 
+import yaml
+
 from .packaging import PackagingKind, inspect_packaging
 from .generated_runtime import (
     GENERATED_DOCKERFILE,
@@ -36,6 +38,7 @@ from .generated_runtime import (
     prepare_generated_runtime,
 )
 from .service_catalog import address, profile_for
+from .secrets import runtime_configuration_value
 
 MANIFEST = "environment.json"
 COMPOSE_FILES = (
@@ -94,6 +97,10 @@ class ProvisionedEnvironment:
     runtime_container: str = ""
     runtime_trace_volume: str = ""
     runtime_trace_path: str = ""
+    # Container-port -> runner-reachable address for conversational ingress. Values are
+    # ephemeral localhost bindings locally or private container-network addresses in a hosted
+    # runner. They contain no credentials and disappear when the runtime is stopped.
+    runtime_endpoints: dict[str, str] = field(default_factory=dict)
     runner_network: str = ""
     running: bool = False
     source_fingerprint: str = ""
@@ -189,19 +196,21 @@ def _free_port() -> int:
 
 
 def port_variables(path: Path) -> dict[str, str]:
-    """Give each interpolated published port its own currently-free host port."""
+    """Ask Docker to allocate every interpolated host port atomically.
+
+    Binding a temporary socket to discover a free port and releasing it before
+    Compose starts is inherently racy: another concurrent world can claim the
+    port in that gap. A published port of zero delegates allocation to Docker at
+    container creation, and ``_published_port`` resolves the assigned value once
+    the service is running.
+    """
     text = path.read_text(encoding="utf-8")
     assigned: dict[str, str] = {}
-    used: set[int] = set()
     for match in _PORT_VARIABLE.finditer(text):
         name = match.group("name")
         if name in assigned:
             continue
-        port = _free_port()
-        while port in used:
-            port = _free_port()
-        used.add(port)
-        assigned[name] = str(port)
+        assigned[name] = "0"
     return assigned
 
 
@@ -237,10 +246,21 @@ def _run(
     process_env = {
         **os.environ,
         **environment.port_variables,
-        **(process_overrides or {}),
     }
-    try:
-        completed = subprocess.run(
+    # Uploaded values are namespaced inside the harness worker. Expose them under their submitted
+    # names only to Compose, where interpolation and explicitly inherited service variables need
+    # them. This never falls back to runner/controller credentials.
+    for name in environment.runtime_configuration_names:
+        value = runtime_configuration_value(name).strip()
+        if value:
+            process_env[name] = value
+    # Explicit ALK endpoint/credential-path substitutions are the final authority. Applying
+    # uploaded values after these substitutions silently restores development hostnames such as
+    # ``harness`` or ``localhost`` at the exact point Compose starts the submitted runtime.
+    process_env.update(process_overrides or {})
+
+    def execute() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             command,
             cwd=environment.source,
             env=process_env,
@@ -249,11 +269,25 @@ def _run(
             check=False,
             timeout=timeout,
         )
+
+    try:
+        completed = execute()
     except FileNotFoundError as exc:
         raise ProvisionError("Docker is not installed or is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:
         raise ProvisionError(f"environment command timed out after {timeout}s") from exc
     output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+    if (
+        completed.returncode
+        and "all predefined address pools have been fully subnetted" in output
+    ):
+        # Interrupted local runs can leave empty Compose networks behind even after their
+        # containers and volumes are gone. After enough runs Docker cannot allocate another
+        # subnet and every otherwise valid environment becomes unrunnable. Reclaim only empty,
+        # ALK-owned networks, never customer/platform networks or a network with a container.
+        if _remove_unused_harness_networks(exclude_project=environment.project):
+            completed = execute()
+            output = ((completed.stdout or "") + (completed.stderr or "")).strip()
     if check and completed.returncode:
         shown = _command_failure_output(output)
         raise ProvisionError(
@@ -305,6 +339,40 @@ def _start_managed_services(
             )
 
 
+_TRANSIENT_BUILD_FAILURES = (
+    "unexpected eof",
+    "tls handshake timeout",
+    "i/o timeout",
+    "connection reset by peer",
+    "temporary failure in name resolution",
+    "no such host",
+    "502 bad gateway",
+    "503 service unavailable",
+    "429 too many requests",
+)
+
+
+def _build_runtime(environment: ProvisionedEnvironment) -> None:
+    """Build the submitted image with bounded retries for registry transport failures.
+
+    Repository and dependency-resolution failures remain deterministic and surface immediately.
+    A public registry can fail before BuildKit receives a base-image manifest; replaying that
+    side-effect-free build is safe and should not force a complete platform-job resubmission.
+    """
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            _run(environment, "build", *environment.runtime_services)
+            return
+        except ProvisionError as exc:
+            transient = any(
+                marker in str(exc).lower() for marker in _TRANSIENT_BUILD_FAILURES
+            )
+            if not transient or attempt == attempts:
+                raise
+            time.sleep(2 ** (attempt - 1))
+
+
 def _command_failure_output(output: str, *, limit: int = 16_000) -> str:
     """Keep actionable build context without putting megabytes of logs into job state/UI."""
     if not output:
@@ -341,16 +409,50 @@ def _config(environment: ProvisionedEnvironment) -> dict[str, Any]:
     return value
 
 
-def _started_services(config: dict[str, Any]) -> list[str]:
+def _started_services(
+    config: dict[str, Any], runtime_services: list[str] | None = None
+) -> list[str]:
     """Services Compose starts by default; opt-in profile services stay opt-in."""
+    runtimes = set(runtime_services or [])
     return sorted(
         name
         for name, service in config["services"].items()
-        if not (service.get("profiles") or [])
+        if _service_starts_by_default(service) and name not in runtimes
     )
 
 
-def _runtime_services(config: dict[str, Any]) -> list[str]:
+def _service_starts_by_default(service: dict[str, Any]) -> bool:
+    profiles = [str(value) for value in (service.get("profiles") or [])]
+    # Compose treats an explicit empty-string profile as active by default. Dify uses this to
+    # make one database/vector backend the default while retaining named alternatives.
+    return not profiles or "" in profiles
+
+
+def _runtime_interface_port(contract: Any | None) -> int | None:
+    runtime = getattr(contract, "runtime", None)
+    interface = getattr(runtime, "interface", None)
+    port = getattr(interface, "port", None)
+    return int(port) if port else None
+
+
+def _service_container_ports(service: dict[str, Any]) -> set[int]:
+    ports: set[int] = set()
+    for entry in service.get("ports") or []:
+        if isinstance(entry, dict) and entry.get("target"):
+            ports.add(int(entry["target"]))
+        elif isinstance(entry, (str, int)):
+            rendered = str(entry).split("/")[0]
+            target = rendered.rsplit(":", 1)[-1]
+            if target.isdigit():
+                ports.add(int(target))
+    for entry in service.get("expose") or []:
+        rendered = str(entry).split("/")[0]
+        if rendered.isdigit():
+            ports.add(int(rendered))
+    return ports
+
+
+def _runtime_services(config: dict[str, Any], contract: Any | None = None) -> list[str]:
     """Opt-in services that identify the submitted agent/worker runtime.
 
     Compose profiles are also commonly used for pgAdmin, dashboards and debugging tools. Treating
@@ -361,7 +463,7 @@ def _runtime_services(config: dict[str, Any]) -> list[str]:
     profiled = [
         name
         for name, service in config["services"].items()
-        if service.get("profiles") or []
+        if not _service_starts_by_default(service)
     ]
     explicit = [
         name
@@ -375,7 +477,23 @@ def _runtime_services(config: dict[str, Any]) -> list[str]:
         for name in profiled
         if any(word in name.lower() for word in ("agent", "worker", "bot"))
     ]
-    return sorted(preferred)
+    if preferred:
+        return sorted(preferred)
+    interface_port = _runtime_interface_port(contract)
+    if interface_port is None:
+        return []
+    candidates = sorted(
+        name
+        for name, service in config["services"].items()
+        if interface_port in _service_container_ports(service)
+    )
+    if len(candidates) > 1:
+        raise ProvisionError(
+            f"chat runtime port {interface_port} is exposed by several Compose services: "
+            + ", ".join(candidates)
+            + "; select one runtime component explicitly"
+        )
+    return candidates
 
 
 def _validate_compose_security(config: dict[str, Any]) -> None:
@@ -417,8 +535,7 @@ def _write_port_override(
     ports.  Most repositories publish constants, which collide as soon as two jobs overlap.  A
     generated Compose override makes isolation universal while leaving container ports intact.
     """
-    services: list[tuple[str, list[dict[str, Any]]]] = []
-    used: set[int] = set()
+    services: list[tuple[str, list[dict[str, Any]], bool]] = []
     dynamic_targets = set(
         _declared_port_targets(Path(environment.compose_file)).values()
     )
@@ -429,45 +546,117 @@ def _write_port_override(
         # Compose excludes profiled services unless that profile is explicitly enabled. Do not
         # allocate ports for dormant TURN/admin/debug services; doing so can exhaust a runner's
         # ephemeral port range before the selected environment even starts.
-        if service.get("profiles"):
+        if not _service_starts_by_default(service):
             continue
         ports: list[dict[str, Any]] = []
         for item in service.get("ports") or []:
             target = int(item.get("target") or 0)
             if not target or target in dynamic_targets:
                 continue
-            published = _free_port()
-            while published in used:
-                published = _free_port()
-            used.add(published)
             ports.append(
                 {
                     "target": target,
-                    "published": str(published),
+                    # Let Docker reserve an available port in the same atomic
+                    # operation that creates the container. Preselecting a
+                    # supposedly free port races concurrent worlds.
+                    "published": "0",
                     "host_ip": bind_host,
                     "protocol": str(item.get("protocol") or "tcp"),
                 }
             )
-        if ports:
-            services.append((name, ports))
-    if not services:
+        fixed_container_name = bool(str(service.get("container_name") or "").strip())
+        if ports or fixed_container_name:
+            services.append((name, ports, fixed_container_name))
+    reset_env_files = _missing_env_file_services(Path(environment.compose_file))
+    if not services and not reset_env_files:
         return
     lines = ["services:"]
-    for name, ports in services:
-        lines.extend((f"  {json.dumps(name)}:", "    ports: !override"))
-        for item in ports:
-            lines.extend(
-                (
-                    f"      - target: {item['target']}",
-                    f"        published: {json.dumps(item['published'])}",
-                    f"        host_ip: {json.dumps(item['host_ip'])}",
-                    f"        protocol: {item['protocol']}",
+    for name in reset_env_files:
+        lines.extend((f"  {json.dumps(name)}:", "    env_file: !reset []"))
+    for name, ports, fixed_container_name in services:
+        lines.append(f"  {json.dumps(name)}:")
+        if fixed_container_name:
+            # A submitted container_name bypasses Compose project scoping and collides across
+            # concurrent jobs. Compose's reset tag restores its normal project-owned name.
+            lines.append("    container_name: !reset null")
+        if ports:
+            lines.append("    ports: !override")
+            for item in ports:
+                lines.extend(
+                    (
+                        f"      - target: {item['target']}",
+                        f"        published: {json.dumps(item['published'])}",
+                        f"        host_ip: {json.dumps(item['host_ip'])}",
+                        f"        protocol: {item['protocol']}",
+                    )
                 )
-            )
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / "compose.harness.override.yaml"
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     environment.compose_override_file = str(target.resolve())
+
+
+def _missing_env_file_services(compose: Path) -> list[str]:
+    """Find services whose repository-local dotenv file is absent.
+
+    Hosted uploads intentionally exclude secret dotenv files. Compose otherwise refuses even to
+    render a service whose ``env_file`` is absent. The generated override removes only that file
+    reference; job-scoped uploaded values are injected separately at the process/container
+    boundary and are never written into the checkout or artifacts.
+    """
+    try:
+        document = yaml.safe_load(compose.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return []
+    services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(services, dict):
+        return []
+    missing: list[str] = []
+    for name, service in services.items():
+        if not isinstance(service, dict) or not service.get("env_file"):
+            continue
+        entries = service["env_file"]
+        if not isinstance(entries, list):
+            entries = [entries]
+        paths = [
+            str(item.get("path") if isinstance(item, dict) else item)
+            for item in entries
+        ]
+        if any(path and not (compose.parent / path).is_file() for path in paths):
+            missing.append(str(name))
+    return sorted(missing)
+
+
+def _write_initial_env_file_override(
+    destination: Path, environment: ProvisionedEnvironment
+) -> None:
+    """Make a submitted Compose model renderable before port inspection."""
+    services = _missing_env_file_services(Path(environment.compose_file))
+    if not services:
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / "compose.harness.override.yaml"
+    lines = ["services:"]
+    for name in services:
+        lines.extend((f"  {json.dumps(name)}:", "    env_file: !reset []"))
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    environment.compose_override_file = str(target.resolve())
+
+
+def _refresh_compose_ports(
+    destination: Path, environment: ProvisionedEnvironment
+) -> dict[str, Any]:
+    """Render the submitted stack with a newly allocated host-port set."""
+    environment.port_variables = port_variables(Path(environment.compose_file))
+    environment.compose_override_file = None
+    _write_initial_env_file_override(destination, environment)
+    config = _config(environment)
+    _validate_compose_security(config)
+    _write_port_override(destination, environment, config)
+    if environment.compose_override_file:
+        config = _config(environment)
+        _validate_compose_security(config)
+    return config
 
 
 def _published_port(
@@ -636,18 +825,25 @@ def _wait_for_endpoints(
     endpoints: list[dict[str, Any]],
     timeout: float = 60.0,
     stability_seconds: float = 2.0,
+    *,
+    use_internal: bool = False,
 ) -> None:
     """Require stable protocol readiness, not merely a briefly-open container port."""
-    indexed = {
-        (str(item["service"]), int(item["host_port"])): item for item in endpoints
-    }
+    indexed: dict[tuple[str, int], dict[str, Any]] = {}
+    for item in endpoints:
+        probe = dict(item)
+        if use_internal:
+            probe["host_port"] = int(item["container_port"])
+            probe["probe_host"] = str(item["service"])
+        indexed[(str(probe["service"]), int(probe["host_port"]))] = probe
     pending = set(indexed)
     ready_since: dict[tuple[str, int], float] = {}
     deadline = time.monotonic() + timeout
-    host = _published_host()
     while pending and time.monotonic() < deadline:
         for endpoint in list(pending):
-            if _endpoint_ready(indexed[endpoint], host):
+            probe = indexed[endpoint]
+            host = str(probe.get("probe_host") or _published_host())
+            if _endpoint_ready(probe, host):
                 first_ready = ready_since.setdefault(endpoint, time.monotonic())
                 # Protocol services can briefly answer while an init script is about to restart
                 # them. A short stability window prevents the first real tool call racing that
@@ -669,6 +865,25 @@ def _wait_for_endpoints(
         raise ProvisionError(f"environment endpoints did not become ready: {rendered}")
 
 
+def _wait_for_environment_endpoints(
+    environment: ProvisionedEnvironment,
+    timeout: float = 60.0,
+    stability_seconds: float = 2.0,
+) -> None:
+    """Probe over the runner's private network when the runner is containerized."""
+    internal = bool(os.environ.get("ALK_RUNNER_CONTAINER", "").strip())
+    if internal and environment.services:
+        _attach_runner_network(environment)
+        _wait_for_endpoints(
+            environment.service_endpoints,
+            timeout,
+            stability_seconds,
+            use_internal=True,
+        )
+        return
+    _wait_for_endpoints(environment.service_endpoints, timeout, stability_seconds)
+
+
 def _overrides(
     environment: ProvisionedEnvironment, config: dict[str, Any]
 ) -> dict[str, str]:
@@ -680,7 +895,12 @@ def _overrides(
     declared = _declared_port_targets(Path(environment.compose_file))
     for variable, default in _url_settings(Path(environment.source)):
         parsed = urlsplit(default)
-        default_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            default_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError:
+            # Cluster DSNs are commonly comma-separated URL lists. They require a topology-aware
+            # adapter; one malformed/specialized declaration must not abort environment creation.
+            continue
         expected_target = declared.get(default_port)
         match = next(
             (
@@ -731,7 +951,10 @@ def _internal_overrides(
     answers: dict[str, str] = {}
     for variable, default in _url_settings(Path(environment.source)):
         parsed = urlsplit(default)
-        default_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            default_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError:
+            continue
         expected_target = declared.get(default_port)
         match = next(
             (
@@ -772,6 +995,23 @@ def _internal_overrides(
         else:
             value = str(endpoint["internal_address"])
         answers[variable] = value
+    if environment.managed and len(environment.runtime_services) == 1:
+        # The harness-generated Compose adapter owns these values.  Its runtime service carries
+        # the complete connector assembled by ``_managed_service`` (database, user and any
+        # run-local credentials), while endpoint inference above can only reconstruct a generic
+        # host/port URL.  Prefer the generated connector so starting the submitted runtime cannot
+        # accidentally turn e.g. ``mysql://harness:.../voice`` into ``mysql://mysql:3306``.
+        runtime = config.get("services", {}).get(environment.runtime_services[0]) or {}
+        generated = _environment_values(runtime)
+        endpoint_names = {
+            str(name)
+            for endpoint in endpoints
+            for name in endpoint.get("configuration_names", [])
+        }
+        for name in endpoint_names:
+            value = generated.get(name, "").strip()
+            if value:
+                answers[name] = value
     return answers
 
 
@@ -825,10 +1065,83 @@ def _published_host() -> str:
     return os.environ.get("ALK_DOCKER_PUBLISHED_HOST", "").strip() or "127.0.0.1"
 
 
+def uses_private_runner_network(environment: ProvisionedEnvironment) -> bool:
+    """Whether this process shares the provisioned environment's Compose network."""
+    return bool(
+        os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
+        and environment.runner_network
+    )
+
+
+def reachable_overrides(environment: ProvisionedEnvironment) -> dict[str, str]:
+    """Return service addresses reachable from the process executing the harness.
+
+    A local CLI reaches Compose services through published host ports. A hosted worker is
+    attached to the run's private Compose network and must use service DNS/container ports;
+    Docker Desktop does not guarantee that a container can hairpin through its own published
+    ``host.docker.internal`` port.
+    """
+    if uses_private_runner_network(environment) and environment.internal_overrides:
+        return dict(environment.internal_overrides)
+    return dict(environment.overrides)
+
+
+def _runner_service_address(
+    environment: ProvisionedEnvironment, address: str, service: str
+) -> str:
+    """Use a run-unique DNS name when the runner shares many Compose networks.
+
+    A hosted runner is attached to the platform network and to one private network per active
+    harness environment. Generic Compose aliases such as ``postgres`` can consequently resolve
+    to the platform database instead of this run's database. Submitted containers stay on one
+    network and may use service aliases; the multi-network runner must use the unique container
+    name Docker registers on the same private network.
+    """
+    container_id = _run(environment, "ps", "--quiet", service, timeout=30).strip()
+    if not container_id:
+        raise ProvisionError(f"service {service!r} has no running container")
+    container_name = (
+        _docker("inspect", "--format", "{{.Name}}", container_id, timeout=30)
+        .strip()
+        .lstrip("/")
+    )
+    if not container_name:
+        raise ProvisionError(f"service {service!r} has no resolvable container name")
+    parsed = urlsplit(address)
+    userinfo, separator, _host = parsed.netloc.rpartition("@")
+    authority = f"{userinfo}{separator}" if separator else ""
+    authority += container_name
+    if parsed.port is not None:
+        authority += f":{parsed.port}"
+    return urlunsplit(parsed._replace(netloc=authority))
+
+
 def attached_postgres_store(destination: str | Path):
     """The standard world-store interface over the repository's running Postgres."""
     from .world.stores.postgres import AttachedPostgresStore
 
+    environment = ProvisionedEnvironment.load(Path(destination))
+    if environment is None or not environment.running:
+        raise ProvisionError(f"no running environment recorded at {destination}")
+    if uses_private_runner_network(environment):
+        candidates = {
+            value
+            for value in environment.internal_overrides.values()
+            if urlsplit(value).scheme in {"postgres", "postgresql"}
+        }
+        if len(candidates) == 1:
+            address = next(iter(candidates))
+            services = {
+                str(endpoint.get("service") or "")
+                for endpoint in environment.service_endpoints
+                if str(endpoint.get("kind") or "") == "postgres"
+            }
+            services.discard("")
+            if len(services) == 1:
+                address = _runner_service_address(
+                    environment, address, next(iter(services))
+                )
+            return AttachedPostgresStore(address)
     return AttachedPostgresStore(postgres_dsn(destination))
 
 
@@ -850,6 +1163,12 @@ def _configuration_names(value: str) -> list[str]:
 
 def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
     names: set[str] = set()
+    store = getattr(contract, "data_store", None)
+    if store is not None:
+        for field_name in ("configured_by", "config_key", "password_from"):
+            names.update(
+                _configuration_names(str(getattr(store, field_name, "") or ""))
+            )
     for dependency in list(getattr(contract, "dependencies", None) or []):
         reached = getattr(dependency, "reached", None)
         if reached is None:
@@ -864,7 +1183,56 @@ def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
         "HARNESS_PLATFORM_API_KEY",
         "HARNESS_PLATFORM_SECRET_KEY",
     }
-    return sorted(name for name in names if name not in forbidden)
+    supplied = os.environ.get("ALK_RUNTIME_CONFIGURATION_NAMES", "")
+    names.update(
+        name
+        for name in supplied.split(",")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+    )
+    return sorted(
+        name for name in names if name not in forbidden and not name.startswith("ALK_")
+    )
+
+
+def _saved_runtime_configuration_names(destination: Path) -> list[str]:
+    """Recover authorized configuration *names* without reading or persisting their values."""
+    names: set[str] = set()
+    job_path = destination / "job.json"
+    if job_path.is_file():
+        try:
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            job = {}
+        agent = job.get("agent") if isinstance(job, dict) else None
+        references = agent.get("secret_refs") if isinstance(agent, dict) else None
+        if isinstance(references, dict):
+            names.update(str(name) for name in references)
+        metadata = job.get("metadata") if isinstance(job, dict) else None
+        declared = (
+            metadata.get("environment_value_names")
+            if isinstance(metadata, dict)
+            else None
+        )
+        if isinstance(declared, list):
+            names.update(str(name) for name in declared)
+
+    previous = ProvisionedEnvironment.load(destination)
+    if previous is not None:
+        names.update(previous.runtime_configuration_names)
+
+    forbidden = {
+        "FI_API_KEY",
+        "FI_SECRET_KEY",
+        "HARNESS_PLATFORM_API_KEY",
+        "HARNESS_PLATFORM_SECRET_KEY",
+    }
+    return sorted(
+        name
+        for name in names
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+        and name not in forbidden
+        and not name.startswith("ALK_")
+    )
 
 
 def _managed_service(
@@ -1007,9 +1375,35 @@ def _managed_service(
                 # memory/boot pressure when several isolated jobs start together. Customers can
                 # still request a management tag explicitly in their contract.
                 "image": f"rabbitmq:{version or '3.13-alpine'}",
+                # The image declares /var/lib/rabbitmq as an anonymous volume. On Docker Desktop
+                # the initial cookie can be materialized as uid 0 even though the broker runs as
+                # uid 100, and the stock entrypoint does not repair that particular file. Seed
+                # the run-local cookie with the correct ownership before delegating back to the
+                # image entrypoint. ``$$`` is Compose escaping, not host interpolation.
+                "entrypoint": [
+                    "sh",
+                    "-c",
+                    'printf %s "$$RABBITMQ_ERLANG_COOKIE" > '
+                    "/var/lib/rabbitmq/.erlang.cookie && "
+                    "chown rabbitmq:rabbitmq /var/lib/rabbitmq/.erlang.cookie && "
+                    "chmod 400 /var/lib/rabbitmq/.erlang.cookie && "
+                    'exec docker-entrypoint.sh "$$@"',
+                    "--",
+                ],
+                # Compose does not reliably retain an image's CMD once an exec-form entrypoint is
+                # supplied (notably with JSON Compose input on Docker Desktop). Pass the stock
+                # broker command explicitly so ``docker-entrypoint.sh`` always receives ``$1``.
+                "command": ["rabbitmq-server"],
                 "environment": {
                     "RABBITMQ_DEFAULT_USER": "harness",
                     "RABBITMQ_DEFAULT_PASS": "harness-local",
+                    # RabbitMQ 3.13 on Docker Desktop can create the image-declared anonymous
+                    # data volume's cookie as root before the broker drops to uid 100.  Erlang
+                    # then aborts with EACCES.  Supplying an environment-local cookie makes the
+                    # broker use the injected value and avoids depending on that image-volume
+                    # ownership race. Each Compose project has a private network, so this is an
+                    # internal bootstrap credential, never a customer or platform secret.
+                    "RABBITMQ_ERLANG_COOKIE": "harness-local-cookie",
                     # Erlang otherwise sizes scheduler/dirty-scheduler pools from the host CPU
                     # count, not the job's practical sandbox share. Concurrent environments can
                     # then exhaust Docker's thread budget during boot even though each broker is
@@ -1157,7 +1551,9 @@ def _managed_compose(
             and not dsn_env
             and not str(getattr(reached, "config_key", "") or "").strip()
             and not str(getattr(reached, "password_from", "") or "").strip()
-            and not str(getattr(reached, "host", "") or "").strip()
+            # SQLite commonly spells its process-local database as ``:memory:``.
+            # It is still embedded state, not an external service ALK must supply.
+            and str(getattr(reached, "host", "") or "").strip() in {"", ":memory:"}
             and not getattr(reached, "port", None)
             and not str(getattr(reached, "database", "") or "").strip()
         )
@@ -1311,10 +1707,58 @@ def provision(
     destination = Path(destination)
     packaging = inspect_packaging(source_root)
     generated_runtime: GeneratedRuntimePlan | None = None
+    explicit_compose = str(
+        getattr(getattr(contract, "runtime", None), "compose_file", "") or ""
+    )
     explicit_dockerfile = str(
         getattr(getattr(contract, "runtime", None), "dockerfile", "") or ""
     )
-    if explicit_dockerfile:
+    # A Compose service commonly builds from the repository's Dockerfile. When understanding
+    # records both, Compose remains the authoritative full-stack runtime; the Dockerfile is not a
+    # competing selection. Ambiguous repositories are rejected earlier by packaging admission.
+    if explicit_compose:
+        selected_compose = (source_root / explicit_compose).resolve()
+        try:
+            selected_compose.relative_to(source_root)
+        except ValueError as exc:
+            raise ProvisionError(
+                "runtime Compose file escapes the submitted repository"
+            ) from exc
+        if not selected_compose.is_file():
+            raise ProvisionError(
+                f"runtime Compose file does not exist: {explicit_compose}"
+            )
+        explicit_candidate = next(
+            (
+                item
+                for item in packaging.candidates
+                if item.kind is PackagingKind.COMPOSE
+                and item.path == Path(explicit_compose).as_posix()
+            ),
+            None,
+        )
+        if explicit_candidate is None:
+            raise ProvisionError(
+                "runtime Compose file is not a supported submitted Compose file: "
+                f"{explicit_compose}"
+            )
+        blocking = [
+            finding.message
+            for finding in explicit_candidate.findings
+            if finding.blocking
+            and not (
+                finding.code == "compose_env_file_missing"
+                # The explicit runtime came from the saved contract.  ALK renders a private
+                # override below that removes the missing env_file, while start_runtime injects
+                # the resolved job-scoped values.  Requiring a worker-only process variable here
+                # made the same bundle resumable from hosted execution but not from the CLI.
+                and contract is not None
+            )
+        ]
+        if blocking:
+            raise ProvisionError("packaging preflight failed: " + "; ".join(blocking))
+        compose = selected_compose
+    elif explicit_dockerfile:
         selected_dockerfile = (source_root / explicit_dockerfile).resolve()
         try:
             selected_dockerfile.relative_to(source_root)
@@ -1392,8 +1836,11 @@ def provision(
         )
     fingerprint = source_fingerprint(source_root)
     runtime_fingerprint = generated_runtime.fingerprint if generated_runtime else ""
-    runtime_configuration_names = (
-        _contract_runtime_configuration_names(contract) if generated_runtime else []
+    runtime_configuration_names = sorted(
+        {
+            *_contract_runtime_configuration_names(contract),
+            *_saved_runtime_configuration_names(destination),
+        }
     )
     existing = ProvisionedEnvironment.load(destination)
     if (
@@ -1409,10 +1856,10 @@ def provision(
         ):
             config = _config(existing)
             _validate_compose_security(config)
-            existing.services = _started_services(config)
-            existing.runtime_services = _runtime_services(config)
+            existing.runtime_services = _runtime_services(config, contract)
+            existing.services = _started_services(config, existing.runtime_services)
             existing.service_endpoints = _service_endpoints(existing, config)
-            _wait_for_endpoints(existing.service_endpoints)
+            _wait_for_environment_endpoints(existing)
             existing.overrides = _overrides(existing, config)
             existing.internal_overrides = _internal_overrides(existing, config)
             existing.runtime_configuration_names = runtime_configuration_names
@@ -1423,6 +1870,7 @@ def provision(
     # remove its test volumes before replacing it so stale rows and orphan containers cannot be
     # mistaken for the newly submitted environment.
     if existing is not None and existing.running:
+        _detach_runner_network(existing)
         _run(
             existing,
             "down",
@@ -1446,14 +1894,15 @@ def provision(
         runtime_fingerprint=runtime_fingerprint,
         runtime_configuration_names=runtime_configuration_names,
     )
+    _write_initial_env_file_override(destination, environment)
     config = _config(environment)
     _validate_compose_security(config)
     _write_port_override(destination, environment, config)
     if environment.compose_override_file:
         config = _config(environment)
         _validate_compose_security(config)
-    environment.services = _started_services(config)
-    environment.runtime_services = _runtime_services(config)
+    environment.runtime_services = _runtime_services(config, contract)
+    environment.services = _started_services(config, environment.runtime_services)
     if not environment.services and len(environment.runtime_services) != 1:
         raise ProvisionError(
             "the Compose file has neither default infrastructure services nor exactly one "
@@ -1465,11 +1914,45 @@ def provision(
         # simulation is accepted. A Dockerfile-only agent may legitimately have no infrastructure
         # containers to start; its environment is the isolated, validated, built runtime itself.
         if environment.runtime_services:
-            _run(environment, "build", *environment.runtime_services)
+            _build_runtime(environment)
         if environment.services:
             _start_managed_services(environment, environment.services)
         environment.service_endpoints = _service_endpoints(environment, config)
-        _wait_for_endpoints(environment.service_endpoints)
+        try:
+            _wait_for_environment_endpoints(environment)
+        except ProvisionError as exc:
+            # A submitted stack can be healthy internally while Docker Desktop/the hosted
+            # provider has not made its newly published ports reachable from the runner yet.
+            # Recreate this run's services and volumes once. This is infrastructure recovery,
+            # before any scenario executes; it neither retries nor hides an agent outcome.
+            if not environment.services or not str(exc).startswith(
+                "environment endpoints did not become ready:"
+            ):
+                raise
+            _detach_runner_network(environment)
+            _run(
+                environment,
+                "down",
+                "--volumes",
+                "--remove-orphans",
+                check=False,
+                timeout=120,
+            )
+            # Reusing the same published port cannot recover a Docker/host forwarding failure.
+            # Re-render both interpolated and fixed port mappings before the second boot.
+            config = _refresh_compose_ports(destination, environment)
+            environment.runtime_services = _runtime_services(config, contract)
+            environment.services = _started_services(
+                config, environment.runtime_services
+            )
+            _start_managed_services(environment, environment.services, build=False)
+            config = _config(environment)
+            environment.runtime_services = _runtime_services(config, contract)
+            environment.services = _started_services(
+                config, environment.runtime_services
+            )
+            environment.service_endpoints = _service_endpoints(environment, config)
+            _wait_for_environment_endpoints(environment)
         environment.overrides = _overrides(environment, config)
         environment.internal_overrides = _internal_overrides(environment, config)
         environment.running = True
@@ -1477,6 +1960,7 @@ def provision(
         environment.save(destination)
         return environment
     except Exception:
+        _detach_runner_network(environment)
         _run(
             environment,
             "down",
@@ -1498,8 +1982,10 @@ def provision_if_present(
         store = getattr(contract, "data_store", None)
         dependencies = list(getattr(contract, "dependencies", None) or [])
         runtime = getattr(contract, "runtime", None)
+        compose_value = str(getattr(runtime, "compose_file", "") or "")
         dockerfile_value = str(getattr(runtime, "dockerfile", "") or "Dockerfile")
-        has_runtime = (Path(source).expanduser().resolve() / dockerfile_value).is_file()
+        source_root = Path(source).expanduser().resolve()
+        has_runtime = bool(compose_value) or (source_root / dockerfile_value).is_file()
         generated = can_generate_runtime(source, runtime)
         if store is None and not dependencies and not has_runtime and not generated:
             return None
@@ -1521,6 +2007,7 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
     if environment.runtime_container:
         stop_runtime(destination)
         environment = ProvisionedEnvironment.load(destination) or environment
+    _detach_runner_network(environment)
     _run(
         environment,
         "down",
@@ -1534,10 +2021,13 @@ def reset(destination: str | Path) -> ProvisionedEnvironment:
         _start_managed_services(environment, environment.services, build=False)
     config = _config(environment)
     _validate_compose_security(config)
-    environment.services = _started_services(config)
-    environment.runtime_services = _runtime_services(config)
+    recorded_runtime = [
+        name for name in environment.runtime_services if name in config["services"]
+    ]
+    environment.runtime_services = recorded_runtime or _runtime_services(config)
+    environment.services = _started_services(config, environment.runtime_services)
     environment.service_endpoints = _service_endpoints(environment, config)
-    _wait_for_endpoints(environment.service_endpoints)
+    _wait_for_environment_endpoints(environment)
     environment.overrides = _overrides(environment, config)
     environment.internal_overrides = _internal_overrides(environment, config)
     environment.running = True
@@ -1585,7 +2075,7 @@ def healthy(destination: str | Path) -> bool:
         return False
     try:
         # Provision/reset require a stability window; this is a point-in-time liveness probe.
-        _wait_for_endpoints(environment.service_endpoints, 1.0, 0.0)
+        _wait_for_environment_endpoints(environment, 1.0, 0.0)
     except ProvisionError:
         return False
     return True
@@ -1611,6 +2101,74 @@ def _docker(*arguments: str, check: bool = True, timeout: int = 120) -> str:
             f"{output or 'no output'}"
         )
     return output
+
+
+def _remove_unused_harness_networks(*, exclude_project: str = "") -> int:
+    """Remove empty networks owned by terminated ALK Compose projects."""
+    listing = _docker(
+        "network",
+        "ls",
+        "--filter",
+        "label=com.docker.compose.project",
+        "--format",
+        "{{.Name}}",
+        check=False,
+        timeout=30,
+    )
+    removed = 0
+    for name in sorted(set(listing.splitlines())):
+        if not name.startswith("fagi-harness-") or name == f"{exclude_project}_default":
+            continue
+        containers = _docker(
+            "network",
+            "inspect",
+            "--format",
+            "{{json .Containers}}",
+            name,
+            check=False,
+            timeout=30,
+        ).strip()
+        try:
+            attached = json.loads(containers or "null")
+        except json.JSONDecodeError:
+            continue
+        if attached != {}:
+            continue
+        result = _docker("network", "rm", name, check=False, timeout=30)
+        if "error" not in result.lower():
+            removed += 1
+    return removed
+
+
+def _remove_empty_project_default_network(project: str) -> bool:
+    """Remove only this run's empty Compose default network after teardown.
+
+    Docker Compose can return successfully from ``down`` while leaving its default
+    network behind when the containerized runner was detached immediately before
+    teardown. Repeated hosted runs then exhaust Docker's address pools. The network
+    name is deterministic and ALK-owned; still require zero attachments before
+    removing it, so cleanup can never disconnect another process.
+    """
+    if not project.startswith("fagi-harness-"):
+        return False
+    name = f"{project}_default"
+    containers = _docker(
+        "network",
+        "inspect",
+        "--format",
+        "{{json .Containers}}",
+        name,
+        check=False,
+        timeout=30,
+    ).strip()
+    try:
+        attached = json.loads(containers or "null")
+    except json.JSONDecodeError:
+        return False
+    if attached != {}:
+        return False
+    result = _docker("network", "rm", name, check=False, timeout=30)
+    return "error" not in result.lower()
 
 
 def _valid_google_credentials(path: Path) -> bool:
@@ -1659,14 +2217,21 @@ def _runtime_credential_mounts(
             source = declared if declared.is_file() else None
         if name.upper() == "GOOGLE_APPLICATION_CREDENTIALS":
             if source is None or not _valid_google_credentials(source):
-                platform_value = os.environ.get(name, "").strip()
-                platform = Path(platform_value).expanduser() if platform_value else None
-                if platform is not None and _valid_google_credentials(platform):
-                    source = platform
+                runtime_value = runtime_configuration_value(name).strip()
+                runtime = Path(runtime_value).expanduser() if runtime_value else None
+                if runtime is not None and _valid_google_credentials(runtime):
+                    source = runtime
+                    # Do not reuse a repository-owned destination when its declared mount is a
+                    # placeholder (commonly /dev/null). Compose may retain that service mount
+                    # even when ``docker compose run --volume`` supplies a replacement, causing
+                    # the worker to see the placeholder. Platform credentials always get an
+                    # ALK-owned destination that cannot collide with submitted mounts.
+                    target = f"/run/harness-secrets/{runtime.name}"
             if source is None or not _valid_google_credentials(source):
                 raise ProvisionError(
                     "the submitted runtime needs GOOGLE_APPLICATION_CREDENTIALS, but neither its "
-                    "Compose mount nor the harness platform points to a valid JSON credential file"
+                    "Compose mount nor the uploaded runtime configuration points to a valid JSON "
+                    "credential file"
                 )
         if source is not None:
             mounts.append((name, source.resolve(), target))
@@ -1678,6 +2243,8 @@ def start_runtime(
     *,
     overrides: dict[str, str] | None = None,
     trace_path: str | Path | None = None,
+    publish_ports: list[int] | None = None,
+    stable_seconds: float | None = None,
 ) -> ProvisionedEnvironment:
     """Start the submitted agent/worker service with only test endpoint substitutions."""
     destination = Path(destination)
@@ -1699,14 +2266,12 @@ def start_runtime(
     service_config = config["services"][service]
     service_environment = _environment_values(service_config)
     endpoint_overrides = environment.internal_overrides
-    if environment.managed:
-        # Managed Compose already contains the complete internal DSN, including its ephemeral
-        # database credentials. The generic non-secret endpoint view must not replace it.
-        endpoint_overrides = {
-            name: value
-            for name, value in endpoint_overrides.items()
-            if name not in service_environment
-        }
+    # Endpoints generated for this isolated environment are authoritative. A submitted image may
+    # declare a development default such as ``http://harness:8787`` or ``localhost``; retaining
+    # it because the variable is present in the service environment disconnects the unchanged
+    # agent from the services ALK just provisioned. ``internal_overrides`` already preserves
+    # complete managed DSNs (including generated credentials), so it is both safer and more
+    # accurate than any submitted default.
     injected = {
         **endpoint_overrides,
         "HARNESS_MODE": "1",
@@ -1718,7 +2283,7 @@ def start_runtime(
         **(overrides or {}),
     }
     for name in environment.runtime_configuration_names:
-        value = os.environ.get(name, "").strip()
+        value = runtime_configuration_value(name).strip()
         if value:
             if name == "LIVEKIT_URL":
                 parsed = urlsplit(value)
@@ -1734,6 +2299,14 @@ def start_runtime(
                         )
                     )
             injected.setdefault(name, value)
+    # LiveKit's production worker defaults to INFO, while its framework-owned tool lifecycle
+    # events are DEBUG.  Those events are the only generic evidence available when a submitted
+    # agent executes tools entirely in-process and does not implement the optional trace seam.
+    # This changes logging only, never agent behavior, and raw logs are not retained.
+    injected.setdefault(
+        "LIVEKIT_LOG_LEVEL",
+        os.environ.get("HARNESS_RUNTIME_LOG_LEVEL", "DEBUG").strip() or "DEBUG",
+    )
     arguments = [
         "run",
         "--detach",
@@ -1741,6 +2314,16 @@ def start_runtime(
         "--name",
         container,
     ]
+    requested_ports = sorted({int(port) for port in publish_ports or []})
+    runner_is_containerized = bool(os.environ.get("ALK_RUNNER_CONTAINER", "").strip())
+    for port in requested_ports:
+        if port < 1 or port > 65535:
+            raise ProvisionError(f"runtime_publish_port_invalid: {port}")
+        # Bind only loopback and let Docker allocate the host port. Fixed submitted ports must
+        # not collide when two jobs run together. A containerized hosted runner joins the
+        # private project network instead and never publishes the ingress on the Docker host.
+        if not runner_is_containerized:
+            arguments.extend(("--publish", f"127.0.0.1::{port}"))
     trace_volume = ""
     trace_destination = ""
     if trace_path is not None:
@@ -1768,13 +2351,15 @@ def start_runtime(
     # Credential paths in a repository env file name host files. Mount them into a stable,
     # read-only container location and replace only the path value; never copy or persist the
     # credential contents in harness artifacts.
+    mounted_credentials: set[str] = set()
     for name, source, target in _runtime_credential_mounts(
         service_environment, service_config
     ):
         arguments.extend(("--volume", f"{source}:{target}:ro"))
         injected[name] = target
+        mounted_credentials.add(name)
     google_path = injected.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
-    if google_path:
+    if google_path and "GOOGLE_APPLICATION_CREDENTIALS" not in mounted_credentials:
         google_source = Path(google_path).expanduser()
         if not _valid_google_credentials(google_source):
             raise ProvisionError(
@@ -1784,8 +2369,23 @@ def start_runtime(
         google_target = f"/run/harness-secrets/{google_source.name}"
         arguments.extend(("--volume", f"{google_source.resolve()}:{google_target}:ro"))
         injected["GOOGLE_APPLICATION_CREDENTIALS"] = google_target
+    # Compose does not consistently replace a service-declared environment value when ``run -e
+    # NAME`` only inherits it from the client process. Pin ALK-owned, non-secret routing values
+    # explicitly; credentials and potentially credential-bearing DSNs remain env-only so they
+    # never enter argv, logs, or exception text.
+    explicit_non_secret = {
+        "DEMO_CALLER_ANI",
+        "HARNESS_AGENT_TOOL_TRACE",
+        "HARNESS_CALLER_IDENTITY_PREFIX",
+        "HARNESS_MODE",
+        "HARNESS_TOOL_TRACE",
+        "LIVEKIT_AGENT_NAME",
+        "LIVEKIT_LOG_LEVEL",
+        "TOOLS_API_URL",
+    }
     for name in sorted(injected):
-        arguments.extend(("--env", name))
+        value = f"{name}={injected[name]}" if name in explicit_non_secret else name
+        arguments.extend(("--env", value))
     arguments.append(service)
     _run(environment, *arguments, timeout=900, process_overrides=injected)
     deadline = time.monotonic() + 60
@@ -1794,7 +2394,12 @@ def start_runtime(
     # container looks healthy, but LiveKit has nobody to dispatch to.  Fifteen seconds covers the
     # observed plugin warm-up while remaining configurable for unusually small or large workers.
     stable_seconds = max(
-        1.0, float(os.environ.get("HARNESS_RUNTIME_STABLE_SECONDS", "15"))
+        0.25,
+        float(
+            stable_seconds
+            if stable_seconds is not None
+            else os.environ.get("HARNESS_RUNTIME_STABLE_SECONDS", "15")
+        ),
     )
     stable_since: float | None = None
     while time.monotonic() < deadline:
@@ -1832,8 +2437,64 @@ def start_runtime(
     environment.runtime_container = container
     environment.runtime_trace_volume = trace_volume
     environment.runtime_trace_path = trace_destination
+    environment.runtime_endpoints = {
+        str(port): _runtime_address(container, port) for port in requested_ports
+    }
     environment.save(destination)
     return environment
+
+
+def _runtime_address(container: str, port: int) -> str:
+    """Return one submitted-runtime port as an address this runner can reach."""
+    if os.environ.get("ALK_RUNNER_CONTAINER", "").strip():
+        # The runner joins the project network before using this address. Container names are
+        # stable, job-scoped and avoid publishing a customer service on the Docker host.
+        return f"{container}:{port}"
+    rendered = _docker("port", container, f"{port}/tcp", timeout=30).strip()
+    first = next((line.strip() for line in rendered.splitlines() if line.strip()), "")
+    if not first:
+        raise ProvisionError(f"runtime port {port} was not published by {container}")
+    # Docker may render 0.0.0.0 or :: even though the requested binding is loopback. Callers
+    # always use local loopback; returning a wildcard host is not a usable endpoint.
+    _, separator, host_port = first.rpartition(":")
+    if not separator or not host_port.isdigit():
+        raise ProvisionError(f"could not parse published runtime address: {first}")
+    return f"127.0.0.1:{host_port}"
+
+
+def runtime_endpoint(
+    destination: str | Path, port: int, *, scheme: str = "http"
+) -> str:
+    """Resolve a declared container port after ``start_runtime`` published it."""
+    environment = ProvisionedEnvironment.load(Path(destination))
+    if environment is None or not environment.runtime_container:
+        raise ProvisionError(f"no running submitted runtime recorded at {destination}")
+    address = environment.runtime_endpoints.get(str(port), "")
+    if not address:
+        raise ProvisionError(f"submitted runtime did not publish container port {port}")
+    return f"{scheme}://{address}"
+
+
+def runtime_logs(destination: str | Path, *, tail: int = 4000) -> str:
+    """Read the active submitted runtime's bounded stdout/stderr.
+
+    This is an evidence fallback for frameworks whose tools execute entirely inside the
+    customer process and therefore never cross the harness webhook.  The caller must normalize
+    framework-specific structured events immediately; raw customer logs are deliberately not
+    persisted as artifacts because they can contain credentials or unrelated PII.
+    """
+    environment = ProvisionedEnvironment.load(Path(destination))
+    if environment is None or not environment.runtime_container:
+        return ""
+    bounded_tail = max(1, min(int(tail), 20_000))
+    return _docker(
+        "logs",
+        "--tail",
+        str(bounded_tail),
+        environment.runtime_container,
+        check=False,
+        timeout=30,
+    )
 
 
 def _runtime_trace_mount(trace: Path) -> tuple[list[str], str]:
@@ -1906,20 +2567,10 @@ def _runtime_trace_mount(trace: Path) -> tuple[list[str], str]:
     return ["--volume", f"{trace.parent}:/run/harness-trace"], ""
 
 
-def connect_runner_network(
-    destination: str | Path, *, alias: str = "alk-harness-runner"
+def _attach_runner_network(
+    environment: ProvisionedEnvironment, *, alias: str = "alk-harness-runner"
 ) -> str:
-    """Join this runner to the submitted environment's private network.
-
-    A per-call webhook lives in the runner process. The submitted agent runs in
-    the repository's Compose network, so a hosted/containerized runner must
-    join that network explicitly; host loopback and host-published ports are
-    neither private nor reliably reachable from sibling containers.
-    """
-    destination = Path(destination)
-    environment = ProvisionedEnvironment.load(destination)
-    if environment is None or not environment.running:
-        raise ProvisionError(f"no running environment recorded at {destination}")
+    """Join a containerized runner to an in-memory environment during provisioning."""
     configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
     if not configured:
         return ""
@@ -1971,8 +2622,42 @@ def connect_runner_network(
     if network not in runner_networks:
         _docker("network", "connect", "--alias", alias, network, runner, timeout=30)
     environment.runner_network = network
-    environment.save(destination)
     return alias
+
+
+def _detach_runner_network(environment: ProvisionedEnvironment) -> None:
+    configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
+    if not configured or not environment.runner_network:
+        return
+    runner = socket.gethostname() if configured == "self" else configured
+    _docker(
+        "network",
+        "disconnect",
+        environment.runner_network,
+        runner,
+        check=False,
+        timeout=30,
+    )
+    environment.runner_network = ""
+
+
+def connect_runner_network(
+    destination: str | Path, *, alias: str = "alk-harness-runner"
+) -> str:
+    """Join this runner to the submitted environment's private network.
+
+    A per-call webhook lives in the runner process. The submitted agent runs in
+    the repository's Compose network, so a hosted/containerized runner must
+    join that network explicitly; host loopback and host-published ports are
+    neither private nor reliably reachable from sibling containers.
+    """
+    destination = Path(destination)
+    environment = ProvisionedEnvironment.load(destination)
+    if environment is None or not environment.running:
+        raise ProvisionError(f"no running environment recorded at {destination}")
+    connected = _attach_runner_network(environment, alias=alias)
+    environment.save(destination)
+    return connected
 
 
 def runtime_environment(destination: str | Path) -> dict[str, str]:
@@ -1986,7 +2671,12 @@ def runtime_environment(destination: str | Path) -> dict[str, str]:
             + (", ".join(environment.runtime_services) or "none")
         )
     config = _config(environment)
-    return _environment_values(config["services"][environment.runtime_services[0]])
+    values = _environment_values(config["services"][environment.runtime_services[0]])
+    for name in environment.runtime_configuration_names:
+        value = runtime_configuration_value(name).strip()
+        if value:
+            values[name] = value
+    return values
 
 
 def infer_livekit_agent_name(destination: str | Path) -> str:
@@ -2074,17 +2764,10 @@ def stop_runtime(destination: str | Path) -> bool:
     environment.runtime_container = ""
     environment.runtime_trace_volume = ""
     environment.runtime_trace_path = ""
-    configured = os.environ.get("ALK_RUNNER_CONTAINER", "").strip()
-    if configured and environment.runner_network:
-        runner = socket.gethostname() if configured == "self" else configured
-        _docker(
-            "network",
-            "disconnect",
-            environment.runner_network,
-            runner,
-            check=False,
-        )
-        environment.runner_network = ""
+    environment.runtime_endpoints = {}
+    # Keep the runner attached while the scenario is graded against the real datastore. The
+    # worker is gone, but post-call state checks still need the run's private network. ``reset``
+    # and ``stop`` own the eventual network detach together with infrastructure teardown.
     environment.save(destination)
     return True
 
@@ -2098,7 +2781,9 @@ def stop(destination: str | Path) -> bool:
     if environment.runtime_container:
         stop_runtime(destination)
         environment = ProvisionedEnvironment.load(destination) or environment
+    _detach_runner_network(environment)
     _run(environment, "down", "--volumes", "--remove-orphans", check=False, timeout=120)
+    _remove_empty_project_default_network(environment.project)
     environment.running = False
     environment.save(destination)
     return True

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shlex
 import shutil
@@ -76,6 +75,7 @@ class GeneratedRuntimePlan:
     install_strategy: str
     extras: tuple[str, ...]
     command: tuple[str, ...]
+    context_excludes: tuple[str, ...]
     dockerfile: str
     context_directory: str = ""
 
@@ -169,6 +169,7 @@ def detect_generated_runtime(
         version = _language_version(str(getattr(runtime, "version", "") or ""), "22")
         dependency, strategy, install, runner = _node_install(component)
         command = explicit_command or _node_command(component, runner)
+        install.extend(_node_build_steps(component, runner, command))
         dockerfile = _node_dockerfile(version, dependency, install, command)
         extras = []
     return GeneratedRuntimePlan(
@@ -179,6 +180,7 @@ def detect_generated_runtime(
         install_strategy=strategy,
         extras=tuple(extras),
         command=tuple(command),
+        context_excludes=_context_excludes(component, runtime, dependency, command),
         dockerfile=dockerfile,
     )
 
@@ -204,7 +206,7 @@ def prepare_generated_runtime(
     if context.exists():
         shutil.rmtree(context)
     context.mkdir(parents=True)
-    _copy_sanitized_context(component, context)
+    _copy_sanitized_context(component, context, plan.context_excludes)
     context.joinpath(GENERATED_DOCKERFILE).write_text(plan.dockerfile, encoding="utf-8")
     prepared = GeneratedRuntimePlan(
         **{**asdict(plan), "context_directory": str(context)}
@@ -234,6 +236,9 @@ def _runtime_override(runtime: Any | None, **values: str) -> Any:
         "workdir": str(getattr(runtime, "workdir", "") or ""),
         "command": list(getattr(runtime, "command", None) or []),
         "extras": list(getattr(runtime, "extras", None) or []),
+        "context_excludes": list(
+            getattr(runtime, "context_excludes", None) or []
+        ),
     }
     payload.update(values)
     return type("RuntimeHints", (), payload)()
@@ -282,14 +287,20 @@ def _component_root(root: Path, configured: str) -> Path:
 def _python_markers(root: Path) -> list[Path]:
     return [
         root / name
-        for name in ("pyproject.toml", "requirements.txt", "uv.lock", "poetry.lock")
+        for name in (
+            "pyproject.toml",
+            "requirements.txt",
+            "uv.lock",
+            "poetry.lock",
+            "setup.py",
+        )
         if root.joinpath(name).is_file()
     ]
 
 
 def _nested_components(root: Path) -> list[Path]:
     found: set[Path] = set()
-    for marker in ("pyproject.toml", "requirements.txt", "package.json"):
+    for marker in ("pyproject.toml", "requirements.txt", "setup.py", "package.json"):
         for path in root.glob(f"*/*/{marker}"):
             if not any(
                 part in _IGNORED_DIRECTORIES for part in path.relative_to(root).parts
@@ -428,6 +439,13 @@ def _python_install(
             "pip-project",
             ["RUN " + shlex.join(["pip", "install", "--no-cache-dir", target])],
             extras,
+        )
+    if root.joinpath("setup.py").is_file():
+        return (
+            "setup.py",
+            "pip-setup-project-unlocked",
+            ["RUN pip install --no-cache-dir ."],
+            [],
         )
     raise GeneratedRuntimeError("generated_runtime_python_dependencies_unsupported")
 
@@ -577,6 +595,22 @@ def _node_command(root: Path, runner: str) -> list[str]:
     return ["node", candidates[0]]
 
 
+def _node_build_steps(root: Path, runner: str, command: list[str]) -> list[str]:
+    """Build a submitted Node application when its selected start script needs that phase."""
+    try:
+        package = json.loads(root.joinpath("package.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    scripts = package.get("scripts", {})
+    if not isinstance(scripts, dict) or not scripts.get("build"):
+        return []
+    selected_start = command in (["npm", "run", "start"], [runner, "start"])
+    if not selected_start:
+        return []
+    invocation = [runner, "run", "build"] if runner == "npm" else [runner, "build"]
+    return ["RUN " + shlex.join(invocation)]
+
+
 def _python_dockerfile(
     version: str,
     dependency: str,
@@ -623,60 +657,136 @@ def _node_dockerfile(
     )
 
 
-def _copy_sanitized_context(source: Path, destination: Path) -> None:
+def _context_excludes(
+    component: Path, runtime: Any | None, dependency: str, command: list[str]
+) -> tuple[str, ...]:
+    required = {
+        Path(name)
+        for name in (dependency, "pyproject.toml", "package.json")
+        if name and component.joinpath(name).is_file()
+    }
+    required.update(
+        Path(token)
+        for token in command
+        if token
+        and not Path(token).is_absolute()
+        and ".." not in Path(token).parts
+        and component.joinpath(token).is_file()
+    )
+    values: set[str] = set()
+    for raw in getattr(runtime, "context_excludes", None) or []:
+        relative = Path(str(raw))
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_invalid: {raw}"
+            )
+        normalized = relative.as_posix().removeprefix("./")
+        target = (component / normalized).resolve()
+        try:
+            target.relative_to(component.resolve())
+        except ValueError as exc:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_invalid: {raw}"
+            ) from exc
+        if not target.exists():
+            # Generated/local state files are commonly listed even before the
+            # first run creates them. A missing exclusion is already excluded
+            # from the immutable build context and is therefore safe to ignore.
+            continue
+        excluded_path = Path(normalized)
+        if any(
+            excluded_path == required_path or excluded_path in required_path.parents
+            for required_path in required
+        ):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_required: {normalized}"
+            )
+        values.add(normalized)
+    return tuple(sorted(values))
+
+
+def _copy_sanitized_context(
+    source: Path, destination: Path, exclusions: tuple[str, ...] = ()
+) -> None:
     count = 0
     total = 0
-    for current, directories, files in os.walk(source, followlinks=False):
-        current_path = Path(current)
-        linked_directories = [
-            current_path / name
-            for name in directories
-            if current_path.joinpath(name).is_symlink()
-        ]
-        if linked_directories:
-            relative = linked_directories[0].relative_to(source)
+    source = source.resolve()
+    excluded = tuple(Path(value) for value in exclusions)
+
+    def is_excluded(relative: Path) -> bool:
+        return any(relative == value or value in relative.parents for value in excluded)
+
+    def copy_file(path: Path, relative: Path) -> None:
+        nonlocal count, total
+        if _sensitive_file(relative):
+            return
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode):
             raise GeneratedRuntimeError(
-                f"generated_runtime_symlink_forbidden: {relative.as_posix()}"
+                f"generated_runtime_file_type_unsupported: {relative.as_posix()}"
             )
-        directories[:] = [
-            name
-            for name in directories
-            if name not in _IGNORED_DIRECTORIES
-            and not current_path.joinpath(name).is_symlink()
-        ]
-        relative_directory = current_path.relative_to(source)
-        for name in files:
-            path = current_path / name
-            relative = relative_directory / name
-            if _sensitive_file(relative):
+        if info.st_size > _MAX_FILE_BYTES:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_file_too_large: {relative.as_posix()}"
+            )
+        count += 1
+        total += info.st_size
+        if count > _MAX_FILES or total > _MAX_CONTEXT_BYTES:
+            raise GeneratedRuntimeError("generated_runtime_context_limit_exceeded")
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
+                    raise GeneratedRuntimeError(
+                        "generated_runtime_secret_material_detected: "
+                        + relative.as_posix()
+                    )
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target, follow_symlinks=True)
+
+    def copy_directory(
+        directory: Path, relative_directory: Path, ancestors: frozenset[Path]
+    ) -> None:
+        resolved_directory = directory.resolve()
+        try:
+            resolved_directory.relative_to(source)
+        except ValueError as exc:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_symlink_forbidden: {relative_directory.as_posix()}"
+            ) from exc
+        if resolved_directory in ancestors:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_symlink_cycle: {relative_directory.as_posix()}"
+            )
+        next_ancestors = ancestors | {resolved_directory}
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            relative = relative_directory / path.name
+            if is_excluded(relative):
                 continue
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode):
-                raise GeneratedRuntimeError(
-                    f"generated_runtime_symlink_forbidden: {relative.as_posix()}"
-                )
-            if not stat.S_ISREG(info.st_mode):
+            if path.name in _IGNORED_DIRECTORIES and path.is_dir():
+                continue
+            if path.is_symlink():
+                try:
+                    resolved = path.resolve(strict=True)
+                    resolved.relative_to(source)
+                except (OSError, ValueError) as exc:
+                    raise GeneratedRuntimeError(
+                        f"generated_runtime_symlink_forbidden: {relative.as_posix()}"
+                    ) from exc
+                if resolved.is_dir():
+                    copy_directory(resolved, relative, next_ancestors)
+                else:
+                    copy_file(resolved, relative)
+            elif path.is_dir():
+                copy_directory(path, relative, next_ancestors)
+            elif path.is_file():
+                copy_file(path, relative)
+            else:
                 raise GeneratedRuntimeError(
                     f"generated_runtime_file_type_unsupported: {relative.as_posix()}"
                 )
-            if info.st_size > _MAX_FILE_BYTES:
-                raise GeneratedRuntimeError(
-                    f"generated_runtime_file_too_large: {relative.as_posix()}"
-                )
-            count += 1
-            total += info.st_size
-            if count > _MAX_FILES or total > _MAX_CONTEXT_BYTES:
-                raise GeneratedRuntimeError("generated_runtime_context_limit_exceeded")
-            with path.open("rb") as stream:
-                while chunk := stream.read(1024 * 1024):
-                    if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                        raise GeneratedRuntimeError(
-                            "generated_runtime_secret_material_detected: "
-                            + relative.as_posix()
-                        )
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target, follow_symlinks=False)
+
+    copy_directory(source, Path(), frozenset())
 
 
 def _sensitive_file(relative: Path) -> bool:

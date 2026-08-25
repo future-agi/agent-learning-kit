@@ -22,7 +22,7 @@ from .config import (
     provider_env,
     read_only_session,
 )
-from .contract import AgentContract, ToolSpec, validate_contract
+from .contract import AgentContract, Runtime, RuntimeInterface, ToolSpec, validate_contract
 from .job import ExecutionMode, HarnessJob, HarnessStage
 from .scenario import Scenario, validate_scenario
 from .session import Stage, Turn
@@ -48,6 +48,8 @@ __all__ = [
     "HarnessJob",
     "HarnessStage",
     "RepoSource",
+    "Runtime",
+    "RuntimeInterface",
     "Scenario",
     "SpecSource",
     "Stage",

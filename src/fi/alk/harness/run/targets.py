@@ -6,16 +6,22 @@ interface, and keeping it that narrow is what lets the same scenarios, the same 
 same grading run against an agent hosted anywhere.
 
 Two things are supplied per target: how to say something to it, and how its tool calls reach the
-world. ``LocalAgent`` runs the agent in this process from its contract, which needs nothing
-except the contract and is what makes a suite runnable the moment the world is built. A hosted
-target is the same class with the transport swapped: the agent runs wherever it runs, its tool
-calls arrive over a webhook, and the webhook answers from ``world.handle_tool_call``. The world
-does not change, the scenarios do not change, and the grading does not change.
+world. ``LocalAgent`` is only for contract-only specs with no submitted implementation.
+``RepositoryChatTarget`` starts the submitted runtime and reaches its existing HTTP/WebSocket
+interface. A hosted target uses the same narrow protocol with the transport swapped: its tool
+calls arrive over a webhook or in a turn response, and the same world answers them. The world,
+scenarios and grading do not change.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+import socket
+import time
 from typing import Any, Callable, Protocol, runtime_checkable
+from urllib.parse import urljoin
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 
@@ -228,7 +234,273 @@ class LocalAgent:
         return self._stage.spent_usd
 
 
-_REGISTRY: dict[str, Callable[..., Target]] = {LocalAgent.key: LocalAgent}
+class RepositoryChatTarget:
+    """The submitted chat runtime, reached over its existing turn ingress.
+
+    Lifecycle mirrors the repository-backed voice path: bind the scenario's generated world,
+    start the isolated submitted runtime with only endpoint substitutions, wait for its real
+    ingress, converse, then remove only that runtime. The source prompt and tools are never
+    reconstructed in this process.
+    """
+
+    key = "repository"
+
+    def __init__(
+        self,
+        contract: AgentContract,
+        world: GeneratedWorld,
+        *,
+        world_root: str | Path,
+        trace_path: str | Path | None = None,
+        scenario_name: str = "scenario",
+    ) -> None:
+        runtime = contract.runtime
+        interface = runtime.interface if runtime is not None else None
+        if interface is None:
+            raise RuntimeError(
+                "the submitted chat runtime has no recorded conversational interface. "
+                "Record its existing HTTP port, path and protocol during understanding; the "
+                "harness will not reconstruct the repository agent from its prompt."
+            )
+        if interface.kind not in {"http", "websocket"}:
+            raise RuntimeError(
+                f"submitted chat interface {interface.kind!r} is not wired for hosted repository "
+                "execution yet; supported now: HTTP and WebSocket"
+            )
+        if interface.port is None:
+            raise RuntimeError("submitted HTTP chat interface has no container port")
+        self.contract = contract
+        self.world = world
+        self.world_root = Path(world_root)
+        self.trace_path = Path(trace_path) if trace_path is not None else None
+        self.scenario_name = scenario_name
+        self.interface = interface
+        self._webhook: Any | None = None
+        self._wrapper: Any | None = None
+        self._messages: list[dict[str, Any]] = []
+        self._turn = 0
+
+    async def open(self) -> None:
+        from ..provision import (
+            connect_runner_network,
+            runtime_endpoint,
+            start_runtime,
+        )
+        from .voice import WorldWebhook
+
+        webhook = WorldWebhook().start()
+        webhook.bind(self.world)
+        self._webhook = webhook
+        try:
+            private_host = await asyncio.to_thread(
+                connect_runner_network, self.world_root
+            )
+            tool_url = (
+                f"http://{private_host}:{webhook.port}"
+                if private_host
+                else f"http://host.docker.internal:{webhook.port}"
+            )
+            await asyncio.to_thread(
+                start_runtime,
+                self.world_root,
+                overrides={"TOOLS_API_URL": tool_url},
+                trace_path=self.trace_path,
+                publish_ports=[self.interface.port],
+                stable_seconds=0.5,
+            )
+            # A runtime-only Compose project creates its network at start. This second call is
+            # the same idempotent attach used by voice and makes its private container address
+            # reachable from a hosted runner container.
+            await asyncio.to_thread(connect_runner_network, self.world_root)
+            scheme = "ws" if self.interface.kind == "websocket" else "http"
+            base = await asyncio.to_thread(
+                runtime_endpoint,
+                self.world_root,
+                self.interface.port,
+                scheme=scheme,
+            )
+            await asyncio.to_thread(self._wait_ready, base)
+            if self.interface.kind == "websocket":
+                from fi.simulate.agent.wrappers.websocket import WebSocketAgentWrapper
+
+                wrapper = WebSocketAgentWrapper
+            else:
+                from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+
+                wrapper = HTTPAgentWrapper
+            self._wrapper = wrapper(
+                endpoint=urljoin(
+                    base.rstrip("/") + "/", self.interface.path.lstrip("/")
+                ),
+                protocol=self.interface.protocol,
+                include_tools=self.interface.include_tools,
+                timeout=30.0,
+                metadata={
+                    "target": "submitted_repository_runtime",
+                    "scenario": self.scenario_name,
+                },
+            )
+        except Exception:
+            await self.close()
+            raise
+
+    def _wait_ready(self, base: str) -> None:
+        from urllib import error as urllib_error
+        from urllib import request as urllib_request
+        from urllib.parse import urlsplit
+
+        deadline = time.monotonic() + 60.0
+        health = self.interface.health_path
+        last = "not reachable"
+        while time.monotonic() < deadline:
+            try:
+                if health and self.interface.kind == "http":
+                    url = urljoin(base.rstrip("/") + "/", health.lstrip("/"))
+                    with urllib_request.urlopen(url, timeout=2) as response:
+                        if int(getattr(response, "status", 200)) < 500:
+                            return
+                else:
+                    parsed = urlsplit(base)
+                    with socket.create_connection(
+                        (str(parsed.hostname), int(parsed.port or 80)), timeout=2
+                    ):
+                        return
+            except (OSError, urllib_error.URLError) as exc:
+                last = f"{type(exc).__name__}: {exc}"
+                time.sleep(0.25)
+        raise RuntimeError(
+            f"submitted chat runtime did not become ready on port {self.interface.port}: {last}"
+        )
+
+    async def say(self, utterance: str) -> str:
+        if self._wrapper is None:
+            raise RuntimeError("submitted chat runtime is not open")
+        from fi.simulate.agent.wrapper import AgentInput
+
+        self._messages.append({"role": "user", "content": utterance})
+        for _step in range(8):
+            request = AgentInput(
+                thread_id=self.scenario_name,
+                execution_id=self.scenario_name,
+                turn_index=self._turn,
+                scenario_name=self.scenario_name,
+                modality="text",
+                messages=list(self._messages),
+                new_message=dict(self._messages[-1]),
+                tools=self._tools() if self.interface.include_tools else [],
+            )
+            response = await self._wrapper.call(request)
+            trace = dict((response.metadata or {}).get("external_agent") or {})
+            if trace and not trace.get("success", False):
+                raise RuntimeError(
+                    str(trace.get("error") or "submitted chat endpoint request failed")
+                )
+            calls = list(response.tool_calls or [])
+            if calls:
+                self._messages.append(
+                    {
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": calls,
+                    }
+                )
+                for index, call in enumerate(calls, start=1):
+                    name, arguments, call_id = self._tool_call(call, index)
+                    result = self.world.handle_tool_call(
+                        {"id": call_id, "name": name, "arguments": arguments}
+                    )
+                    self._messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": (
+                                result.content
+                                if result is not None
+                                else f"there is no tool called {name}"
+                            ),
+                        }
+                    )
+                continue
+            said = response.content.strip()
+            self._messages.append({"role": "assistant", "content": said})
+            self._turn += 1
+            return said
+        raise RuntimeError(
+            "submitted chat agent exceeded 8 tool continuations in one turn"
+        )
+
+    @staticmethod
+    def _tool_call(call: dict[str, Any], index: int) -> tuple[str, dict[str, Any], str]:
+        function = (
+            call.get("function") if isinstance(call.get("function"), dict) else {}
+        )
+        name = str(call.get("name") or function.get("name") or "")
+        raw = call.get("arguments", function.get("arguments", {}))
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                parsed = {"_raw": raw}
+        else:
+            parsed = dict(raw or {}) if isinstance(raw, dict) else {}
+        return name, parsed, str(call.get("id") or f"call_{index}")
+
+    def _tools(self) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for spec in self.contract.tools:
+            properties = {
+                arg: {"type": self._json_type(spec.arg_types.get(arg, "string"))}
+                for arg in spec.args
+            }
+            tools.append(
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": list(spec.args),
+                    },
+                }
+            )
+        return tools
+
+    @staticmethod
+    def _json_type(declared: str) -> str:
+        normalized = str(declared or "").lower()
+        if any(mark in normalized for mark in ("int", "float", "number")):
+            return "number"
+        if "bool" in normalized:
+            return "boolean"
+        if any(mark in normalized for mark in ("list", "array", "sequence")):
+            return "array"
+        if any(mark in normalized for mark in ("dict", "map", "object")):
+            return "object"
+        return "string"
+
+    async def close(self) -> None:
+        from ..provision import stop_runtime
+
+        try:
+            await asyncio.to_thread(stop_runtime, self.world_root)
+        finally:
+            if self._webhook is not None:
+                self._webhook.stop()
+                self._webhook = None
+            self._wrapper = None
+
+    @property
+    def spent_usd(self) -> float:
+        # The submitted target owns its model/provider accounting. Provider evidence may add it
+        # later; the harness must not fabricate a cost from HTTP traffic.
+        return 0.0
+
+
+_REGISTRY: dict[str, Callable[..., Target]] = {
+    LocalAgent.key: LocalAgent,
+    RepositoryChatTarget.key: RepositoryChatTarget,
+}
 
 
 def register_target(key: str, factory: Callable[..., Target]) -> None:

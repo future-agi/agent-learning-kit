@@ -134,6 +134,72 @@ def test_missing_compose_env_file_fails_before_docker_and_names_service(
     assert "voice-app" in candidate.findings[0].message
 
 
+def test_uploaded_environment_satisfies_missing_compose_env_file(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "docker-compose.yml",
+        "services:\n  voice-app:\n    image: example/voice\n    env_file: [.env]\n",
+    )
+
+    manifest = inspect_packaging(tmp_path, external_environment=True)
+
+    assert manifest.ready
+    assert manifest.selected_path == "docker-compose.yml"
+    finding = manifest.candidates[0].findings[0]
+    assert finding.code == "compose_env_file_missing"
+    assert finding.blocking is False
+
+
+def test_optional_compose_env_file_does_not_block_admission(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "compose.yml",
+        """services:
+  chat-app:
+    image: example/chat
+    env_file:
+      - path: .env.local
+        required: false
+""",
+    )
+
+    manifest = inspect_packaging(tmp_path)
+
+    assert manifest.ready
+    assert not any(
+        finding.code == "compose_env_file_missing"
+        for finding in manifest.candidates[0].findings
+    )
+
+
+def test_named_compose_variant_is_discovered(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "docker-compose.middleware.yaml",
+        "services:\n  redis:\n    image: redis:7\n",
+    )
+
+    manifest = inspect_packaging(tmp_path)
+
+    assert manifest.ready
+    assert manifest.selected_path == "docker-compose.middleware.yaml"
+
+
+def test_compose_override_fragment_is_not_selected_as_runtime(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "docker-compose.ports.yaml",
+        "services:\n  qdrant:\n    ports: ['6333:6333']\n",
+    )
+
+    manifest = inspect_packaging(tmp_path)
+
+    assert not manifest.ready
+    assert manifest.candidates[0].findings[0].code == "compose_override_fragment"
+
+
 def test_infrastructure_only_compose_is_not_reported_as_an_agent_runtime(
     tmp_path: Path,
 ) -> None:

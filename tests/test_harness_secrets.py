@@ -3,6 +3,7 @@ import pytest
 from fi.alk.harness.secrets import (
     SecretResolutionError,
     resolve_worker_secrets,
+    runtime_configuration_value,
     worker_environment,
 )
 from fi.simulate.runtime.spec import SecretRef
@@ -42,3 +43,48 @@ def test_worker_does_not_inherit_unrelated_host_secrets():
     )
 
     assert child == {"PATH": "/bin", "LIVEKIT_API_KEY": "job-value"}
+
+
+def test_uploaded_runtime_values_cannot_replace_runner_model_credentials():
+    child = worker_environment(
+        {},
+        runtime_configuration={
+            "GOOGLE_APPLICATION_CREDENTIALS": "customer.json",
+            "OPENAI_API_KEY": "customer-openai",
+        },
+        host_environment={
+            "PATH": "/bin",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/runner/google.json",
+            "GOOGLE_CLOUD_PROJECT": "runner-project",
+        },
+    )
+
+    assert child["GOOGLE_APPLICATION_CREDENTIALS"] == "/runner/google.json"
+    assert child["GOOGLE_CLOUD_PROJECT"] == "runner-project"
+    assert "OPENAI_API_KEY" not in child
+    assert (
+        runtime_configuration_value("GOOGLE_APPLICATION_CREDENTIALS", environment=child)
+        == "customer.json"
+    )
+    assert (
+        runtime_configuration_value("OPENAI_API_KEY", environment=child)
+        == "customer-openai"
+    )
+
+
+def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it():
+    child = worker_environment(
+        {
+            "ALK_RUNNER_CONTAINER": "customer-container",
+            "HARNESS_WEBHOOK_HOST": "127.0.0.1",
+        },
+        host_environment={
+            "ALK_RUNNER_CONTAINER": "self",
+            "ALK_DOCKER_PUBLISHED_HOST": "host.docker.internal",
+            "HARNESS_WEBHOOK_HOST": "0.0.0.0",
+        },
+    )
+
+    assert child["ALK_RUNNER_CONTAINER"] == "self"
+    assert child["ALK_DOCKER_PUBLISHED_HOST"] == "host.docker.internal"
+    assert child["HARNESS_WEBHOOK_HOST"] == "0.0.0.0"
