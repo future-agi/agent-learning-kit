@@ -237,14 +237,9 @@ class PostgresStore(ContainerStore):
     def load_from(self, path: str | Path) -> None:
         root = Path(path)
         schema = root / SCHEMA
-        # A standalone scenario store starts empty and needs the DDL; a compose-provisioned
-        # (Attached) store saves no schema.sql because store.json already carries the applied
-        # CREATE scripts, which Held.load_from replays. Apply schema.sql only when it exists and
-        # the tables are not already there, so restore works either way and never double-applies.
-        with self._connect() as connection:
-            has_schema = bool(self._tables(connection))
-        if not has_schema and schema.exists():
-            self.apply(schema.read_text(encoding="utf-8"))
+        if not schema.exists():
+            raise StoreError(f"no saved Postgres schema at {schema}")
+        self.apply(schema.read_text(encoding="utf-8"))
         Held.load_from(self, root)
 
     # -- what a scenario changes -----------------------------------------------------

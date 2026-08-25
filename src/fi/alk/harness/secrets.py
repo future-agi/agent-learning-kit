@@ -95,9 +95,6 @@ def worker_environment(
         # Runner-owned model configuration. Uploaded agent values with these names remain in the
         # runtime namespace and cannot replace controller credentials.
         "ALK_HARNESS_MODEL",
-        # Lets a local sandbox hand its own Google credential to the runtime it builds. A hosted
-        # runner leaves this unset so its platform key is never mounted into a submitted agent.
-        "ALK_ALLOW_HOST_GOOGLE_CREDENTIALS",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",
@@ -111,44 +108,10 @@ def worker_environment(
         "FI_BASE_URL",
         "FI_API_KEY",
         "FI_SECRET_KEY",
-        # Runner-owned Docker runtime + voice configuration. The harness starts store and agent
-        # containers on the host daemon and must reach them: ALK_DOCKER_NETWORK lets the store be
-        # reached by container name on a shared network, ALK_DOCKER_PUBLISHED_HOST/BIND_HOST give
-        # the host published services are on. Without these the child defaults to 127.0.0.1 --
-        # its own loopback inside the sandbox -- and every store probe is refused.
-        "ALK_DOCKER_NETWORK",
-        "ALK_DOCKER_PUBLISHED_HOST",
-        "ALK_DOCKER_BIND_HOST",
-        "ALK_RUNNER_CONTAINER",
-        "ALK_HARNESS_MODEL",
-        "ALK_AGENT_MODEL",
-        "ALK_JUDGE_MODEL",
-        "ALK_USER_MODEL",
-        "CLOUD_ML_REGION",
-        "HARNESS_WEBHOOK_HOST",
-        "HARNESS_WEBHOOK_PORT",
-        "HARNESS_WEBHOOK_URL",
-        "HARNESS_RUNTIME_WEBHOOK_URL",
-        "HARNESS_VOICE_CASE",
-        "HARNESS_VOICE_INFRA_RETRIES",
-        "LIVEKIT_TARGET_AGENT_NAME",
-        # Local-dev convenience: let the developer's provider creds from their local environment
-        # reach the worker directly. A hosted provider supplies these through secret_refs instead.
-        "LIVEKIT_URL",
-        "LIVEKIT_API_KEY",
-        "LIVEKIT_API_SECRET",
-        "ACCEPTANCE_LIVEKIT_URL",
-        "DEEPGRAM_API_KEY",
-        "CARTESIA_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_CLOUD_LOCATION",
     }
     child = {name: value for name, value in host.items() if name in allowed}
     reserved = {
         "ALK_HARNESS_MODEL",
-        # A submitted job must not be able to turn on the host-credential fallback for itself.
-        "ALK_ALLOW_HOST_GOOGLE_CREDENTIALS",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",

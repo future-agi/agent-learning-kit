@@ -38,7 +38,7 @@ DONE = "done"
 # remain alive forever after a dropped upstream stream, though, which previously left a hosted
 # job looking healthy while making no progress.  Bound *inactivity*, not total stage duration:
 # long scenario suites remain valid as long as they keep producing observable work.
-STAGE_IDLE_TIMEOUT_SECONDS = float(os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", "600"))
+STAGE_IDLE_TIMEOUT_SECONDS = float(os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", "180"))
 STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
 
 
