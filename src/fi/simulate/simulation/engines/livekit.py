@@ -1650,6 +1650,11 @@ class LiveKitEngine(BaseEngine):
                 simulator.stt.language if simulator is not None else None
             ),
             variables={"instruction": persona.situation or ""},
+            # Delivery cues are Cartesia only. Passing the provider here rather than reading it
+            # inside the prompt keeps the decision where the provider is actually known.
+            tts_provider=(
+                simulator.tts.provider if simulator is not None else None
+            ),
         )
         if simulator is None:
             voice_provider = os.environ.get(

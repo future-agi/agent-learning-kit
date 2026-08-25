@@ -39,6 +39,32 @@ VOICE_COMMUNICATION_STYLE_GUIDES: dict[str, str] = {
 }
 
 
+# Delivery cues Cartesia renders and every other engine speaks aloud as words. Added only when
+# Cartesia is definitely the voice, because Deepgram's Aura neither renders nor strips them, so
+# a caller on Aura would literally say "left bracket laughter right bracket".
+#
+# Deliberately narrow. Cartesia documents five SSML tags and one nonverbalism, but `<speed>` and
+# `<volume>` carry a decimal that a token stream can split ("1", ".", "0"), which makes the tag
+# be read out, and Cartesia advises against shifting `<emotion>` mid generation. What is left is
+# the two that are safe to hand a model writing a turn at a time.
+CARTESIA_DELIVERY_CUES = """# HOW YOU SOUND
+
+Two cues shape delivery. They are never spoken as words. Use them sparingly, and only where a
+real person would.
+
+- [laughter] produces a real laugh. Write it inline: "No, [laughter] you're kidding."
+  At most once every few turns, and never to open one.
+- <break time="500ms"/> is a fixed silence. Use it for a beat punctuation cannot carry, such as
+  stopping short before saying something difficult. One per turn at most.
+
+Write both exactly as shown. Do not invent others: no <laugh>, no [laughs], no [sighs], no
+*sighs*, no (angrily), no emotion labels. Anything not on this list is read aloud and ruins the
+call.
+
+Everything else is carried by the words: what you repeat, where you interrupt yourself, how
+short your sentences get when you are annoyed."""
+
+
 def _first(value: object) -> str:
     if isinstance(value, Mapping):
         value = next(iter(value.values()), "")
@@ -342,6 +368,7 @@ def render_simulator_prompt(
     agent_name: str | None = None,
     additional_instructions: str | None = None,
     default_language: str | None = None,
+    tts_provider: str | None = None,
 ) -> str:
     """Fill a caller-prompt template, the way the platform fills its own.
 
@@ -382,6 +409,8 @@ def render_simulator_prompt(
     prompt = re.sub(r"Currently,\s*[.]", "", prompt)
     prompt = re.sub(r"[ \t]{2,}", " ", prompt).strip()
 
+    if tts_provider and tts_provider.strip().lower() == "cartesia":
+        prompt += "\n\n" + CARTESIA_DELIVERY_CUES
     if additional_instructions and additional_instructions.strip():
         prompt += (
             "\n\n# ADDITIONAL SIMULATOR INSTRUCTIONS\n\n"
@@ -411,6 +440,7 @@ def build_voice_simulator_prompt(
     default_language: str | None = None,
     template: str | None = None,
     variables: Mapping[str, Any] | None = None,
+    tts_provider: str | None = None,
 ) -> str:
     """The caller prompt for one simulated customer.
 
@@ -425,6 +455,7 @@ def build_voice_simulator_prompt(
         agent_name=agent_name,
         additional_instructions=additional_instructions,
         default_language=default_language,
+        tts_provider=tts_provider,
     )
 
 
@@ -434,6 +465,7 @@ __all__ = [
     "VOICE_PERSONALITY_GUIDES",
     "append_voice_execution_rules",
     "DEFAULT_SIMULATOR_TEMPLATE",
+    "CARTESIA_DELIVERY_CUES",
     "build_voice_simulator_prompt",
     "render_simulator_prompt",
     "format_voice_persona",
