@@ -16,7 +16,14 @@ from pathlib import Path
 from typing import Any
 
 from fi.alk.harness import hosted_scheduler as hs
-from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
+from fi.alk.harness.outbound import (
+    ChannelError,
+    ChannelOutcome,
+    HostedAttemptSupersededError,
+    HostedChannelFailedError,
+    HostedFencedError,
+)
+from fi.alk.harness.process_runtime import EnvironmentRuntime, ProcessRuntimeError, RuntimeState
 from fi.alk.harness.world.errors import (
     WorldReadOnly,
     WorldStateTooLarge,
@@ -38,9 +45,15 @@ class FakeProvisioner:
     review named as fidelity gaps: `reset_scripts` lets a test script one world's next N reset
     outcomes (anything unscripted resets clean to READY), and every provider call — including
     `healthy()` (R13: spine v1.12 §4.5b folded it into the same non-reentrant set) — goes through
-    `_serialized`, which both yields (`await asyncio.sleep(0)` — so a genuine overlap has a real
-    chance to interleave) and asserts no second call is ever in flight at the same time, matching
-    "not reentrant" (B1/B2's own regression test)."""
+    `_serialized`, which yields (`await asyncio.sleep(0)` — so a genuine overlap has a real
+    chance to interleave) and records any overlapping call into `overlaps`, matching "not
+    reentrant" (B1/B2's own regression test).
+
+    `_serialized` used to `assert not self._busy` in-band — but that assertion fires INSIDE
+    `_reconcile`'s own `except Exception` (a reconcile must never crash the pool) or `lease()`'s
+    `except Exception as exc: reset_exc = exc`, so production swallows it and the calling test
+    never sees a failure. Recording into `overlaps` and asserting on it from the test's OWN frame
+    is what actually makes a `_provider_lock` regression observable."""
 
     def __init__(
         self, instances: int, *, reset_scripts: dict[int, list[RuntimeState]] | None = None
@@ -49,28 +62,29 @@ class FakeProvisioner:
         self.reset_scripts = reset_scripts or {}
         self.provision_calls = 0
         self.reset_calls = 0
+        self.healthy_calls = 0
         self.closed = False
         self._runtimes = {i: _runtime(i) for i in range(instances)}
-        self._busy = False
+        self.overlaps: list[str] = []
+        self._in_flight: list[str] = []
 
     @contextlib.asynccontextmanager
-    async def _serialized(self):
-        # The `try/finally` wraps the yielding `sleep(0)` too — `close()` cancelling an in-flight
-        # reconcile (M6) must still clear `_busy`, or a cancellation lands this assertion stuck
-        # True forever and fails every later call in the same test for the wrong reason.
-        assert not self._busy, "provider port called reentrantly (provision/reset/healthy/close overlap)"
-        self._busy = True
+    async def _serialized(self, label: str):
+        if self._in_flight:
+            self.overlaps.append(f"{self._in_flight[-1]} overlapped {label}")
+        self._in_flight.append(label)
         try:
             await asyncio.sleep(0)
             yield
         finally:
-            self._busy = False
+            # `remove` (not `pop`) — cancellation (M6) can unwind these out of call order.
+            self._in_flight.remove(label)
 
     async def provision(
         self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
         contract: Any | None = None, instances: int = 1,
     ) -> list[EnvironmentRuntime]:
-        async with self._serialized():
+        async with self._serialized("provision"):
             self.provision_calls += 1
             for index in range(instances):
                 if index not in self._runtimes or self._runtimes[index].state in (
@@ -80,17 +94,18 @@ class FakeProvisioner:
             return [self._runtimes[index] for index in range(instances) if index in self._runtimes]
 
     async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
-        async with self._serialized():
+        async with self._serialized(f"reset(w{runtime.world_index})"):
             self.reset_calls += 1
             script = self.reset_scripts.get(runtime.world_index)
             runtime.state = script.pop(0) if script else RuntimeState.READY
 
     async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
-        async with self._serialized():
+        async with self._serialized(f"healthy(w{runtime.world_index})"):
+            self.healthy_calls += 1
             return runtime.state is RuntimeState.READY
 
     async def close(self, *, work_directory: Path) -> None:
-        async with self._serialized():
+        async with self._serialized("close"):
             self.closed = True
 
 
@@ -279,7 +294,7 @@ def test_a_freshly_provisioned_world_failing_its_health_probe_is_not_handed_out(
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
             async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
-                async with self._serialized():
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
                     return runtime.world_index != 0
 
         pool, _ = _pool(2, provisioner=Provisioner(2))
@@ -364,7 +379,9 @@ def test_reconcile_can_drop_a_world_that_never_recovers() -> None:
 
 def test_concurrent_mark_unhealthy_never_calls_provision_reentrantly() -> None:
     # T7/B1: two worlds going bad in the same tick must serialize onto one provider call at a
-    # time — `FakeProvisioner._serialized`'s own assertion is what actually catches a regression.
+    # time. `overlaps` is asserted here, in the TEST's own frame — an in-band assert inside
+    # `_serialized` would instead land inside `_reconcile`'s `except Exception` and never fail
+    # this test.
     async def scenario() -> None:
         pool, provisioner = _pool(2)
         await pool.start()
@@ -377,16 +394,22 @@ def test_concurrent_mark_unhealthy_never_calls_provision_reentrantly() -> None:
         assert pool.size == 2
         world_index, runtime = await pool.lease()
         assert runtime.state is RuntimeState.READY
+        assert provisioner.overlaps == []
         await pool.close()
+        assert provisioner.overlaps == []
 
     asyncio.run(scenario())
 
 
 def test_lease_reset_and_a_background_reconcile_never_overlap_on_the_provider() -> None:
-    # TH-4/B2: the overlap that actually matters is a lease()'s reset() running concurrently with
-    # a DIFFERENT world's reconcile provision() -- the old coalescer test never drove two
-    # DIFFERENT provider calls at once; `FakeProvisioner._serialized`'s reentrancy assertion is
-    # what would catch a `_provider_lock` regression, so this drives it for real.
+    # TH-4/B2: the overlap that actually matters is a lease()'s reset() running concurrently
+    # with a DIFFERENT world's reconcile provision() -- the old coalescer test never drove two
+    # DIFFERENT provider calls at once. `overlaps` is asserted from the test's own frame: the
+    # old in-band assert inside `_serialized` fired inside `_reconcile`'s `except Exception` /
+    # `lease()`'s `except Exception as exc: reset_exc = exc` and was silently swallowed by
+    # production error-handling, so all three `_provider_lock` sites had zero effective
+    # coverage. `reset_calls` is pinned too, so the test cannot silently stop driving the
+    # overlap it claims to.
     async def scenario() -> None:
         pool, provisioner = _pool(2)
         await pool.start()
@@ -408,6 +431,54 @@ def test_lease_reset_and_a_background_reconcile_never_overlap_on_the_provider() 
         assert leased is not None and leased[0] == 1
         await asyncio.sleep(0.1)  # let the reconcile finish
         assert provisioner.provision_calls >= 2
+        assert provisioner.reset_calls >= 1
+        assert provisioner.overlaps == []
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_lease_recovers_the_world_index_when_the_provider_call_races_a_replaced_runtime_object() -> None:
+    # The R14 discard branch used to drop a replaced-object's index from `_leased` without
+    # putting it back anywhere -- not `_available`, not `_down`. Every later candidate set then
+    # stays empty forever and `lease()` hangs. Dead in production today (the real provider
+    # mutates `EnvironmentRuntime` in place, never replaces it), but the fix has to hold
+    # independent of that reachability argument, so this drives the replacement directly.
+    async def scenario() -> None:
+        holder: dict[str, Any] = {}
+
+        class SwapOnce(FakeProvisioner):
+            def __init__(self, instances: int) -> None:
+                super().__init__(instances)
+                self.armed = False  # only swap once the test's OWN lease call is under way
+                self._swapped = False
+
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    if self.armed and not self._swapped:
+                        self._swapped = True
+                        # Simulate a concurrent reconcile replacing this index's own
+                        # `EnvironmentRuntime` object between this lease's provider call and its
+                        # post-call re-read.
+                        holder["pool"]._runtimes[runtime.world_index] = _runtime(
+                            runtime.world_index, RuntimeState.READY
+                        )
+                    return runtime.state is RuntimeState.READY
+
+        provisioner = SwapOnce(1)
+        pool, _ = _pool(1, provisioner=provisioner)
+        holder["pool"] = pool
+        await pool.start()
+        first, _ = await pool.lease()
+        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+
+        provisioner.armed = True
+        before = provisioner.healthy_calls
+        world_index, runtime = await asyncio.wait_for(pool.lease(), timeout=1.0)
+        assert world_index == 0
+        assert runtime.state is RuntimeState.READY
+        assert provisioner.healthy_calls - before == 2  # the swapped attempt, then the retry that succeeded
         await pool.close()
 
     asyncio.run(scenario())
@@ -463,6 +534,53 @@ def test_close_waits_for_an_in_flight_reconcile_before_closing_the_provider() ->
     asyncio.run(scenario())
 
 
+def test_close_during_an_in_flight_reconcile_never_overlaps_the_providers_close_call() -> None:
+    # §4.5b: the old bounded-wait-then-cancel let close() run `provisioner.close()` CONCURRENTLY
+    # with a still-live `provision()` once the internal 30s bound expired -- cancelling the
+    # awaiting coroutine cannot stop underlying thread-backed work. Real `asyncio.to_thread`
+    # dispatch here (a plain `asyncio.sleep`-backed fake would let even the OLD cancel-then-close
+    # behavior look correct, since cancellation genuinely stops a sleeping coroutine). `overlaps`
+    # -- the same state mechanism the reentrancy tests above build -- is the assertion a
+    # regression back to cancel-then-close would trip.
+    async def scenario() -> None:
+        release_provision = threading.Event()
+
+        class SlowThreadedProvisioner(FakeProvisioner):
+            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+                async with self._serialized("provision"):
+                    self.provision_calls += 1
+
+                    def _blocking() -> list[EnvironmentRuntime]:
+                        release_provision.wait(timeout=5.0)
+                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+
+                    runtimes = await asyncio.to_thread(_blocking)
+                    for runtime in runtimes:
+                        self._runtimes[runtime.world_index] = runtime
+                    return runtimes
+
+        provisioner = SlowThreadedProvisioner(1)
+        release_provision.set()
+        pool, _ = _pool(1, provisioner=provisioner)
+        await pool.start()
+        release_provision.clear()
+
+        world_index, _ = await pool.lease()
+        await pool.mark_unhealthy(world_index, cause="boom")  # schedules a reconcile mid-flight
+        await asyncio.sleep(0.05)  # let the reconcile's provision() actually begin on its thread
+
+        close_task = asyncio.create_task(pool.close())
+        await asyncio.sleep(0.05)
+        assert not provisioner.closed, "close() ran the provider's own close() before provision() returned"
+
+        release_provision.set()  # let the thread-backed provision() finish on its own
+        await asyncio.wait_for(close_task, timeout=5.0)
+        assert provisioner.closed is True
+        assert provisioner.overlaps == []
+
+    asyncio.run(scenario())
+
+
 def test_mark_unhealthy_and_lease_after_close_are_blocked() -> None:
     # R5: `close()` latches -- neither a late `mark_unhealthy()` (e.g. a scenario's `finally`
     # racing a SIGTERM-triggered close()) nor a fresh `lease()` may touch the provider again once
@@ -492,6 +610,127 @@ def test_mark_unhealthy_and_lease_after_close_are_blocked() -> None:
     asyncio.run(scenario())
 
 
+def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner() -> None:
+    # A caller wrapping the WHOLE close() call in its own timeout (the entrypoint's
+    # `_bounded_close`) used to cancel close() after `_closed` had already latched --
+    # a retry then hit the old `if self._closed: return` idempotency check and returned
+    # IMMEDIATELY, claiming completion while teardown could still be running (or, with the check
+    # removed but no shield, cancelled the shared teardown outright). Either bug shows up as the
+    # retry NOT genuinely blocking until teardown finishes -- checked directly below, rather than
+    # via an eventually-true `provisioner.closed` (a to_thread-backed close() leaks its thread on
+    # real cancellation and can flip that flag on its own regardless of whether close() re-awaited
+    # it, the same non-cancellable-thread shape the test above covers).
+    async def scenario() -> None:
+        events: list[str] = []
+        release_close = threading.Event()
+
+        class SlowCloseProvisioner(FakeProvisioner):
+            async def close(self, *, work_directory: Path) -> None:
+                async with self._serialized("close"):
+
+                    def _blocking() -> None:
+                        release_close.wait(timeout=5.0)
+                        events.append("provider-close-done")
+
+                    await asyncio.to_thread(_blocking)
+                    self.closed = True
+
+        provisioner = SlowCloseProvisioner(1)
+        pool, _ = _pool(1, provisioner=provisioner)
+        await pool.start()
+
+        # First call: the CALLER's own timeout fires while provisioner.close() is still blocked
+        # on its thread -- this must not stop the teardown itself (asyncio.shield).
+        try:
+            await asyncio.wait_for(pool.close(), timeout=0.1)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            raise AssertionError("expected the first close() to time out while provisioner.close() blocks")
+        events.append("first-close-timed-out")
+        assert provisioner.closed is False  # still mid-teardown, not abandoned
+
+        # Retry, started while the provider is STILL blocked (release_close not yet set) -- it
+        # must genuinely wait, not return claiming completion (the early-return bug) or race an
+        # independently-cancelled teardown to a coincidentally-correct result.
+        retry_task = asyncio.create_task(pool.close())
+        await asyncio.sleep(0.05)
+        assert not retry_task.done(), "retry close() returned before teardown actually finished"
+        events.append("retry-still-waiting")
+
+        release_close.set()
+        await asyncio.wait_for(retry_task, timeout=2.0)
+        events.append("retry-close-returned")
+
+        assert events == [
+            "first-close-timed-out", "retry-still-waiting", "provider-close-done", "retry-close-returned",
+        ]
+        assert provisioner.closed is True
+        assert provisioner.overlaps == []
+
+    asyncio.run(scenario())
+
+
+def test_close_blocks_a_reset_that_wins_the_provider_lock_race_after_close_has_latched() -> None:
+    # `_closed` is set (under `_state_lock`, no `_provider_lock` needed) the moment close()
+    # starts -- but a lease already past the top-of-loop `_closed` check can still
+    # win the `_provider_lock` FIFO queue race and call reset() against a provider close() is
+    # about to hard-clean. Reproduces the race by holding `_provider_lock` externally so both
+    # close() and a queued lease() are genuinely waiting on it when it releases.
+    async def scenario() -> None:
+        pool, provisioner = _pool(1)
+        await pool.start()
+        first, _ = await pool.lease()
+        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+
+        await pool._provider_lock.acquire()  # stand in for "some provider call already in flight"
+        lease_task = asyncio.create_task(pool.lease())
+        await asyncio.sleep(0.05)  # let lease() clear the top `_closed` check and queue on the lock
+        close_task = asyncio.create_task(pool.close())
+        await asyncio.sleep(0.05)  # close() latches `_closed` (no lock needed) and also queues
+        pool._provider_lock.release()  # FIFO: lease() was queued first, so it goes first
+
+        try:
+            await asyncio.wait_for(lease_task, timeout=1.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.reason == "closed"
+        else:
+            raise AssertionError("expected NoWorldsAvailable(reason='closed')")
+        assert provisioner.reset_calls == 0  # never touched the provider once closed had latched
+
+        await asyncio.wait_for(close_task, timeout=1.0)
+
+    asyncio.run(scenario())
+
+
+def test_close_blocks_a_healthy_probe_that_wins_the_provider_lock_race_after_close_has_latched() -> None:
+    # The healthy() block specifically: a freshly-provisioned world skips reset() (m9) and
+    # goes straight to healthy() -- that site needs the same re-check as the reset block above,
+    # not just the reset block.
+    async def scenario() -> None:
+        pool, provisioner = _pool(1)
+        await pool.start()  # world 0 is "fresh" -- its first lease skips reset(), pays for healthy()
+
+        await pool._provider_lock.acquire()
+        lease_task = asyncio.create_task(pool.lease())
+        await asyncio.sleep(0.05)
+        close_task = asyncio.create_task(pool.close())
+        await asyncio.sleep(0.05)
+        pool._provider_lock.release()
+
+        try:
+            await asyncio.wait_for(lease_task, timeout=1.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.reason == "closed"
+        else:
+            raise AssertionError("expected NoWorldsAvailable(reason='closed')")
+        assert provisioner.healthy_calls == 0
+
+        await asyncio.wait_for(close_task, timeout=1.0)
+
+    asyncio.run(scenario())
+
+
 def test_start_degrades_when_provision_returns_fewer_worlds_than_instances() -> None:
     # R2: `provision()` legitimately returns fewer worlds than requested (conformance-gate
     # failure, `fixed_port`) — spine v1.12 §4: "Fail -> effective parallelism 1 ...
@@ -516,6 +755,43 @@ def test_start_degrades_when_provision_returns_fewer_worlds_than_instances() -> 
         assert pool.effective_size == 1
         world_index, _ = await pool.lease()
         assert world_index == 0
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_effective_size_tracks_a_reconcile_not_just_start() -> None:
+    # `_effective_size` used to be a start()-time snapshot `_reconcile` never touched -- P10
+    # sizes `parallelism_degraded` off this property, so a stale value would announce the wrong
+    # world count outbound. Here start() degrades to 1 of 3, then a reconcile recovers the full
+    # 3 -- `effective_size` must follow it back up.
+    async def scenario() -> None:
+        calls = {"n": 0}
+
+        class Provisioner:
+            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return [_runtime(0, RuntimeState.READY)]  # degraded: 1 of 3 requested
+                return [_runtime(i, RuntimeState.READY) for i in range(instances)]  # fully recovered
+
+            async def reset(self, runtime, *, work_directory):
+                pass
+
+            async def healthy(self, runtime, *, work_directory):
+                return True
+
+            async def close(self, *, work_directory):
+                pass
+
+        pool, _ = _pool(3, provisioner=Provisioner())
+        await pool.start()
+        assert pool.effective_size == 1
+        world_index, _ = await pool.lease()
+        await pool.mark_unhealthy(world_index, cause="force a reconcile")
+        await asyncio.sleep(0.1)
+        assert pool.size == 3
+        assert pool.effective_size == 3
         await pool.close()
 
     asyncio.run(scenario())
@@ -570,6 +846,287 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
 
     asyncio.run(zero_worlds())
     asyncio.run(gap())
+
+
+def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_lease() -> None:
+    # hosted-execution-seams.md v1.13 §5.4: a deterministic §2f fault (domain environment/agent,
+    # never retried) used to be discarded at the reset()/reconcile seam and re-reported as
+    # retryable `world_pool_exhausted`/infrastructure -- burning every whole-job retry on a fault
+    # that fails identically every time.
+    #
+    # Isolated to `lease()`'s OWN reset()/healthy() extraction: `provision()` always SUCCEEDS
+    # (so the reconcile's separate give-up extraction never runs and cannot backfill the same
+    # code), and the reconcile's post-provision healthy-probe failing again is what keeps the
+    # world down -- a first version of this test had `provision()` also fail typed, which masked
+    # a mutated-away `lease()` extraction because the reconcile's own give-up path recorded the
+    # same code independently.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+                async with self._serialized(f"reset(w{runtime.world_index})"):
+                    self.reset_calls += 1
+                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, provisioner=Provisioner(1), outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1,
+        )
+        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        assert result.aborted is not None
+        assert result.aborted.code == "seed_failed"
+        assert result.aborted.domain == "environment"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_reconcile() -> None:
+    # The OTHER extraction site, isolated the same way in reverse -- `reset()` fails UNTYPED
+    # (so `lease()`'s own extraction always yields `None` and cannot backfill), and only the
+    # reconcile's give-up path ever sees a typed `ProcessRuntimeError`.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+                async with self._serialized(f"reset(w{runtime.world_index})"):
+                    self.reset_calls += 1
+                    raise RuntimeError("generic reset failure")  # untyped -- lease()'s own code is None
+
+            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+                async with self._serialized("provision"):
+                    self.provision_calls += 1
+                    if self.provision_calls == 1:
+                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+
+        pool, _ = _pool(1, provisioner=Provisioner(1))
+        await pool.start()
+        first, _ = await pool.lease()
+        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code == "seed_failed"
+            assert exc.domain is hs.FailureDomain.ENVIRONMENT
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_pool_exhaustion_with_mixed_section_2f_codes_stays_world_pool_exhausted() -> None:
+    # Mixed codes across the unhealthy worlds must NOT surface either one -- v1.13 only
+    # promotes a code that is UNIFORM across every currently-unhealthy world.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+                async with self._serialized(f"reset(w{runtime.world_index})"):
+                    self.reset_calls += 1
+                    code = "seed_failed" if runtime.world_index == 0 else "store_statement_failed"
+                    raise ProcessRuntimeError("reset", code, "boom")
+
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    code = "seed_failed" if runtime.world_index == 0 else "store_statement_failed"
+                    raise ProcessRuntimeError("reset", code, "boom")
+
+            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+                async with self._serialized("provision"):
+                    self.provision_calls += 1
+                    if self.provision_calls == 1:
+                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                    # Untyped -- must not overwrite `_down_codes` with a uniform code.
+                    raise RuntimeError("provider is generically down")
+
+        pool, _ = _pool(2, provisioner=Provisioner(2))
+        await pool.start()
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code is None
+            assert exc.domain is None
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_pool_exhaustion_with_a_uniform_infrastructure_domain_code_stays_world_pool_exhausted() -> None:
+    # `store_statement_failed` IS §2f-typed and uniform here, but its domain is
+    # infrastructure (retryable) -- v1.13 only promotes `environment`/`agent`, so this must still
+    # fall back to the generic exhaustion abort.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+                async with self._serialized(f"reset(w{runtime.world_index})"):
+                    self.reset_calls += 1
+                    raise ProcessRuntimeError("reset", "store_statement_failed", "boom")
+
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    raise ProcessRuntimeError("reset", "store_statement_failed", "boom")
+
+            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+                async with self._serialized("provision"):
+                    self.provision_calls += 1
+                    if self.provision_calls == 1:
+                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                    raise ProcessRuntimeError("reset", "store_statement_failed", "boom")
+
+        pool, _ = _pool(1, provisioner=Provisioner(1))
+        await pool.start()
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code is None
+            assert exc.domain is None
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_code() -> None:
+    # A world demoted by a typed `seed_failed` reset failure used to keep that code in
+    # `_down_codes` forever if the reconcile that follows gives up UNTYPED (a bare `OSError`, or
+    # any non-§2f exception) -- the give-up path only overwrote when its OWN failure was typed,
+    # so this stale code outlived the attempt that actually produced it and a later exhaustion
+    # declaration read it as if it were current.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+                async with self._serialized(f"reset(w{runtime.world_index})"):
+                    self.reset_calls += 1
+                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+
+            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+                async with self._serialized("provision"):
+                    self.provision_calls += 1
+                    if self.provision_calls == 1:
+                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                    # Every reconcile attempt after the initial `start()` fails UNTYPED -- the
+                    # give-up path must clear the `seed_failed` code the reset() failure recorded,
+                    # not leave it standing.
+                    raise OSError("transient enospc")
+
+        pool, _ = _pool(1, provisioner=Provisioner(1))
+        await pool.start()
+        first, _ = await pool.lease()
+        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code is None
+            assert exc.domain is None
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_lease_exhaustion_considers_every_down_world_not_just_the_exclude_narrowed_subset() -> None:
+    # A retry lease's `exclude` set narrows `usable` to the runtimes NOT being avoided -- using
+    # `usable` (rather than every currently-unhealthy world) as the uniformity set let the
+    # excluded world's own failure escape the check entirely, so a lone untyped down world
+    # sitting outside `exclude` could hide behind a uniform typed code from everyone else and
+    # wrongly surface as that code+domain instead of the generic exhaustion abort.
+    #
+    # Isolated to the uniformity computation alone: `healthy()` always returns `False` (never
+    # raises), so the post-provision recovery branch never runs and never pops `_down_codes` --
+    # only the two codes this test sets directly via `mark_unhealthy()` are ever in play.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    return False
+
+        pool, _ = _pool(2, provisioner=Provisioner(2))
+        await pool.start()
+        await pool.mark_unhealthy(0, cause="generic reset failure", code=None)  # untyped
+        await pool.mark_unhealthy(1, cause="seed_failed", code="seed_failed")  # typed, environment
+        try:
+            # Excludes world 0 -- a scenario retrying away from the world it just failed on. The
+            # only OTHER down world (1) carries a uniform typed code on its own, but world 0's own
+            # untyped failure must still block the pass-through.
+            await asyncio.wait_for(pool.lease(exclude=frozenset({0})), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code is None
+            assert exc.domain is None
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_success_with_a_failed_health_probe_clears_a_stale_typed_code() -> None:
+    # A world demoted with a typed code can be re-provisioned successfully and still fail its
+    # post-provision health probe -- that probe returning `False` (not raising) is untyped, and
+    # the give-up path above never runs on this branch because `provision()` itself succeeded. The
+    # world stays down, but nothing about this round produced a §2f code, so a later exhaustion
+    # declaration must see the generic `world_pool_exhausted` shape, not the code an earlier,
+    # superseded demotion happened to record.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    return False  # untyped -- provision() itself always succeeds
+
+        pool, provisioner = _pool(1, provisioner=Provisioner(1))
+        await pool.start()
+        await pool.mark_unhealthy(0, cause="seed reset failed", code="seed_failed")  # stale typed code
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code is None
+            assert exc.domain is None
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        assert provisioner.provision_calls >= 2  # the reconcile actually re-provisioned
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_success_with_a_typed_health_probe_failure_surfaces_that_codes_own_domain() -> None:
+    # The other direction of the same probe: when the post-provision health check itself raises a
+    # typed §2f error, that is the round's own result and must replace whatever an earlier,
+    # superseded demotion recorded -- not merely clear it to `None`.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    raise ProcessRuntimeError("healthy", "build_failed", "container image missing on retry")
+
+        pool, _ = _pool(1, provisioner=Provisioner(1))
+        await pool.start()
+        await pool.mark_unhealthy(0, cause="seed reset failed", code="seed_failed")  # different, stale code
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code == "build_failed"
+            assert exc.domain is hs.FailureDomain.AGENT
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
 
 
 def test_world_unhealthy_emitted_exactly_once_per_demotion_path() -> None:
@@ -912,6 +1469,65 @@ def test_a_leaked_phase_thread_does_not_starve_a_sibling_world_and_close_still_c
     asyncio.run(scenario())
 
 
+def test_scenario_phases_run_on_the_dedicated_hosted_scenario_executor() -> None:
+    # R1's actual claim is WHOSE executor phase threads run on, not merely how many workers it
+    # has -- reverting `loop.run_in_executor(executor, _run)` back to
+    # `asyncio.to_thread(_run)` (the loop's shared default executor) survived every test in the
+    # suite, because nothing pinned the dispatch target itself. Capture the real thread name from
+    # inside a phase body.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        seen_thread_name = {"name": ""}
+
+        def capture(world: Any) -> None:
+            seen_thread_name["name"] = threading.current_thread().name
+
+        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        scenarios = [FakeScenario("s1", "id-1", setup_fn=capture, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        assert result.receipts[0].status == "passed"
+        assert seen_thread_name["name"].startswith("hosted-scenario"), seen_thread_name["name"]
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_executor_sizing_covers_more_scenarios_than_the_leak_headroom_alone() -> None:
+    # `_LEAK_HEADROOM` alone assumes spine §1's `scenario_count` admission cap (<=10) -- W=1, N
+    # scenarios that all abandon their setup thread, N > effective_size + _LEAK_HEADROOM (11).
+    # Before the fix, scenarios past the headroom found the executor saturated and were reported
+    # `driver_crashed` for a phase that never even started, instead of the genuine
+    # `setup_timeout` every one of them actually is.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        original = hs.SETUP_TIMEOUT_SECONDS
+        hs.SETUP_TIMEOUT_SECONDS = 0.1
+        try:
+            def runaway(world: Any) -> None:
+                time.sleep(5.0)  # abandoned -- never returns within the test
+
+            n = 13  # > effective_size(1) + _LEAK_HEADROOM(10)
+            scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
+            scenarios = [
+                FakeScenario(f"s{i}", f"id-{i}", setup_fn=runaway, sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+                for i in range(n)
+            ]
+            result = await asyncio.wait_for(scheduler.run(scenarios), timeout=15.0)
+            codes = [r.failure.code for r in result.receipts if r.failure is not None]
+            assert codes.count("driver_crashed") == 0, codes
+            assert codes.count("setup_timeout") == n
+        finally:
+            hs.SETUP_TIMEOUT_SECONDS = original
+        await asyncio.wait_for(pool.close(), timeout=2.0)
+
+    asyncio.run(scenario())
+
+
 def test_check_broken_leaves_later_subgoals_unjudged() -> None:
     async def scenario() -> None:
         outbound = FakeOutbound()
@@ -1007,6 +1623,39 @@ def test_world_unhealthy_cause_is_truncated_and_redacted() -> None:
     asyncio.run(scenario())
 
 
+def test_mark_unhealthy_schedules_recovery_before_the_telemetry_emit() -> None:
+    # `_schedule_reconcile()` used to run AFTER the `world_unhealthy` emit -- a slow (or hanging)
+    # `OutboundPort` call delayed recovery by exactly its own duration, and worst case (an emit
+    # that never returns) `_reconcile_pending` stays latched forever and `lease()`'s grace loop
+    # spins without ever declaring exhaustion.
+    async def scenario() -> None:
+        emit_started = asyncio.Event()
+        emit_release = asyncio.Event()
+
+        class SlowOutbound(FakeOutbound):
+            async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
+                emit_started.set()
+                await emit_release.wait()
+                await super().world_unhealthy(world_index=world_index, cause=cause)
+
+        outbound = SlowOutbound()
+        pool, provisioner = _pool(1, outbound=outbound)
+        await pool.start()
+        world_index, _ = await pool.lease()
+
+        mark_task = asyncio.create_task(pool.mark_unhealthy(world_index, cause="boom"))
+        await asyncio.wait_for(emit_started.wait(), timeout=1.0)
+        # The emit is blocked -- recovery must already have been scheduled by this point.
+        assert pool._reconcile_task is not None, "reconcile was not scheduled ahead of the emit"
+
+        emit_release.set()
+        await asyncio.wait_for(mark_task, timeout=1.0)
+        await asyncio.sleep(0.05)
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_world_unavailable_twice_gives_up_after_the_one_retry() -> None:
     async def scenario() -> None:
         outbound = FakeOutbound()
@@ -1067,6 +1716,14 @@ def test_cancel_between_attempt_1_and_attempt_2_reports_errored_not_skipped() ->
         assert receipt.failure is not None and receipt.failure.code == "world_unavailable"
         assert receipt.scenario_attempt == 1
         assert receipt.world_index == 0
+        # Defensive, not discriminating on its own: this site's own retry-lease `None` return
+        # already short-circuits BEFORE the emit both before and after the `scenario_retried`
+        # placement change (the mutation run confirmed it), so this only pins that the property
+        # continues to hold -- the actual discriminating test is
+        # `test_cancel_during_the_retry_leases_own_health_probe...` below, the one whose
+        # mutation-reverted shape this assertion actually catches.
+        kinds = [event for event, _ in outbound.events]
+        assert kinds.count("scenario_retried") == 0
         await pool.close()
 
     asyncio.run(scenario())
@@ -1084,7 +1741,7 @@ def test_cancel_during_the_retry_leases_own_health_probe_reports_errored_not_ski
             async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
                 if runtime.world_index == 1:
                     cancel_flag["v"] = True
-                async with self._serialized():
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
                     return runtime.state is RuntimeState.READY
 
         outbound = FakeOutbound()
@@ -1106,6 +1763,11 @@ def test_cancel_during_the_retry_leases_own_health_probe_reports_errored_not_ski
         assert receipt.failure is not None and receipt.failure.code == "world_unavailable"
         assert receipt.scenario_attempt == 1
         assert receipt.world_index == 0
+        # The retry lease itself succeeded (world 1 granted), but attempt 2's own cancel
+        # re-check bailed before it ever proceeded -- `scenario_retried` sits right next to
+        # attempt 2's `scenario_started` now, so neither fires here either.
+        kinds = [event for event, _ in outbound.events]
+        assert kinds.count("scenario_retried") == 0
         await pool.close()
 
     asyncio.run(scenario())
@@ -1334,6 +1996,89 @@ def test_driver_crashed_reports_unjudged_sub_goals_when_they_are_readable() -> N
     asyncio.run(scenario())
 
 
+def test_driver_crashed_reports_the_call_summary_when_the_call_step_already_ran() -> None:
+    # A crash AFTER a successful call step -- here, `world.read_only()` blowing up while building
+    # the check-phase handle -- must not report `call: null`. The call demonstrably ran;
+    # outbound-channels.md Channel 2's errored-receipt body only allows `null` when the call
+    # never started.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class BrokenSecondReadOnly:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_only(self) -> Any:
+                self.calls += 1
+                if self.calls == 1:
+                    return object()  # used by the default no-op ready_fn; never touched
+                raise RuntimeError("check-phase read_only() blew up")
+
+        class Factory:
+            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> Any:
+                return BrokenSecondReadOnly()
+
+        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        scheduler = hs.HostedScheduler(pool=pool, world_factory=Factory(), call_runner=runner, outbound=outbound, job_seed=1)
+        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        receipt = result.receipts[0]
+        assert receipt.status == "errored"
+        assert receipt.failure is not None and receipt.failure.code == "driver_crashed"
+        assert receipt.call is not None
+        assert receipt.call.duration_ms == 5000  # _call_outcome()'s fixture value -- the call ran
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_retrys_driver_crashed_receipt_does_not_carry_the_previous_attempts_call_summary() -> None:
+    # `_ScenarioContext` is shared across both attempts of a retry (`_run_scenario` recurses
+    # with the same `context` object) -- `world_index`/`attempt` were refreshed on entry but
+    # `call` was not, so an attempt-1 outcome that reached the call step
+    # (e.g. `evidence_missing`, retried onto a fresh world) left attempt 1's `CallSummary` sitting
+    # on the context for attempt 2 to inherit if attempt 2 crashed before making its own call.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class WorldForAttempt:
+            def __init__(self, world_index: int) -> None:
+                self.world_index = world_index
+                self.rng = None
+
+            def read_only(self) -> Any:
+                if self.world_index == 1:
+                    # attempt 2's own world -- crashes before its call step ever runs.
+                    raise RuntimeError("attempt 2's read_only() blew up before its own call step")
+                return object()  # attempt 1's world -- used by the default no-op ready_fn
+
+        class Factory:
+            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> Any:
+                return WorldForAttempt(runtime.world_index)
+
+        # Attempt 1's call genuinely ran (started_at/duration_ms distinct from any fixture default)
+        # but captured zero tool calls -- `evidence_missing`, retried onto a fresh world.
+        runner = FakeCallRunner(
+            {"s1": hs.CallOutcome(calls=(), turns=1, started_at="A1", ended_at="A1-end", duration_ms=1111)}
+        )
+        scheduler = hs.HostedScheduler(pool=pool, world_factory=Factory(), call_runner=runner, outbound=outbound, job_seed=1)
+        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        receipt = result.receipts[0]
+        assert receipt.status == "errored"
+        assert receipt.failure is not None and receipt.failure.code == "driver_crashed"
+        assert receipt.scenario_attempt == 2
+        assert receipt.world_index == 1
+        assert receipt.call is None  # attempt 2 never reached its own call step
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_exactly_one_receipt_per_scenario_key_even_when_one_scenario_crashes() -> None:
     # T7/B3: `gather(return_exceptions=True)` + the try/finally around the leased region must
     # never produce zero or duplicate receipts for any scenario.
@@ -1379,6 +2124,136 @@ def test_outbound_failures_never_kill_the_run_or_change_the_receipt() -> None:
     asyncio.run(scenario())
 
 
+def test_a_fence_stops_the_run_from_launching_further_scenarios() -> None:
+    # `HostedFencedError`/`HostedChannelFailedError` used to be swallowed as best-effort telemetry
+    # by `_emit`/`_log`/`mark_unhealthy`'s emit, so a superseded attempt ran its ENTIRE scenario
+    # set and billed a whole attempt's worth of simulated calls after the platform had already
+    # fenced it (outbound-channels.md: 401/403 -> "stop emitting, exit code 3 ... never an infra
+    # retry"). A fence on the first scenario's own
+    # `scenario_started` emit must stop every later scenario from ever launching.
+    async def scenario() -> None:
+        class FencingOutbound(FakeOutbound):
+            async def scenario_started(
+                self, *, scenario_key: str, world_index: int, scenario_attempt: int
+            ) -> None:
+                if scenario_key == "s0":
+                    raise HostedFencedError(
+                        ChannelError(ChannelOutcome.FENCED, None, "fence_mismatch", "attempt superseded")
+                    )
+                await super().scenario_started(
+                    scenario_key=scenario_key, world_index=world_index, scenario_attempt=scenario_attempt
+                )
+
+        outbound = FencingOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        n = 5
+        runner = FakeCallRunner({f"s{i}": _call_outcome(calls=(hs.Call(name="x", arguments={}),)) for i in range(n)})
+        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        scenarios = [FakeScenario(f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]) for i in range(n)]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        assert result.fenced is not None
+        assert isinstance(result.fenced, HostedFencedError)
+        # s0's fence lands before the call step; if the run had kept launching, s1-s4 would have
+        # reached the call step too (their own `scenario_started` succeeds).
+        assert runner.calls == []
+        assert outbound.receipts == []  # a superseded attempt emits no receipts
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_fence_landing_before_the_world_is_resolved_releases_it_instead_of_demoting_it() -> None:
+    # A `_FATAL_OUTBOUND` escaping through the first `scenario_started` emit reached
+    # `_run_scenario`'s `finally` with `world_resolved` still `False`, and `mark_unhealthy()`
+    # there demoted a world that never did anything wrong -- a
+    # false `world_unhealthy` emitted after the run had already stopped emitting, and a
+    # `_schedule_reconcile()` call that spent a `provision()` attempt on a job that already stopped.
+    async def scenario() -> None:
+        class FencingOutbound(FakeOutbound):
+            async def scenario_started(
+                self, *, scenario_key: str, world_index: int, scenario_attempt: int
+            ) -> None:
+                raise HostedFencedError(
+                    ChannelError(ChannelOutcome.FENCED, None, "fence_mismatch", "attempt superseded")
+                )
+
+        outbound = FencingOutbound()
+        pool, provisioner = _pool(1, outbound=outbound)
+        await pool.start()
+        runner = FakeCallRunner({"s0": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        scenarios = [FakeScenario("s0", "id-0", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        assert result.fenced is not None
+        assert [event for event, _ in outbound.events if event == "world_unhealthy"] == []
+        # If a reconcile were (wrongly) scheduled, close() waits for it to finish before
+        # returning -- checking `provision_calls` only after close() makes this deterministic.
+        await pool.close()
+        assert provisioner.provision_calls == 1  # only start()'s own call
+
+    asyncio.run(scenario())
+
+
+def test_a_channel_failed_error_latches_the_same_fenced_path() -> None:
+    # The same latch, reached through `WorldPool.mark_unhealthy`'s own emit rather than the
+    # scheduler's `_emit` -- `HostedChannelFailedError` (404x3, "finalize platform_sync") is just
+    # as fatal as a fence and must stop the run the same way.
+    async def scenario() -> None:
+        class ChannelFailingOutbound(FakeOutbound):
+            async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
+                raise HostedChannelFailedError(
+                    ChannelError(ChannelOutcome.CHANNEL_FAILED, None, "not_found", "channel gone")
+                )
+
+        outbound = ChannelFailingOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        world_index, _ = await pool.lease()
+        await pool.mark_unhealthy(world_index, cause="boom")
+        assert pool.fenced is not None
+        assert isinstance(pool.fenced, HostedChannelFailedError)
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_attempt_superseded_error_latches_the_same_fenced_path() -> None:
+    # `HostedAttemptSupersededError` (409 `attempt_superseded`) is the third member of
+    # outbound.py's `ChannelState` "stop emitting" latch, not just the two originally caught --
+    # it is "a fence in substance" per that module's own docstring. Without it in
+    # `_FATAL_OUTBOUND`, a superseded attempt took the best-effort branch instead and drained its
+    # entire scenario list against a channel that refuses every request.
+    async def scenario() -> None:
+        class SupersedingOutbound(FakeOutbound):
+            async def scenario_started(
+                self, *, scenario_key: str, world_index: int, scenario_attempt: int
+            ) -> None:
+                if scenario_key == "s0":
+                    raise HostedAttemptSupersededError(
+                        ChannelError(ChannelOutcome.PERMANENT_ITEM, None, "attempt_superseded", "attempt was superseded")
+                    )
+                await super().scenario_started(
+                    scenario_key=scenario_key, world_index=world_index, scenario_attempt=scenario_attempt
+                )
+
+        outbound = SupersedingOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        n = 5
+        runner = FakeCallRunner({f"s{i}": _call_outcome(calls=(hs.Call(name="x", arguments={}),)) for i in range(n)})
+        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        scenarios = [FakeScenario(f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]) for i in range(n)]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        assert result.fenced is not None
+        assert isinstance(result.fenced, HostedAttemptSupersededError)
+        assert runner.calls == []
+        assert outbound.receipts == []
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_cancel_after_the_first_scenario_skips_the_rest() -> None:
     # T3/TH-2: the original test's `cancel_requested=lambda: True` was true before `run()` was
     # even called, so nothing ever launched and the "in-flight scenario finishes" behavior was
@@ -1412,6 +2287,15 @@ def test_cancel_after_the_first_scenario_skips_the_rest() -> None:
             scenario_key="s2", scenario_id="id-2", scenario_attempt=1, world_index=None,
             status="skipped", sub_goals=(), evaluations=(), call=None, failure=None,
         )
+        # (outbound-channels.md v1.3 Sequencing: "terminal event -> skipped receipts ->
+        # manifest"): `run()` only SYNTHESIZES the skipped receipts -- emitting them is the
+        # caller's job, done after its own terminal event. Only the real "s0" receipt should be
+        # on the wire at this point.
+        assert [r.scenario_key for r in outbound.receipts] == ["s0"]
+        await scheduler.emit_skipped_receipts(result)
+        assert [r.scenario_key for r in outbound.receipts] == ["s0", "s1", "s2"]
+        assert outbound.receipts[1] == result.receipts[1]
+        assert outbound.receipts[2] == result.receipts[2]
         await pool.close()
 
     asyncio.run(scenario())
@@ -1464,6 +2348,12 @@ def test_zero_ready_worlds_aborts_the_run_and_skips_the_rest() -> None:
         assert statuses["s3"] == "skipped"
         started = [event for event, _ in outbound.events if event == "scenario_started"]
         assert len(started) == 1  # s2/s3 were genuinely never launched
+        # Same ordering guarantee -- only the real "s1" receipt is on the wire until the
+        # caller explicitly asks for the synthesized `skipped` ones.
+        assert [r.scenario_key for r in outbound.receipts] == ["s1"]
+        await scheduler.emit_skipped_receipts(result)
+        skipped_keys = sorted(r.scenario_key for r in outbound.receipts if r.status == "skipped")
+        assert skipped_keys == ["s2", "s3"]
 
     asyncio.run(scenario())
 
