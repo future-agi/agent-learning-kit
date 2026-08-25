@@ -1643,11 +1643,6 @@ class LiveKitEngine(BaseEngine):
             default_language=(
                 simulator.stt.language if simulator is not None else None
             ),
-            template=(
-                getattr(simulator, "prompt_template", None)
-                if simulator is not None
-                else None
-            ),
             variables={"instruction": persona.situation or ""},
         )
         if simulator is None:

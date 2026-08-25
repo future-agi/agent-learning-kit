@@ -459,14 +459,6 @@ class SimulatorAgentDefinition(BaseModel):
             "It never replaces persona, situation, or outcome instructions."
         ),
     )
-    prompt_template: Optional[str] = Field(
-        None,
-        description=(
-            "The caller prompt template, with {{persona}} and any other slots the run supplies. "
-            "Filled rather than composed, so the prompt is authored once and not rebuilt in code. "
-            "Falls back to the shipped default when absent."
-        ),
-    )
 
     llm: LLMConfig = Field(
         default_factory=lambda: LLMConfig(model="gpt-4o-mini", temperature=0.6)
