@@ -1,4 +1,4 @@
-"""The §2e pre-provision checklist — `hosted-execution-seams.md` v1.7 — as a single gate the
+"""The §2e pre-provision checklist — `hosted-execution-seams.md` v1.8 — as a single gate the
 in-sandbox provisioner runs before starting anything.
 
 `bundle_v2.py` validates everything decidable from the manifest's own field values alone; this
@@ -52,10 +52,14 @@ _SECRET_PURPOSE_VALUES = {member.value for member in SecretPurpose}
 class PreflightError(RuntimeError):
     """A §2e checklist rule rejected the bundle.
 
-    ``code`` is one of §2e's failure-code table (v1.7): "contract-rule" codes, each named by a
+    ``code`` is one of §2e's failure-code table (v1.8): "contract-rule" codes, each named by a
     numbered checklist item's prose, and "mechanical" codes for plumbing failures the contract
     describes but does not formalize as a rule (a missing bundle file, an out-of-range
-    ``parallelism``). Every code this module raises is in that table.
+    ``parallelism``). Every code this module raises is in that table, with one open exception:
+    ``fixed_port_reserved`` (F11, p5-round1-review) has no §2e entry yet — the collision it
+    guards against is real (a `fixed_port` aliasing the provisioner's own port-formula bands) but
+    the frozen v1.8 table predates the rule; flagged for the owner to add in the next amendment,
+    not silently worked around.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -114,6 +118,17 @@ _MAX_PROCESSES = 100
 _MIN_PARALLELISM = 1
 _MAX_PARALLELISM = 8
 
+# §2b's own port formulas (`process_runtime.plan_ports`): job-shared `14000 + ordinal`
+# (ordinal <= 99, §2e item 7's process cap) and per-world `15000 + 100*world_index + ordinal`
+# (world_index <= 7, §1's parallelism cap). A `fixed_port` landing inside either band can alias a
+# formula port the provisioner is about to hand to a *different* process — F11, p5-round1-review.
+# `fixed_port` forces W=1, so the collision surface is small, but the failure mode is a bind
+# error inside a customer process, not a bundle rejection, which is strictly worse. Mirrored here
+# rather than imported from `process_runtime.py`: preflight has no business depending on the
+# execution module, and both bands are fixed by the contract, not by any runtime state.
+_JOB_SHARED_PORT_BAND = range(14000, 14100)
+_PER_WORLD_PORT_BAND = range(15000, 15800)
+
 
 def preflight_bundle(
     bundle_dir: Path,
@@ -170,6 +185,7 @@ def preflight_bundle(
         _verify_secret_purposes(manifest, secret_refs)  # 5
         _verify_depends_on(manifest)  # 5
         _verify_engine_catalog(manifest)  # 5
+        _verify_fixed_port_not_reserved(manifest)  # 5 / §2b
         _verify_seed_missing(manifest)  # 5 / §2c
         _verify_reserved_names(bundle_dir, manifest)  # 5
         _verify_seed_files_on_disk_and_listed(bundle_dir, manifest, files)  # 5
@@ -469,6 +485,18 @@ def _verify_engine_catalog(manifest: EnvironmentBundleV2) -> None:
             )
 
 
+def _verify_fixed_port_not_reserved(manifest: EnvironmentBundleV2) -> None:
+    for process in manifest.processes:
+        if not isinstance(process, SourceProcess) or process.fixed_port is None:
+            continue
+        if process.fixed_port in _JOB_SHARED_PORT_BAND or process.fixed_port in _PER_WORLD_PORT_BAND:
+            raise PreflightError(
+                "fixed_port_reserved",
+                f"{process.name}: fixed_port {process.fixed_port} falls inside the provisioner's "
+                "own port-formula bands (14000-14099 job-shared, 15000-15799 per-world)",
+            )
+
+
 def _verify_seed_missing(manifest: EnvironmentBundleV2) -> None:
     covered = {store.capability for store in (manifest.seed.stores if manifest.seed else [])}
     missing = sorted(
@@ -497,7 +525,11 @@ def _verify_reserved_names(bundle_dir: Path, manifest: EnvironmentBundleV2) -> N
             # a generated seed file's own note about the reservation ("-- never create
             # _alk_conformance here") would otherwise trip the scan on prose, not on an identifier
             # it defines. Quoted string literals containing the name as *data* remain a known
-            # false-positive surface: the scan has no lexer, only comment-stripping.
+            # false-positive surface: the scan has no lexer, only comment-stripping. The stripping
+            # is a false-NEGATIVE surface in the opposite direction, equally lexer-free and equally
+            # left as-is (N7, p4-round2-review; B4, p4-round3-review): a `--` or `/*` inside a
+            # string literal (not a comment) deletes real content up to the next line-end or `*/`,
+            # which can delete a reserved-name definition that follows it on the same statement.
             code = _SQL_BLOCK_COMMENT.sub("", _SQL_LINE_COMMENT.sub("", text))
             if _RESERVED_NAME_PATTERN.search(code):
                 raise PreflightError(

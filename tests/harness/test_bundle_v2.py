@@ -402,6 +402,32 @@ def test_unknown_field_on_a_process_entry_is_rejected() -> None:
         ManagedProcess.model_validate({**POSTGRES_PROCESS_EXAMPLE, "mounts": ["/data"]})
 
 
+@pytest.mark.parametrize(
+    "bad_name", ["/etc", "../../etc", "Tools-Api", "tools_api!", "-leading-dash"],
+    ids=["absolute", "traversal", "uppercase", "punctuation", "leading-dash"],
+)
+def test_a_process_name_outside_the_closed_pattern_is_rejected(bad_name: str) -> None:
+    """F3, p5-round1-review — BLOCKER, model layer. `name` is path-joined into
+    `/work/build/<name>/` and `/work/worlds/w<N>/<name>/` verbatim (§2b) — an unvalidated name
+    used to make `Path("/work/build") / "/etc"` collapse to `Path("/etc")`, which the provisioner
+    then `rmtree`'d as svc-control. Both process classes carry the same
+    `^[a-z0-9][a-z0-9_-]*$` pattern (§0 v1.8); `process_runtime.py`'s own `_ensure_within` is the
+    defense-in-depth backstop for a caller that bypasses this model layer entirely (see
+    `test_process_runtime.py`'s `test_build_tree_dir_rejects_a_name_that_escapes_the_work_directory`
+    and siblings — "tests both layers," per the worklist)."""
+    with pytest.raises(ValidationError, match="process_name_invalid"):
+        ManagedProcess.model_validate({**POSTGRES_PROCESS_EXAMPLE, "name": bad_name})
+    with pytest.raises(ValidationError, match="process_name_invalid"):
+        SourceProcess.model_validate({**AGENT_PROCESS_EXAMPLE, "name": bad_name})
+
+
+def test_process_names_matching_every_2b_example_are_accepted() -> None:
+    """Every example name in §2b's own JSON (`postgres`, `tools-api`, `agent`) must keep working —
+    the pattern is closed, not merely restrictive."""
+    for name in ("postgres", "tools-api", "agent"):
+        assert ManagedProcess.model_validate({**POSTGRES_PROCESS_EXAMPLE, "name": name}).name == name
+
+
 # --- §2a/§2b/§2d rules the model owns on its own, exercised at manifest scope ----------------
 
 
@@ -464,9 +490,16 @@ def test_an_unresolved_control_service_is_rejected() -> None:
 
 def test_a_control_service_resolving_to_a_managed_engine_is_rejected() -> None:
     """N9 (p4-round2-review): `control_service` names the agent-side service the world handle and
-    evidence seam attach to (§2a) — a datastore in that role is incoherent. Before this check, the
-    `ManagedProcess` branch of the user-assignment loop below ran first and expected `svc-data`
-    for it, which `postgres` already has, so the bundle silently loaded."""
+    evidence seam attach to (§2a) — a datastore in that role is incoherent. For THIS fixture,
+    pre-fix, the user-assignment loop below still caught it, just under the wrong code: `postgres`
+    got its expected `svc-data` (fine), but `agent` — carrying `user: "svc-agent"` from
+    `AGENT_PROCESS_EXAMPLE` — is no longer `control_service`, so the loop demands `svc-tools` for
+    it instead and raises `user_assignment_invalid: agent must be svc-tools, got svc-agent` (B1,
+    p4-round3-review). The genuine silent-load case needs a bundle where no source process claims
+    `svc-agent` at all (e.g. only `postgres` + `tools-api`) — every expectation is then satisfied
+    and the bundle loads with no agent-side process in it. This test still discriminates the fix
+    either way: the pre-fix code (`user_assignment_invalid`) does not match the post-fix code
+    (`control_service_unresolved`), so it goes red on a revert."""
     manifest = {
         **FULL_MANIFEST_EXAMPLE,
         "runtime": {**RUNTIME_EXAMPLE, "control_service": "postgres"},

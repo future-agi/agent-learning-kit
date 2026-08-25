@@ -1,5 +1,5 @@
 """`futureagi.environment-bundle.v2` — the hosted provisioner's manifest shape (`hosted-execution-
-seams.md` v1.7).
+seams.md` v1.8).
 
 v1 (`bundle.py`) describes a `command`-per-service compose world and embeds the repository
 source. v2 describes `/work/source` as already present and a job that starts plain processes on
@@ -29,7 +29,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, Sequence, Union
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .bundle import CapabilityProtocol, _reject_secret_values, _safe_relative
 
@@ -106,16 +114,36 @@ class SecretPurpose(str, Enum):
     SOURCE_CHECKOUT = "source_checkout"
 
 
+# §0 (v1.8): a process `name` is path-joined into `/work/build/<name>/` and
+# `/work/worlds/w<N>/<name>/` verbatim (§2b) — the pattern below is the closed shape that makes
+# `/`, `..`, and an absolute form unspellable at the model layer, matching every §2b example
+# (including `tools-api`).
+_PROCESS_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _validate_process_name(name: str) -> str:
+    if not _PROCESS_NAME_PATTERN.fullmatch(name):
+        raise ValueError(f"process_name_invalid: {name!r} must match ^[a-z0-9][a-z0-9_-]*$")
+    return name
+
+
 class StartedCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    port: int | None = Field(default=None, ge=1, le=65535)
+    # §2b (v1.8): "the value selects the port-probe variant, it is not a literal port number" —
+    # the probed port is always the dependency's own allocated port (`port_plan.port_for`,
+    # `process_runtime.py`), honoring `fixed_port` when the process declares one. A prior version
+    # of this field carried a literal int; `bool` makes the "not a literal" rule unspellable
+    # wrong rather than merely documented.
+    port: bool | None = None
     log_marker: str | None = None
     timeout_seconds: float = Field(default=30.0, gt=0)
 
     @model_validator(mode="after")
     def _exactly_one_probe(self) -> "StartedCheck":
-        if (self.port is None) == (self.log_marker is None):
+        has_port = bool(self.port)
+        has_marker = self.log_marker is not None
+        if has_port == has_marker:
             raise ValueError("started_check_requires_exactly_one_of_port_or_log_marker")
         return self
 
@@ -129,6 +157,11 @@ class ManagedProcess(BaseModel):
     version: str = Field(min_length=1)
     user: ProcessUser
     depends_on: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _name_shape(cls, value: str) -> str:
+        return _validate_process_name(value)
 
 
 class SourceProcess(BaseModel):
@@ -146,6 +179,11 @@ class SourceProcess(BaseModel):
     secret_purposes: list[SecretPurpose] = Field(default_factory=list)
     user: ProcessUser
     depends_on: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _name_shape(cls, value: str) -> str:
+        return _validate_process_name(value)
 
     @model_validator(mode="after")
     def _shape(self) -> "SourceProcess":

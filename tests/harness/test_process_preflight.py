@@ -1,4 +1,4 @@
-"""The §2e pre-provision checklist (`process_preflight.py`), per `hosted-execution-seams.md` v1.7.
+"""The §2e pre-provision checklist (`process_preflight.py`), per `hosted-execution-seams.md` v1.8.
 
 Every checklist item gets at least one rejection test carrying its named code, plus one clean
 accept-lane run of the full checklist. Bundles are built as real directories under `tmp_path` with
@@ -9,13 +9,20 @@ managed-engine/process concept here is a manifest fact, never a running service.
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import inspect
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
 
+from fi.alk.harness import bundle as bundle_module
+from fi.alk.harness import bundle_v2 as bundle_v2_module
+from fi.alk.harness import process_preflight as process_preflight_module
+from fi.alk.harness import process_runtime as process_runtime_module
 from fi.alk.harness.bundle_v2 import (
     BUNDLE_V2_SCHEMA_VERSION,
     EnvironmentBundleV2,
@@ -481,6 +488,37 @@ def test_an_engine_version_outside_the_catalog_pin_is_rejected(tmp_path: Path) -
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
+@pytest.mark.parametrize("colliding_port", [14000, 14099, 15000, 15799])
+def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(
+    tmp_path: Path, colliding_port: int
+) -> None:
+    """F11, p5-round1-review: `fixed_port` forces effective parallelism to 1, but the literal
+    value was never checked against the provisioner's own port-formula bands — a bundle declaring
+    `fixed_port: 14000` collides with a job-shared engine at ordinal 0, and the failure mode is an
+    opaque bind error inside a customer process, not a bundle rejection. `fixed_port_reserved` has
+    no §2e table entry yet (flagged for the owner in `PreflightError`'s own docstring) — the
+    S3 containment test below carries the same flag."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["fixed_port"] = colliding_port
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="fixed_port_reserved"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_a_fixed_port_outside_both_bands_is_accepted(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["fixed_port"] = 9000
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    assert preflight_bundle(
+        tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+    ) is None
+
+
 def test_a_postgres_capability_with_no_store_entry_is_rejected(tmp_path: Path) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["capabilities"]["other_db"] = {
@@ -705,6 +743,30 @@ def test_a_compose_bundle_with_an_unlisted_file_reports_compose_not_hosted(
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs={})
 
 
+def test_a_compose_bundle_with_a_changed_listed_file_reports_compose_not_hosted(
+    tmp_path: Path,
+) -> None:
+    """B2 (p4-round3-review): the fixture above only pins the gate above item 2 — its sole
+    competing violation (`compose.yaml` unlisted) never reaches item 1, since the bundle is
+    otherwise digest-consistent. This mutates a LISTED file's bytes after sealing, without
+    resealing, so item 1 would otherwise raise `bundle_file_changed` — proving the gate wins
+    above item 1 too, not just item 2."""
+    manifest = _build_bundle(
+        tmp_path,
+        body_overrides=lambda b: {
+            **b,
+            "runtime": {"kind": "compose", "document": "compose.yaml"},
+            "processes": [],
+            "seed": None,
+        },
+        include_seed=False,
+    )
+    (tmp_path / "compose.yaml").write_bytes(b"services: {}\n")
+    (tmp_path / "db" / "schema.sql").write_bytes(b"MUTATED")  # still listed in files[]; unsealed.
+    with pytest.raises(PreflightError, match="compose_not_hosted"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs={})
+
+
 # --- kind: external ------------------------------------------------------------------------------
 
 
@@ -738,3 +800,232 @@ def test_kind_external_skips_the_process_block_but_still_enforces_resource_sanit
     # Item 7 still runs regardless of runtime kind.
     with pytest.raises(PreflightError, match="parallelism_out_of_range"):
         preflight_bundle(tmp_path, manifest, parallelism=99, secret_refs={})
+
+
+# --- §2e-table containment (B3/S3, p4-round3-review) ---------------------------------------------
+#
+# `PreflightError`'s own docstring claims "every code this module raises is in that [§2e] table" —
+# true today, per p4-round3-review's part-B finding, but mechanically unenforced: a future
+# `raise ValueError("some_new_code: ...")` anywhere in the model layer would silently leak an
+# unlisted code across a seam the contract calls closed, and nothing short of re-deriving the claim
+# by hand (as that review did) would catch it. This makes the claim a running test instead.
+#
+# Approach (grep-free, as the worklist asked): walk each module's SOURCE TEXT with `ast`, not
+# `grep` — a plain substring/regex scan over raw text can't distinguish an actual `raise
+# PreflightError(...)`/`raise ValueError(...)` call from a code fragment inside a docstring or a
+# comment quoting one. Two extraction shapes:
+#   - `PreflightError(...)`: the whole first positional argument, when it is a literal string, IS
+#     the code (every call in this codebase spells it that way) — `_translate_validation_error`'s
+#     `extra_forbidden` branch RETURNS its `PreflightError(...)` rather than raising it directly
+#     (the caller does `raise _translate_validation_error(exc) from exc`), so the walk matches
+#     every `Call` node by callee name, not only ones sitting directly under a `Raise`.
+#   - `ValueError(...)` (the model layer): the code is only the LEADING token of the message, up
+#     to `:` or end-of-string — recovered by taking the static leading text of the first argument
+#     (a plain string constant, an f-string's first literal segment, or the left operand of a `+`
+#     concatenation — every shape actually used in `bundle_v2.py`/`bundle.py`) and applying the
+#     same `[a-z][a-z0-9_]*` leading-token regex `_translate_validation_error`'s own runtime
+#     fallback uses. A `ValueError` whose message has no static leading text at all (fully
+#     dynamic) would be skipped rather than mis-coded — none exist in these three modules today.
+#
+# Scope judgement call: `bundle.py` also carries `EnvironmentBundle`/`BundleRuntime` (v1's OWN,
+# separate model classes) with their own, unrelated `ValueError` raises (e.g. plain prose with no
+# code prefix at all, `bundle_digest_invalid`/`bundle_schema_unsupported` reused as v1's own
+# names) — none of that is reachable from `EnvironmentBundleV2.model_validate(...)`'s validation
+# tree, since v1 and v2 are disjoint model hierarchies (`bundle_v2.py`'s own docstring: "v1 stays
+# untouched"). The only `bundle.py` surface v2 actually calls into is the two helper functions
+# `bundle_v2.py` imports and its own validators invoke — `_safe_relative`, `_reject_secret_values`
+# — so this test walks exactly those two functions' source (`inspect.getsource`), not the whole
+# file; walking the whole file would both over-include unreachable v1 codes and risk masking a
+# real gap behind noise from a hierarchy this claim was never about.
+
+
+_CODE_LEADING_TOKEN = re.compile(r"^([a-z][a-z0-9_]*)(?::|$)")
+
+
+def _static_leading_text(node: ast.expr) -> str | None:
+    """The static leading text of a raise-argument expression, or `None` if it has none at all
+    (a fully dynamic value, e.g. a bare name or an f-string starting with a `{...}`)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr) and node.values and isinstance(node.values[0], ast.Constant):
+        return str(node.values[0].value)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _static_leading_text(node.left)
+    return None
+
+
+def _raised_codes(source_text: str, callee_name: str, *, whole_first_argument: bool) -> set[str]:
+    codes: set[str] = set()
+    for node in ast.walk(ast.parse(source_text)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Name) and func.id == callee_name):
+            continue
+        if not node.args:
+            continue
+        if whole_first_argument:
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                codes.add(first.value)
+            continue
+        leading = _static_leading_text(node.args[0])
+        if leading is None:
+            continue
+        match = _CODE_LEADING_TOKEN.match(leading)
+        if match:
+            codes.add(match.group(1))
+    return codes
+
+
+# §2e's closed failure-code table (v1.8), transcribed verbatim — the single source of truth every
+# raised code is checked against. Split exactly as the contract text splits it, purely for
+# reviewability against the spec; the test below treats it as one flat set.
+#
+# `fixed_port_reserved` (F11, p5-round1-review) is the one entry NOT actually in the frozen v1.8
+# table — flagged identically in `PreflightError`'s own docstring. The rule it guards (a
+# `fixed_port` aliasing the provisioner's own port-formula bands) is real; the table predates it.
+# Recorded here, transcribed alongside the real entries rather than hidden in a second set, so
+# this test still does its job for every OTHER code — the one exception is a known, owner-facing
+# gap, not silent drift.
+_SECTION_2E_CONTRACT_RULE_CODES = frozenset({
+    "compose_not_hosted", "engine_unsupported", "no_sql_store", "seed_missing",
+    "seed_strategy_unsupported", "sentinel_shape_mismatch", "store_protocol_unsupported",
+    "capability_engine_mismatch", "store_service_not_managed", "reserved_name",
+    "unknown_placeholder", "unknown_field", "secret_in_bundle", "secret_unclaimed",
+    "secret_missing", "build_requires_root", "user_assignment_invalid",
+    "configuration_name_duplicate", "configuration_name_required",
+    "configuration_name_reserved", "sentinel_shape_invalid", "capability_unresolved",
+    "service_unresolved", "control_service_unresolved", "process_name_duplicate",
+    "inputs_digest_mismatch",
+    "fixed_port_reserved",  # NOT in the frozen v1.8 table yet — see the note above.
+})
+_SECTION_2E_MECHANICAL_CODES = frozenset({
+    "bundle_schema_unsupported", "bundle_manifest_invalid", "bundle_manifest_drifted",
+    "bundle_digest_mismatch", "bundle_digest_invalid", "inputs_digest_invalid",
+    "file_sha256_invalid", "source_digest_invalid", "bundle_file_missing",
+    "bundle_file_changed", "bundle_file_unlisted", "bundle_symlink_forbidden",
+    "bundle_path_unsafe", "depends_on_unresolved", "depends_on_cycle", "seed_file_missing",
+    "seed_file_unlisted", "process_count_exceeded", "parallelism_out_of_range",
+    "evidence_seam_required", "processes_required", "processes_and_seed_forbidden",
+    "document_only_for_compose", "compose_runtime_requires_document",
+    "build_command_step_empty", "started_check_requires_exactly_one_of_port_or_log_marker",
+    "resolved_secret_forbidden", "capability_slug_invalid",
+    "process_name_invalid",  # §0/§2b v1.8: the process-`name` pattern rule.
+})
+_SECTION_2E_CODES = _SECTION_2E_CONTRACT_RULE_CODES | _SECTION_2E_MECHANICAL_CODES
+
+
+def test_every_code_these_modules_can_raise_is_in_the_closed_section_2e_table() -> None:
+    raised: set[str] = set()
+    raised |= _raised_codes(
+        Path(inspect.getfile(process_preflight_module)).read_text(encoding="utf-8"),
+        "PreflightError", whole_first_argument=True,
+    )
+    raised |= _raised_codes(
+        Path(inspect.getfile(bundle_v2_module)).read_text(encoding="utf-8"),
+        "ValueError", whole_first_argument=False,
+    )
+    raised |= _raised_codes(
+        inspect.getsource(bundle_module._safe_relative), "ValueError", whole_first_argument=False
+    )
+    raised |= _raised_codes(
+        inspect.getsource(bundle_module._reject_secret_values),
+        "ValueError", whole_first_argument=False,
+    )
+    unlisted = raised - _SECTION_2E_CODES
+    assert not unlisted, f"raised but not in §2e's table: {sorted(unlisted)}"
+
+
+def test_the_extraction_itself_finds_a_nonempty_set_in_every_source() -> None:
+    """Guards the test above against a false pass from a broken extractor (e.g. an import that
+    silently resolves to the wrong file, or a callee-name typo) — each source individually must
+    contribute at least one code, not just the union as a whole."""
+    preflight_codes = _raised_codes(
+        Path(inspect.getfile(process_preflight_module)).read_text(encoding="utf-8"),
+        "PreflightError", whole_first_argument=True,
+    )
+    bundle_v2_codes = _raised_codes(
+        Path(inspect.getfile(bundle_v2_module)).read_text(encoding="utf-8"),
+        "ValueError", whole_first_argument=False,
+    )
+    assert "unknown_field" in preflight_codes  # the `return`-not-`raise` case (see module note).
+    assert "compose_not_hosted" in preflight_codes
+    assert len(bundle_v2_codes) > 10
+    assert "bundle_path_unsafe" in _raised_codes(
+        inspect.getsource(bundle_module._safe_relative), "ValueError", whole_first_argument=False
+    )
+    assert "resolved_secret_forbidden" in _raised_codes(
+        inspect.getsource(bundle_module._reject_secret_values),
+        "ValueError", whole_first_argument=False,
+    )
+
+
+# --- §2f-table containment (v1.8 addition) --------------------------------------------------------
+#
+# v1.8 gave `process_runtime.py` its own closed table (§2f) for the subset of `ProcessRuntimeError`
+# codes that cross the outbound seam. Same containment argument as §2e above, extended to the
+# module the new table covers — worklist item: `unsupported_capability_protocol` and
+# `source_tree_unavailable` are new in this fix pass and must show up here or the test (correctly)
+# fails. `ProcessRuntimeError(stage, code, message, ...)` carries its code at positional index 1,
+# not index 0 (`PreflightError`'s shape), so this is a distinct extraction, not a reuse of
+# `_raised_codes`.
+
+
+def _raised_codes_at_index(source_text: str, callee_name: str, *, index: int) -> set[str]:
+    codes: set[str] = set()
+    for node in ast.walk(ast.parse(source_text)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Name) and func.id == callee_name):
+            continue
+        if len(node.args) <= index:
+            continue
+        argument = node.args[index]
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            codes.add(argument.value)
+    return codes
+
+
+# §2f's closed table (v1.8), transcribed verbatim.
+_SECTION_2F_CODES = frozenset({
+    "source_tree_unavailable", "build_failed", "runtime_unsupported", "spawn_failed",
+    "depends_on_timeout", "unsupported_capability_protocol",
+})
+# `ProcessRuntimeError` also raises codes that are deliberately INTERNAL-only — each marks a
+# precondition `preflight_bundle` should already have made impossible (a placeholder token or a
+# missing credential preflight itself should have caught), so by the module's own docstring these
+# "never cross the outbound seam directly" and have no §2f entry to begin with. Excluded from
+# CONTAINMENT, not from extraction — a genuinely new internal code still surfaces in the raised
+# set for a human to classify, since only these two documented names are exempted.
+_INTERNAL_ONLY_RUNTIME_CODES = frozenset({
+    "internal_unknown_placeholder", "internal_missing_credentials",
+})
+
+
+def test_every_section_2f_code_process_runtime_raises_is_in_the_closed_table() -> None:
+    raised = _raised_codes_at_index(
+        Path(inspect.getfile(process_runtime_module)).read_text(encoding="utf-8"),
+        "ProcessRuntimeError", index=1,
+    )
+    # `process_name_invalid` (F3's defense-in-depth path-containment check, `_ensure_within`) is
+    # not a NEW §2f code — it deliberately reuses the EXISTING §2e model-layer code as a backstop
+    # for when the model layer is bypassed, so `_SECTION_2E_CODES` is a legitimate source too, not
+    # just §2f's own six entries.
+    unlisted = raised - _SECTION_2F_CODES - _SECTION_2E_CODES - _INTERNAL_ONLY_RUNTIME_CODES
+    assert not unlisted, (
+        f"raised but not in §2f's table (nor §2e's, nor a documented internal-only code): "
+        f"{sorted(unlisted)}"
+    )
+
+
+def test_the_section_2f_extraction_itself_finds_a_nonempty_set() -> None:
+    raised = _raised_codes_at_index(
+        Path(inspect.getfile(process_runtime_module)).read_text(encoding="utf-8"),
+        "ProcessRuntimeError", index=1,
+    )
+    assert "build_failed" in raised
+    assert "spawn_failed" in raised
+    assert "source_tree_unavailable" in raised
+    assert "unsupported_capability_protocol" in raised
