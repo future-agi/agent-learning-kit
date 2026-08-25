@@ -368,9 +368,11 @@ class _TestRunnerAgent(Agent):
                 clip_source: Any = await asyncio.to_thread(_download)
                 if not clip_source:
                     return
+                self._background_noise_file = clip_source
             else:
                 clip_source = getattr(BuiltinAudioClip, source, None)
                 if clip_source is None:
+                    logger.warning("background audio clip %r is not one LiveKit ships", source)
                     return
             player = BackgroundAudioPlayer(
                 ambient_sound=AudioConfig(clip_source, volume=volume)
@@ -379,6 +381,27 @@ class _TestRunnerAgent(Agent):
             self._background_player = player
         except Exception:
             logger.warning("background audio not started", exc_info=True)
+
+    async def _stop_background_audio(self) -> None:
+        """Close the ambience player and remove any clip downloaded for it.
+
+        Without this the mixer task, its audio source and the published track outlive the call,
+        and a suite leaks one of each (plus a temp file) per scenario.
+        """
+        player = getattr(self, "_background_player", None)
+        if player is not None:
+            self._background_player = None
+            try:
+                await player.aclose()
+            except Exception:
+                logger.warning("background audio not closed cleanly", exc_info=True)
+        downloaded = getattr(self, "_background_noise_file", None)
+        if downloaded:
+            self._background_noise_file = None
+            try:
+                Path(downloaded).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("background audio clip not removed: %s", downloaded)
 
     def open_conversation(self) -> None:
         if self._session is None:
@@ -1363,6 +1386,7 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            await self._stop_background_audio()
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
             pending_target_transcriptions.clear()

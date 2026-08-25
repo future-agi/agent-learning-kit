@@ -11,6 +11,7 @@ of these harder" is the next thing said rather than a regeneration from nothing.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -29,7 +30,6 @@ from .config import (
     provider_env,
     thinking_config,
 )
-from . import progress
 from .catalogue import load_catalogue
 from .contract import AgentContract
 from .scenario import Scenario
@@ -44,7 +44,13 @@ from .scenario_tools import (
 from .session import Stage
 from .tools import qualified, schema
 
+logger = logging.getLogger(__name__)
+
 SKILL = "write-scenarios"
+
+# The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
+# only report gaps and never submit or save a scenario itself.
+REVIEW_SERVER = "suite-review"
 
 
 # Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
@@ -365,12 +371,16 @@ async def _write_slice(
         can_save=False,
         start_from=[],
     )
-    progress.started(destination, mine.named())
+    logger.info("slice starting: %s (wants %s)", mine.named(), mine.count)
+    seen = 0
 
     def watch(event: Any) -> None:
         # Report as they land rather than at the end. A slice that proves its first scenario
         # four minutes in is the difference between a run that looks alive and one that does not.
-        progress.kept(destination, mine.named(), len(kept))
+        nonlocal seen
+        if len(kept) != seen:
+            seen = len(kept)
+            logger.info("slice %s proved %s of %s", mine.named(), seen, mine.count)
         if on_event:
             on_event(event)
 
@@ -404,11 +414,11 @@ async def _write_slice(
                 on_event=watch,
             )
     except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
-        progress.failed(destination, mine.named(), str(broke))
+        logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
         if on_event:
             on_event({"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]})
         return list(kept)
-    progress.finished(destination, mine.named(), len(kept))
+    logger.info("slice %s finished with %s of %s", mine.named(), len(kept), mine.count)
     return list(kept)
 
 
@@ -581,11 +591,12 @@ async def write_in_parallel(
 
     at_once = max(1, min(at_once or AT_ONCE, MOST_AT_ONCE))
     allocation = planned(wanted, cases, slices)
-    progress.planned(
-        destination,
-        [(one.named(), one.count) for one in allocation],
-        at_once=at_once,
-        asked=wanted,
+    logger.info(
+        "writing %s scenarios across %s slices, %s at a time: %s",
+        wanted,
+        len(allocation),
+        at_once,
+        ", ".join(f"{one.named()} x{one.count}" for one in allocation),
     )
     if on_event:
         on_event(
@@ -629,15 +640,13 @@ async def write_in_parallel(
             break
         if on_event:
             on_event({"type": "topping_up", "slices": [one.named() for one in missing]})
-        progress.planned(
-            destination,
-            [(one.named(), one.count) for one in [*allocation, *missing]],
-            at_once=at_once,
-            asked=wanted,
+        logger.info(
+            "topping up %s of %s with %s more slices: %s",
+            len(suite),
+            wanted,
+            len(missing),
+            ", ".join(f"{one.named()} x{one.count}" for one in missing),
         )
-        for one in [*allocation, *missing]:
-            if one in allocation:
-                progress.finished(destination, one.named(), one.count)
         more = await asyncio.gather(
             *(
                 guarded(one, missing, len(allocation) + index)
@@ -652,7 +661,7 @@ async def write_in_parallel(
             break
 
     write_scenarios(suite, destination, load_catalogue(destination))
-    progress.settled(destination, kept_total=len(suite))
+    logger.info("suite saved: %s of %s asked for", len(suite), wanted)
     if on_event:
         on_event({"type": "saved", "kept": len(suite), "asked": wanted})
     return load(destination)

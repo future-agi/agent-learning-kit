@@ -121,8 +121,14 @@ def accept_scenario(
     kept: list[Scenario],
     simulator_prompt: str = "",
     hard_constraints: list[str] | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
-    """Validate one scenario, then prove it. A plain function so both halves are testable."""
+    """Validate one scenario, then prove it. A plain function so both halves are testable.
+
+    ``persist`` is off for a writer that shares the destination with siblings: writing the suite
+    removes every folder not in the writer's own list, so persisting here would delete whatever
+    the others have proved. Those writers keep their work in ``kept`` and the caller saves once.
+    """
     try:
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
@@ -164,7 +170,8 @@ def accept_scenario(
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
-    write_scenarios(kept, world_root, catalogue)
+    if persist:
+        write_scenarios(kept, world_root, catalogue)
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
@@ -249,7 +256,10 @@ def scenario_tools(
     target = {"count": wanted}
     exploration = {"since_submit": 0}
 
-    scenario_required = ["name", "instruction", "solution", "sub_goals"]
+    # ``branch`` is required because coverage is counted on the use case and branch pair, and the
+    # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
+    # slice the same pair, and all but the first are silently thrown away.
+    scenario_required = ["name", "branch", "instruction", "solution", "sub_goals"]
     if contract.conversational:
         scenario_required.append("persona")
 
@@ -430,6 +440,12 @@ def scenario_tools(
                     "type": "string",
                     "description": "One line: what this scenario is trying to find out.",
                 },
+                "background_noise": {
+                    "type": "string",
+                    "description": "Where the caller is phoning from, when it is part of the "
+                    "test: street, transit, vehicle, outdoors, retail, office or home. Leave it "
+                    "out unless the place matters.",
+                },
                 "instruction": {
                     "type": "string",
                     "description": "The task, written to the person the agent is serving. For a "
@@ -548,6 +564,7 @@ def scenario_tools(
             kept=kept,
             simulator_prompt=simulator_prompt,
             hard_constraints=contract.hard_constraints,
+            persist=can_save,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

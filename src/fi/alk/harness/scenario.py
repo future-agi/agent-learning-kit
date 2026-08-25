@@ -200,14 +200,14 @@ class Scenario(BaseModel):
 
     max_turns: int = 10
 
-    # Whether this call happens somewhere noisy. Recorded per scenario rather than per run, so a
-    # suite covers both conditions and the same scenario stays comparable to itself across runs.
-    # Chosen at random when the writer does not say, because a suite where every call is quiet
-    # tests an agent nobody has: real callers phone from cars, kitchens and streets.
-    #
-    # Nothing consumes this yet. It is carried so the scenarios written from today are already
-    # answerable when the caller learns to add noise, rather than needing to be rewritten then.
-    background_noise: bool = Field(default_factory=lambda: random.choice((True, False)))
+    # Where this call is being made from, so the agent is heard through it. ``True`` asks for
+    # noise and leaves the place to the fixture; a string names it outright ("street", "vehicle",
+    # "retail"), which is what lets one scenario be a call from a car and another from an office.
+    # Recorded per scenario rather than per run, so a suite covers both conditions and the same
+    # scenario stays comparable to itself across runs. Chosen at random when the writer does not
+    # say, because a suite where every call is quiet tests an agent nobody has: real callers
+    # phone from cars, kitchens and streets.
+    background_noise: bool | str = Field(default_factory=lambda: random.choice((True, False)))
 
     def slots(self) -> dict[str, str]:
         """Every value this scenario offers the simulator prompt."""

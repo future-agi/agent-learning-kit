@@ -95,6 +95,9 @@ def worker_environment(
         # Runner-owned model configuration. Uploaded agent values with these names remain in the
         # runtime namespace and cannot replace controller credentials.
         "ALK_HARNESS_MODEL",
+        # Lets a local sandbox hand its own Google credential to the runtime it builds. A hosted
+        # runner leaves this unset so its platform key is never mounted into a submitted agent.
+        "ALK_ALLOW_HOST_GOOGLE_CREDENTIALS",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",
@@ -144,6 +147,8 @@ def worker_environment(
     child = {name: value for name, value in host.items() if name in allowed}
     reserved = {
         "ALK_HARNESS_MODEL",
+        # A submitted job must not be able to turn on the host-credential fallback for itself.
+        "ALK_ALLOW_HOST_GOOGLE_CREDENTIALS",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",

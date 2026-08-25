@@ -589,11 +589,14 @@ async def _spoken_to(
             # A scenario that asks to be heard through background noise selects a clip for the
             # caller's environment; the voice engine mixes it under the caller. Cleared otherwise so
             # a previous call's noise never leaks into a quiet one.
-            if getattr(scenario, "background_noise", False):
+            noisy = getattr(scenario, "background_noise", False)
+            if noisy:
                 from ..background_noise import source_for
 
-                environment = ""
-                if isinstance(scenario.fixture, dict):
+                # The scenario names the place when it cares which one; otherwise the fixture
+                # says where the caller is, and failing that any noise will do.
+                environment = noisy if isinstance(noisy, str) else ""
+                if not environment and isinstance(scenario.fixture, dict):
                     environment = str(
                         scenario.fixture.get("environment")
                         or scenario.fixture.get("location")
