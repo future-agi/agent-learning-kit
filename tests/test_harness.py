@@ -6208,7 +6208,34 @@ def test_a_second_run_joins_the_same_test_rather_than_starting_another():
     )
     assert api.provisioned == 1
     assert (first.test_execution_id, second.test_execution_id) == ("te-1", "te-2")
-    assert second.url == "/dashboard/simulate/test/rt-1/runs"
+    assert second.url == "/dashboard/simulate/test/rt-1/te-2"
+
+
+def test_platform_display_names_are_readable_and_do_not_repeat_the_run_name():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from fi.alk.harness import platform
+
+    assert (
+        platform.display_run_name(
+            "uber-voice-agent", now=datetime(2026, 8, 25, 12, 22, tzinfo=timezone.utc)
+        )
+        == "Uber Voice Agent · 25 Aug 2026 12:22 UTC"
+    )
+    persona = platform.persona_of(
+        SimpleNamespace(
+            name="dana-full-booking-otp-card",
+            use_case="Book a ride using a saved card after OTP verification.",
+            tests="",
+            instruction="Book my ride",
+            persona={"name": "Dana"},
+        )
+    )
+    assert persona["name"] == "Dana"
+    assert persona["scenario_name"] == (
+        "Book a ride using a saved card after OTP verification"
+    )
 
 
 def test_reporting_says_when_the_platform_allocated_too_few_calls():
@@ -6316,3 +6343,16 @@ def test_a_transcript_line_keeps_one_speaker_not_two():
     assert said("user: I need a ride.") == ("customer", "I need a ride.")
     # A colon inside speech is not a speaker label.
     assert said("assistant: Call at 3:30 PM.") == ("agent", "Call at 3:30 PM.")
+def test_platform_call_start_uses_existing_ongoing_status_flow():
+    from fi.alk.harness import platform
+
+    class Recording:
+        calls = []
+
+        def ongoing(self, call_execution_id):
+            self.calls.append(call_execution_id)
+            return {"updated": True}
+
+    api = Recording()
+    platform.mark_ongoing(platform.Reported(), "ce-started", platform=api)
+    assert api.calls == ["ce-started"]

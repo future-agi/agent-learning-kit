@@ -497,6 +497,19 @@ def export_session_bundle(
                 generated.append(document)
             runtime = BundleRuntime(kind=RuntimeKind.COMPOSE, document=document)
 
+        repository = source.name
+        commit = None
+        job_path = session / "job.json"
+        if job_path.is_file():
+            try:
+                saved_job = json.loads(job_path.read_text(encoding="utf-8"))
+                saved_source = saved_job.get("source") or {}
+                repository = str(saved_source.get("repository") or repository)
+                commit = saved_source.get("commit_sha") or None
+            except (OSError, json.JSONDecodeError, AttributeError):
+                # The source digest still gives exact provenance for legacy/local sessions.
+                pass
+
         raw = {
             "schema_version": BUNDLE_SCHEMA_VERSION,
             "name": name,
@@ -510,12 +523,45 @@ def export_session_bundle(
             "readiness": readiness,
             "provenance": {
                 "source_kind": "repository",
-                "repository": source.name,
+                "repository": repository,
+                "commit": commit,
                 "source_digest": source_fingerprint(source),
                 "adopted_files": adopted,
                 "generated_files": generated,
             },
         }
+        # Freeze the provisioning decision inside the sealed payload. This plan excludes
+        # ephemeral ports/project names and resolved values, so equal admitted inputs produce
+        # an equal plan digest across retries and execution providers.
+        from .environment_plan import (
+            ENVIRONMENT_PLAN_FILE,
+            PlanSource,
+            create_environment_plan,
+            write_environment_plan,
+        )
+
+        plan = create_environment_plan(
+            source=PlanSource(
+                kind="repository",
+                repository=repository,
+                commit_sha=commit,
+                source_digest=str(raw["provenance"]["source_digest"]),
+            ),
+            runtime=runtime,
+            services=services,
+            capabilities=capabilities,
+            readiness=[ReadinessProbe.model_validate(item) for item in readiness],
+            metadata={
+                "managed": bool(provisioned and provisioned.managed),
+                "generated_runtime_fingerprint": (
+                    provisioned.runtime_fingerprint if provisioned else ""
+                ),
+            },
+        )
+        write_environment_plan(staging, plan)
+        generated.append(ENVIRONMENT_PLAN_FILE)
+        raw["provenance"]["generated_files"] = generated
+        raw["metadata"] = {"environment_plan_digest": plan.digest}
         seal_bundle(staging, raw)
         if final.exists():
             shutil.rmtree(final)

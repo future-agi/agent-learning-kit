@@ -1,17 +1,34 @@
-from fastapi.testclient import TestClient
-
 import asyncio
+from io import BytesIO
 import json
 import os
+
+from fastapi import UploadFile
+from fastapi.testclient import TestClient
+import pytest
 
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
     LocalSandboxRequest,
+    SandboxAdjustmentRequest,
     SandboxRerunRequest,
+    _CONTROLLER_TOKEN,
+    _presentation_value,
+    _process_identity,
     _worker_failure_retryable,
     create_app,
 )
 from fi.alk.harness.secrets import resolve_worker_secrets
+
+
+def test_presentation_redaction_handles_prose_with_email_before_url():
+    prose = "Contact owner@example.com or see https://example.com/docs"
+
+    assert _presentation_value(prose) == prose
+    assert (
+        _presentation_value("postgres://user:password@database:5432/app")
+        == "postgres://[redacted]@database:5432/app"
+    )
 
 
 def test_local_sandbox_rejects_source_outside_allowed_root(tmp_path, monkeypatch):
@@ -25,6 +42,29 @@ def test_local_sandbox_rejects_source_outside_allowed_root(tmp_path, monkeypatch
     response = client.post("/v1/jobs", json={"source_path": str(outside)})
 
     assert response.status_code == 403
+
+
+def test_second_sandbox_instance_does_not_orphan_live_controller(tmp_path):
+    root = tmp_path / "state"
+    first = LocalSandbox(root)
+    job = first.jobs_root / "live-job"
+    job.mkdir()
+    state_path = job / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "stage": "running",
+                "controller_pid": os.getpid(),
+                "controller_identity": _process_identity(os.getpid()),
+                "controller_token": _CONTROLLER_TOKEN,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    LocalSandbox(root)
+
+    assert json.loads(state_path.read_text())["stage"] == "running"
 
 
 def test_local_sandbox_persists_and_lists_job_without_secrets(tmp_path, monkeypatch):
@@ -95,6 +135,77 @@ def test_local_sandbox_reports_live_stage_timestamp_and_detail_from_events(
     assert current["detail"] == "generating and validating scenarios"
 
 
+def test_local_sandbox_exposes_generated_stage_outputs_and_adjustments(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    async def idle(_job, _source):
+        await asyncio.sleep(0)
+
+    sandbox._execute = idle
+
+    async def submit():
+        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    output = tmp_path / "state" / "artifacts" / response.job.run_id
+    output.mkdir(parents=True)
+    (output / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "agent",
+                "one_liner": "Books appointments",
+                "tools": [{"name": "book"}],
+                "hard_constraints": ["confirm first"],
+                "real_use_cases": ["new booking"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "environment.json").write_text(
+        json.dumps(
+            {
+                "source": "/private/source",
+                "compose_file": "/private/docker-compose.yml",
+                "compose_override_file": "/private/override.yml",
+                "services": ["postgres"],
+                "overrides": {"DATABASE_URL": "postgres://test"},
+                "running": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "scenarios.json").write_text(
+        json.dumps([{"name": "booking", "instruction": "Book tomorrow"}]),
+        encoding="utf-8",
+    )
+
+    adjusted = sandbox.adjust(
+        response.job.job_id,
+        SandboxAdjustmentRequest(
+            instruction="Add 10 more scenarios covering payment failures"
+        ),
+    )
+
+    assert [item["kind"] for item in adjusted.stage_outputs] == [
+        "contract",
+        "environment",
+        "scenarios",
+    ]
+    assert "source" not in adjusted.stage_outputs[1]["data"]
+    assert "compose_override_file" not in adjusted.stage_outputs[1]["data"]
+    assert adjusted.status.total_scenarios == 10
+    assert adjusted.adjustments[0]["target_stage"] == "scenarios"
+    assert adjusted.adjustments[0]["scenario_delta"] == 10
+    assert adjusted.adjustments[0]["status"] == "pending"
+
+
 def test_local_sandbox_reports_committed_scenario_progress_while_worker_runs(
     tmp_path, monkeypatch
 ):
@@ -136,6 +247,93 @@ def test_local_sandbox_reports_committed_scenario_progress_while_worker_runs(
     assert current["stage"] == "running"
     assert current["completed_scenarios"] == 1
     assert current["total_scenarios"] == 3
+
+
+def test_local_sandbox_exposes_secret_safe_live_stage_outputs(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    state_root = tmp_path / "state"
+    sandbox = LocalSandbox(state_root)
+
+    async def no_execution(_job, _source):
+        return None
+
+    sandbox._execute = no_execution
+
+    async def submit():
+        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    submitted = asyncio.run(submit())
+    run_root = sandbox.artifacts_root / submitted.job.run_id
+    run_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "contract.json").write_text(
+        json.dumps(
+            {
+                "one_liner": "Books rides",
+                "modality": "voice",
+                "tools": [{"name": "book_ride", "args": ["secret"]}],
+                "hard_constraints": ["Confirm before booking"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "environment.json").write_text(
+        json.dumps(
+            {
+                "project": "isolated",
+                "services": ["postgres"],
+                "overrides": {
+                    "DATABASE_URL": "postgresql://user:password@postgres:5432/app"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "scenarios.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "booking",
+                    "instruction": "Book a ride",
+                    "use_case": "happy path",
+                    "private_reference": "must-not-be-returned",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "platform.json").write_text(
+        json.dumps(
+            {
+                "run_test_id": "11111111-1111-1111-1111-111111111111",
+                "test_execution_id": "22222222-2222-2222-2222-222222222222",
+                "url": "https://untrusted.example/ignored",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = sandbox.get(submitted.job.job_id).model_dump(mode="json")
+    serialized = json.dumps(response["stage_outputs"])
+
+    assert [item["kind"] for item in response["stage_outputs"]] == [
+        "contract",
+        "environment",
+        "scenarios",
+        "simulation",
+    ]
+    assert "book_ride" in serialized
+    assert "postgresql://***@postgres:5432/app" in serialized
+    assert "password" not in serialized
+    assert "must-not-be-returned" not in serialized
+    assert (
+        "/dashboard/simulate/test/11111111-1111-1111-1111-111111111111/"
+        "22222222-2222-2222-2222-222222222222"
+    ) in serialized
+    assert "untrusted.example" not in serialized
 
 
 def test_preflight_discovers_connectors_and_missing_credentials_without_values(
@@ -407,6 +605,52 @@ def test_uploaded_folder_rejects_traversal_and_embedded_env(tmp_path):
     assert traversal.status_code == 400
     assert secret_file.status_code == 400
     assert not tmp_path.joinpath("escape.py").exists()
+
+
+def test_secret_file_upload_is_opaque_one_time_and_job_scoped(tmp_path):
+    sandbox = LocalSandbox(tmp_path / "state")
+    raw = b'{"type":"service_account","project_id":"customer"}'
+    uploaded = asyncio.run(
+        sandbox.upload_secret_file(
+            UploadFile(filename="customer.json", file=BytesIO(raw)),
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        )
+    )
+
+    assert uploaded.size == len(raw)
+    assert uploaded.secret_ref.manager == "mounted"
+    assert raw.decode() not in uploaded.model_dump_json()
+    with pytest.raises(Exception, match="reference_invalid"):
+        sandbox._claim_secret_files(
+            "wrong-alias", {"AWS_SHARED_CREDENTIALS_FILE": uploaded.secret_ref}
+        )
+    claimed, names = sandbox._claim_secret_files(
+        "job-one", {uploaded.environment_name: uploaded.secret_ref}
+    )
+    claimed_path = next(iter(claimed.values()))
+    assert names == {"GOOGLE_APPLICATION_CREDENTIALS"}
+    assert open(claimed_path, "rb").read() == raw
+    assert oct(os.stat(claimed_path).st_mode & 0o777) == "0o400"
+    with pytest.raises(Exception, match="unavailable_or_consumed"):
+        sandbox._claim_secret_files(
+            "job-two", {uploaded.environment_name: uploaded.secret_ref}
+        )
+
+    sandbox._delete_job_secret_files("job-one")
+    assert not os.path.exists(claimed_path)
+
+
+def test_secret_file_endpoint_rejects_invalid_google_json(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/secret-files",
+        files={"file": ("credentials.json", b"not-json", "application/json")},
+        data={"environment_name": "GOOGLE_APPLICATION_CREDENTIALS"},
+    )
+
+    assert response.status_code == 400
+    assert "valid JSON object" in response.json()["detail"]
 
 
 def test_preflight_does_not_call_infrastructure_only_compose_execution_ready(

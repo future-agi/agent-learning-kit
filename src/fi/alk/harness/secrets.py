@@ -88,13 +88,20 @@ def worker_environment(
         # Runner topology. Hosted workers need these to reach sibling services privately and to
         # expose their per-call webhook, but submitted values must never control them.
         "ALK_DOCKER_BIND_HOST",
+        "ALK_DOCKER_NETWORK",
         "ALK_DOCKER_PUBLISHED_HOST",
         "ALK_RUNNER_CONTAINER",
         "HARNESS_WEBHOOK_HOST",
         "HARNESS_WEBHOOK_PORT",
+        "HARNESS_WEBHOOK_URL",
+        "HARNESS_RUNTIME_WEBHOOK_URL",
+        "HARNESS_VOICE_INFRA_RETRIES",
         # Runner-owned model configuration. Uploaded agent values with these names remain in the
         # runtime namespace and cannot replace controller credentials.
+        "ALK_AGENT_MODEL",
         "ALK_HARNESS_MODEL",
+        "ALK_JUDGE_MODEL",
+        "ALK_USER_MODEL",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",
@@ -118,11 +125,18 @@ def worker_environment(
         "CLOUD_ML_REGION",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GOOGLE_CLOUD_PROJECT",
+        "ALK_DOCKER_NETWORK",
         "ALK_DOCKER_BIND_HOST",
         "ALK_DOCKER_PUBLISHED_HOST",
         "ALK_RUNNER_CONTAINER",
         "HARNESS_WEBHOOK_HOST",
         "HARNESS_WEBHOOK_PORT",
+        "HARNESS_WEBHOOK_URL",
+        "HARNESS_RUNTIME_WEBHOOK_URL",
+        "HARNESS_VOICE_INFRA_RETRIES",
+        "ALK_AGENT_MODEL",
+        "ALK_JUDGE_MODEL",
+        "ALK_USER_MODEL",
     }
     child.update(
         {name: value for name, value in resolved.items() if name not in reserved}

@@ -2203,6 +2203,12 @@ def _runtime_credential_mounts(
         if isinstance(volume, dict) and volume.get("target") and volume.get("source")
     }
     mounts: list[tuple[str, Path, str]] = []
+    hosted_execution = os.environ.get("ALK_HOSTED_EXECUTION", "").strip() == "1"
+    approved_secret_files = {
+        name.strip()
+        for name in os.environ.get("ALK_RUNTIME_SECRET_FILE_NAMES", "").split(",")
+        if name.strip()
+    }
     for name, value in service_environment.items():
         if not any(marker in name.upper() for marker in ("CREDENTIAL", "KEY_FILE")):
             continue
@@ -2211,6 +2217,10 @@ def _runtime_credential_mounts(
         source = (
             configured if configured.is_absolute() and configured.is_file() else None
         )
+        if hosted_execution and name not in approved_secret_files:
+            # A raw path supplied by an untrusted hosted job must never become a host bind mount.
+            # Only the provider's opaque secret-file upload flow may authorize file mounts.
+            source = None
         if configured.is_absolute() and value in declared_volumes:
             target = value
             declared = declared_volumes[value]
@@ -2219,7 +2229,11 @@ def _runtime_credential_mounts(
             if source is None or not _valid_google_credentials(source):
                 runtime_value = runtime_configuration_value(name).strip()
                 runtime = Path(runtime_value).expanduser() if runtime_value else None
-                if runtime is not None and _valid_google_credentials(runtime):
+                if (
+                    runtime is not None
+                    and _valid_google_credentials(runtime)
+                    and (not hosted_execution or name in approved_secret_files)
+                ):
                     source = runtime
                     # Do not reuse a repository-owned destination when its declared mount is a
                     # placeholder (commonly /dev/null). Compose may retain that service mount
@@ -2229,9 +2243,9 @@ def _runtime_credential_mounts(
                     target = f"/run/harness-secrets/{runtime.name}"
             if source is None or not _valid_google_credentials(source):
                 raise ProvisionError(
-                    "the submitted runtime needs GOOGLE_APPLICATION_CREDENTIALS, but neither its "
-                    "Compose mount nor the uploaded runtime configuration points to a valid JSON "
-                    "credential file"
+                    "the submitted runtime needs GOOGLE_APPLICATION_CREDENTIALS, but no valid "
+                    "JSON credential file was mounted for this job; upload the service-account JSON "
+                    "through the credential-file control"
                 )
         if source is not None:
             mounts.append((name, source.resolve(), target))
@@ -2358,8 +2372,41 @@ def start_runtime(
         arguments.extend(("--volume", f"{source}:{target}:ro"))
         injected[name] = target
         mounted_credentials.add(name)
+    # Dockerfile/generated runtimes may not declare credential variables in their image or
+    # generated Compose model. Provider-authorized file references are still mounted explicitly;
+    # discovery controls the env name while the provider controls the source path.
+    for name in sorted(
+        {
+            item.strip()
+            for item in os.environ.get("ALK_RUNTIME_SECRET_FILE_NAMES", "").split(",")
+            if item.strip()
+        }
+        - mounted_credentials
+    ):
+        runtime_path = runtime_configuration_value(name).strip()
+        source = Path(runtime_path).expanduser() if runtime_path else None
+        valid = source is not None and source.is_file()
+        if name == "GOOGLE_APPLICATION_CREDENTIALS":
+            valid = bool(source is not None and _valid_google_credentials(source))
+        if not valid or source is None:
+            raise ProvisionError(f"job-scoped credential file unavailable: {name}")
+        target = f"/run/harness-secrets/{name.lower()}"
+        arguments.extend(("--volume", f"{source.resolve()}:{target}:ro"))
+        injected[name] = target
+        mounted_credentials.add(name)
     google_path = injected.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     if google_path and "GOOGLE_APPLICATION_CREDENTIALS" not in mounted_credentials:
+        if os.environ.get(
+            "ALK_HOSTED_EXECUTION", ""
+        ).strip() == "1" and "GOOGLE_APPLICATION_CREDENTIALS" not in {
+            name.strip()
+            for name in os.environ.get("ALK_RUNTIME_SECRET_FILE_NAMES", "").split(",")
+            if name.strip()
+        }:
+            raise ProvisionError(
+                "hosted credential file path rejected; upload "
+                "GOOGLE_APPLICATION_CREDENTIALS through the credential-file control"
+            )
         google_source = Path(google_path).expanduser()
         if not _valid_google_credentials(google_source):
             raise ProvisionError(

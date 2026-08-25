@@ -786,6 +786,53 @@ def test_runtime_does_not_revalidate_container_target_for_mounted_google_credent
     assert seen["injected"]["GOOGLE_APPLICATION_CREDENTIALS"] == container_target
 
 
+def test_hosted_runtime_rejects_raw_google_host_path(tmp_path, monkeypatch) -> None:
+    credential = tmp_path / "customer.json"
+    credential.write_text('{"type":"service_account"}\n')
+    monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
+    monkeypatch.setenv(
+        "ALK_RUNTIME_VALUE_GOOGLE_APPLICATION_CREDENTIALS", str(credential)
+    )
+    monkeypatch.delenv("ALK_RUNTIME_SECRET_FILE_NAMES", raising=False)
+
+    with pytest.raises(provisioning.ProvisionError, match="credential-file control"):
+        provisioning._runtime_credential_mounts(
+            {"GOOGLE_APPLICATION_CREDENTIALS": "/etc/vertex/creds.json"},
+            {
+                "volumes": [
+                    {"source": "/dev/null", "target": "/etc/vertex/creds.json"}
+                ]
+            },
+        )
+
+
+def test_hosted_runtime_accepts_provider_authorized_google_file(
+    tmp_path, monkeypatch
+) -> None:
+    credential = tmp_path / "customer.json"
+    credential.write_text('{"type":"service_account"}\n')
+    monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
+    monkeypatch.setenv(
+        "ALK_RUNTIME_VALUE_GOOGLE_APPLICATION_CREDENTIALS", str(credential)
+    )
+    monkeypatch.setenv(
+        "ALK_RUNTIME_SECRET_FILE_NAMES", "GOOGLE_APPLICATION_CREDENTIALS"
+    )
+
+    mounts = provisioning._runtime_credential_mounts(
+        {"GOOGLE_APPLICATION_CREDENTIALS": "/etc/vertex/creds.json"},
+        {"volumes": [{"source": "/dev/null", "target": "/etc/vertex/creds.json"}]},
+    )
+
+    assert mounts == [
+        (
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            credential.resolve(),
+            f"/run/harness-secrets/{credential.name}",
+        )
+    ]
+
+
 def test_managed_runtime_uses_generated_private_endpoint_over_submitted_default(
     tmp_path: Path, monkeypatch
 ) -> None:

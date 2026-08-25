@@ -15,6 +15,7 @@ rather than a new code path.
 
 from .chat import Conversation, open_conversation
 from .bundle import EnvironmentBundle, load_bundle, seal_bundle
+from .environment_plan import EnvironmentPlan, load_environment_plan
 from .config import (
     DEFAULT_MODEL,
     artifact_dir,
@@ -43,6 +44,7 @@ __all__ = [
     "Conversation",
     "DEFAULT_MODEL",
     "EnvironmentBundle",
+    "EnvironmentPlan",
     "ExecutionMode",
     "GitHubSource",
     "HarnessJob",
@@ -58,6 +60,7 @@ __all__ = [
     "artifact_dir",
     "load_skill",
     "load_bundle",
+    "load_environment_plan",
     "open_conversation",
     "open_stage",
     "provider_env",
