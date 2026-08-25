@@ -35,6 +35,7 @@ from fi.alk.harness.provision import (
     provision,
     reachable_overrides,
     reset,
+    runtime_logs,
     start_runtime,
     stop,
     stop_runtime,
@@ -101,6 +102,30 @@ def test_stopping_worker_keeps_runner_network_for_post_call_grading(
     assert saved.runtime_container == ""
     assert saved.runner_network == "fagi-harness-grading_default"
     assert docker_calls == [("rm", "--force", "runtime-id")]
+
+
+def test_runtime_logs_reads_only_the_active_bounded_runtime(monkeypatch, tmp_path):
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="fagi-harness-evidence",
+        runtime_container="fagi-harness-evidence-runtime",
+        running=True,
+    )
+    environment.save(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        "fi.alk.harness.provision._docker",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or "structured logs",
+    )
+
+    assert runtime_logs(tmp_path, tail=50_000) == "structured logs"
+    assert calls == [
+        (
+            ("logs", "--tail", "20000", "fagi-harness-evidence-runtime"),
+            {"check": False, "timeout": 30},
+        )
+    ]
 
 
 def test_runtime_build_retries_transient_registry_transport_failure(monkeypatch):
@@ -488,8 +513,6 @@ def test_static_ports_receive_a_job_scoped_compose_override(tmp_path, monkeypatc
     environment = ProvisionedEnvironment(
         source=str(tmp_path), compose_file=str(compose), project="isolated"
     )
-    monkeypatch.setattr("fi.alk.harness.provision._free_port", lambda: 46379)
-
     _write_port_override(
         tmp_path / "session",
         environment,
@@ -498,7 +521,7 @@ def test_static_ports_receive_a_job_scoped_compose_override(tmp_path, monkeypatc
 
     generated = Path(environment.compose_override_file).read_text()
     assert "ports: !override" in generated
-    assert 'published: "46379"' in generated
+    assert 'published: "0"' in generated
     assert 'host_ip: "127.0.0.1"' in generated
 
 
@@ -537,8 +560,6 @@ def test_profile_gated_service_ports_are_not_allocated(tmp_path, monkeypatch):
     environment = ProvisionedEnvironment(
         source=str(tmp_path), compose_file=str(compose), project="isolated"
     )
-    monkeypatch.setattr("fi.alk.harness.provision._free_port", lambda: 48000)
-
     _write_port_override(
         tmp_path / "session",
         environment,
@@ -558,6 +579,7 @@ def test_profile_gated_service_ports_are_not_allocated(tmp_path, monkeypatch):
 
     generated = Path(environment.compose_override_file).read_text()
     assert '"api"' in generated
+    assert 'published: "0"' in generated
     assert "coturn" not in generated
     assert "49152" not in generated
 
@@ -571,7 +593,6 @@ def test_empty_compose_profile_remains_active_by_default(tmp_path, monkeypatch):
     environment = ProvisionedEnvironment(
         source=str(tmp_path), compose_file=str(compose), project="isolated"
     )
-    monkeypatch.setattr("fi.alk.harness.provision._free_port", lambda: 45432)
     config = {
         "services": {
             "postgres": {
@@ -583,7 +604,7 @@ def test_empty_compose_profile_remains_active_by_default(tmp_path, monkeypatch):
 
     _write_port_override(tmp_path / "session", environment, config)
 
-    assert 'published: "45432"' in Path(environment.compose_override_file).read_text()
+    assert 'published: "0"' in Path(environment.compose_override_file).read_text()
 
 
 def test_authenticated_redis_response_counts_as_protocol_ready(monkeypatch):
@@ -693,6 +714,39 @@ def test_external_model_provider_is_not_mistaken_for_managed_infrastructure(
         real_use_cases=["answer a caller"],
         dependencies=[
             Dependency(name="OpenAI TTS", kind="service", what="speech synthesis")
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+
+    assert target is not None
+    document = json.loads(target.read_text())
+    assert set(document["services"]) == {"agent-runtime"}
+
+
+def test_embedded_memory_sqlite_is_not_mistaken_for_external_infrastructure(
+    tmp_path,
+):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    contract = AgentContract(
+        agent="hotel-voice-agent",
+        tools=[ToolSpec(name="book_room", args=["date"])],
+        real_use_cases=["book a hotel room"],
+        data_store=DataStore(kind="sqlite", database=":memory:"),
+        dependencies=[
+            Dependency(
+                name="hotel_sqlite",
+                kind="datastore",
+                engine="sqlite (apsw in-process)",
+                reached={
+                    "host": ":memory:",
+                    "loader_module": "fake_data.seed",
+                    "loader_function": "populate",
+                },
+            )
         ],
         runtime=Runtime(dockerfile="Dockerfile"),
     )
@@ -867,6 +921,13 @@ def test_queue_and_object_services_are_generated_from_declared_dependencies(tmp_
         "agent-runtime",
     }
     assert document["services"]["rabbitmq"]["image"] == "rabbitmq:3.13-alpine"
+    assert document["services"]["rabbitmq"]["environment"][
+        "RABBITMQ_ERLANG_COOKIE"
+    ] == "harness-local-cookie"
+    assert "chown rabbitmq:rabbitmq" in document["services"]["rabbitmq"][
+        "entrypoint"
+    ][2]
+    assert document["services"]["rabbitmq"]["command"] == ["rabbitmq-server"]
     assert (
         document["services"]["rabbitmq"]["environment"][
             "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS"
@@ -1001,6 +1062,10 @@ def test_case_two_dockerfile_agent_gets_managed_clickhouse_and_redis(
     try:
         assert environment.managed
         assert set(environment.services) == {"clickhouse", "redis"}
+        assert environment.internal_overrides["CLICKHOUSE_URL"] == (
+            "http://harness@clickhouse:8123/voice"
+        )
+        assert "CLICKHOUSE_URL" in environment.runtime_configuration_names
         environment = start_runtime(session)
         expected = "AGENT_READY clickhouse=Bengaluru redis=+PONG"
         assert expected in _wait_runtime_log(environment, expected)
@@ -1103,6 +1168,10 @@ while True:
     environment = provision(source, session, contract)
     try:
         assert environment.managed and environment.services == ["mysql"]
+        assert environment.internal_overrides["DATABASE_URL"] == (
+            "mysql://harness:harness-local@mysql:3306/voice"
+        )
+        assert "DATABASE_URL" in environment.runtime_configuration_names
         environment = start_runtime(session)
         assert expected in _wait_runtime_log(environment, expected, timeout=45)
         stop_runtime(session)

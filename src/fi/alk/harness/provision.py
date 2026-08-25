@@ -196,19 +196,21 @@ def _free_port() -> int:
 
 
 def port_variables(path: Path) -> dict[str, str]:
-    """Give each interpolated published port its own currently-free host port."""
+    """Ask Docker to allocate every interpolated host port atomically.
+
+    Binding a temporary socket to discover a free port and releasing it before
+    Compose starts is inherently racy: another concurrent world can claim the
+    port in that gap. A published port of zero delegates allocation to Docker at
+    container creation, and ``_published_port`` resolves the assigned value once
+    the service is running.
+    """
     text = path.read_text(encoding="utf-8")
     assigned: dict[str, str] = {}
-    used: set[int] = set()
     for match in _PORT_VARIABLE.finditer(text):
         name = match.group("name")
         if name in assigned:
             continue
-        port = _free_port()
-        while port in used:
-            port = _free_port()
-        used.add(port)
-        assigned[name] = str(port)
+        assigned[name] = "0"
     return assigned
 
 
@@ -256,8 +258,9 @@ def _run(
     # uploaded values after these substitutions silently restores development hostnames such as
     # ``harness`` or ``localhost`` at the exact point Compose starts the submitted runtime.
     process_env.update(process_overrides or {})
-    try:
-        completed = subprocess.run(
+
+    def execute() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             command,
             cwd=environment.source,
             env=process_env,
@@ -266,11 +269,25 @@ def _run(
             check=False,
             timeout=timeout,
         )
+
+    try:
+        completed = execute()
     except FileNotFoundError as exc:
         raise ProvisionError("Docker is not installed or is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:
         raise ProvisionError(f"environment command timed out after {timeout}s") from exc
     output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+    if (
+        completed.returncode
+        and "all predefined address pools have been fully subnetted" in output
+    ):
+        # Interrupted local runs can leave empty Compose networks behind even after their
+        # containers and volumes are gone. After enough runs Docker cannot allocate another
+        # subnet and every otherwise valid environment becomes unrunnable. Reclaim only empty,
+        # ALK-owned networks, never customer/platform networks or a network with a container.
+        if _remove_unused_harness_networks(exclude_project=environment.project):
+            completed = execute()
+            output = ((completed.stdout or "") + (completed.stderr or "")).strip()
     if check and completed.returncode:
         shown = _command_failure_output(output)
         raise ProvisionError(
@@ -519,7 +536,6 @@ def _write_port_override(
     generated Compose override makes isolation universal while leaving container ports intact.
     """
     services: list[tuple[str, list[dict[str, Any]], bool]] = []
-    used: set[int] = set()
     dynamic_targets = set(
         _declared_port_targets(Path(environment.compose_file)).values()
     )
@@ -537,14 +553,13 @@ def _write_port_override(
             target = int(item.get("target") or 0)
             if not target or target in dynamic_targets:
                 continue
-            published = _free_port()
-            while published in used:
-                published = _free_port()
-            used.add(published)
             ports.append(
                 {
                     "target": target,
-                    "published": str(published),
+                    # Let Docker reserve an available port in the same atomic
+                    # operation that creates the container. Preselecting a
+                    # supposedly free port races concurrent worlds.
+                    "published": "0",
                     "host_ip": bind_host,
                     "protocol": str(item.get("protocol") or "tcp"),
                 }
@@ -980,6 +995,23 @@ def _internal_overrides(
         else:
             value = str(endpoint["internal_address"])
         answers[variable] = value
+    if environment.managed and len(environment.runtime_services) == 1:
+        # The harness-generated Compose adapter owns these values.  Its runtime service carries
+        # the complete connector assembled by ``_managed_service`` (database, user and any
+        # run-local credentials), while endpoint inference above can only reconstruct a generic
+        # host/port URL.  Prefer the generated connector so starting the submitted runtime cannot
+        # accidentally turn e.g. ``mysql://harness:.../voice`` into ``mysql://mysql:3306``.
+        runtime = config.get("services", {}).get(environment.runtime_services[0]) or {}
+        generated = _environment_values(runtime)
+        endpoint_names = {
+            str(name)
+            for endpoint in endpoints
+            for name in endpoint.get("configuration_names", [])
+        }
+        for name in endpoint_names:
+            value = generated.get(name, "").strip()
+            if value:
+                answers[name] = value
     return answers
 
 
@@ -1131,6 +1163,12 @@ def _configuration_names(value: str) -> list[str]:
 
 def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
     names: set[str] = set()
+    store = getattr(contract, "data_store", None)
+    if store is not None:
+        for field_name in ("configured_by", "config_key", "password_from"):
+            names.update(
+                _configuration_names(str(getattr(store, field_name, "") or ""))
+            )
     for dependency in list(getattr(contract, "dependencies", None) or []):
         reached = getattr(dependency, "reached", None)
         if reached is None:
@@ -1337,9 +1375,35 @@ def _managed_service(
                 # memory/boot pressure when several isolated jobs start together. Customers can
                 # still request a management tag explicitly in their contract.
                 "image": f"rabbitmq:{version or '3.13-alpine'}",
+                # The image declares /var/lib/rabbitmq as an anonymous volume. On Docker Desktop
+                # the initial cookie can be materialized as uid 0 even though the broker runs as
+                # uid 100, and the stock entrypoint does not repair that particular file. Seed
+                # the run-local cookie with the correct ownership before delegating back to the
+                # image entrypoint. ``$$`` is Compose escaping, not host interpolation.
+                "entrypoint": [
+                    "sh",
+                    "-c",
+                    'printf %s "$$RABBITMQ_ERLANG_COOKIE" > '
+                    "/var/lib/rabbitmq/.erlang.cookie && "
+                    "chown rabbitmq:rabbitmq /var/lib/rabbitmq/.erlang.cookie && "
+                    "chmod 400 /var/lib/rabbitmq/.erlang.cookie && "
+                    'exec docker-entrypoint.sh "$$@"',
+                    "--",
+                ],
+                # Compose does not reliably retain an image's CMD once an exec-form entrypoint is
+                # supplied (notably with JSON Compose input on Docker Desktop). Pass the stock
+                # broker command explicitly so ``docker-entrypoint.sh`` always receives ``$1``.
+                "command": ["rabbitmq-server"],
                 "environment": {
                     "RABBITMQ_DEFAULT_USER": "harness",
                     "RABBITMQ_DEFAULT_PASS": "harness-local",
+                    # RabbitMQ 3.13 on Docker Desktop can create the image-declared anonymous
+                    # data volume's cookie as root before the broker drops to uid 100.  Erlang
+                    # then aborts with EACCES.  Supplying an environment-local cookie makes the
+                    # broker use the injected value and avoids depending on that image-volume
+                    # ownership race. Each Compose project has a private network, so this is an
+                    # internal bootstrap credential, never a customer or platform secret.
+                    "RABBITMQ_ERLANG_COOKIE": "harness-local-cookie",
                     # Erlang otherwise sizes scheduler/dirty-scheduler pools from the host CPU
                     # count, not the job's practical sandbox share. Concurrent environments can
                     # then exhaust Docker's thread budget during boot even though each broker is
@@ -1487,7 +1551,9 @@ def _managed_compose(
             and not dsn_env
             and not str(getattr(reached, "config_key", "") or "").strip()
             and not str(getattr(reached, "password_from", "") or "").strip()
-            and not str(getattr(reached, "host", "") or "").strip()
+            # SQLite commonly spells its process-local database as ``:memory:``.
+            # It is still embedded state, not an external service ALK must supply.
+            and str(getattr(reached, "host", "") or "").strip() in {"", ":memory:"}
             and not getattr(reached, "port", None)
             and not str(getattr(reached, "database", "") or "").strip()
         )
@@ -2048,6 +2114,74 @@ def _docker(*arguments: str, check: bool = True, timeout: int = 120) -> str:
     return output
 
 
+def _remove_unused_harness_networks(*, exclude_project: str = "") -> int:
+    """Remove empty networks owned by terminated ALK Compose projects."""
+    listing = _docker(
+        "network",
+        "ls",
+        "--filter",
+        "label=com.docker.compose.project",
+        "--format",
+        "{{.Name}}",
+        check=False,
+        timeout=30,
+    )
+    removed = 0
+    for name in sorted(set(listing.splitlines())):
+        if not name.startswith("fagi-harness-") or name == f"{exclude_project}_default":
+            continue
+        containers = _docker(
+            "network",
+            "inspect",
+            "--format",
+            "{{json .Containers}}",
+            name,
+            check=False,
+            timeout=30,
+        ).strip()
+        try:
+            attached = json.loads(containers or "null")
+        except json.JSONDecodeError:
+            continue
+        if attached != {}:
+            continue
+        result = _docker("network", "rm", name, check=False, timeout=30)
+        if "error" not in result.lower():
+            removed += 1
+    return removed
+
+
+def _remove_empty_project_default_network(project: str) -> bool:
+    """Remove only this run's empty Compose default network after teardown.
+
+    Docker Compose can return successfully from ``down`` while leaving its default
+    network behind when the containerized runner was detached immediately before
+    teardown. Repeated hosted runs then exhaust Docker's address pools. The network
+    name is deterministic and ALK-owned; still require zero attachments before
+    removing it, so cleanup can never disconnect another process.
+    """
+    if not project.startswith("fagi-harness-"):
+        return False
+    name = f"{project}_default"
+    containers = _docker(
+        "network",
+        "inspect",
+        "--format",
+        "{{json .Containers}}",
+        name,
+        check=False,
+        timeout=30,
+    ).strip()
+    try:
+        attached = json.loads(containers or "null")
+    except json.JSONDecodeError:
+        return False
+    if attached != {}:
+        return False
+    result = _docker("network", "rm", name, check=False, timeout=30)
+    return "error" not in result.lower()
+
+
 def _valid_google_credentials(path: Path) -> bool:
     """Google's SDK accepts a path long before it discovers malformed JSON.
 
@@ -2188,6 +2322,14 @@ def start_runtime(
                         )
                     )
             injected.setdefault(name, value)
+    # LiveKit's production worker defaults to INFO, while its framework-owned tool lifecycle
+    # events are DEBUG.  Those events are the only generic evidence available when a submitted
+    # agent executes tools entirely in-process and does not implement the optional trace seam.
+    # This changes logging only, never agent behavior, and raw logs are not retained.
+    injected.setdefault(
+        "LIVEKIT_LOG_LEVEL",
+        os.environ.get("HARNESS_RUNTIME_LOG_LEVEL", "DEBUG").strip() or "DEBUG",
+    )
     arguments = [
         "run",
         "--detach",
@@ -2265,6 +2407,7 @@ def start_runtime(
         "HARNESS_MODE",
         "HARNESS_TOOL_TRACE",
         "LIVEKIT_AGENT_NAME",
+        "LIVEKIT_LOG_LEVEL",
         "TOOLS_API_URL",
     }
     for name in sorted(injected):
@@ -2357,6 +2500,28 @@ def runtime_endpoint(
     if not address:
         raise ProvisionError(f"submitted runtime did not publish container port {port}")
     return f"{scheme}://{address}"
+
+
+def runtime_logs(destination: str | Path, *, tail: int = 4000) -> str:
+    """Read the active submitted runtime's bounded stdout/stderr.
+
+    This is an evidence fallback for frameworks whose tools execute entirely inside the
+    customer process and therefore never cross the harness webhook.  The caller must normalize
+    framework-specific structured events immediately; raw customer logs are deliberately not
+    persisted as artifacts because they can contain credentials or unrelated PII.
+    """
+    environment = ProvisionedEnvironment.load(Path(destination))
+    if environment is None or not environment.runtime_container:
+        return ""
+    bounded_tail = max(1, min(int(tail), 20_000))
+    return _docker(
+        "logs",
+        "--tail",
+        str(bounded_tail),
+        environment.runtime_container,
+        check=False,
+        timeout=30,
+    )
 
 
 def _runtime_trace_mount(trace: Path) -> tuple[list[str], str]:
@@ -2645,6 +2810,7 @@ def stop(destination: str | Path) -> bool:
         environment = ProvisionedEnvironment.load(destination) or environment
     _detach_runner_network(environment)
     _run(environment, "down", "--volumes", "--remove-orphans", check=False, timeout=120)
+    _remove_empty_project_default_network(environment.project)
     environment.running = False
     environment.save(destination)
     return True

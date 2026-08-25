@@ -26,6 +26,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import asdict
@@ -549,7 +550,7 @@ async def _spoken_to(
             normalized = _normalize_live_exchange(turn)
             loop.call_soon_threadsafe(on_exchange, normalized)
 
-    def placed_once() -> tuple[int, dict[str, Any]]:
+    def placed_once() -> tuple[int, dict[str, Any], str]:
         """Everything about the call, off the event loop.
 
         Wiring reads a subprocess's stdout and the call itself blocks for minutes. Run inline
@@ -563,6 +564,7 @@ async def _spoken_to(
             trace_path=folder / "agent-tool-calls.jsonl",
         )
         started = time.time()
+        runtime_output = ""
         try:
             sdk_output = folder / "sdk"
             os.environ["HARNESS_VOICE_OUTPUT_ROOT"] = str(sdk_output.resolve())
@@ -627,18 +629,24 @@ async def _spoken_to(
                     )
             if (Path(world_root) / "environment.json").exists():
                 try:
-                    from ..provision import stop_runtime
+                    from ..provision import runtime_logs, stop_runtime
 
+                    # Some third-party LiveKit agents execute every tool in-process. They do not
+                    # call the harness webhook and may not implement HARNESS_AGENT_TOOL_TRACE,
+                    # but the LiveKit worker emits structured execution lifecycle events. Read
+                    # those events before removing the per-scenario container. Raw logs are not
+                    # retained; only normalized tool evidence is kept below.
+                    runtime_output = runtime_logs(world_root)
                     stop_runtime(world_root)
                 except Exception:
                     logger.exception(
                         "runtime cleanup failed after scenario %s", scenario.name
                     )
         # Everything the runner recorded about this call, read from the report it wrote.
-        return code, newest_report(started, root=sdk_output)
+        return code, newest_report(started, root=sdk_output), runtime_output
 
     attempts = 1 + max(0, int(os.environ.get("HARNESS_VOICE_INFRA_RETRIES", "1")))
-    code, case = 1, {}
+    code, case, runtime_output = 1, {}, ""
     attempts_used = 0
     trace_path = folder / "agent-tool-calls.jsonl"
     for attempt in range(attempts):
@@ -649,8 +657,10 @@ async def _spoken_to(
         # The webhook is the transport-level evidence fallback. Clear calls from a failed voice
         # attempt before retrying so only the attempt whose transcript is graded can contribute.
         world.calls = []
-        code, case = await asyncio.to_thread(placed_once)
-        attempt_calls = _semantic_calls(trace_path, contract=contract)
+        code, case, runtime_output = await asyncio.to_thread(placed_once)
+        attempt_calls = _semantic_calls(trace_path, contract=contract) or _livekit_log_calls(
+            runtime_output, contract=contract
+        )
         if (
             not _voice_attempt_should_retry(
                 code, case, has_agent_calls=bool(attempt_calls or world.calls)
@@ -664,7 +674,9 @@ async def _spoken_to(
             attempt + 2,
             attempts,
         )
-    semantic = _semantic_calls(trace_path, contract=contract)
+    semantic = _semantic_calls(trace_path, contract=contract) or _livekit_log_calls(
+        runtime_output, contract=contract
+    )
     # A worker trace includes semantic/local actions that never cross HTTP and is preferred when
     # available. In a hosted Docker runner, however, the job artifacts can live in a named volume
     # whose container path cannot be bind-mounted by the host daemon into the submitted runtime.
@@ -920,6 +932,116 @@ def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> lis
         else:
             calls.append(call)
     return calls
+
+
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _livekit_log_calls(
+    output: str, *, contract: AgentContract | None = None
+) -> list[Call]:
+    """Normalize completed LiveKit Python tool executions from bounded runtime logs.
+
+    This fallback is intentionally narrow: a start event alone earns no evidence, and arbitrary
+    application prose is never interpreted as a call.  LiveKit's structured ``executing tool``
+    and matching ``tools execution completed`` records are stable SDK lifecycle events.  The
+    result value is not present in those logs, so it is represented honestly as completion
+    evidence rather than fabricated output.
+    """
+    endpoint_names = {
+        entry.endpoint.strip("/"): entry.tool
+        for entry in (contract.tool_entrypoints if contract is not None else [])
+        if entry.endpoint.strip("/")
+    }
+    decoder = json.JSONDecoder()
+    starts: list[dict[str, Any]] = []
+    completed: set[str] = set()
+    for raw_line in str(output or "").splitlines():
+        line = _ANSI.sub("", raw_line)
+        marker = "executing tool"
+        completion = "tools execution completed"
+        record: Any = None
+        try:
+            structured = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            structured = None
+        if isinstance(structured, dict) and structured.get("message") in {
+            marker,
+            completion,
+        }:
+            record = structured
+            event = str(structured["message"])
+        elif marker in line:
+            brace = line.find("{", line.find(marker) + len(marker))
+            if brace < 0:
+                continue
+            try:
+                record, _ = decoder.raw_decode(line[brace:])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            event = marker
+        elif completion in line:
+            brace = line.find("{", line.find(completion) + len(completion))
+            if brace < 0:
+                continue
+            try:
+                record, _ = decoder.raw_decode(line[brace:])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            event = completion
+        else:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if event == marker:
+            if not record.get("function"):
+                continue
+            speech_id = str(record.get("speech_id") or "")
+            arguments: Any = record.get("lk.pii.arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {"raw": arguments}
+            if not isinstance(arguments, dict):
+                arguments = {"value": arguments}
+            starts.append(
+                {
+                    "name": str(record["function"]).strip("/"),
+                    "arguments": arguments,
+                    "speech_id": speech_id,
+                    "at": _log_timestamp(str(record.get("timestamp") or line)),
+                }
+            )
+        elif event == completion:
+            if record.get("speech_id"):
+                completed.add(str(record["speech_id"]))
+    return [
+        Call(
+            name=endpoint_names.get(one["name"], one["name"]),
+            arguments=one["arguments"],
+            result={
+                "evidence": "livekit_runtime_log",
+                "execution": "completed",
+            },
+            ok=True,
+            at=float(one["at"]),
+        )
+        for one in starts
+        if one["speech_id"] and one["speech_id"] in completed
+    ]
+
+
+def _log_timestamp(line: str) -> float:
+    value = line.strip()
+    matched = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})", value)
+    if matched is not None:
+        value = matched.group(1).replace(",", ".")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def _telemetry_mirror(previous: Call, current: Call) -> bool:

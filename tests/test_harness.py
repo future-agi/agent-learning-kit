@@ -153,17 +153,15 @@ services:
         'url = os.environ.get("TOOLS_API_URL", "http://localhost:18090")\n',
         encoding="utf-8",
     )
-    ports = iter((41000, 41001))
-    monkeypatch.setattr(provisioning, "_free_port", lambda: next(ports))
     calls: list[tuple[str, ...]] = []
 
     config = {
         "services": {
             "postgres": {
-                "ports": [{"target": 5432, "published": "41000"}],
+                "ports": [{"target": 5432, "published": "0"}],
             },
             "tools-api": {
-                "ports": [{"target": 8080, "published": "41001"}],
+                "ports": [{"target": 8080, "published": "0"}],
             },
             "agent": {"profiles": ["full"]},
         }
@@ -173,8 +171,12 @@ services:
         calls.append(arguments)
         if "config" in arguments and "--format" in arguments:
             return json.dumps(config)
-        if arguments[:2] == ("port", "tools-api"):
-            return "127.0.0.1:42123"
+        if arguments and arguments[0] == "port":
+            return (
+                "127.0.0.1:42123"
+                if arguments[1] == "tools-api"
+                else "127.0.0.1:42122"
+            )
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
@@ -182,7 +184,7 @@ services:
     environment = provisioning.provision(source, output)
 
     assert environment.services == ["postgres", "tools-api"]
-    assert environment.port_variables == {"PG_PORT": "41000", "TOOLS_PORT": "41001"}
+    assert environment.port_variables == {"PG_PORT": "0", "TOOLS_PORT": "0"}
     assert environment.overrides == {"TOOLS_API_URL": "http://127.0.0.1:42123"}
     assert (output / "environment.json").exists()
     up = next(call for call in calls if call and call[0] == "up")
@@ -468,12 +470,11 @@ def test_postgres_and_runtime_are_generated_when_source_has_no_compose(
         ),
         runtime=Runtime(dockerfile="Dockerfile"),
     )
-    monkeypatch.setattr(provisioning, "_free_port", lambda: 41999)
     config = {
         "services": {
             "postgres": {
                 "image": "postgres:16",
-                "ports": [{"target": 5432, "published": "41999"}],
+                "ports": [{"target": 5432, "published": "0"}],
             },
             "agent-runtime": {"profiles": ["harness-runtime"]},
         }
@@ -482,6 +483,8 @@ def test_postgres_and_runtime_are_generated_when_source_has_no_compose(
     def run(_environment, *arguments, **_kwargs):
         if "config" in arguments and "--format" in arguments:
             return json.dumps(config)
+        if arguments and arguments[0] == "port":
+            return "127.0.0.1:41999"
         return ""
 
     monkeypatch.setattr(provisioning, "_run", run)
@@ -582,7 +585,7 @@ def test_submitted_compose_gets_one_clean_retry_when_published_ports_are_transie
                 }
             )
         if arguments and arguments[0] == "port":
-            return f"0.0.0.0:{rendered_port(environment)}"
+            return f"0.0.0.0:{18080 if waits == 0 else 18081}"
         return ""
 
     def wait(endpoints, *_args, **_kwargs):
@@ -598,8 +601,6 @@ def test_submitted_compose_gets_one_clean_retry_when_published_ports_are_transie
 
     monkeypatch.setattr(provisioning, "_run", run)
     monkeypatch.setattr(provisioning, "_wait_for_endpoints", wait)
-    ports = iter((18080, 18081))
-    monkeypatch.setattr(provisioning, "_free_port", lambda: next(ports))
     environment = provisioning.provision(source, output)
 
     assert environment.running
@@ -882,8 +883,95 @@ def test_runtime_credentials_are_not_serialized_into_docker_arguments(
         invocation for invocation in invocations if invocation[0][0] == "run"
     )
     assert secret not in repr(run_arguments)
-    assert ("--env", "LIVEKIT_API_SECRET") == run_arguments[-3:-1]
+    assert any(
+        run_arguments[index : index + 2] == ("--env", "LIVEKIT_API_SECRET")
+        for index in range(len(run_arguments) - 1)
+    )
     assert run_kwargs["process_overrides"]["LIVEKIT_API_SECRET"] == secret
+
+
+def test_unused_harness_network_cleanup_is_scoped_and_requires_no_attachments(
+    monkeypatch,
+):
+    from fi.alk.harness import provision as provisioning
+
+    removed: list[str] = []
+
+    def docker(*arguments, **_kwargs):
+        if arguments[:2] == ("network", "ls"):
+            return "\n".join(
+                [
+                    "fagi-harness-orphan_default",
+                    "fagi-harness-active_default",
+                    "fagi-harness-current_default",
+                    "futureagi_default",
+                ]
+            )
+        if arguments[:2] == ("network", "inspect"):
+            name = arguments[-1]
+            return '{"container": {}}' if name.endswith("active_default") else "{}"
+        if arguments[:2] == ("network", "rm"):
+            removed.append(arguments[-1])
+        return ""
+
+    monkeypatch.setattr(provisioning, "_docker", docker)
+
+    assert (
+        provisioning._remove_unused_harness_networks(
+            exclude_project="fagi-harness-current"
+        )
+        == 1
+    )
+    assert removed == ["fagi-harness-orphan_default"]
+
+
+def test_stop_reclaims_only_its_empty_default_network(tmp_path, monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    output = tmp_path / "session"
+    output.mkdir()
+    provisioning.ProvisionedEnvironment(
+        source=str(tmp_path),
+        compose_file=str(tmp_path / "compose.yml"),
+        project="fagi-harness-owned",
+        running=True,
+    ).save(output)
+    removed: list[str] = []
+
+    monkeypatch.setattr(provisioning, "_run", lambda *_args, **_kwargs: "")
+
+    def docker(*arguments, **_kwargs):
+        if arguments[:2] == ("network", "inspect"):
+            return "{}"
+        if arguments[:2] == ("network", "rm"):
+            removed.append(arguments[-1])
+        return ""
+
+    monkeypatch.setattr(provisioning, "_docker", docker)
+
+    assert provisioning.stop(output)
+    assert removed == ["fagi-harness-owned_default"]
+
+
+def test_stop_never_removes_an_attached_or_non_harness_network(monkeypatch):
+    from fi.alk.harness import provision as provisioning
+
+    removed: list[str] = []
+
+    def docker(*arguments, **_kwargs):
+        if arguments[:2] == ("network", "inspect"):
+            return '{"container": {}}'
+        if arguments[:2] == ("network", "rm"):
+            removed.append(arguments[-1])
+        return ""
+
+    monkeypatch.setattr(provisioning, "_docker", docker)
+
+    assert not provisioning._remove_empty_project_default_network("futureagi")
+    assert not provisioning._remove_empty_project_default_network(
+        "fagi-harness-active"
+    )
+    assert removed == []
 
 
 def test_runtime_chat_port_is_ephemeral_and_recorded(tmp_path, monkeypatch):
@@ -2791,6 +2879,74 @@ def test_semantic_worker_trace_collapses_only_local_telemetry_mirror(tmp_path):
     assert [call.result["status"] for call in calls[1:]] == ["pending", "ready"]
 
 
+def test_livekit_runtime_log_fallback_keeps_only_completed_structured_tool_calls():
+    from fi.alk.harness.run.simulation import _livekit_log_calls
+
+    output = "\n".join(
+        [
+            "2026-08-24 22:44:39,082 - DEBUG livekit.agents - executing tool "
+            '{"function":"get_current_time","lk.pii.arguments":"{}",'
+            '"speech_id":"speech-one"}',
+            "2026-08-24 22:44:39,107 - DEBUG livekit.agents - tools execution completed "
+            '{"speech_id":"speech-one"}',
+            "2026-08-24 22:44:57,247 - DEBUG livekit.agents - executing tool "
+            '{"function":"list_available_slots",'
+            '"lk.pii.arguments":"{\\"range\\": \\"+1month\\"}",'
+            '"speech_id":"speech-two"}',
+            # No completion for speech-two: it must not earn tool evidence.
+            "application says it called schedule_appointment successfully",
+        ]
+    )
+
+    calls = _livekit_log_calls(output)
+
+    assert len(calls) == 1
+    assert calls[0].name == "get_current_time"
+    assert calls[0].arguments == {}
+    assert calls[0].ok is True
+    assert calls[0].result == {
+        "evidence": "livekit_runtime_log",
+        "execution": "completed",
+    }
+    assert calls[0].at > 0
+
+
+def test_livekit_runtime_log_fallback_reads_production_json_logging():
+    from fi.alk.harness.run.simulation import _livekit_log_calls
+
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "level": "DEBUG",
+                    "name": "livekit.agents",
+                    "function": "list_available_slots",
+                    "lk.pii.arguments": '{"range":"+2week"}',
+                    "speech_id": "speech-json",
+                    "timestamp": "2026-08-24T23:10:52.123456+00:00",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "tools execution completed",
+                    "level": "DEBUG",
+                    "name": "livekit.agents",
+                    "speech_id": "speech-json",
+                    "timestamp": "2026-08-24T23:10:52.223456+00:00",
+                }
+            ),
+        ]
+    )
+
+    calls = _livekit_log_calls(output)
+
+    assert len(calls) == 1
+    assert calls[0].name == "list_available_slots"
+    assert calls[0].arguments == {"range": "+2week"}
+    assert calls[0].at > 0
+
+
 def test_a_store_that_is_not_sqlite_needs_nothing_above_it_to_change(tmp_path):
     """The harness writes the schema, the seed and the changes in whatever its agent's store
     speaks. What it cannot do from a prompt is execute them, freeze the result and put it back, so
@@ -3052,6 +3208,28 @@ def test_a_restored_world_still_knows_how_this_agent_says_no(tmp_path):
 
     save(world, tmp_path, sequences=[])
     assert restore(tmp_path).call("look").refused
+
+
+def test_a_source_documented_exception_is_a_refusal_but_an_undocumented_one_crashes():
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    handler = "def handle(args, db):\n    raise LookupError('account_not_found')\n"
+
+    documented = GeneratedWorld(":memory:")
+    documented.handlers = {"lookup_account": handler}
+    documented.refusal_signature = (
+        "lookup_account raises LookupError when no account exists"
+    )
+    refused = documented.call("lookup_account", {"account_id": "ACC-9999"})
+    assert refused.refused
+    assert not refused.ok
+
+    undocumented = GeneratedWorld(":memory:")
+    undocumented.handlers = {"lookup_account": handler}
+    crashed = undocumented.call("lookup_account", {"account_id": "ACC-9999"})
+    assert not crashed.refused
+    assert not crashed.ok
+    assert crashed.error == "LookupError: account_not_found"
 
 
 def _models_within(annotation):
