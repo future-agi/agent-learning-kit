@@ -278,11 +278,8 @@ def wire(
                 "TOOLS_API_URL": url,
                 "LIVEKIT_AGENT_NAME": agent_name,
             }
-            # The harness-generated agent-runtime does not carry the agent's own .env.local, and
-            # runtime_configuration_names only covers datastore config -- not the provider
-            # credentials the worker needs to actually run: LiveKit to register and place the
-            # call, Deepgram for STT/TTS, Vertex for the LLM. Pass them through from this
-            # process's environment (the sandbox has placed them here).
+            # The generated runtime carries no .env.local, and the runtime configuration covers
+            # datastore settings only, so the provider credentials it needs come from here.
             for _cred in (
                 "LIVEKIT_URL",
                 "LIVEKIT_API_KEY",
@@ -296,18 +293,13 @@ def wire(
                 _value = os.environ.get(_cred, "").strip()
                 if _value:
                     runtime_overrides.setdefault(_cred, _value)
-            # An agent's Compose commonly mounts its Vertex credential from an env-var source, e.g.
-            # ${VERTEX_CREDENTIALS:-/dev/null}:/etc/vertex/creds.json. With that variable unset the
-            # placeholder is mounted and the agent's own LLM cannot authenticate, so point it at the
-            # same resolved Google credential the harness already holds for the run.
+            # An agent's Compose often mounts its Vertex credential from this variable, and with it
+            # unset a placeholder is mounted and the agent's own LLM cannot authenticate.
             _google_creds = runtime_overrides.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
             if _google_creds:
                 runtime_overrides.setdefault("VERTEX_CREDENTIALS", _google_creds)
-            # Voice agents often gate an audio-enhancement plugin on a license the harness cannot
-            # supply (e.g. ai_coustics noise cancellation). Unauthorized, it raises on the first
-            # inbound audio frame and the worker drops the call right after its greeting. Agents
-            # that read this flag skip that plugin; agents that do not simply ignore it. A run may
-            # override it to keep enhancement on when a license is present.
+            # Audio enhancement is usually licensed, and unauthorized it raises on the first
+            # inbound frame and drops the call. Agents that do not read this flag ignore it.
             runtime_overrides.setdefault("DISABLE_AI_COUSTICS", "1")
             os.environ["LIVEKIT_TARGET_AGENT_NAME"] = agent_name
             caller_phone = fixture_phone(scenario)
