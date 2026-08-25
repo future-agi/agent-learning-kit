@@ -69,6 +69,34 @@ def test_rejects_missing_transcript_and_incomplete_scenario_set(tmp_path):
         seal_artifacts(tmp_path, run_id="run-1", expected_scenarios=2)
 
 
+@pytest.mark.parametrize("ended", ["finished", "gave-up", "ran-out-of-turns"])
+def test_accepts_every_terminal_chat_outcome_without_changing_its_grade(
+    tmp_path, ended
+):
+    case = _case(tmp_path)
+    result_path = case / "result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result.update(ended=ended, passed=ended == "finished")
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    manifest = seal_artifacts(tmp_path, run_id="run-1", expected_scenarios=1)
+
+    assert manifest.scenarios[0].canonical_status == ended
+    persisted = json.loads(result_path.read_text(encoding="utf-8"))
+    assert persisted["passed"] is (ended == "finished")
+
+
+def test_rejects_a_chat_result_that_has_not_reached_a_terminal_outcome(tmp_path):
+    case = _case(tmp_path)
+    result_path = case / "result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["ended"] = ""
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    with pytest.raises(ArtifactIntegrityError, match="result_not_terminal"):
+        seal_artifacts(tmp_path, run_id="run-1", expected_scenarios=1)
+
+
 def test_rejects_recording_claim_without_durable_track(tmp_path):
     case = _case(tmp_path)
     result_path = case / "result.json"

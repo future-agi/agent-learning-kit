@@ -722,6 +722,25 @@ class LocalSandbox:
             stage = raw_state["stage"]
             updated_at = raw_state.get("updated_at", updated_at)
             detail = raw_state.get("detail")
+        completed_scenarios = int(raw_state.get("completed_scenarios", 0) or 0)
+        if stage == HarnessStage.RUNNING.value:
+            # The worker writes state.json only at process boundaries, while each scenario result
+            # is committed as soon as that scenario finishes. Derive live progress from the newest
+            # campaign directory so a multi-call run does not remain at 0/N until finalization.
+            # Only immediate scenario result files count; nested SDK/debug artifacts are ignored.
+            runs_root = self.artifacts_root / job.run_id / "runs"
+            campaigns = [path for path in runs_root.glob("run-*") if path.is_dir()]
+            if campaigns:
+                latest = max(campaigns, key=lambda path: path.stat().st_mtime_ns)
+                committed = sum(
+                    1
+                    for scenario in latest.iterdir()
+                    if scenario.is_dir() and (scenario / "result.json").is_file()
+                )
+                completed_scenarios = min(
+                    raw_state.get("total_scenarios", job.scenario_count),
+                    max(completed_scenarios, committed),
+                )
         status_value = HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
@@ -729,7 +748,7 @@ class LocalSandbox:
             updated_at=updated_at,
             detail=detail,
             failure=raw_state.get("failure"),
-            completed_scenarios=raw_state.get("completed_scenarios", 0),
+            completed_scenarios=completed_scenarios,
             total_scenarios=raw_state.get("total_scenarios", job.scenario_count),
             attempt=raw_state.get("attempt", 1),
         )
