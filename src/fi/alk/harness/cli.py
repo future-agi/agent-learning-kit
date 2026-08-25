@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 import time
@@ -90,6 +91,20 @@ async def _ask_operator(_tool_name: str, payload: dict[str, Any], _context: Any)
     )
 
 
+def _guidance(args: argparse.Namespace) -> str:
+    instructions = [
+        str(item).strip()
+        for item in (getattr(args, "guidance", None) or [])
+        if str(item).strip()
+    ]
+    if not instructions:
+        return ""
+    return (
+        "\n\n## User adjustments\n\nApply these explicit corrections while preserving "
+        "all unaffected validated work:\n- " + "\n- ".join(instructions)
+    )
+
+
 async def _understand(args: argparse.Namespace) -> int:
     source = resolve(args.kind, name=args.name, root=args.path)
     stage, destination = open_stage(
@@ -106,7 +121,7 @@ async def _understand(args: argparse.Namespace) -> int:
 
     await _converse(
         stage,
-        opening(source),
+        opening(source) + _guidance(args),
         interactive=args.interactive,
         until=lambda: load(destination) is not None,
         nudge=(
@@ -202,7 +217,7 @@ async def _build(args: argparse.Namespace) -> int:
     )
     await _converse(
         stage,
-        build_opening(contract, provisioned=environment is not None),
+        build_opening(contract, provisioned=environment is not None) + _guidance(args),
         interactive=args.interactive,
         until=lambda: world_saved(destination),
         nudge=(
@@ -337,7 +352,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
     )
     await _converse(
         stage,
-        scenario_opening(contract, wanted, existing),
+        scenario_opening(contract, wanted, existing) + _guidance(args),
         interactive=args.interactive,
         until=lambda: bool(load_written(destination)),
         nudge=(
@@ -578,6 +593,44 @@ def _load_connection_env(source: Path) -> list[str]:
     return loaded
 
 
+def _new_adjustments(
+    path: Path | None, cursor: int
+) -> tuple[list[dict[str, Any]], int]:
+    if path is None or not path.is_file():
+        return [], cursor
+    records: list[dict[str, Any]] = []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    for line in lines[cursor:]:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records, len(lines)
+
+
+def _write_adjustment_status(
+    inbox: Path | None,
+    adjustment_id: str,
+    status: str,
+    *,
+    applied_stage: str,
+) -> None:
+    if inbox is None:
+        return
+    status_path = inbox.with_name("adjustment-status.jsonl")
+    record = {
+        "adjustment_id": adjustment_id,
+        "status": status,
+        "applied_stage": applied_stage,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    with status_path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+        stream.flush()
+
+
 async def _auto(args: argparse.Namespace) -> int:
     """Take one source connection through every stage without operator messages.
 
@@ -662,7 +715,7 @@ async def _auto(args: argparse.Namespace) -> int:
             f"({len(loaded_connection)} names; values hidden)\n"
         )
 
-    stages = (
+    stages = [
         (
             "understand",
             _understand,
@@ -673,6 +726,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 interactive=False,
                 model=args.model,
+                guidance=[],
             ),
         ),
         (
@@ -683,6 +737,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 path=str(source),
                 out=str(destination),
                 interactive=False,
+                guidance=[],
             ),
         ),
         (
@@ -693,6 +748,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 count=args.count,
                 interactive=False,
+                guidance=[],
             ),
         ),
         (
@@ -705,12 +761,21 @@ async def _auto(args: argparse.Namespace) -> int:
                 model=args.run_model,
             ),
         ),
-    )
+    ]
     from .provision import ProvisionError, stop
 
     cleanup_failed: ProvisionError | None = None
     try:
-        for label, operation, stage_args in stages:
+        stage_index = 0
+        adjustment_cursor = 0
+        applying: dict[str, list[str]] = {label: [] for label, *_ in stages}
+        adjustments_path = (
+            Path(args.adjustments_path)
+            if getattr(args, "adjustments_path", None)
+            else None
+        )
+        while stage_index < len(stages):
+            label, operation, stage_args = stages[stage_index]
             print(f"\n=== {label} ===", flush=True)
             emit("harness.stage.started", label)
             status = await operation(stage_args)
@@ -724,6 +789,74 @@ async def _auto(args: argparse.Namespace) -> int:
                 emit("harness.stage.failed", label, status=status)
                 return status
             emit("harness.stage.completed", label, status=status)
+            for adjustment_id in applying[label]:
+                _write_adjustment_status(
+                    adjustments_path,
+                    adjustment_id,
+                    "applied",
+                    applied_stage=label,
+                )
+                emit(
+                    "harness.adjustment.applied",
+                    label,
+                    adjustment_id=adjustment_id,
+                )
+            applying[label] = []
+            if hasattr(stage_args, "guidance"):
+                stage_args.guidance = []
+
+            incoming, adjustment_cursor = _new_adjustments(
+                adjustments_path, adjustment_cursor
+            )
+            rewind_to: int | None = None
+            for adjustment in incoming:
+                target = str(adjustment.get("target_stage") or label)
+                target_index = next(
+                    (
+                        index
+                        for index, (stage_name, *_rest) in enumerate(stages)
+                        if stage_name == target
+                    ),
+                    min(stage_index, 2),
+                )
+                target_args = stages[target_index][2]
+                target_args.guidance = [
+                    *getattr(target_args, "guidance", []),
+                    str(adjustment.get("instruction") or ""),
+                ]
+                delta = adjustment.get("scenario_delta")
+                if target == "scenarios" and isinstance(delta, int) and delta > 0:
+                    existing_count = len(load_written(destination))
+                    target_args.count = max(target_args.count, existing_count) + delta
+                adjustment_id = str(adjustment.get("adjustment_id") or "")
+                if adjustment_id:
+                    applying[target].append(adjustment_id)
+                    _write_adjustment_status(
+                        adjustments_path,
+                        adjustment_id,
+                        "applying",
+                        applied_stage=target,
+                    )
+                    emit(
+                        "harness.adjustment.applying",
+                        target,
+                        adjustment_id=adjustment_id,
+                    )
+                if target_index <= stage_index:
+                    rewind_to = (
+                        target_index
+                        if rewind_to is None
+                        else min(rewind_to, target_index)
+                    )
+            if rewind_to is not None:
+                emit(
+                    "harness.pipeline.rewound",
+                    stages[rewind_to][0],
+                    from_stage=label,
+                )
+                stage_index = rewind_to
+            else:
+                stage_index += 1
     finally:
         # The source environment exists only for this run. This boundary covers normal stage
         # failures and exceptions raised by world/scenario construction. Cleanup happens before
@@ -755,7 +888,7 @@ async def _auto(args: argparse.Namespace) -> int:
             destination,
             run_id=job.run_id,
             max_bytes=job.artifacts.max_artifact_bytes,
-            expected_scenarios=job.scenario_count,
+            expected_scenarios=len(load_written(destination)) or job.scenario_count,
         )
     except ArtifactIntegrityError as exc:
         emit(

@@ -154,6 +154,13 @@ class SandboxJobResponse(BaseModel):
     stage_outputs: list[dict[str, Any]] = Field(default_factory=list)
     artifact_path: str | None = None
     credentials: CredentialManifest | None = None
+    stage_outputs: list[dict[str, Any]] = Field(default_factory=list)
+    adjustments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SandboxAdjustmentRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2_000)
+    client_request_id: str | None = Field(default=None, max_length=128)
 
 
 class UploadedSourceResponse(BaseModel):
@@ -1051,6 +1058,8 @@ class LocalSandbox:
                         str(output),
                         "--status",
                         str(directory / "result.json"),
+                        "--adjustments",
+                        str(directory / "adjustments.jsonl"),
                         stdout=log_handle,
                         stderr=asyncio.subprocess.STDOUT,
                         start_new_session=True,
@@ -1179,6 +1188,12 @@ class LocalSandbox:
             stage = raw_state["stage"]
             updated_at = raw_state.get("updated_at", updated_at)
             detail = raw_state.get("detail")
+        scenario_index = _json_artifact(
+            self.artifacts_root / job.run_id / "scenarios.json"
+        )
+        discovered_scenarios = (
+            len(scenario_index) if isinstance(scenario_index, list) else 0
+        )
         completed_scenarios = int(raw_state.get("completed_scenarios", 0) or 0)
         if stage == HarnessStage.RUNNING.value:
             # The worker writes state.json only at process boundaries, while each scenario result
@@ -1232,7 +1247,10 @@ class LocalSandbox:
             detail=detail,
             failure=failure,
             completed_scenarios=completed_scenarios,
-            total_scenarios=raw_state.get("total_scenarios", job.scenario_count),
+            total_scenarios=max(
+                raw_state.get("total_scenarios", job.scenario_count),
+                discovered_scenarios,
+            ),
             attempt=raw_state.get("attempt", 1),
         )
         return SandboxJobResponse(
@@ -1248,6 +1266,7 @@ class LocalSandbox:
                 if (directory / "credentials.json").is_file()
                 else None
             ),
+            adjustments=_adjustments(directory),
         )
 
     def list(self) -> list[SandboxJobResponse]:
@@ -1304,6 +1323,38 @@ class LocalSandbox:
         self._ephemeral_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
         self._delete_job_secret_files(job_id)
+        return self.get(job_id)
+
+    def adjust(
+        self, job_id: str, request: SandboxAdjustmentRequest
+    ) -> SandboxJobResponse:
+        response = self.get(job_id)
+        if response.status.stage.terminal:
+            raise HTTPException(
+                status_code=409, detail="a completed run cannot be adjusted"
+            )
+        if response.status.stage in {
+            HarnessStage.CLEANING_UP,
+            HarnessStage.UPLOADING_ARTIFACTS,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="the run is already finalizing; start a follow-up run to change it",
+            )
+        instruction = request.instruction.strip()
+        record = {
+            "adjustment_id": str(uuid.uuid4()),
+            "client_request_id": request.client_request_id,
+            "instruction": instruction,
+            "target_stage": _adjustment_stage(instruction, response.status.stage.value),
+            "scenario_delta": _scenario_delta(instruction),
+            "status": "pending",
+            "created_at": _now(),
+        }
+        path = self.jobs_root / job_id / "adjustments.jsonl"
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+            stream.flush()
         return self.get(job_id)
 
 
@@ -1475,6 +1526,185 @@ def _events(path: Path) -> list[dict[str, Any]]:
         except ValueError:
             continue
     return result
+
+
+def _json_artifact(path: Path, *, max_bytes: int = 1_000_000) -> Any | None:
+    """Read a bounded, generated JSON artifact for control-plane presentation."""
+    try:
+        if not path.is_file() or path.stat().st_size > max_bytes:
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _stage_outputs(root: Path) -> list[dict[str, Any]]:
+    outputs: list[dict[str, Any]] = []
+    contract = _json_artifact(root / "contract.json")
+    if isinstance(contract, dict):
+        outputs.append(
+            {
+                "id": "contract",
+                "stage": HarnessStage.UNDERSTANDING_AGENT.value,
+                "title": "Agent contract",
+                "summary": (
+                    f"{len(contract.get('tools') or [])} tools, "
+                    f"{len(contract.get('hard_constraints') or [])} constraints and "
+                    f"{len(contract.get('real_use_cases') or [])} use cases"
+                ),
+                "kind": "contract",
+                "data": _presentation_value(contract),
+                "updated_at": datetime.fromtimestamp(
+                    (root / "contract.json").stat().st_mtime, timezone.utc
+                ).isoformat(),
+            }
+        )
+    environment = _json_artifact(root / "environment.json")
+    if isinstance(environment, dict):
+        visible = _presentation_value(
+            {
+                key: value
+                for key, value in environment.items()
+                if key
+                not in {
+                    "source",
+                    "compose_file",
+                    "compose_override_file",
+                    "internal_overrides",
+                    "runtime_trace_path",
+                    "source_fingerprint",
+                }
+            }
+        )
+        outputs.append(
+            {
+                "id": "environment",
+                "stage": HarnessStage.GENERATING_ENVIRONMENT.value,
+                "title": "Execution environment",
+                "summary": (
+                    f"{len(environment.get('services') or [])} services ready"
+                    + (
+                        f" in {environment.get('provision_seconds')}s"
+                        if environment.get("provision_seconds") is not None
+                        else ""
+                    )
+                ),
+                "kind": "environment",
+                "data": visible,
+                "updated_at": datetime.fromtimestamp(
+                    (root / "environment.json").stat().st_mtime, timezone.utc
+                ).isoformat(),
+            }
+        )
+    scenarios = _json_artifact(root / "scenarios.json")
+    if isinstance(scenarios, list):
+        outputs.append(
+            {
+                "id": "scenarios",
+                "stage": HarnessStage.GENERATING_SCENARIOS.value,
+                "title": "Generated scenarios",
+                "summary": f"{len(scenarios)} grounded scenarios",
+                "kind": "scenarios",
+                "data": scenarios,
+                "updated_at": datetime.fromtimestamp(
+                    (root / "scenarios.json").stat().st_mtime, timezone.utc
+                ).isoformat(),
+            }
+        )
+    results = _json_artifact(root / "results.json")
+    if isinstance(results, dict):
+        outputs.append(
+            {
+                "id": "results",
+                "stage": HarnessStage.GRADING.value,
+                "title": "Run results",
+                "summary": "Scenario execution and grading evidence",
+                "kind": "results",
+                "data": results,
+                "updated_at": datetime.fromtimestamp(
+                    (root / "results.json").stat().st_mtime, timezone.utc
+                ).isoformat(),
+            }
+        )
+    return outputs
+
+
+def _presentation_value(value: Any, key: str = "") -> Any:
+    lowered = key.lower()
+    if any(marker in lowered for marker in ("password", "secret", "token", "api_key")):
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _presentation_value(item, str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_presentation_value(item, key) for item in value]
+    if isinstance(value, str) and "://" in value and "@" in value:
+        scheme, remainder = value.split("://", 1)
+        # Prose can contain an email before a later URL. Only redact when the URI
+        # remainder itself contains userinfo.
+        if "@" in remainder:
+            return f"{scheme}://[redacted]@{remainder.split('@', 1)[1]}"
+    return value
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def _adjustments(directory: Path) -> list[dict[str, Any]]:
+    requested = _read_jsonl(directory / "adjustments.jsonl")
+    acknowledgements = {
+        item.get("adjustment_id"): item
+        for item in _read_jsonl(directory / "adjustment-status.jsonl")
+    }
+    return [
+        {**item, **acknowledgements.get(item.get("adjustment_id"), {})}
+        for item in requested
+    ]
+
+
+def _scenario_delta(instruction: str) -> int | None:
+    match = re.search(
+        r"\b(?:add|create|generate|write)\s+(\d{1,3})\s+(?:more\s+)?scenarios?\b",
+        instruction,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return min(100, int(match.group(1)))
+
+
+def _adjustment_stage(instruction: str, current_stage: str) -> str:
+    lowered = instruction.lower()
+    if any(word in lowered for word in ("scenario", "persona", "test case")):
+        return "scenarios"
+    if any(
+        word in lowered
+        for word in ("environment", "database", "service", "seed", "test data")
+    ):
+        return "environment"
+    if any(word in lowered for word in ("contract", "tool", "capability")):
+        return "understand"
+    return {
+        HarnessStage.UNDERSTANDING_AGENT.value: "understand",
+        HarnessStage.GENERATING_ENVIRONMENT.value: "environment",
+        HarnessStage.BUILDING_ENVIRONMENT.value: "environment",
+        HarnessStage.VALIDATING_ENVIRONMENT.value: "environment",
+        HarnessStage.GENERATING_SCENARIOS.value: "scenarios",
+        HarnessStage.VALIDATING_SCENARIOS.value: "scenarios",
+    }.get(current_stage, "scenarios")
 
 
 def _stage_from_events(events: list[dict[str, Any]]) -> str | None:
@@ -1745,6 +1975,19 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def cancel_job(job_id: str) -> SandboxJobResponse:
         try:
             return await sandbox.cancel(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="job not found") from exc
+
+    @app.post(
+        "/v1/jobs/{job_id}/adjust",
+        response_model=SandboxJobResponse,
+        dependencies=[Depends(_authorize)],
+    )
+    async def adjust_job(
+        job_id: str, request: SandboxAdjustmentRequest
+    ) -> SandboxJobResponse:
+        try:
+            return sandbox.adjust(job_id, request)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="job not found") from exc
 
