@@ -228,7 +228,23 @@ class FailureDomain(str, Enum):
     CONNECTIVITY = "connectivity"
     INFRASTRUCTURE = "infrastructure"
     GRADING = "grading"
+    ARTIFACT = "artifact"
     PLATFORM_SYNC = "platform_sync"
+
+
+class FailureOwner(str, Enum):
+    CUSTOMER_AGENT = "customer_agent"
+    FUTUREAGI = "futureagi"
+
+
+class CustomerFailure(BaseModel):
+    """Small, ownership-correct failure surface safe for customer-facing APIs."""
+
+    category: str
+    owner: FailureOwner
+    code: str
+    message: str
+    retryable: bool = False
 
 
 class HarnessFailure(BaseModel):
@@ -238,6 +254,35 @@ class HarnessFailure(BaseModel):
     message: str
     retryable: bool = False
     details: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @property
+    def owner(self) -> FailureOwner:
+        return (
+            FailureOwner.CUSTOMER_AGENT
+            if self.domain is FailureDomain.AGENT
+            else FailureOwner.FUTUREAGI
+        )
+
+    def for_customer(self) -> CustomerFailure:
+        """Do not present a harness subsystem failure as a customer-agent failure."""
+        if self.owner is FailureOwner.CUSTOMER_AGENT:
+            return CustomerFailure(
+                category="agent_failure",
+                owner=self.owner,
+                code=self.code,
+                message=self.message,
+                retryable=False,
+            )
+        return CustomerFailure(
+            category="system_failure",
+            owner=self.owner,
+            code=self.code,
+            message=(
+                "FutureAGI could not complete this run. The failure has been recorded "
+                "for diagnosis; the submitted agent has not been marked as failed."
+            ),
+            retryable=self.retryable,
+        )
 
 
 class HarnessJobStatus(BaseModel):
@@ -295,7 +340,9 @@ __all__ = [
     "AgentConnection",
     "ArtifactLevel",
     "ExecutionMode",
+    "CustomerFailure",
     "FailureDomain",
+    "FailureOwner",
     "HarnessArtifactPolicy",
     "HarnessFailure",
     "HarnessJob",

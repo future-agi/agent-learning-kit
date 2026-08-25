@@ -18,6 +18,7 @@ from .job import (
     HarnessJob,
     HarnessJobStatus,
     HarnessStage,
+    SourceKind,
     SourceVisibility,
 )
 
@@ -138,11 +139,47 @@ class HarnessExecutor:
         output: Path,
         model: str | None = None,
         run_model: str | None = None,
+        adjustments_path: Path | None = None,
     ) -> HarnessJobStatus:
         from .cli import _auto
 
         output = output.expanduser().resolve()
         source = source.expanduser().resolve()
+        # A branch name is acquisition input, not immutable provenance. Resolve the checkout to
+        # its exact commit before job.json and the environment plan are written. The source
+        # content digest remains authoritative for uploads and non-Git sources.
+        if job.source.kind is SourceKind.GITHUB and not job.source.commit_sha:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "rev-parse", "HEAD"],
+                cwd=source,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            commit_sha = completed.stdout.strip().lower()
+            if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+                return HarnessJobStatus(
+                    job_id=job.job_id,
+                    run_id=job.run_id,
+                    stage=HarnessStage.FAILED,
+                    updated_at=datetime.now(timezone.utc),
+                    detail="could not resolve the acquired GitHub revision",
+                    failure=HarnessFailure(
+                        domain=FailureDomain.INFRASTRUCTURE,
+                        stage=HarnessStage.ACQUIRING_SOURCE,
+                        code="github_commit_resolution_failed",
+                        message="The runner could not resolve the acquired GitHub revision",
+                    ),
+                    total_scenarios=job.scenario_count,
+                )
+            job = job.model_copy(
+                update={
+                    "source": job.source.model_copy(update={"commit_sha": commit_sha})
+                }
+            )
         # Source acquisition has already materialized GitHub/archive/local inputs as a local
         # checkout.  The understanding registry describes how to inspect that materialized
         # content (``repo``), while the immutable job retains its original source provenance.
@@ -160,6 +197,7 @@ class HarnessExecutor:
             model=model,
             run_model=run_model,
             job=job,
+            adjustments_path=str(adjustments_path) if adjustments_path else None,
         )
         status = await _auto(args)
         failure = _failure_from_events(output) if status not in (0, 2) else None
@@ -176,8 +214,8 @@ class HarnessExecutor:
                 else f"exit {status}"
             ),
             failure=failure,
-            completed_scenarios=job.scenario_count if status in (0, 2) else 0,
-            total_scenarios=job.scenario_count,
+            completed_scenarios=_scenario_count(output) if status in (0, 2) else 0,
+            total_scenarios=_scenario_count(output) or job.scenario_count,
         )
 
     async def acquire_and_run(
@@ -203,6 +241,14 @@ class HarnessExecutor:
 def run_sync(job: HarnessJob, *, source: Path, output: Path) -> HarnessJobStatus:
     """Small synchronous adapter for job consumers that do not own an event loop."""
     return asyncio.run(HarnessExecutor().run(job, source=source, output=output))
+
+
+def _scenario_count(output: Path) -> int:
+    try:
+        value = json.loads((output / "scenarios.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    return len(value) if isinstance(value, list) else 0
 
 
 def _failure_from_events(output: Path) -> HarnessFailure:
@@ -234,7 +280,7 @@ def _failure_from_events(output: Path) -> HarnessFailure:
         ),
         "uploading_artifacts": (
             HarnessStage.UPLOADING_ARTIFACTS,
-            FailureDomain.INFRASTRUCTURE,
+            FailureDomain.ARTIFACT,
         ),
     }.get(label, (HarnessStage.RUNNING, FailureDomain.INFRASTRUCTURE))
     return HarnessFailure(

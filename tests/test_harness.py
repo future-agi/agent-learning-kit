@@ -173,9 +173,7 @@ services:
             return json.dumps(config)
         if arguments and arguments[0] == "port":
             return (
-                "127.0.0.1:42123"
-                if arguments[1] == "tools-api"
-                else "127.0.0.1:42122"
+                "127.0.0.1:42123" if arguments[1] == "tools-api" else "127.0.0.1:42122"
             )
         return ""
 
@@ -968,9 +966,7 @@ def test_stop_never_removes_an_attached_or_non_harness_network(monkeypatch):
     monkeypatch.setattr(provisioning, "_docker", docker)
 
     assert not provisioning._remove_empty_project_default_network("futureagi")
-    assert not provisioning._remove_empty_project_default_network(
-        "fagi-harness-active"
-    )
+    assert not provisioning._remove_empty_project_default_network("fagi-harness-active")
     assert removed == []
 
 
@@ -6107,9 +6103,10 @@ def _reported_result(**over):
             Checkpoint(name="user_authenticated", kind="code", passed=True),
             Checkpoint(
                 name="confirmation_obtained",
-                kind="judged",
+                kind="eval",
                 passed=False,
                 detail="never asked",
+                by="support-agent-confirmation_obtained (turing_large)",
             ),
         ],
     )
@@ -6161,6 +6158,10 @@ def test_sub_goals_travel_named_so_a_page_can_show_one_per_column():
     assert payload["call_metadata"]["harness_of"] == 2
     assert "evaluations" not in payload
     assert payload["call_metadata"]["harness_evaluations"]
+    assert (
+        payload["call_metadata"]["harness_evaluations"][1]["platform_template"]
+        == "support-agent-confirmation_obtained"
+    )
     assert payload["result_digest"].startswith("sha256:")
     assert (
         platform.result_of(_reported_result())["result_digest"]
@@ -6207,7 +6208,34 @@ def test_a_second_run_joins_the_same_test_rather_than_starting_another():
     )
     assert api.provisioned == 1
     assert (first.test_execution_id, second.test_execution_id) == ("te-1", "te-2")
-    assert second.url == "/dashboard/simulate/test/rt-1/runs"
+    assert second.url == "/dashboard/simulate/test/rt-1/te-2"
+
+
+def test_platform_display_names_are_readable_and_do_not_repeat_the_run_name():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from fi.alk.harness import platform
+
+    assert (
+        platform.display_run_name(
+            "uber-voice-agent", now=datetime(2026, 8, 25, 12, 22, tzinfo=timezone.utc)
+        )
+        == "Uber Voice Agent · 25 Aug 2026 12:22 UTC"
+    )
+    persona = platform.persona_of(
+        SimpleNamespace(
+            name="dana-full-booking-otp-card",
+            use_case="Book a ride using a saved card after OTP verification.",
+            tests="",
+            instruction="Book my ride",
+            persona={"name": "Dana"},
+        )
+    )
+    assert persona["name"] == "Dana"
+    assert persona["scenario_name"] == (
+        "Book a ride using a saved card after OTP verification"
+    )
 
 
 def test_reporting_says_when_the_platform_allocated_too_few_calls():
@@ -6264,3 +6292,18 @@ def test_new_platform_execution_preserves_submitted_scenario_order():
     )
     assert api.started_with == ["sid-a", "sid-b"]
     assert reported.calls == {"a": "ce-a", "b": "ce-b"}
+
+
+def test_platform_call_start_uses_existing_ongoing_status_flow():
+    from fi.alk.harness import platform
+
+    class Recording:
+        calls = []
+
+        def ongoing(self, call_execution_id):
+            self.calls.append(call_execution_id)
+            return {"updated": True}
+
+    api = Recording()
+    platform.mark_ongoing(platform.Reported(), "ce-started", platform=api)
+    assert api.calls == ["ce-started"]
