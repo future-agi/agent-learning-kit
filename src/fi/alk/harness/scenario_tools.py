@@ -448,8 +448,13 @@ def scenario_tools(
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "The task, written to the person the agent is serving. For a "
-                    "conversational agent this fills the simulator prompt's slot.",
+                    "description": "What this person is trying to achieve, written to them. "
+                    "State the objective first, in their own terms, so they pursue it rather "
+                    "than narrate a situation: 'Get the cancellation fee refunded', not 'You "
+                    "were charged a fee'. Then give them everything they need to hold the "
+                    "conversation without inventing anything: the facts they know, the values "
+                    "they can be asked for, what they will only say once asked, and what would "
+                    "count as done. Every value real and read out of the world.",
                 },
                 "persona": {
                     "type": "object",

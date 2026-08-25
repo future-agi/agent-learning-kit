@@ -22,7 +22,8 @@ name          short identifier; it becomes this scenario's folder
 use_case      which of the agent's use cases this belongs to
 branch        what makes this one different from its siblings in that use case
 tests         one line: what this scenario is trying to find out
-instruction   the task, written to the person the agent is serving
+instruction   what this person is trying to achieve, written to them, plus everything
+              they need to pursue it without inventing anything
 persona       who that person is: identity, communication style, languages/accent and characteristics
 setup_code    Python: def setup(world) — what this scenario changes first
 ready_code    Python: def ready(world) — is the world ready for this scenario
@@ -109,6 +110,8 @@ not exist, and no lookup will ever find them.
 
 **Possessing and volunteering are separate.** Whether the person offers a value unprompted is the
 scenario's business. Whether they have it at all is not optional.
+
+**Write the instruction as an objective, not a situation.** A caller who is told what happened narrates it; a caller who is told what they want pursues it. Open with the goal in their own words ("Get the cancellation fee refunded"), then give them the facts they hold, the values they can be asked for, what they will only say once asked for it, and what would count as done. Every value read out of the world, never invented.
 
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
