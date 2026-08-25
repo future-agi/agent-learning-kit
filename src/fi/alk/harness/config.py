@@ -93,10 +93,20 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     Claude Code resolves the GCP project from ``GOOGLE_CLOUD_PROJECT``, the credential file, or
     the active gcloud configuration, in that order, so an unset project id is not an error here.
     """
+    # Every model a session can reach is pinned to the same one. Naming only the main model
+    # leaves the sub-agent and fast-path settings to the CLI's own preference, and a suite written
+    # by twenty writers then runs on whatever that preference happens to be rather than on the
+    # model the run asked for.
+    chosen = chosen_model(model)
     env = {
         "CLAUDE_CODE_USE_VERTEX": "1",
         "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
-        "ANTHROPIC_MODEL": chosen_model(model),
+        "ANTHROPIC_MODEL": chosen,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": chosen,
+        "ANTHROPIC_SMALL_FAST_MODEL": chosen,
+        "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
     }
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",
