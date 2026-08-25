@@ -454,9 +454,10 @@ def scenario_tools(
                 },
                 "background_noise": {
                     "type": "string",
-                    "description": "Where the caller is phoning from, when it is part of the "
-                    "test: street, transit, vehicle, outdoors, retail, office or home. Leave it "
-                    "out unless the place matters.",
+                    "description": "Where the caller is phoning from: street, transit, vehicle, "
+                    "outdoors, retail, office or home. Name it whenever the instruction implies "
+                    "somewhere, a caller leaving a hotel or standing on a street is not in a "
+                    "quiet room. Left out, it is decided from the scenario name.",
                 },
                 "instruction": {
                     "type": "string",
@@ -465,8 +466,12 @@ def scenario_tools(
                     "than narrate a situation: 'Get the cancellation fee refunded', not 'You "
                     "were charged a fee'. Then give them everything they need to hold the "
                     "conversation without inventing anything: the facts they know, the values "
-                    "they can be asked for, what they will only say once asked, and what would "
-                    "count as done. Every value real and read out of the world.",
+                    "they can be asked for, and what they will only say once asked. Every value "
+                    "real and read out of the world. Write only what this person knows before "
+                    "the call. Never tell them what the agent will do, ask for, or disclose: "
+                    "that is what the scenario is testing, and a caller told to expect it will "
+                    "play along whether or not it happens. 'You want the fee waived' is theirs; "
+                    "'the agent will offer you a refund' is not.",
                 },
                 "persona": {
                     "type": "object",
