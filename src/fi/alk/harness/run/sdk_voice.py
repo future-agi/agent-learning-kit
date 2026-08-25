@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from fi import simulate
@@ -75,14 +76,126 @@ def _persona_stt_language() -> str:
     return "en"
 
 
+# Cartesia voice selection: a persona's accent (or, failing that, language) chooses a catalog
+# language bucket, and gender chooses within it, so a caller sounds like the accent the scenario
+# wrote across dozens of languages rather than the handful of English voices Deepgram aura ships.
+# Accent wins over language; both accept ISO codes and demonyms. Runs only when a Cartesia key is
+# present; otherwise the Deepgram aura path below is used unchanged.
+_CARTESIA_SUPPORTED_LANGS = frozenset(
+    {
+        "en", "es", "hi", "de", "fr", "it", "pl", "ru", "pt", "ja", "ko", "zh", "tr", "sv",
+        "nl", "no", "te", "kn", "fi", "mr", "da", "bn", "sk", "uk", "el", "ta", "vi", "id",
+        "ro", "ka", "ml", "ms", "he", "bg", "th", "hu", "pa", "cs", "tl", "ar", "gu", "hr",
+    }
+)
+_CARTESIA_ACCENT_TO_LANG: dict[str, str] = {
+    "spanish": "es", "south american": "es", "indian": "hi", "german": "de", "french": "fr",
+    "italian": "it", "polish": "pl", "russian": "ru", "portuguese": "pt", "brazilian": "pt",
+    "japanese": "ja", "korean": "ko", "chinese": "zh", "mandarin": "zh", "turkish": "tr",
+    "swedish": "sv", "dutch": "nl", "norwegian": "no", "finnish": "fi", "danish": "da",
+    "slovak": "sk", "ukrainian": "uk", "greek": "el", "romanian": "ro", "georgian": "ka",
+    "bulgarian": "bg", "thai": "th", "hungarian": "hu", "czech": "cs", "croatian": "hr",
+    "vietnamese": "vi", "indonesian": "id", "malay": "ms", "malaysian": "ms", "tagalog": "tl",
+    "filipino": "tl", "arabic": "ar", "hebrew": "he", "israeli": "he", "telugu": "te",
+    "kannada": "kn", "marathi": "mr", "bengali": "bn", "tamil": "ta", "malayalam": "ml",
+    "punjabi": "pa", "gujarati": "gu",
+}
+_CARTESIA_LANGUAGE_TO_LANG: dict[str, str] = {
+    "english": "en", "hinglish": "hi", "spanish": "es", "hindi": "hi", "german": "de",
+    "french": "fr", "italian": "it", "polish": "pl", "russian": "ru", "portuguese": "pt",
+    "japanese": "ja", "korean": "ko", "chinese": "zh", "mandarin": "zh", "turkish": "tr",
+    "swedish": "sv", "dutch": "nl", "norwegian": "no", "telugu": "te", "kannada": "kn",
+    "finnish": "fi", "marathi": "mr", "danish": "da", "bengali": "bn", "slovak": "sk",
+    "ukrainian": "uk", "greek": "el", "tamil": "ta", "vietnamese": "vi", "indonesian": "id",
+    "romanian": "ro", "georgian": "ka", "malayalam": "ml", "malay": "ms", "hebrew": "he",
+    "bulgarian": "bg", "thai": "th", "hungarian": "hu", "punjabi": "pa", "czech": "cs",
+    "tagalog": "tl", "filipino": "tl", "arabic": "ar", "gujarati": "gu", "croatian": "hr",
+}
+_CARTESIA_DEFAULT_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+
+
+def _norm(value) -> str:
+    return str(value or "").strip().lower().replace("-", " ")
+
+
+@lru_cache(maxsize=1)
+def _cartesia_catalog() -> dict:
+    path = Path(__file__).parent / "data" / "voices_by_language_and_gender.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _persona_language_name(persona: dict) -> str:
+    languages = persona.get("languages")
+    if isinstance(languages, list) and languages:
+        return _norm(languages[0])
+    return _norm(persona.get("language"))
+
+
+def _cartesia_lang_key(persona: dict) -> str:
+    """The catalog language bucket for a persona: accent wins, then language, else English."""
+    accent = _norm(persona.get("accent"))
+    key = _CARTESIA_ACCENT_TO_LANG.get(accent)
+    if key in _CARTESIA_SUPPORTED_LANGS:
+        return key
+    language = _persona_language_name(persona)
+    key = _CARTESIA_LANGUAGE_TO_LANG.get(language)
+    if key in _CARTESIA_SUPPORTED_LANGS:
+        return key
+    if language in _CARTESIA_SUPPORTED_LANGS:
+        return language
+    return "en"
+
+
+def _cartesia_voice_for(persona: dict) -> str:
+    """A stable Cartesia voice id for one caller, chosen by accent/language and gender.
+
+    Deterministic by persona name so a caller keeps its voice across runs while a suite still
+    spreads voices. Falls back across gender and to English when a long-tail language lacks one.
+    """
+    gender = _norm(persona.get("gender"))
+    if gender not in ("male", "female"):
+        gender = "female"
+    catalog = _cartesia_catalog()
+    key = _cartesia_lang_key(persona)
+    other = "male" if gender == "female" else "female"
+    voices = (
+        (catalog.get(key) or {}).get(gender)
+        or (catalog.get(key) or {}).get(other)
+        or (catalog.get("en") or {}).get(gender)
+        or []
+    )
+    if not voices:
+        return _CARTESIA_DEFAULT_VOICE
+    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(voices)
+    return voices[index]
+
+
+def _voice_providers() -> tuple[str, str]:
+    """The (stt, tts) providers for the caller. An explicit env override wins; otherwise Cartesia
+    when its key is present (richer, multi-language voices), else Deepgram aura."""
+    default = "cartesia" if os.environ.get("CARTESIA_API_KEY", "").strip() else "deepgram"
+    stt = os.environ.get("SIMULATOR_STT_PROVIDER", "").strip() or default
+    tts = os.environ.get("SIMULATOR_TTS_PROVIDER", "").strip() or default
+    return stt, tts
+
+
 def _simulator() -> simulate.SimulatorAgentDefinition:
     llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google")
-    stt_provider = os.environ.get("SIMULATOR_STT_PROVIDER", "deepgram")
-    tts_provider = os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram")
+    stt_provider, tts_provider = _voice_providers()
+    default_tts_voice = (
+        _CARTESIA_DEFAULT_VOICE if tts_provider == "cartesia" else "aura-asteria-en"
+    )
     defaults = {
         "llm": {"google": "gemini-2.5-flash-lite", "openai": "gpt-4o-mini"},
-        "stt": {"deepgram": "nova-2", "google": "chirp_2"},
-        "tts": {"deepgram": "aura-asteria-en", "google": "en-US-Chirp3-HD-Aoede"},
+        "stt": {"deepgram": "nova-2", "cartesia": "ink-2", "google": "chirp_2"},
+        "tts": {
+            "deepgram": "aura-asteria-en",
+            "cartesia": "sonic-3",
+            "google": "en-US-Chirp3-HD-Aoede",
+        },
     }
 
     def model(kind: str, provider: str) -> str:
@@ -106,7 +219,7 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
         tts={
             "provider": tts_provider,
             "model": model("tts", tts_provider),
-            "voice": os.environ.get("SIMULATOR_TTS_VOICE", "aura-asteria-en"),
+            "voice": os.environ.get("SIMULATOR_TTS_VOICE", default_tts_voice),
         },
         instructions=(
             "Act as the customer described by the scenario. Speak naturally and briefly. "
@@ -164,14 +277,15 @@ def _scenario() -> simulate.Scenario:
     persona = _json_env("HARNESS_PERSONA", {"name": "customer"})
     persona = dict(persona) if isinstance(persona, dict) else {"name": "customer"}
     persona["role"] = "customer"
-    # Give the caller a voice from its accent when the suite runs on aura and none was set, so
-    # different callers sound different and match the accent the scenario wrote.
-    if (
-        not persona.get("voice")
-        and not persona.get("voice_id")
-        and os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram").lower() == "deepgram"
-    ):
-        persona["voice"] = _aura_voice_for(persona)
+    # Give the caller a voice from its accent/language when none was set, so different callers
+    # sound different and match what the scenario wrote. Cartesia draws from the multi-language
+    # catalog; Deepgram falls back to the aura voices it ships.
+    if not persona.get("voice") and not persona.get("voice_id"):
+        tts_provider = _voice_providers()[1].lower()
+        if tts_provider == "cartesia":
+            persona["voice"] = _cartesia_voice_for(persona)
+        elif tts_provider == "deepgram":
+            persona["voice"] = _aura_voice_for(persona)
     metadata = dict(persona.get("metadata") or {})
     if isinstance(fixture, dict) and fixture.get("phone"):
         # LiveKit exposes this as participant metadata/attributes. A target can
