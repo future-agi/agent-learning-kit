@@ -162,12 +162,6 @@ world.
 
 Keep that plan concise and continue immediately unless the person explicitly asked to review it.
 
-**Then write the suite with `generate_suite`, not one scenario at a time.** It splits the work
-across the agent's use cases and runs several writers at once, each proving its own scenarios
-through the same three gates. Writing a suite yourself with `submit_scenario` costs about three
-turns per scenario against one budget, so a request for twenty or fifty runs out long before it
-finishes, and what does get written is lost because nothing was saved.
-
 **Pass your plan to it.** The tool takes the split as an argument, and you have just read the
 world and know which use cases have
 something in them; it is the part of this only you can do. Each slice names its use case,
@@ -399,7 +393,8 @@ hides the problem and everything built afterwards inherits it.
 1. `inspect_world` with no table, then look at the ones that matter. Read the sub-goals already
    defined.
 2. Read the agent's hard rules. Each one is a branch waiting to be written.
-3. For a suite, say how you are splitting it and then `generate_suite` with the count. It
+3. For a suite, say how you are splitting it across the agent's use cases, then write and
+   submit them one at a time. A large ask comes back a batch at a time rather than all at once.
    writes the whole thing and saves it, and you report what came back.
 4. For a single scenario: work out the solution, `try_calls` it with your `setup_code`, then
    `submit_scenario`.

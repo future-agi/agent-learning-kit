@@ -12,6 +12,7 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,17 @@ def _ok(text: str) -> dict[str, Any]:
 
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+
+
+def parallel_suites() -> bool:
+    """Whether a suite is written by several writers at once.
+
+    Off by default. Writing one scenario at a time is slower but is the path the base branch runs
+    on, and a suite that is written slowly is worth more than one that is not written at all.
+    Set HARNESS_PARALLEL_SCENARIOS=1 to fan out instead.
+    """
+    return os.environ.get("HARNESS_PARALLEL_SCENARIOS", "").strip() == "1"
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -855,12 +867,18 @@ def scenario_tools(
         ]
         # Only the session a person is talking to may fan out. A writer that is itself one slice
         # of a fan-out calling this would split its own slice again, and so on.
-        + ([generate_suite, save_scenarios] if can_save else []),
+        + (
+            [generate_suite, save_scenarios]
+            if can_save and parallel_suites()
+            else [save_scenarios]
+            if can_save
+            else []
+        ),
     )
     return server, kept
 
 
-TOOL_NAMES = (
+_ALWAYS = (
     "inspect_world",
     "inspect_scenario",
     "try_calls",
@@ -872,9 +890,19 @@ TOOL_NAMES = (
     "fix_tool",
     "aim_for",
     "drop_scenario",
-    "generate_suite",
     "save_scenarios",
 )
+
+
+def tool_names() -> tuple[str, ...]:
+    """The tools a saving session publishes, which depends on how a suite is written."""
+    if parallel_suites():
+        return (*_ALWAYS[:-1], "generate_suite", "save_scenarios")
+    return _ALWAYS
+
+
+# Kept as a name because callers import it; it reflects the surface for this process.
+TOOL_NAMES = tool_names()
 
 
 def world_summary(world_root: Path) -> str:

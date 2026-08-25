@@ -34,6 +34,7 @@ from .catalogue import load_catalogue
 from .contract import AgentContract
 from .scenario import Scenario
 from .scenario_tools import (
+    parallel_suites,
     SCENARIO_SERVER,
     TOOL_NAMES,
     load_scenarios,
@@ -145,10 +146,13 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
         "across several turns. If a proof says an intended check is vacuous or broken, repair "
         "that named sub-goal with add_sub_goal and resubmit. Never evade a gate by deleting a "
         "check for behavior the scenario still claims to test. Then save_scenarios."
-        "\n\nFor a suite rather than one scenario, say briefly how you are splitting it "
-        "across the agent's use cases and then write it with generate_suite in the same turn: "
-        "it runs a writer per use case at the same time and saves what they prove, where "
-        "writing this many one at a time would run out of turns before finishing."
+        + (
+            "\n\nFor a suite rather than one scenario, say briefly how you are splitting it "
+            "across the agent's use cases and then write it with generate_suite in the same "
+            "turn: it runs a writer per use case at the same time and saves what they prove."
+            if parallel_suites()
+            else ""
+        )
     )
 
 
