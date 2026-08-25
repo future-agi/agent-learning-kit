@@ -184,7 +184,7 @@ class Slice:
     why: str = ""
 
     def named(self) -> str:
-        return f"{self.use_case} — {self.angle}" if self.angle else self.use_case
+        return f"{self.use_case}: {self.angle}" if self.angle else self.use_case
 
 
 def even_slices(wanted: int, use_cases: list[str]) -> list[Slice]:

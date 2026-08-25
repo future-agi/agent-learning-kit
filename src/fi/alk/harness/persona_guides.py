@@ -12,7 +12,7 @@ and another way through the harness, for reasons nobody can see.
 
 Read, not imported: the tables live inside a Django app this package cannot import, but they are
 plain literals, so they are parsed out of the file. Absent, every lookup answers with nothing and
-a persona still renders — one without guidance, never a crash.
+a persona still renders, one without guidance, never a crash.
 """
 
 from __future__ import annotations

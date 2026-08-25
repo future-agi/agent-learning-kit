@@ -154,10 +154,8 @@ class Scenario(BaseModel):
 
     name: str
     use_case: str = ""
-    # Which branch of that use case this is: the condition that makes this row different from
-    # its siblings. A use case fans out into several — the ordinary path, the one that cannot be
-    # completed, the rule under pressure — and each is its own test. Coverage is counted on the
-    # pair, so a use case can carry many scenarios without any of them reading as a duplicate.
+    # What makes this row different from its siblings in the same use case. Coverage is counted
+    # on the pair, so a use case can carry many scenarios without any reading as a duplicate.
     branch: str = ""
     tests: str = ""
 
@@ -200,13 +198,9 @@ class Scenario(BaseModel):
 
     max_turns: int = 10
 
-    # Where this call is being made from, so the agent is heard through it. ``True`` asks for
-    # noise and leaves the place to the fixture; a string names it outright ("street", "vehicle",
-    # "retail"), which is what lets one scenario be a call from a car and another from an office.
-    # Recorded per scenario rather than per run, so a suite covers both conditions and the same
-    # scenario stays comparable to itself across runs. Chosen at random when the writer does not
-    # say, because a suite where every call is quiet tests an agent nobody has: real callers
-    # phone from cars, kitchens and streets.
+    # Where this call is made from. True asks for noise and leaves the place to the fixture; a
+    # string names it ("street", "vehicle", "retail"). Random when the writer does not say, so a
+    # suite covers both conditions rather than testing only callers in quiet rooms.
     background_noise: bool | str = Field(default_factory=lambda: random.choice((True, False)))
 
     def slots(self) -> dict[str, str]:
@@ -238,9 +232,8 @@ def validate_scenario(
     ):
         problems.append("persona is incomplete: " + ", ".join(missing))
     elif scenario.persona is not None:
-        # A persona written in words of its own renders fine and then does nothing: no behaviour
-        # guidance attaches to it, and the accent it names selects no voice. Caught here, where
-        # the writer is still holding the scenario and can fix it in one turn.
+        # A persona in words of its own renders fine and then does nothing: no behaviour guidance
+        # attaches, and the accent it names selects no voice.
         from .persona_guides import unrecognised
 
         problems.extend(unrecognised(scenario.persona.model_dump()))

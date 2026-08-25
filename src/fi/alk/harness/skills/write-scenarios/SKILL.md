@@ -234,7 +234,7 @@ Every stance still obeys the bar above: a real person could bring it, a competen
 fail it, and the values are real. A stance chooses *what to look at*, never whether the scenario
 has to be honest.
 
-Two rules keep this from turning into noise. **Each scenario carries one use case and one branch, and no two scenarios carry the same pair** — a duplicate is either the same test twice or one of them is mislabelled, and it hides a gap while appearing to fill it. Several scenarios sharing a use case is normal and expected; that is what branches are for. What is not allowed is two rows that agree on both. And a stance that produces nothing new
+Two rules keep this from turning into noise. **Each scenario carries one use case and one branch, and no two scenarios carry the same pair**: a duplicate is either the same test twice or one of them is mislabelled, and it hides a gap while appearing to fill it. Several scenarios sharing a use case is normal and expected; that is what branches are for. What is not allowed is two rows that agree on both. And a stance that produces nothing new
 for a given agent produces nothing: an agent with no rules to bend does not need an adversarial
 scenario invented for it.
 
