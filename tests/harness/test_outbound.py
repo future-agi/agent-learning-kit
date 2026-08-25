@@ -254,7 +254,9 @@ VALID_CAPABILITIES = {
     "attempt_id": _ATTEMPT_ID,
     "attempt_number": 1,
     "fence": "opaque-fence",
-    "expires_at": "2026-08-25T12:00:00.000Z",
+    # Far future: load_capabilities rejects an expired token against wall-clock
+    # time, so a near-term timestamp turns the whole fixture into a time bomb.
+    "expires_at": "2099-01-01T00:00:00.000Z",
     "token": "bearer-token",
     "endpoints": {
         "events": f"https://platform.example/simulate/api/harness/attempts/{_ATTEMPT_ID}/events/",
@@ -367,7 +369,7 @@ def test_load_capabilities_rejects_a_non_https_endpoint(tmp_path: Path, channel:
 def test_load_capabilities_rejects_an_expired_token(tmp_path: Path) -> None:
     path = _write(tmp_path / "capabilities.json", VALID_CAPABILITIES)
     with pytest.raises(CapabilitiesError) as excinfo:
-        load_capabilities(path, now=lambda: datetime(2027, 1, 1, tzinfo=timezone.utc))
+        load_capabilities(path, now=lambda: datetime(2100, 1, 1, tzinfo=timezone.utc))
     assert excinfo.value.code == "capabilities_expired"
     assert path.exists()  # a failed load must never unlink -- same rule as any other rejection
 
@@ -2016,7 +2018,7 @@ def _capabilities() -> HostedCapabilities:
             "attempt_id": "a1",
             "attempt_number": 1,
             "fence": "fence1",
-            "expires_at": "2026-08-25T12:00:00.000Z",
+            "expires_at": "2099-01-01T00:00:00.000Z",
             "token": "tok",
             "endpoints": ENDPOINTS,
         }
