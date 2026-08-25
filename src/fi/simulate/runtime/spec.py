@@ -70,6 +70,9 @@ class RuntimeRequirements(BaseModel):
     concurrency_weight: int = Field(default=1, ge=1)
     max_duration_seconds: int = Field(default=300, ge=1)
     network_policy: str = "live"
+    # World count for the hosted harness (seam contract §1); the gateway caps
+    # it at admission, so the model stays permissive beyond ge=1.
+    parallelism: int = Field(default=1, ge=1)
 
 
 class TimeoutPolicy(BaseModel):

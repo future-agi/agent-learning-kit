@@ -5344,9 +5344,10 @@ def test_a_setup_or_ready_that_says_nothing_is_not_a_complaint():
     )
     assert not complained.ok and complained.said == "no pending orders"
 
-    # And False is a failure that says nothing, so the message says that rather than being blank.
+    # And False from ready() names no precondition, so it is broken rather than a plain failure —
+    # the message says that rather than being blank.
     bare = _run("def ready(world):\n    return False\n", "s/ready.py", "ready", None)
-    assert not bare.ok and "without saying what is wrong" in bare.said
+    assert not bare.ok and bare.broken and "without saying what is wrong" in bare.said
 
 
 def test_an_optional_field_may_be_null():
