@@ -8,6 +8,7 @@ LiveKit room, simulated caller, transcript, recordings, and terminal status.
 from __future__ import annotations
 
 import argparse
+import logging
 import asyncio
 import json
 import os
@@ -25,6 +26,8 @@ from fi.simulate.runtime import (
     new_run_id,
 )
 from fi.simulate.runtime.runner import SimulationRunner
+
+logger = logging.getLogger(__name__)
 
 
 def _required(name: str) -> str:
@@ -44,12 +47,63 @@ def _json_env(name: str, default):
 
 # Language names a persona may carry, to the codes Deepgram STT expects. Unrecognised values that
 # already look like a code are passed through; everything else falls back to English.
+# Language names and region codes to the code the providers expect. Ported from the platform
+# so a persona resolves to the same language here as it does there. Anything unrecognised
+# falls back to English, which is what the platform does too.
 _LANGUAGE_CODES: dict[str, str] = {
-    "english": "en", "hindi": "hi", "hinglish": "hi", "spanish": "es", "french": "fr",
-    "german": "de", "portuguese": "pt", "italian": "it", "dutch": "nl", "japanese": "ja",
-    "korean": "ko", "mandarin": "zh", "chinese": "zh", "arabic": "ar", "russian": "ru",
-    "tamil": "ta", "telugu": "te", "bengali": "bn",
+    "ar": "ar", "ar-sa": "ar", "arabic": "ar", "bg": "bg",
+    "bulgarian": "bg", "ca": "ca", "catalan": "ca", "chinese": "zh",
+    "chinese (cantonese, traditional)": "zh-HK", "chinese (mandarin, simplified)": "zh", "chinese (mandarin, traditional)": "zh-TW", "cs": "cs",
+    "czech": "cs", "da": "da", "da-dk": "da", "danish": "da",
+    "de": "de", "de-ch": "de-CH", "dutch": "nl", "el": "el",
+    "en": "en-US", "en-au": "en-AU", "en-gb": "en-GB", "en-in": "en-IN",
+    "en-nz": "en-NZ", "en-us": "en-US", "english": "en-US", "es": "es",
+    "es-419": "es-419", "estonian": "et", "et": "et", "fi": "fi",
+    "finnish": "fi", "flemish": "nl-BE", "fr": "fr", "fr-ca": "fr-CA",
+    "french": "fr", "german": "de", "greek": "el", "hi": "hi",
+    "hindi": "hi", "hu": "hu", "hungarian": "hu", "id": "id",
+    "indonesian": "id", "it": "it", "italian": "it", "ja": "ja",
+    "japanese": "ja", "ko": "ko", "ko-kr": "ko", "korean": "ko",
+    "latvian": "lv", "lithuanian": "lt", "lt": "lt", "lv": "lv",
+    "malay": "ms", "ms": "ms", "nl": "nl", "nl-be": "nl-BE",
+    "no": "no", "norwegian": "no", "pl": "pl", "polish": "pl",
+    "portuguese": "pt", "pt": "pt", "pt-br": "pt-BR", "pt-pt": "pt-PT",
+    "ro": "ro", "romanian": "ro", "ru": "ru", "russian": "ru",
+    "sk": "sk", "slovak": "sk", "spanish": "es", "sv": "sv",
+    "sv-se": "sv", "swedish": "sv", "th": "th", "th-th": "th",
+    "thai": "th", "tr": "tr", "turkish": "tr", "uk": "uk",
+    "ukrainian": "uk", "vi": "vi", "vietnamese": "vi", "zh": "zh",
+    "zh-cn": "zh", "zh-hans": "zh", "zh-hant": "zh-TW", "zh-hk": "zh-HK",
+    "zh-tw": "zh-TW",
 }
+
+
+
+def _normalised_language(raw: str) -> str:
+    """The code the providers expect, from a language name or a region code.
+
+    Ported from the platform: lowercase, strip, exact lookup, and anything unrecognised becomes
+    English rather than failing the call.
+    """
+    return _LANGUAGE_CODES.get((raw or "").strip().lower(), "en-US")
+
+
+# Languages we transcribe with Deepgram's multilingual model rather than a single language code.
+# The platform sends Arabic to Azure, which we do not have, so it joins Spanish on the model that
+# does cover it. Deliberate divergence: we only ever use providers we hold keys for.
+_MULTILINGUAL_STT = ("ar", "es")
+
+
+def _transcriber_for(language: str) -> tuple[str, str, str]:
+    """The (provider, model, language) a persona's language needs for speech to text.
+
+    Deepgram throughout, because Deepgram and Cartesia are the only providers configured. A
+    language Deepgram serves better multilingually is sent to that model instead of its own code.
+    """
+    code = (language or "").lower()
+    if code.split("-", 1)[0] in _MULTILINGUAL_STT:
+        return ("deepgram", "nova-3", "multi")
+    return ("deepgram", "nova-3", language or "en-US")
 
 
 def _persona_stt_language() -> str:
@@ -183,17 +237,22 @@ def _voice_providers() -> tuple[str, str]:
 
 
 def _simulator() -> simulate.SimulatorAgentDefinition:
+    # The caller's brain is fixed on Vertex Gemini and only the model name is configurable. Its
+    # voice is not: speech to text and text to speech follow the persona's language, because a
+    # caller who speaks Japanese cannot be transcribed as English.
     llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google")
-    stt_provider, tts_provider = _voice_providers()
+    language = _persona_stt_language()
+    stt_provider, stt_model, stt_language = _transcriber_for(language)
+    _, tts_provider = _voice_providers()
     default_tts_voice = (
         _CARTESIA_DEFAULT_VOICE if tts_provider == "cartesia" else "aura-asteria-en"
     )
     defaults = {
-        "llm": {"google": "gemini-2.5-flash-lite", "openai": "gpt-4o-mini"},
-        "stt": {"deepgram": "nova-2", "cartesia": "ink-2", "google": "chirp_2"},
+        "llm": {"google": "gemini-2.5-flash", "openai": "gpt-4o-mini"},
+        "stt": {"deepgram": stt_model or "nova-3", "cartesia": "ink-2", "google": "chirp_2"},
         "tts": {
             "deepgram": "aura-asteria-en",
-            "cartesia": "sonic-3",
+            "cartesia": "sonic-3.5",
             "google": "en-US-Chirp3-HD-Aoede",
         },
     }
@@ -205,7 +264,11 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
             provider.lower(), next(iter(defaults[kind].values()))
         )
 
+    # The harness writes the caller prompt as a template; the call fills it. Absent, the SDK
+    # falls back to its shipped default so a run without one behaves as it always did.
+    template = os.environ.get("HARNESS_SIMULATOR_PROMPT", "").strip() or None
     return simulate.SimulatorAgentDefinition(
+        prompt_template=template,
         llm={
             "provider": llm_provider,
             "model": model("llm", llm_provider),
@@ -214,7 +277,7 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
         stt={
             "provider": stt_provider,
             "model": model("stt", stt_provider),
-            "language": _persona_stt_language(),
+            "language": stt_language,
         },
         tts={
             "provider": tts_provider,

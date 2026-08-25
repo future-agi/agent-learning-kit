@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any, Literal, Mapping
 
 from fi.simulate.simulation.models import Persona
 
 CallType = Literal["inbound", "outbound"]
+
+logger = logging.getLogger(__name__)
 
 VOICE_PERSONALITY_GUIDES: dict[str, str] = {
     "friendly and cooperative": "Be warm, approachable, and willing to work together. Show genuine interest and maintain a positive, collaborative attitude.",
@@ -318,32 +322,66 @@ def append_voice_execution_rules(prompt: str) -> str:
     return prompt
 
 
-def build_voice_simulator_prompt(
+# The template the caller prompt is rendered from. The harness fills slots; it does not author
+# prose. Mirrors the platform's own default, which pairs a persona block with the situation and
+# then scrubs the situation slot because the persona block already carries it.
+DEFAULT_SIMULATOR_TEMPLATE = (
+    "You are a customer in a voice simulation. {{channel}} "
+    "Stay consistent with the persona throughout the conversation.\n\n{{persona}}"
+)
+
+_SLOT = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+
+
+def render_simulator_prompt(
+    template: str,
     persona: Persona,
     *,
     call_type: CallType,
+    variables: Mapping[str, Any] | None = None,
     agent_name: str | None = None,
     additional_instructions: str | None = None,
     default_language: str | None = None,
 ) -> str:
-    channel = (
-        f"You will make a call to an agent named {agent_name}."
-        if call_type == "inbound" and agent_name
-        else "You will make a call to an agent."
-        if call_type == "inbound"
-        else f"You will receive a call from an agent named {agent_name}."
-        if agent_name
-        else "You will receive a call from an agent."
-    )
-    prompt = (
-        "You are a customer in a voice simulation. "
-        f"{channel} Stay consistent with the persona throughout the conversation.\n\n"
-        + format_voice_persona(
-            persona,
-            call_type=call_type,
-            default_language=default_language,
+    """Fill a caller-prompt template, the way the platform fills its own.
+
+    ``{{persona}}`` becomes the formatted persona block, ``{{channel}}`` the call direction
+    sentence, and every other ``{{slot}}`` is taken from ``variables``. ``{{situation}}`` is
+    dropped rather than filled, because the persona block already states the situation and the
+    platform removes it for the same reason.
+
+    A template that cannot be rendered is returned to the caller unfilled rather than raising, so
+    a bad template degrades the call instead of ending the run.
+    """
+    values = dict(variables or {})
+    try:
+        persona_text = format_voice_persona(
+            persona, call_type=call_type, default_language=default_language
         )
-    )
+    except Exception:
+        logger.exception("persona_format_failed")
+        persona_text = ""
+    values.setdefault("persona", persona_text)
+    values.setdefault("channel", _channel_sentence(call_type, agent_name))
+
+    def fill(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name == "situation":
+            return ""
+        if name in values:
+            return str(values[name])
+        logger.warning("simulator_prompt_slot_unfilled", extra={"slot": name})
+        return ""
+
+    try:
+        prompt = _SLOT.sub(fill, template)
+    except Exception:
+        logger.exception("simulator_prompt_render_failed")
+        return template
+    # Tidy the hole a dropped situation slot leaves behind, as the platform does.
+    prompt = re.sub(r"Currently,\s*[.]", "", prompt)
+    prompt = re.sub(r"[ \t]{2,}", " ", prompt).strip()
+
     if additional_instructions and additional_instructions.strip():
         prompt += (
             "\n\n# ADDITIONAL SIMULATOR INSTRUCTIONS\n\n"
@@ -352,11 +390,51 @@ def build_voice_simulator_prompt(
     return append_voice_execution_rules(prompt)
 
 
+def _channel_sentence(call_type: CallType, agent_name: str | None) -> str:
+    return (
+        f"You will make a call to an agent named {agent_name}."
+        if call_type == "inbound" and agent_name
+        else "You will make a call to an agent."
+        if call_type == "inbound"
+        else f"You will receive a call from an agent named {agent_name}."
+        if agent_name
+        else "You will receive a call from an agent."
+    )
+
+
+def build_voice_simulator_prompt(
+    persona: Persona,
+    *,
+    call_type: CallType,
+    agent_name: str | None = None,
+    additional_instructions: str | None = None,
+    default_language: str | None = None,
+    template: str | None = None,
+    variables: Mapping[str, Any] | None = None,
+) -> str:
+    """The caller prompt for one simulated customer.
+
+    Renders ``template`` when one is supplied, and the shipped default otherwise, so a run with no
+    template configured still produces the prompt it always did.
+    """
+    return render_simulator_prompt(
+        template or DEFAULT_SIMULATOR_TEMPLATE,
+        persona,
+        call_type=call_type,
+        variables=variables,
+        agent_name=agent_name,
+        additional_instructions=additional_instructions,
+        default_language=default_language,
+    )
+
+
 __all__ = [
     "CallType",
     "VOICE_COMMUNICATION_STYLE_GUIDES",
     "VOICE_PERSONALITY_GUIDES",
     "append_voice_execution_rules",
+    "DEFAULT_SIMULATOR_TEMPLATE",
     "build_voice_simulator_prompt",
+    "render_simulator_prompt",
     "format_voice_persona",
 ]

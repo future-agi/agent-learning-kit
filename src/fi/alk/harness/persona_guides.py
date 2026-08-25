@@ -18,6 +18,8 @@ a persona still renders, one without guidance, never a crash.
 from __future__ import annotations
 
 import ast
+import logging
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -101,6 +103,8 @@ def available() -> bool:
     return bool(guides())
 
 
+logger = logging.getLogger(__name__)
+
 # Where the platform's persona model is mounted, for the values it accepts.
 VOCABULARY_ENV = "HARNESS_PERSONA_VOCABULARY"
 
@@ -135,11 +139,15 @@ def vocabulary() -> dict[str, list[str]]:
     """
     path = os.environ.get(VOCABULARY_ENV) or ""
     if not path or not Path(path).exists():
-        return {}
+        # No model mounted. Fall back to the copy carried with the harness so a writer is always
+        # offered real values: an empty vocabulary silently lets it invent an accent that selects
+        # no voice and a personality that attaches no guidance.
+        return _bundled_vocabulary()
     try:
         tree = ast.parse(Path(path).read_text(encoding="utf-8"))
     except (OSError, SyntaxError):
-        return {}
+        logger.warning("persona vocabulary at %s is unreadable; using the bundled copy", path)
+        return _bundled_vocabulary()
 
     by_class: dict[str, list[str]] = {}
     for node in ast.walk(tree):
@@ -163,6 +171,28 @@ def vocabulary() -> dict[str, list[str]]:
 
     return {
         field: by_class[cls] for field, cls in FIELDS.items() if by_class.get(cls)
+    }
+
+
+
+@lru_cache(maxsize=1)
+def _bundled_vocabulary() -> dict[str, list[str]]:
+    """The platform's persona values, carried with the harness.
+
+    Kept so the harness constrains personas out of the box. Languages come from the agent
+    definition's set rather than the persona dropdown's two, because nothing on the platform
+    enforces the dropdown and a caller is expected to speak more than English and Hindi.
+    """
+    path = Path(__file__).parent / "data" / "persona_vocabulary.json"
+    try:
+        by_class = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("bundled persona vocabulary is unreadable; personas stay unconstrained")
+        return {}
+    return {
+        field: list(by_class[cls])
+        for field, cls in FIELDS.items()
+        if by_class.get(cls)
     }
 
 
