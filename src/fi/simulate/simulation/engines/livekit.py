@@ -1386,7 +1386,13 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
-            await self._stop_background_audio()
+            # The ambience belongs to the caller agent, not the engine. Guarded because teardown
+            # must never be the reason a case fails.
+            if customer_agent is not None:
+                try:
+                    await customer_agent._stop_background_audio()
+                except Exception:
+                    logger.warning("background audio not closed cleanly", exc_info=True)
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
             pending_target_transcriptions.clear()

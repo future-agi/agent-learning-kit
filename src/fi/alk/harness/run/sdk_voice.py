@@ -52,7 +52,7 @@ def _json_env(name: str, default):
 # falls back to English, which is what the platform does too.
 _LANGUAGE_CODES: dict[str, str] = {
     "ar": "ar", "ar-sa": "ar", "arabic": "ar", "bg": "bg",
-    "bulgarian": "bg", "ca": "ca", "catalan": "ca", "chinese": "zh",
+    "bulgarian": "bg", "ca": "ca", "catalan": "ca", "chinese": "zh", "chinese simplified": "zh", "chinese traditional": "zh-TW",
     "chinese (cantonese, traditional)": "zh-HK", "chinese (mandarin, simplified)": "zh", "chinese (mandarin, traditional)": "zh-TW", "cs": "cs",
     "czech": "cs", "da": "da", "da-dk": "da", "danish": "da",
     "de": "de", "de-ch": "de-CH", "dutch": "nl", "el": "el",
@@ -155,7 +155,7 @@ _CARTESIA_ACCENT_TO_LANG: dict[str, str] = {
     "punjabi": "pa", "gujarati": "gu",
 }
 _CARTESIA_LANGUAGE_TO_LANG: dict[str, str] = {
-    "english": "en", "hinglish": "hi", "spanish": "es", "hindi": "hi", "german": "de",
+    "english": "en", "chinese simplified": "zh", "chinese traditional": "zh", "hinglish": "hi", "spanish": "es", "hindi": "hi", "german": "de",
     "french": "fr", "italian": "it", "polish": "pl", "russian": "ru", "portuguese": "pt",
     "japanese": "ja", "korean": "ko", "chinese": "zh", "mandarin": "zh", "turkish": "tr",
     "swedish": "sv", "dutch": "nl", "norwegian": "no", "telugu": "te", "kannada": "kn",

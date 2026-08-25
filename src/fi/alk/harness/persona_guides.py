@@ -169,9 +169,19 @@ def vocabulary() -> dict[str, list[str]]:
         if values:
             by_class[node.name] = values
 
-    return {
+    found = {
         field: by_class[cls] for field, cls in FIELDS.items() if by_class.get(cls)
     }
+    if not found:
+        # The file parsed but held none of the classes we key on, so it is the wrong file or the
+        # classes moved. Silently returning nothing would drop every persona constraint at once.
+        logger.warning(
+            "persona vocabulary at %s defines none of %s; using the bundled copy",
+            path,
+            ", ".join(sorted(set(FIELDS.values()))),
+        )
+        return _bundled_vocabulary()
+    return found
 
 
 
