@@ -13,14 +13,14 @@ same way, and it needs no model to do it.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
-import random
 import re
 from collections import Counter
 from math import ceil
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .catalogue import Catalogue
 from .simulator import variables_in
@@ -149,10 +149,31 @@ class Persona(BaseModel):
         return "\n".join(parts)
 
 
+def _slug(name: str) -> str:
+    """An ASCII key for ``name``, safe to send as a header value.
+
+    Falls back to a digest rather than an empty string: an empty key would collapse every
+    scenario in a job onto one idempotency key on the receiving side.
+    """
+    cleaned = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return cleaned or "scenario-" + hashlib.sha256(name.encode()).hexdigest()[:12]
+
+
+def _decided_by(name: str) -> bool:
+    """Whether this scenario is noisy, decided by its name so a rerun decides the same."""
+    return hashlib.sha256((name or "").encode()).digest()[0] % 2 == 0
+
+
 class Scenario(BaseModel):
     """One test: what changes, what is asked, what a correct agent does, what must hold."""
 
     name: str
+    # How this scenario is identified on the wire. Derived from ``name``, which is already unique
+    # across a suite and already a slug because it is the folder name. It ships as a header, so
+    # anything outside ASCII is dropped and an empty result falls back to a digest.
+    scenario_key: str = ""
+    # Assigned by the platform when the scenario is pre-allocated. Never written here.
+    scenario_id: str = ""
     use_case: str = ""
     # What makes this row different from its siblings in the same use case. Coverage is counted
     # on the pair, so a use case can carry many scenarios without any reading as a duplicate.
@@ -198,14 +219,23 @@ class Scenario(BaseModel):
 
     max_turns: int = 10
 
-    # Where this call is made from. True asks for noise and leaves the place to the fixture; a
-    # string names it ("street", "vehicle", "retail"). Random when the writer does not say, so a
-    # suite covers both conditions rather than testing only callers in quiet rooms.
-    background_noise: bool | str = Field(default_factory=lambda: random.choice((True, False)))
+    # Where this call is made from. A string names the place ("street", "vehicle", "retail"), and
+    # True asks for noise while leaving the place to the fixture. Left unset it is decided from
+    # the name, so a suite still covers both conditions but the same suite decides the same way
+    # twice; a coin flip here made a seeded run unreproducible.
+    background_noise: bool | str = ""
 
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
     RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
+
+    @model_validator(mode="after")
+    def _identify(self) -> "Scenario":
+        if not self.scenario_key:
+            self.scenario_key = _slug(self.name)
+        if self.background_noise == "":
+            self.background_noise = _decided_by(self.name)
+        return self
 
     def slots(self) -> dict[str, str]:
         """Every value this scenario offers the simulator prompt."""
