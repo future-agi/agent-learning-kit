@@ -1804,6 +1804,17 @@ def provision(
     else:
         compose = None
     managed = False
+    # The harness's fidelity order is provisioned > adopted > generated: run the agent's real
+    # services whenever it ships them. _managed_compose only models "agent + datastore" and
+    # silently drops any other service the agent's tools are actually served by -- an HTTP
+    # tools-api, a queue, a mock upstream -- which then leaves the world with no endpoint to
+    # forward to, so every tool call comes back "no such tool". So prefer the agent's own shipped
+    # Compose whenever it ships one (its real tool services come up and the world forwards to
+    # them), and fall back to the generated adapter only for agents that ship no usable Compose.
+    if compose is None:
+        shipped = compose_file(source_root)
+        if shipped is not None:
+            compose = shipped
     if compose is None and contract is not None:
         if not packaging.candidates and not (source_root / "Dockerfile").is_file():
             try:
@@ -2228,6 +2239,18 @@ def _runtime_credential_mounts(
                     # ALK-owned destination that cannot collide with submitted mounts.
                     target = f"/run/harness-secrets/{runtime.name}"
             if source is None or not _valid_google_credentials(source):
+                # A local sandbox supplies the credential through its own environment rather than
+                # an uploaded runtime configuration. That credential belongs to whoever is running
+                # the harness, not to the submitted agent, so it is only ever handed over when the
+                # operator says so: without this opt-in a hosted runner would mount its own
+                # platform key into a container it does not trust.
+                if os.environ.get("ALK_ALLOW_HOST_GOOGLE_CREDENTIALS", "").strip() == "1":
+                    env_value = os.environ.get(name, "").strip()
+                    env_path = Path(env_value).expanduser() if env_value else None
+                    if env_path is not None and _valid_google_credentials(env_path):
+                        source = env_path
+                        target = f"/run/harness-secrets/{env_path.name}"
+            if source is None or not _valid_google_credentials(source):
                 raise ProvisionError(
                     "the submitted runtime needs GOOGLE_APPLICATION_CREDENTIALS, but neither its "
                     "Compose mount nor the uploaded runtime configuration points to a valid JSON "
@@ -2358,6 +2381,10 @@ def start_runtime(
         arguments.extend(("--volume", f"{source}:{target}:ro"))
         injected[name] = target
         mounted_credentials.add(name)
+    # A submitted service that declares its own credential volume has already been mounted (the
+    # host secret now lives at the container target). Re-validating that container path as a host
+    # file below would always fail, so only resolve GOOGLE_APPLICATION_CREDENTIALS here when it
+    # arrived as an injected host path (the generated-runtime path, which mounts no credentials).
     google_path = injected.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     if google_path and "GOOGLE_APPLICATION_CREDENTIALS" not in mounted_credentials:
         google_source = Path(google_path).expanduser()
