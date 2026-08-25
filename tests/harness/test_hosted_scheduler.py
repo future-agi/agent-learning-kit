@@ -998,6 +998,47 @@ def test_pool_exhaustion_with_a_uniform_infrastructure_domain_code_stays_world_p
     asyncio.run(scenario())
 
 
+def test_pool_exhaustion_uses_the_carried_domain_not_the_fallback_map() -> None:
+    # v1.15 §2f: the producer resolves `spawn_failed`'s managed/source split AT THE RAISE and
+    # carries it on `ProcessRuntimeError.domain` -- the scheduler must read that directly. The
+    # fallback map's own `spawn_failed` entry is `infrastructure` (retryable, never surfaced by
+    # exhaustion); this raises `spawn_failed` carrying `agent` instead, which IS a never-retried
+    # domain. Only reading the CARRIED domain makes this surface as `spawn_failed`/`agent` --
+    # a scheduler that fell back to the map (or ignored `domain` entirely) would see
+    # `infrastructure`, which is not in `_SECTION_2F_NEVER_RETRIED`, and this would incorrectly
+    # stay the generic `world_pool_exhausted` instead.
+    async def scenario() -> None:
+        class Provisioner(FakeProvisioner):
+            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+                async with self._serialized(f"reset(w{runtime.world_index})"):
+                    self.reset_calls += 1
+                    raise ProcessRuntimeError(
+                        "reset", "spawn_failed", "agent process exec failed",
+                        domain=hs.FailureDomain.AGENT,
+                    )
+
+            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+                async with self._serialized(f"healthy(w{runtime.world_index})"):
+                    self.healthy_calls += 1
+                    raise ProcessRuntimeError(
+                        "reset", "spawn_failed", "agent process exec failed",
+                        domain=hs.FailureDomain.AGENT,
+                    )
+
+        pool, _ = _pool(1, provisioner=Provisioner(1))
+        await pool.start()
+        try:
+            await asyncio.wait_for(pool.lease(), timeout=3.0)
+        except hs.NoWorldsAvailable as exc:
+            assert exc.code == "spawn_failed"
+            assert exc.domain is hs.FailureDomain.AGENT
+        else:
+            raise AssertionError("expected NoWorldsAvailable")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_code() -> None:
     # A world demoted by a typed `seed_failed` reset failure used to keep that code in
     # `_down_codes` forever if the reconcile that follows gives up UNTYPED (a bare `OSError`, or

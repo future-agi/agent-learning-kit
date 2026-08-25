@@ -127,6 +127,22 @@ _MAX_PARALLELISM = 8
 _JOB_SHARED_PORT_BAND = range(14000, 14100)
 _PER_WORLD_PORT_BAND = range(15000, 15800)
 
+# `process_runtime.py`'s own `_rabbitmq_management_port` formula (`amqp_port + 10000`) —
+# mirrored here for the same reason as the two bands above: preflight has no business depending
+# on the execution module. The rabbitmq catalog entry supports `datadir_copy` only (no
+# `template_database`), so its amqp port is always drawn from the PER-WORLD band in practice
+# today; the job-shared shift is reserved too, defensively, since the formula itself is generic
+# and nothing about this band's math depends on which base band it is applied to.
+_RABBITMQ_MANAGEMENT_PORT_OFFSET = 10000
+_JOB_SHARED_RABBITMQ_MANAGEMENT_BAND = range(
+    _JOB_SHARED_PORT_BAND.start + _RABBITMQ_MANAGEMENT_PORT_OFFSET,
+    _JOB_SHARED_PORT_BAND.stop + _RABBITMQ_MANAGEMENT_PORT_OFFSET,
+)
+_PER_WORLD_RABBITMQ_MANAGEMENT_BAND = range(
+    _PER_WORLD_PORT_BAND.start + _RABBITMQ_MANAGEMENT_PORT_OFFSET,
+    _PER_WORLD_PORT_BAND.stop + _RABBITMQ_MANAGEMENT_PORT_OFFSET,
+)
+
 
 def preflight_bundle(
     bundle_dir: Path,
@@ -487,11 +503,17 @@ def _verify_fixed_port_not_reserved(manifest: EnvironmentBundleV2) -> None:
     for process in manifest.processes:
         if not isinstance(process, SourceProcess) or process.fixed_port is None:
             continue
-        if process.fixed_port in _JOB_SHARED_PORT_BAND or process.fixed_port in _PER_WORLD_PORT_BAND:
+        if (
+            process.fixed_port in _JOB_SHARED_PORT_BAND
+            or process.fixed_port in _PER_WORLD_PORT_BAND
+            or process.fixed_port in _JOB_SHARED_RABBITMQ_MANAGEMENT_BAND
+            or process.fixed_port in _PER_WORLD_RABBITMQ_MANAGEMENT_BAND
+        ):
             raise PreflightError(
                 "fixed_port_reserved",
                 f"{process.name}: fixed_port {process.fixed_port} falls inside the provisioner's "
-                "own port-formula bands (14000-14099 job-shared, 15000-15799 per-world)",
+                "own port-formula bands (14000-14099 job-shared, 15000-15799 per-world, "
+                "24000-24099/25000-25799 rabbitmq management)",
             )
 
 

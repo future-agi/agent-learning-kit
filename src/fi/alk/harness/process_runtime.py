@@ -60,6 +60,7 @@ from .bundle_v2 import (
     SourceProcess,
     StoreEntry,
 )
+from .job import FailureDomain
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +81,49 @@ class ProcessRuntimeError(RuntimeError):
     bug to fix here, not a failure the outbound seam ever needs a name for. `stage` names which
     phase failed (`build`, `spawn`, `depends_on`, `render`); `process` names the process involved,
     when there is one.
+
+    v1.15 §2f: the PRODUCER resolves `domain` — a row like `spawn_failed` splits managed-vs-source
+    on a fact (the failing process's declared `kind`) only known at the raise site, so every raise
+    site for a §2f code sets `domain` here rather than leaving the consumer to re-derive it from
+    `code` alone (which cannot recover the managed/source split). `domain` is `None` only where
+    the raise site genuinely cannot tell which process kind failed (a mixed-kind catch-all); such
+    sites are rare and `SECTION_2F_DOMAIN` below exists as their fallback.
     """
 
-    def __init__(self, stage: str, code: str, message: str, *, process: str | None = None) -> None:
+    def __init__(
+        self,
+        stage: str,
+        code: str,
+        message: str,
+        *,
+        process: str | None = None,
+        domain: FailureDomain | None = None,
+    ) -> None:
         self.stage = stage
         self.code = code
         self.process = process
+        self.domain = domain
         located = f" ({process})" if process else ""
         super().__init__(f"{stage}/{code}{located}: {message}")
+
+
+# §2f's closed build/run failure-code table (hosted-execution-seams.md §4.6) -> FailureDomain.
+# THE single home for this map (v1.15's §2f-map cleanup) — `hosted_scheduler.py`/
+# `hosted_entrypoint.py` import it rather than keeping their own copies. It is a FALLBACK ONLY:
+# every raise site above sets `ProcessRuntimeError.domain` directly, so a consumer reads that
+# first and falls back to this map only for an error that reaches it with no carried domain.
+# `spawn_failed`'s entry is the pre-v1.15 conservative guess (matches its source-process half);
+# a `spawn_failed` raised with a resolved `domain` never consults this entry at all.
+SECTION_2F_DOMAIN: dict[str, FailureDomain] = {
+    "source_tree_unavailable": FailureDomain.ENVIRONMENT,
+    "build_failed": FailureDomain.AGENT,
+    "runtime_unsupported": FailureDomain.ENVIRONMENT,
+    "spawn_failed": FailureDomain.INFRASTRUCTURE,
+    "depends_on_timeout": FailureDomain.INFRASTRUCTURE,
+    "unsupported_capability_protocol": FailureDomain.ENVIRONMENT,
+    "seed_failed": FailureDomain.ENVIRONMENT,
+    "store_statement_failed": FailureDomain.INFRASTRUCTURE,
+}
 
 
 # --- §3 EnvironmentRuntime -------------------------------------------------------------------
@@ -275,6 +311,7 @@ def render_capability_address(
     raise ProcessRuntimeError(
         "render", "unsupported_capability_protocol",
         f"{protocol.value} has no defined address shape at this seam",
+        domain=FailureDomain.ENVIRONMENT,
     )
 
 
@@ -493,6 +530,7 @@ def _resolve_process_user(
     require: bool,
     process_name: str,
     stage: str,
+    domain: FailureDomain,
 ) -> "pwd.struct_passwd | None":
     """F1, p5-round1-review: every build tree and every spawned process must run under its
     declared `user`, not the harness's own `svc-control` — otherwise an untrusted `agent` process
@@ -503,7 +541,9 @@ def _resolve_process_user(
     `require=False` (the default, the local test lane's shape — no `svc-*` accounts on a dev box)
     logs and returns `None`, so the caller runs unprivileged rather than failing every local run.
     `require=True` is for a caller that knows it is on the hosted path, where the snapshot's own
-    guarantee means resolution failing is itself an infrastructure fault worth a typed failure.
+    guarantee means resolution failing is itself a typed failure. `domain` is the caller's own
+    §2f `spawn_failed` split (managed vs source) — this function has no process-kind knowledge of
+    its own, so it never guesses it.
     """
     resolved = resolver(user.value)
     if resolved is None:
@@ -511,7 +551,7 @@ def _resolve_process_user(
             raise ProcessRuntimeError(
                 stage, "spawn_failed",
                 f"{user.value!r} has no passwd entry; the hosted snapshot must guarantee it",
-                process=process_name,
+                process=process_name, domain=domain,
             )
         logger.warning(
             "process %s declares user=%s but it is not resolvable on this host; running "
@@ -576,7 +616,7 @@ def _reject_escaping_symlinks(tree_root: Path, allowed_root: Path, *, process_na
                 "build", "source_tree_unavailable",
                 f"{entry.relative_to(tree_root)} is a symlink to {target}, which escapes "
                 "/work/source",
-                process=process_name,
+                process=process_name, domain=FailureDomain.ENVIRONMENT,
             )
 
 
@@ -627,7 +667,7 @@ def build_process_tree(
         raise ProcessRuntimeError(
             "build", "source_tree_unavailable",
             f"{process.working_directory} resolves outside /work/source",
-            process=process.name,
+            process=process.name, domain=FailureDomain.ENVIRONMENT,
         )
     if not resolved_source_dir.is_dir():
         # F5, p5-round1-review: named explicitly, before any copy attempt, rather than letting
@@ -635,7 +675,7 @@ def build_process_tree(
         raise ProcessRuntimeError(
             "build", "source_tree_unavailable",
             f"{process.working_directory} is absent or not a directory in the checkout",
-            process=process.name,
+            process=process.name, domain=FailureDomain.ENVIRONMENT,
         )
     _reject_escaping_symlinks(resolved_source_dir, resolved_source_root, process_name=process.name)
 
@@ -650,11 +690,12 @@ def build_process_tree(
         raise ProcessRuntimeError(
             "build", "source_tree_unavailable",
             f"copying {process.working_directory}: {exc}", process=process.name,
+            domain=FailureDomain.ENVIRONMENT,
         ) from exc
 
     resolved_user = _resolve_process_user(
         process.user, resolver=user_resolver, require=require_declared_user,
-        process_name=process.name, stage="build",
+        process_name=process.name, stage="build", domain=FailureDomain.AGENT,
     )
     if resolved_user is not None:
         _chown_tree(build_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown)
@@ -676,7 +717,7 @@ def build_process_tree(
             raise ProcessRuntimeError(
                 "build", "build_failed",
                 f"{step!r} exceeded the {build_step_timeout_seconds}s build-step timeout",
-                process=process.name,
+                process=process.name, domain=FailureDomain.AGENT,
             ) from exc
         except FileNotFoundError as exc:
             if not build_dir.is_dir():
@@ -687,6 +728,7 @@ def build_process_tree(
                 raise ProcessRuntimeError(
                     "build", "source_tree_unavailable",
                     f"{build_dir} vanished before {step!r} could run", process=process.name,
+                    domain=FailureDomain.ENVIRONMENT,
                 ) from exc
             if _looks_like_missing_interpreter(step[0]):
                 raise ProcessRuntimeError(
@@ -694,10 +736,11 @@ def build_process_tree(
                     "runtime_unsupported",
                     f"{step[0]!r} is not on the snapshot's PATH; the snapshot ships python "
                     "3.11/3.12 and node 20/22 only",
-                    process=process.name,
+                    process=process.name, domain=FailureDomain.ENVIRONMENT,
                 ) from exc
             raise ProcessRuntimeError(
-                "build", "build_failed", f"{step!r}: {exc}", process=process.name
+                "build", "build_failed", f"{step!r}: {exc}", process=process.name,
+                domain=FailureDomain.AGENT,
             ) from exc
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()[:2000]
@@ -705,7 +748,7 @@ def build_process_tree(
                 "build",
                 "build_failed",
                 f"{step!r} exited {result.returncode}" + (f": {stderr}" if stderr else ""),
-                process=process.name,
+                process=process.name, domain=FailureDomain.AGENT,
             )
     return build_dir
 
@@ -1028,7 +1071,7 @@ def spawn_managed_process(
     """
     resolved_user = _resolve_process_user(
         process.user, resolver=user_resolver, require=require_declared_user,
-        process_name=process.name, stage="spawn",
+        process_name=process.name, stage="spawn", domain=FailureDomain.INFRASTRUCTURE,
     )
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -1056,7 +1099,7 @@ def spawn_managed_process(
         # seams themselves.
         raise ProcessRuntimeError(
             "spawn", "spawn_failed", f"{process.name}: preparing {data_dir}: {exc}",
-            process=process.name,
+            process=process.name, domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     spawn_uid = resolved_user.pw_uid if resolved_user is not None else None
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
@@ -1066,7 +1109,7 @@ def spawn_managed_process(
         if credentials is None:
             raise ProcessRuntimeError(
                 "spawn", "spawn_failed", "postgres requires generated credentials",
-                process=process.name,
+                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
             )
         if not (data_dir / "PG_VERSION").exists():
             pwfile = data_dir.parent / f".{process.name}.pwfile"
@@ -1096,7 +1139,7 @@ def spawn_managed_process(
                     raise ProcessRuntimeError(
                         "spawn", "spawn_failed",
                         f"initdb exited {result.returncode}: {stderr}",
-                        process=process.name,
+                        process=process.name, domain=FailureDomain.INFRASTRUCTURE,
                     )
             finally:
                 pwfile.unlink(missing_ok=True)
@@ -1107,7 +1150,7 @@ def spawn_managed_process(
         if credentials is None:
             raise ProcessRuntimeError(
                 "spawn", "spawn_failed", "rabbitmq requires generated credentials",
-                process=process.name,
+                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
             )
         # M8, p6-review-r1: written fresh on every spawn (job bootstrap AND every world's own
         # instance) — cheap, and means a `datadir_copy` restore can never carry a stale plugin/
@@ -1134,7 +1177,7 @@ def spawn_managed_process(
         except OSError as exc:
             raise ProcessRuntimeError(
                 "spawn", "spawn_failed", f"{process.name}: writing rabbitmq config: {exc}",
-                process=process.name,
+                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         env.update(rabbitmq_daemon_env(data_dir=data_dir, port=port, credentials=credentials))
         env["RABBITMQ_ENABLED_PLUGINS_FILE"] = str(plugins_path)
@@ -1149,7 +1192,8 @@ def spawn_managed_process(
         argv = rabbitmq_daemon_argv()
     else:  # pragma: no cover - ManagedEngine is closed; unreachable past the model layer.
         raise ProcessRuntimeError(
-            "spawn", "spawn_failed", f"unknown engine {process.engine!r}", process=process.name
+            "spawn", "spawn_failed", f"unknown engine {process.engine!r}", process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
         )
     try:
         handle = runner(
@@ -1157,7 +1201,10 @@ def spawn_managed_process(
             user=spawn_uid, group=spawn_gid,
         )
     except FileNotFoundError as exc:
-        raise ProcessRuntimeError("spawn", "spawn_failed", str(exc), process=process.name) from exc
+        raise ProcessRuntimeError(
+            "spawn", "spawn_failed", str(exc), process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
+        ) from exc
     return SpawnedWorldProcess(
         process_name=process.name, handle=handle, port=port, world_index=None,
         uid=spawn_uid, gid=spawn_gid,
@@ -1188,7 +1235,7 @@ def spawn_source_process(
     """
     resolved_user = _resolve_process_user(
         process.user, resolver=user_resolver, require=require_declared_user,
-        process_name=process.name, stage="spawn",
+        process_name=process.name, stage="spawn", domain=FailureDomain.AGENT,
     )
     try:
         world_dir.mkdir(parents=True, exist_ok=True)
@@ -1199,7 +1246,7 @@ def spawn_source_process(
         # a permission error creating/chowning this process's `{{WORLD_DIR}}` used to raise bare.
         raise ProcessRuntimeError(
             "spawn", "spawn_failed", f"{process.name}: preparing {world_dir}: {exc}",
-            process=process.name,
+            process=process.name, domain=FailureDomain.AGENT,
         ) from exc
     rendered = render_environment(
         process,
@@ -1221,7 +1268,9 @@ def spawn_source_process(
             group=resolved_user.pw_gid if resolved_user is not None else None,
         )
     except FileNotFoundError as exc:
-        raise ProcessRuntimeError("spawn", "spawn_failed", str(exc), process=process.name) from exc
+        raise ProcessRuntimeError(
+            "spawn", "spawn_failed", str(exc), process=process.name, domain=FailureDomain.AGENT,
+        ) from exc
     port = port_plan.port_for(process.name, world_index)
     return SpawnedWorldProcess(
         process_name=process.name, handle=handle, port=port, world_index=world_index,
@@ -1449,7 +1498,7 @@ def wait_for_dependency(
                 "depends_on",
                 "depends_on_timeout",
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
-                process=dependency_name,
+                process=dependency_name, domain=FailureDomain.INFRASTRUCTURE,
             ),
         )
         return
@@ -1486,7 +1535,7 @@ def wait_for_dependency(
             "depends_on_timeout",
             f"{dependency_name}: started_check did not pass within "
             f"{started_check.timeout_seconds}s",
-            process=dependency_name,
+            process=dependency_name, domain=FailureDomain.INFRASTRUCTURE,
         ),
     )
 
@@ -1622,7 +1671,7 @@ def _call_sql(
         raise ProcessRuntimeError(
             stage, "store_statement_failed",
             f"{process_name}: store rejected a provisioner-issued statement: {exc}",
-            process=process_name,
+            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
@@ -1636,7 +1685,7 @@ def _call_redis(
         raise ProcessRuntimeError(
             stage, "store_statement_failed",
             f"{process_name}: store rejected a provisioner-issued command: {exc}",
-            process=process_name,
+            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
@@ -1650,7 +1699,7 @@ def _call_rabbitmq(
         raise ProcessRuntimeError(
             stage, "store_statement_failed",
             f"{process_name}: store rejected a provisioner-issued queue inspection: {exc}",
-            process=process_name,
+            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
@@ -1699,7 +1748,7 @@ def _call_rabbitmq_action(
         raise ProcessRuntimeError(
             stage, "store_statement_failed",
             f"{process_name}: store rejected the provisioner's canary {action}: {exc}",
-            process=process_name,
+            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
@@ -1910,18 +1959,20 @@ def apply_seed_file(
         except Exception as exc:
             raise ProcessRuntimeError(
                 "seed", "seed_failed", f"{file}: {exc}", process=process_name,
+                domain=FailureDomain.ENVIRONMENT,
             ) from exc
         return
     else:  # pragma: no cover - ManagedEngine is closed; unreachable past the model layer.
         raise ProcessRuntimeError(
-            "seed", "seed_failed", f"unknown engine {engine!r}", process=process_name
+            "seed", "seed_failed", f"unknown engine {engine!r}", process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()[:2000]
         raise ProcessRuntimeError(
             "seed", "seed_failed",
             f"{file}: exited {result.returncode}" + (f": {stderr}" if stderr else ""),
-            process=process_name,
+            process=process_name, domain=FailureDomain.ENVIRONMENT,
         )
 
 
@@ -2393,6 +2444,7 @@ def _wait_for_store_ready(
         timeout_error=lambda: ProcessRuntimeError(
             "baseline", "depends_on_timeout",
             f"{process.name}: did not become ready within {timeout}s", process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ),
     )
 
@@ -2638,7 +2690,7 @@ def _freeze_one_store(
             raise ProcessRuntimeError(
                 "baseline", "seed_failed",
                 f"{process.name}: sentinel check failed against the freshly seeded baseline",
-                process=process.name,
+                process=process.name, domain=FailureDomain.ENVIRONMENT,
             )
 
         row_counts: dict[str, int] = {}
@@ -2702,7 +2754,7 @@ def _freeze_one_store(
                 raise ProcessRuntimeError(
                     "baseline", "store_statement_failed",
                     f"{process.name}: sealing the datadir_copy baseline: {exc}",
-                    process=process.name,
+                    process=process.name, domain=FailureDomain.INFRASTRUCTURE,
                 ) from exc
             baseline_reference = str(baseline_dir)
             # `result_handle` stays `None` — every world starts its OWN engine instance from this
@@ -2793,7 +2845,7 @@ def _seal_world_store(
             raise ProcessRuntimeError(
                 "reset", "store_statement_failed",
                 f"{process.name}: restoring the datadir_copy baseline: {exc}",
-                process=process.name,
+                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         new_handle = spawn_managed_process(
             process, port=port, data_dir=data_dir, credentials=credentials, runner=context.runner,
@@ -2835,7 +2887,7 @@ def _seal_world_store(
         # class as `spawn_managed_process`'s own boundary.
         raise ProcessRuntimeError(
             "reset", "spawn_failed", f"{process.name}: preparing {data_dir}: {exc}",
-            process=process.name,
+            process=process.name, domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     handle = spawn_managed_process(
         process, port=port, data_dir=data_dir, credentials=credentials, runner=context.runner,
@@ -3247,15 +3299,13 @@ def run_conformance_gate(
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     """§0.2/§4.1: `/work/job.json` is the provisioner's own configuration source — `agent.
     secret_refs` (§1: `{alias: {manager, key, version, purpose}}`) is where each alias's REAL
-    purpose comes from. N10, p6-review-r2 (MAJOR): every alias used to be relabelled `target_
-    provider` unconditionally in `_load_and_delete_secrets`, which silently defeats `select_
-    process_secrets`'s own `SOURCE_CHECKOUT` exclusion (F13) the moment a `source_checkout` alias
-    ever reaches `secrets.json` — the guest must not depend on the gateway alone never putting one
-    there, which is exactly the promise F13's own docstring says it will not depend on. Q11,
-    p6-review-r3: the two raises below use `spawn_failed` for a malformed `job.json`, which is
-    also a vocabulary stretch — §2f's domain rule for it is "infrastructure if a managed engine,
-    `agent` if source," neither of which is what a config-read fault actually is; picked as the
-    closest §4.6 code available, same reasoning as `store_statement_failed`'s stretch elsewhere.
+    purpose comes from — never relabelled `target_provider` unconditionally, which would silently
+    defeat `select_process_secrets`'s own `SOURCE_CHECKOUT` exclusion the moment a
+    `source_checkout` alias ever reaches `secrets.json`. The two raises below use `spawn_failed`
+    for a malformed `job.json`, which is a vocabulary stretch — §2f's domain rule for it is
+    "infrastructure if a managed engine, `agent` if source," neither of which is what a
+    config-read fault actually is; picked as the closest §4.6 code available, domain
+    `infrastructure` (a corrupted upload, not a bundle-authoring fault the customer caused).
     """
     job_json_path = work_directory / "job.json"
     if not job_json_path.exists():
@@ -3275,11 +3325,13 @@ def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ProcessRuntimeError(
             "secrets", "spawn_failed", f"{job_json_path}: unreadable or not valid JSON: {exc}",
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     if not isinstance(raw, dict):
         raise ProcessRuntimeError(
             "secrets", "spawn_failed",
             f"{job_json_path}: expected a JSON object, got {type(raw).__name__}",
+            domain=FailureDomain.INFRASTRUCTURE,
         )
     agent = raw.get("agent")
     refs = agent.get("secret_refs") if isinstance(agent, dict) else None
@@ -3300,10 +3352,10 @@ def _load_and_delete_secrets(
     in-memory map lives for the whole job — `reset` restarts and `provision` reconciliations
     re-inject from memory."
 
-    N10, p6-review-r2 (MAJOR): each alias's purpose comes from `job.json`'s own `agent.
-    secret_refs` (`_read_job_secret_purposes`) — NOT invented as `target_provider` for every
-    alias, which used to retire `select_process_secrets`'s `SOURCE_CHECKOUT` exclusion the moment
-    a `source_checkout` alias ever reached this file. `secret_purpose_map`, when given, overrides
+    Each alias's purpose comes from `job.json`'s own `agent.secret_refs`
+    (`_read_job_secret_purposes`) — NOT invented as `target_provider` for every alias, which would
+    retire `select_process_secrets`'s own `SOURCE_CHECKOUT` exclusion the moment a
+    `source_checkout` alias ever reached this file. `secret_purpose_map`, when given, overrides
     the job.json read entirely (the local/test lane's own shape — no `/work/job.json` on a dev
     box). An alias in `secrets.json` with no matching ref anywhere is dropped, not injected under
     a guessed purpose, and logged — `select_process_secrets` naturally never matches an alias
@@ -3317,6 +3369,7 @@ def _load_and_delete_secrets(
         except (OSError, json.JSONDecodeError) as exc:
             raise ProcessRuntimeError(
                 "secrets", "spawn_failed", f"{secrets_path}: unreadable or not valid JSON: {exc}",
+                domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         secrets_path.unlink(missing_ok=True)
         if not isinstance(raw, dict):
@@ -3324,6 +3377,7 @@ def _load_and_delete_secrets(
                 "secrets", "spawn_failed",
                 f"{secrets_path}: expected a JSON object of alias -> value, got "
                 f"{type(raw).__name__}",
+                domain=FailureDomain.INFRASTRUCTURE,
             )
         values = {str(alias): str(value) for alias, value in raw.items()}
 
@@ -3517,15 +3571,19 @@ class ProcessRuntimeProvider:
                     bundle, bundle_digest=bundle_digest, context=context
                 )
             except (OSError, shutil.Error) as exc:
-                # N9, p6-review-r2 (MAJOR): §4.6 — filesystem failures during provisioning are
-                # `infrastructure`. This phase's own copy-heavy work (build trees, baseline
-                # snapshot/seal) used to be able to raise bare here. Q11, p6-review-r3:
-                # `store_statement_failed` is a vocabulary stretch for a build-tree copy fault —
-                # the closest §2f code in a closed table with no generic `provisioner_io_failed`,
-                # and it lands the correct `infrastructure` domain either way.
+                # §4.6 — filesystem failures during provisioning are `infrastructure`. This
+                # phase's own copy-heavy work (build trees, baseline snapshot/seal) can raise a raw
+                # filesystem error covering EITHER a source build tree or a managed baseline seal —
+                # `store_statement_failed` is a vocabulary stretch for a build-tree copy fault (the
+                # closest §2f code in a closed table with no generic `provisioner_io_failed`), but
+                # the domain is `infrastructure` either way, so it is set directly here rather than
+                # left to the fallback map.
                 self._manifest = None
                 self._bundle_digest = None
-                raise ProcessRuntimeError("baseline", "store_statement_failed", str(exc)) from exc
+                raise ProcessRuntimeError(
+                    "baseline", "store_statement_failed", str(exc),
+                    domain=FailureDomain.INFRASTRUCTURE,
+                ) from exc
             except BaseException:
                 self._manifest = None
                 self._bundle_digest = None
@@ -3654,15 +3712,16 @@ class ProcessRuntimeProvider:
                 existing_handles=self._world_handles.get(world_index, {}),
             )
         except (OSError, shutil.Error) as exc:
-            # N9, p6-review-r2 (MAJOR): §4.6 — filesystem failures during provisioning are
-            # infrastructure. mkdir/chown/chmod for a (re)spawned process, uncaught this deep,
-            # used to raise bare out of `provision()`.
+            # A raw filesystem fault this deep in `_clone_or_reset_world` (mkdir/chown/chmod for a
+            # (re)spawned process) does not by itself say which process's kind failed — `domain`
+            # is left unset so the §4 seam's fallback map applies (SECTION_2F_DOMAIN), since every
+            # raise site that DOES know its process kind already carries its own domain directly.
             partial = getattr(exc, "partial_handles", None)
             if partial is not None:
-                self._world_handles[world_index] = partial  # N4: never orphan a live engine.
+                self._world_handles[world_index] = partial  # never orphan a live engine.
             raise ProcessRuntimeError("spawn", "spawn_failed", str(exc)) from exc
         except BaseException as exc:
-            # N4, p6-review-r2 (MAJOR): a raise partway through `_clone_or_reset_world`/`spawn_
+            # A raise partway through `_clone_or_reset_world`/`spawn_
             # world` used to drop every ALREADY-(re)sealed/spawned handle of THIS world on the
             # floor — nothing held it, so `close()`'s own `rmtree` of this world's data directory
             # next ran against a still-live server. `exc.partial_handles` (set by `freeze_
@@ -3782,12 +3841,14 @@ class ProcessRuntimeProvider:
                 existing_handles=self._world_handles.get(world_index, {}),
             )
         except (OSError, shutil.Error) as exc:
-            # N9, p6-review-r2 (MAJOR): reset's own filesystem work is fundamentally "reseal this
-            # world's stores from baseline" — the `store_statement_failed` half of N9's mapping.
+            # reset's own filesystem work is fundamentally "reseal this world's stores from
+            # baseline" — the infrastructure-domain half of the store-statement mapping.
             partial = getattr(exc, "partial_handles", None)
             if partial is not None:
-                self._world_handles[world_index] = partial  # N4.
-            raise ProcessRuntimeError("reset", "store_statement_failed", str(exc)) from exc
+                self._world_handles[world_index] = partial
+            raise ProcessRuntimeError(
+                "reset", "store_statement_failed", str(exc), domain=FailureDomain.INFRASTRUCTURE,
+            ) from exc
         except BaseException as exc:
             partial = getattr(exc, "partial_handles", None)  # N4, p6-review-r2.
             if partial is not None:
@@ -3981,7 +4042,7 @@ class ProcessRuntimeProvider:
             raise ProcessRuntimeError(
                 "reset", "store_statement_failed",
                 f"{process_name}: job-shared engine died and could not be respawned: {exc}",
-                process=process_name,
+                process=process_name, domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         return new_handle
 

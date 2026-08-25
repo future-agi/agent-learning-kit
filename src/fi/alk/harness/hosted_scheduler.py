@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import random
 import re
 import threading
@@ -42,7 +43,13 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from .job import FailureDomain, HarnessStage
 from .outbound import HostedAttemptSupersededError, HostedChannelFailedError, HostedFencedError
-from .process_runtime import EnvironmentRuntime, ProcessRuntimeError, RuntimeState
+from .process_runtime import (
+    SECTION_2F_DOMAIN,
+    EnvironmentRuntime,
+    ProcessRuntimeError,
+    RuntimeState,
+)
+
 from .world.errors import (
     WorldError,
     WorldQueryRejected,
@@ -53,6 +60,8 @@ from .world.errors import (
     WorldUsageError,
 )
 from .world.runtime import Call
+
+logger = logging.getLogger(__name__)
 
 # --- the World handle (world-handle-interface.md v3.4) --------------------------------------
 #
@@ -308,21 +317,33 @@ _RETRYABLE_CODES = frozenset({"evidence_missing"})
 # these used to be discarded at the reset()/provision() seam (caught as a bare `Exception`, only
 # `str()` surviving into `world_unhealthy.cause`), so a deterministic `environment`/`agent` fault
 # (never retried) was re-reported as `world_pool_exhausted`/infrastructure and burned every
-# whole-job retry on a failure that repeats identically. `spawn_failed` is contractually split
-# managed->infrastructure / source->agent, but this module deliberately never reads `bundle` (see
-# the module docstring) so it cannot tell which process kind failed at this seam -- conservatively
-# `infrastructure` (matches today's behavior on the source-process half; the correct split is an
-# open contract question, not resolved here).
-_SECTION_2F_DOMAIN: dict[str, FailureDomain] = {
-    "source_tree_unavailable": FailureDomain.ENVIRONMENT,
-    "build_failed": FailureDomain.AGENT,
-    "runtime_unsupported": FailureDomain.ENVIRONMENT,
-    "spawn_failed": FailureDomain.INFRASTRUCTURE,
-    "depends_on_timeout": FailureDomain.INFRASTRUCTURE,
-    "unsupported_capability_protocol": FailureDomain.ENVIRONMENT,
-    "seed_failed": FailureDomain.ENVIRONMENT,
-    "store_statement_failed": FailureDomain.INFRASTRUCTURE,
-}
+# whole-job retry on a failure that repeats identically. v1.15: the PRODUCER now resolves
+# `spawn_failed`'s managed-vs-source split at the raise site (`ProcessRuntimeError.domain`) --
+# this module reads that carried domain first; `SECTION_2F_DOMAIN` (imported from
+# `process_runtime.py`, the codes' own home) is consulted only for the rare error that reaches
+# here with no carried domain, and that fallback is logged so a silent re-guess never hides again.
+
+
+def _resolve_2f_domain(
+    code: str | None, domain: FailureDomain | None,
+) -> tuple[str, FailureDomain] | None:
+    """v1.15 §2f: pair a code with its resolved domain. `domain` should be the value CARRIED by a
+    typed provisioner error (`ProcessRuntimeError.domain`); `None` here falls back to the closed
+    code->domain map (and logs it) rather than silently re-guessing. Returns `None` outright for
+    no code, or a code outside the §2f table (`internal_*` etc.) — callers already treat that the
+    same as "not a §2f error."
+    """
+    if code is None or code not in SECTION_2F_DOMAIN:
+        return None
+    if domain is not None:
+        return code, domain
+    logger.warning(
+        "process_runtime error %r crossed the §4 seam with no carried domain; using the §2f "
+        "fallback map (%s)", code, SECTION_2F_DOMAIN[code].value,
+    )
+    return code, SECTION_2F_DOMAIN[code]
+
+
 # v1.13: only these two domains are "never retried" -- a uniform §2f code across every unhealthy
 # world in one of them surfaces as that code+domain; anything else (mixed codes, or any
 # infrastructure-domain fault) stays `world_pool_exhausted` exactly as before.
@@ -655,10 +676,12 @@ class WorldPool:
         self._down: set[int] = set()
         self._fresh: set[int] = set()  # m9: provisioned/recovered but never yet leased/reset
         self._effective_size = 0  # R2: the achieved world count `start()` settled on
-        # The §2f code (or `None`) behind the most recent demotion/reconcile-failure for a down
-        # world index -- read by `lease()`'s exhaustion check to decide whether a uniform
-        # never-retried code can surface instead of the generic `world_pool_exhausted`.
-        self._down_codes: dict[int, str | None] = {}
+        # The §2f (code, domain) pair (or `None`) behind the most recent demotion/reconcile-failure
+        # for a down world index -- read by `lease()`'s exhaustion check to decide whether a
+        # uniform never-retried code can surface instead of the generic `world_pool_exhausted`.
+        # `domain` is the CARRIED value off the typed error (v1.15), captured once here rather than
+        # re-derived later from the code alone.
+        self._down_codes: dict[int, tuple[str, FailureDomain] | None] = {}
         self._fenced: BaseException | None = None  # latched by mark_fenced(), never cleared
 
         # m1: `asyncio.Condition` (not a manual `Event` + `clear()`) — waiting and notifying share
@@ -813,9 +836,9 @@ class WorldPool:
                         codes = {self._down_codes.get(index) for index in self._down}
                         code = domain = None
                         if len(codes) == 1:
-                            (only_code,) = codes
-                            if only_code is not None:
-                                only_domain = _SECTION_2F_DOMAIN.get(only_code)
+                            (only,) = codes
+                            if only is not None:
+                                only_code, only_domain = only
                                 if only_domain in _SECTION_2F_NEVER_RETRIED:
                                     code, domain = only_code, only_domain
                         raise NoWorldsAvailable(
@@ -890,16 +913,15 @@ class WorldPool:
                     if reset_exc is not None
                     else f"reset left world in state {runtime.state.value}"
                 )
-                # Preserve a typed §2f code across this seam instead of flattening it to free
-                # text -- `mark_unhealthy` records it so a later exhaustion declaration can tell a
-                # deterministic never-retried fault apart from a generic infrastructure one.
-                code = (
-                    reset_exc.code
-                    if isinstance(reset_exc, ProcessRuntimeError) and reset_exc.code in _SECTION_2F_DOMAIN
-                    else None
-                )
+                # Preserve a typed §2f code (and its CARRIED domain, v1.15) across this seam
+                # instead of flattening it to free text -- `mark_unhealthy` records it so a later
+                # exhaustion declaration can tell a deterministic never-retried fault apart from a
+                # generic infrastructure one.
+                is_typed = isinstance(reset_exc, ProcessRuntimeError)
+                code = reset_exc.code if is_typed else None
+                domain = reset_exc.domain if is_typed else None
 
-            await self.mark_unhealthy(world_index, cause=cause, code=code)
+            await self.mark_unhealthy(world_index, cause=cause, code=code, domain=domain)
             # loop again — this index is now excluded via `_down`, no explicit retry bookkeeping.
 
     async def release(self, world_index: int) -> None:
@@ -909,7 +931,17 @@ class WorldPool:
                 self._available.add(world_index)
             self._state_lock.notify_all()
 
-    async def mark_unhealthy(self, world_index: int, *, cause: str, code: str | None = None) -> None:
+    async def mark_unhealthy(
+        self,
+        world_index: int,
+        *,
+        cause: str,
+        code: str | None = None,
+        domain: FailureDomain | None = None,
+    ) -> None:
+        # `domain` is the CARRIED value off a typed provisioner error (v1.15); `None` here (e.g. a
+        # caller that only has a bare code) falls back to the closed map via `_resolve_2f_domain`,
+        # logged when it fires.
         async with self._state_lock:
             self._leased.discard(world_index)
             self._available.discard(world_index)
@@ -918,7 +950,7 @@ class WorldPool:
             # Unconditional -- every demotion overwrites the recorded reason (or clears a stale
             # §2f code with `None` when this one isn't typed), so exhaustion always reads the
             # MOST RECENT cause for this index, never a leftover from an earlier failure.
-            self._down_codes[world_index] = code
+            self._down_codes[world_index] = _resolve_2f_domain(code, domain)
             runtime = self._runtimes.get(world_index)
             if runtime is not None:
                 # M12 (spine v1.12 §4.5b, normative): the scheduler demotes `state` on the
@@ -999,14 +1031,13 @@ class WorldPool:
             break
 
         if last_exc is not None or runtimes is None:
-            # The FINAL failed re-provision attempt's typed §2f code, applied to every world
-            # still down when this reconcile gives up -- one `provision()` call covers the whole
-            # pool, so a typed failure here is uniform by construction across everything it did
-            # not just recover.
-            code = (
-                last_exc.code
-                if isinstance(last_exc, ProcessRuntimeError) and last_exc.code in _SECTION_2F_DOMAIN
-                else None
+            # The FINAL failed re-provision attempt's typed §2f code (and its CARRIED domain,
+            # v1.15), applied to every world still down when this reconcile gives up -- one
+            # `provision()` call covers the whole pool, so a typed failure here is uniform by
+            # construction across everything it did not just recover.
+            is_typed = isinstance(last_exc, ProcessRuntimeError)
+            code_and_domain = _resolve_2f_domain(
+                last_exc.code if is_typed else None, last_exc.domain if is_typed else None,
             )
             # R8: every success path below ends in `notify_all()` — this give-up path must too,
             # or a `lease()` blocked in `_wait_bounded(poll=False)` (the `abandon is None` case)
@@ -1016,7 +1047,7 @@ class WorldPool:
             # exhaustion later reads that leftover code as if it were this attempt's own result.
             async with self._state_lock:
                 for index in self._down:
-                    self._down_codes[index] = code
+                    self._down_codes[index] = code_and_domain
                 self._state_lock.notify_all()
             return  # stays `_down`; the next `mark_unhealthy` (or a lease-triggered wait) retries.
 
@@ -1036,7 +1067,7 @@ class WorldPool:
         # path only fires on a raised/failed `provision()`), so without this the state block below
         # has no code of its own and would otherwise leave whatever an earlier, superseded demotion
         # recorded standing.
-        healthy_codes: dict[int, str | None] = {}
+        healthy_codes: dict[int, tuple[str, FailureDomain] | None] = {}
         async with self._provider_lock:
             for runtime in runtimes:
                 try:
@@ -1046,10 +1077,9 @@ class WorldPool:
                     healthy_codes[runtime.world_index] = None
                 except Exception as exc:  # noqa: BLE001
                     healthy_by_index[runtime.world_index] = False
-                    healthy_codes[runtime.world_index] = (
-                        exc.code
-                        if isinstance(exc, ProcessRuntimeError) and exc.code in _SECTION_2F_DOMAIN
-                        else None
+                    is_typed = isinstance(exc, ProcessRuntimeError)
+                    healthy_codes[runtime.world_index] = _resolve_2f_domain(
+                        exc.code if is_typed else None, exc.domain if is_typed else None,
                     )
 
         achieved = {runtime.world_index for runtime in runtimes}

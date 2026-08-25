@@ -9,6 +9,7 @@ invocation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -38,11 +39,13 @@ from fi.alk.harness.hosted_scheduler import (
     ReceiptFailure,
     ResultReceipt,
     RunResult,
+    WorldPool,
 )
 from fi.alk.harness.job import (
     AgentConnection,
     ArtifactLevel,
     ExecutionMode,
+    FailureDomain,
     HarnessArtifactPolicy,
     HarnessJob,
     HarnessStage,
@@ -280,7 +283,17 @@ class FakeTransport:
 
 
 class FakeProvisioner:
-    name = "fake-process"  # mirrors `ProcessRuntimeProvider.name` so passthrough is testable.
+    """`_serialized` records any overlapping call into `overlaps` rather than asserting in-band --
+    an in-band `assert not self._busy` fires INSIDE `WorldPool.lease()`'s own
+    `except Exception as exc: reset_exc = exc` (a reset/healthy failure is expected there) or
+    `_reconcile`'s `except Exception` (a reconcile must never crash the pool), so production
+    swallows it and a caller driving this fake through `WorldPool` (rather than calling it
+    directly) would never see the failure. Asserting on `overlaps` from the test's OWN frame is
+    what actually makes a `_provider_lock` regression observable end-to-end (R7: this is the same
+    fake `WorldPool`'s own test suite already exercises this way, now needed here too since
+    `hosted_entrypoint.py` no longer wraps the provider in its own lock)."""
+
+    name = "fake-process"  # mirrors `ProcessRuntimeProvider.name`.
 
     def __init__(self, instances: int = 1, *, always_unhealthy: bool = False) -> None:
         self.instances = instances
@@ -289,7 +302,8 @@ class FakeProvisioner:
         self.reset_calls = 0
         self.healthy_calls = 0
         self.closed = False
-        self._busy = False
+        self.overlaps: list[str] = []
+        self._in_flight: list[str] = []
         self._runtimes = {
             i: EnvironmentRuntime(
                 runtime_id=f"digest:w{i}", world_index=i, bundle_digest="digest",
@@ -298,42 +312,43 @@ class FakeProvisioner:
             for i in range(instances)
         }
 
-    async def _serialized(self) -> None:
-        assert not self._busy, "provider called reentrantly"
-        self._busy = True
+    @contextlib.asynccontextmanager
+    async def _serialized(self, label: str):
+        if self._in_flight:
+            self.overlaps.append(f"{self._in_flight[-1]} overlapped {label}")
+        self._in_flight.append(label)
         try:
             await asyncio.sleep(0)
+            yield
         finally:
-            self._busy = False
+            self._in_flight.remove(label)
 
     async def provision(
         self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
         contract: Any | None = None, instances: int = 1,
     ) -> list[EnvironmentRuntime]:
         del bundle, source, bundle_dir, work_directory, contract
-        await self._serialized()
-        self.provision_calls += 1
-        return [self._runtimes[i] for i in range(instances)]
+        async with self._serialized("provision"):
+            self.provision_calls += 1
+            return [self._runtimes[i] for i in range(instances)]
 
     async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
         del work_directory
-        await self._serialized()
-        self.reset_calls += 1
-        runtime.state = RuntimeState.READY
+        async with self._serialized(f"reset(w{runtime.world_index})"):
+            self.reset_calls += 1
+            runtime.state = RuntimeState.READY
 
     async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
-        del runtime, work_directory
-        # v1.12 folds `healthy` into the same non-reentrant set as provision/reset/close --
-        # this is the one verb that previously did NOT call `_serialized()`, so a `SerializingProvider`
-        # gap here would pass silently without it.
-        await self._serialized()
-        self.healthy_calls += 1
-        return not self.always_unhealthy
+        del work_directory
+        # v1.12 folds `healthy` into the same non-reentrant set as provision/reset/close.
+        async with self._serialized(f"healthy(w{runtime.world_index})"):
+            self.healthy_calls += 1
+            return not self.always_unhealthy
 
     async def close(self, *, work_directory: Path) -> None:
         del work_directory
-        await self._serialized()
-        self.closed = True
+        async with self._serialized("close"):
+            self.closed = True
 
 
 class FakeWorld:
@@ -661,50 +676,29 @@ def test_cancel_state_reads_reason_from_file() -> None:
     assert state.reason() is ob.TerminalReason.TTL_EXCEEDED
 
 
-def test_serializing_provider_serializes_concurrent_provision_calls() -> None:
+def test_world_pool_serializes_concurrent_provider_calls_end_to_end() -> None:
+    # R7: `hosted_entrypoint.py` used to wrap every provider in `SerializingProvider` before
+    # `WorldPool` ever saw it -- removed now that `WorldPool`'s own `_provider_lock` covers
+    # provision/reset/healthy/close (mutation-verified in review: `healthy` rides the same
+    # non-reentrancy rule as the other three, per v1.12 §4.5b). This repoints the old
+    # wrapper-level test at the SAME guarantee, one level up: `pool.start()` (a `provision()` call)
+    # racing `pool._reconcile()` (a `provision()` THEN a `healthy()` call) against the bare,
+    # unwrapped `FakeProvisioner` this module now wires directly.
     async def scenario() -> None:
         fake = FakeProvisioner(instances=1)
-        wrapped = he.SerializingProvider(fake)
-        work = Path(tempfile.mkdtemp(prefix="p10-serial-"))
-        results = await asyncio.gather(
-            wrapped.provision(None, source=work, bundle_dir=work, work_directory=work, instances=1),
-            wrapped.provision(None, source=work, bundle_dir=work, work_directory=work, instances=1),
+        work = Path(tempfile.mkdtemp(prefix="p10-pool-serial-"))
+        pool = WorldPool(
+            fake, bundle=None, source=work, bundle_dir=work, work_directory=work, instances=1,
         )
-        # The real, load-bearing check is INSIDE `FakeProvisioner._serialized()` (an `assert not
-        # self._busy` around a real `await` yield point) -- if `SerializingProvider` let both calls
-        # run concurrently, that assertion would raise and this whole coroutine would fail instead
-        # of returning cleanly. `provision_calls == 2` only confirms both eventually ran.
-        assert fake.provision_calls == 2
-        assert all(len(r) == 1 for r in results)
+        await asyncio.gather(pool.start(), pool._reconcile())
+        # `overlaps` is populated OUT-OF-BAND by `FakeProvisioner._serialized()` -- an in-band
+        # `assert` there would fire inside `_reconcile`'s own `except Exception` (a reconcile must
+        # never crash the pool) and never reach this frame, silently passing a broken lock.
+        assert fake.overlaps == []
+        assert fake.provision_calls >= 1
+        await pool.close()
 
     asyncio.run(scenario())
-
-
-def test_serializing_provider_serializes_healthy_against_provision() -> None:
-    # v1.12 folds `healthy` into the SAME non-reentrant set as provision/reset/close --
-    # `FakeProvisioner.healthy` is the one verb that previously did not call `_serialized()`
-    # (see its own definition above), so this is the only test that would have caught a
-    # `SerializingProvider` that forgot to wrap `healthy()` in its lock.
-    async def scenario() -> None:
-        fake = FakeProvisioner(instances=1)
-        wrapped = he.SerializingProvider(fake)
-        work = Path(tempfile.mkdtemp(prefix="p10-serial-healthy-"))
-        runtime = fake._runtimes[0]
-        await asyncio.gather(
-            wrapped.provision(None, source=work, bundle_dir=work, work_directory=work, instances=1),
-            wrapped.healthy(runtime, work_directory=work),
-        )
-        assert fake.provision_calls == 1
-        assert fake.healthy_calls == 1
-
-    asyncio.run(scenario())
-
-
-def test_serializing_provider_name_passes_through() -> None:
-    # §4's `RuntimeProvider` Protocol declares `name: str` -- the wrapper must not hide it.
-    fake = FakeProvisioner(instances=1)
-    wrapped = he.SerializingProvider(fake)
-    assert wrapped.name == "fake-process"
 
 
 def test_scenarios_client_provision_unwraps_the_result_envelope() -> None:
@@ -1273,18 +1267,19 @@ def test_pool_close_backstop_runs_even_when_scenario_source_raises_untyped() -> 
     asyncio.run(scenario())
 
 
-def test_process_runtime_error_maps_to_the_closed_2f_domain_table() -> None:
-    # deleting the whole `except ProcessRuntimeError` clause passed 29/29 because
-    # `ProcessRuntimeError` never appeared anywhere in the suite -- the §2f domain map
-    # was unexecuted. Drives four real codes through `pool.start()` and checks each domain.
-    async def run_case(code: str, process: str | None, expected_domain: str) -> None:
+def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -> None:
+    # v1.15 §2f: the producer resolves and carries `domain` at the raise site -- `spawn_failed`'s
+    # managed/source split is no longer re-derived from a manifest lookup here (mutation: force
+    # `_process_runtime_error_domain` back to ignoring `exc.domain` and this test catches it, since
+    # the SAME code with two different carried domains would then collapse to one fallback value).
+    async def run_case(code: str, domain: FailureDomain | None, expected_domain: str) -> None:
         class RaisingProvisioner(FakeProvisioner):
             async def provision(
                 self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
                 contract: Any | None = None, instances: int = 1,
             ) -> list[EnvironmentRuntime]:
                 del bundle, source, bundle_dir, work_directory, contract, instances
-                raise ProcessRuntimeError("build", code, "synthetic failure", process=process)
+                raise ProcessRuntimeError("build", code, "synthetic failure", domain=domain)
 
         harness = _build_harness(scenarios=[], instances=1)
         harness.deps.build_provider = lambda: RaisingProvisioner(instances=1)
@@ -1296,10 +1291,62 @@ def test_process_runtime_error_maps_to_the_closed_2f_domain_table() -> None:
         assert failure["domain"] == expected_domain
         assert failure["stage"] == "building_environment"
 
+    # The same code, two different CARRIED domains -- proves the domain is read off the
+    # exception, not re-derived from `code`/`process` (the map alone could never distinguish
+    # these two cases, since both are `spawn_failed`).
+    asyncio.run(run_case("spawn_failed", FailureDomain.AGENT, "agent"))  # source, carried
+    asyncio.run(run_case("spawn_failed", FailureDomain.INFRASTRUCTURE, "infrastructure"))  # managed, carried
+    # No carried domain (as a raise site outside this module's control might produce) -- the
+    # closed map is consulted as a fallback only.
     asyncio.run(run_case("build_failed", None, "agent"))
     asyncio.run(run_case("seed_failed", None, "environment"))
-    asyncio.run(run_case("spawn_failed", "postgres", "infrastructure"))  # managed process
-    asyncio.run(run_case("spawn_failed", "agent", "agent"))  # source process
+
+
+def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerror() -> None:
+    # karthik-integration-changes.md K1: the Scenario Generation Contract's own model may not
+    # carry `scenario_key` yet, and `hosted_scheduler.py` reads `scenario.scenario_key` with plain
+    # attribute access -- an entry that lacks the field entirely used to raise AttributeError deep
+    # in the scheduler (no terminal event, a crash exit code) instead of failing the job cleanly.
+    class ScenarioMissingKey:
+        scenario_id = "id-x"
+        sub_goals: list[Any] = []
+
+        def setup(self, world: Any) -> object:
+            del world
+            return None
+
+        def ready(self, world: Any) -> object:
+            del world
+            return None
+
+    class RawScenarioSource:
+        """Returns entries verbatim -- unlike `FakeScenarioSource`, never reads `.scenario_key`
+        itself before handing them back, so the entrypoint's own validation is what is under
+        test, not this fixture crashing first."""
+
+        def __init__(self, scenarios: list[Any]) -> None:
+            self._scenarios = scenarios
+
+        async def build(
+            self, job: Any, bundle: Any, scenarios_client: he.ScenariosClient, *, pool: Any,
+            world_factory: Any,
+        ) -> list[Any]:
+            del job, bundle, scenarios_client, pool, world_factory
+            return self._scenarios
+
+    async def scenario() -> None:
+        harness = _build_harness(scenarios=[], instances=1)
+        harness.deps.scenario_source = RawScenarioSource([ScenarioMissingKey()])
+        result = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert result == he.EXIT_OK
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["stage"] == "validating_scenarios"
+        assert failure["domain"] == "environment"
+        assert "scenario_key" in failure["message"]
+
+    asyncio.run(scenario())
 
 
 def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
@@ -2125,9 +2172,7 @@ TESTS = [
     test_row_counts_for_capability_returns_the_matching_store,
     test_row_counts_for_capability_raises_when_the_capability_is_absent,
     test_cancel_state_reads_reason_from_file,
-    test_serializing_provider_serializes_concurrent_provision_calls,
-    test_serializing_provider_serializes_healthy_against_provision,
-    test_serializing_provider_name_passes_through,
+    test_world_pool_serializes_concurrent_provider_calls_end_to_end,
     test_scenarios_client_provision_unwraps_the_result_envelope,
     test_scenarios_client_fencing_latches_the_shared_channel_state,
     test_capabilities_failure_exits_boot_failure_with_no_channel_and_no_event,
@@ -2149,7 +2194,7 @@ TESTS = [
     test_build_json_fixed_port_at_w1_does_not_crash,
     test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0,
     test_pool_close_backstop_runs_even_when_scenario_source_raises_untyped,
-    test_process_runtime_error_maps_to_the_closed_2f_domain_table,
+    test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map,
     test_finish_emits_the_terminal_before_closing_the_pool,
     test_redaction_end_to_end_secret_never_crosses_any_channel,
     test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the_terminal,

@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
 from . import outbound as ob
-from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, ProcessKind, load_bundle_v2
+from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
 from .hosted_scheduler import (
     CallOutcome,
     CallRunner,
@@ -56,6 +56,7 @@ from .job import (
 )
 from .process_preflight import PreflightError, preflight_bundle
 from .process_runtime import (
+    SECTION_2F_DOMAIN,
     EnvironmentRuntime,
     ProcessRuntimeError,
     ProcessRuntimeProvider,
@@ -276,61 +277,6 @@ class NotWiredScenarioSource:
 
 
 # =================================================================================================
-# §4.5b -- a single provider mutex serializing every provision/reset/close/healthy call. Explicitly
-# this module's duty per the obligations list. `WorldPool` (hosted_scheduler.py) already serializes
-# provision/reset/close through its own `_provider_lock`, but NOT `healthy()` (by design — its own
-# docstring reads v1.11 §4.5b's non-reentrancy sentence as naming only provision/reset/close); this
-# wrapper is the belt-and-suspenders version that holds for all four regardless of what the
-# scheduler's own lock covers today, and is safe to layer under it (two distinct `asyncio.Lock`
-# objects on a single-threaded event loop cannot deadlock each other).
-# =================================================================================================
-
-
-class SerializingProvider:
-    def __init__(self, provider: WorldProvisioner) -> None:
-        self._provider = provider
-        self._lock = asyncio.Lock()
-
-    @property
-    def name(self) -> str:
-        # §4's `RuntimeProvider` Protocol declares `name: str` ("retained for logging only");
-        # this wrapper otherwise hides it, so any future `provider.name` read would AttributeError.
-        return getattr(self._provider, "name", "")
-
-    async def provision(
-        self,
-        bundle: Any,
-        *,
-        source: Path,
-        bundle_dir: Path,
-        work_directory: Path,
-        contract: Any | None = None,
-        instances: int = 1,
-    ) -> list[EnvironmentRuntime]:
-        async with self._lock:
-            return await self._provider.provision(
-                bundle,
-                source=source,
-                bundle_dir=bundle_dir,
-                work_directory=work_directory,
-                contract=contract,
-                instances=instances,
-            )
-
-    async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
-        async with self._lock:
-            await self._provider.reset(runtime, work_directory=work_directory)
-
-    async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
-        async with self._lock:
-            return await self._provider.healthy(runtime, work_directory=work_directory)
-
-    async def close(self, *, work_directory: Path) -> None:
-        async with self._lock:
-            await self._provider.close(work_directory=work_directory)
-
-
-# =================================================================================================
 # WorldFactory -- real HostedWorld instances, fed by build.json's row counts (never
 # a partial map).
 # =================================================================================================
@@ -342,37 +288,25 @@ class WorldFactoryError(RuntimeError):
     the row counts for that store), never a scenario-code fault."""
 
 
-# §2f's closed build/run failure-code table (hosted-execution-seams.md §4.6) -> FailureDomain.
-# LOCAL to this module for now -- no module owns this map today. `spawn_failed` is the one code the table itself
-# splits by process kind ("infrastructure if a managed engine, agent if source"), so it is resolved
-# by a manifest lookup in `_process_runtime_error_domain` below rather than a flat entry here.
-_SECTION_2F_DOMAIN: dict[str, FailureDomain] = {
-    "source_tree_unavailable": FailureDomain.ENVIRONMENT,
-    "build_failed": FailureDomain.AGENT,
-    "runtime_unsupported": FailureDomain.ENVIRONMENT,
-    "depends_on_timeout": FailureDomain.INFRASTRUCTURE,
-    "unsupported_capability_protocol": FailureDomain.ENVIRONMENT,
-    "seed_failed": FailureDomain.ENVIRONMENT,
-    "store_statement_failed": FailureDomain.INFRASTRUCTURE,
-}
+def _process_runtime_error_domain(exc: ProcessRuntimeError) -> FailureDomain:
+    """v1.15 §2f: the producer (`process_runtime.py`) resolves and carries `domain` at the raise
+    site -- read it directly rather than re-deriving `spawn_failed`'s managed/source split from
+    the manifest (the old approach could not tell which process kind failed without one). The
+    imported `SECTION_2F_DOMAIN` map is a fallback ONLY, for an error that reaches here with no
+    carried domain -- logged when it fires, matching the scheduler's own rule.
+    """
+    if exc.domain is not None:
+        return exc.domain
+    if exc.code in SECTION_2F_DOMAIN:
+        logger.warning(
+            "process_runtime error %r crossed the §4 seam with no carried domain; using the §2f "
+            "fallback map (%s)", exc.code, SECTION_2F_DOMAIN[exc.code].value,
+        )
+        return SECTION_2F_DOMAIN[exc.code]
+    return FailureDomain.INFRASTRUCTURE  # internal_* etc. -- the honest default
 
 
-def _process_runtime_error_domain(
-    exc: ProcessRuntimeError, manifest: EnvironmentBundleV2
-) -> FailureDomain:
-    if exc.code == "spawn_failed":
-        for process in manifest.processes:
-            if process.name == exc.process:
-                return (
-                    FailureDomain.INFRASTRUCTURE
-                    if process.kind is ProcessKind.MANAGED
-                    else FailureDomain.AGENT
-                )
-        return FailureDomain.INFRASTRUCTURE  # unresolvable process name -- the honest default
-    return _SECTION_2F_DOMAIN.get(exc.code, FailureDomain.INFRASTRUCTURE)  # internal_* etc.
-
-
-_SECTION_2F_CODES: frozenset[str] = frozenset(_SECTION_2F_DOMAIN) | {"spawn_failed"}
+_SECTION_2F_CODES: frozenset[str] = frozenset(SECTION_2F_DOMAIN)
 
 
 def _section_2f_code(code: str) -> str:
@@ -1245,6 +1179,63 @@ class HostedEntrypointDeps:
 
 
 # =================================================================================================
+# Scenario-entry validation at fetch (defense against karthik-integration-changes.md K1): the
+# Scenario Generation Contract's own model may not carry `scenario_key` (or may hand back some
+# other malformed shape) by the time `scenario_source.build()` returns it here, and
+# `hosted_scheduler.py` reads `scenario.scenario_key`/`.sub_goals`/`.setup`/`.ready` at its own
+# call sites with plain attribute access -- an attribute a pydantic/dataclass model never defined
+# raises AttributeError, not a typed failure, deep inside the scheduler with no terminal event and
+# a nonzero exit that reads as an infrastructure crash. Checked here with `getattr` (never direct
+# attribute access) so a malformed entry is caught at the seam, before the scheduler ever touches
+# it -- one bad entry fails the whole job as a typed FAILED terminal instead of crashing the guest.
+# =================================================================================================
+
+# No closed-vocabulary code names this defect specifically (the §2e/§2f tables are bundle/process
+# concerns, not scenario-content ones) -- `scenario_preallocation_failed` is this module's own
+# existing code for "the scenario set is not viable for this attempt," already scoped to stage
+# `validating_scenarios`, and is reused here rather than inventing a new one. Domain `environment`
+# (not `platform_sync`, its other use here): a malformed entry is a deterministic generation-stage
+# content defect, not a transport failure, and fails identically on retry.
+_SCENARIO_ENTRY_INVALID_CODE = "scenario_preallocation_failed"
+
+
+def _validate_scenario_entry(entry: Any, *, index: int) -> str | None:
+    """Returns a human-readable defect description, or `None` if `entry` looks usable by
+    `hosted_scheduler.py`'s `Scenario` Protocol. Every check is a `getattr` with a default, never
+    a direct attribute/index access -- the whole point is to survive a shape that lacks a field
+    entirely, not just one that carries a wrong value.
+    """
+    scenario_key = getattr(entry, "scenario_key", None)
+    if not isinstance(scenario_key, str) or not scenario_key:
+        return f"scenario[{index}] has no non-empty scenario_key"
+    label = f"scenario[{index}] ({scenario_key!r})"
+    if not isinstance(getattr(entry, "scenario_id", None), str):
+        return f"{label} has no scenario_id"
+    if not callable(getattr(entry, "setup", None)):
+        return f"{label} has no callable setup()"
+    if not callable(getattr(entry, "ready", None)):
+        return f"{label} has no callable ready()"
+    sub_goals = getattr(entry, "sub_goals", None)
+    if not isinstance(sub_goals, Sequence) or isinstance(sub_goals, (str, bytes)):
+        return f"{label} has no sub_goals sequence"
+    for goal_index, goal in enumerate(sub_goals):
+        goal_name = getattr(goal, "name", None)
+        if not isinstance(goal_name, str) or not goal_name:
+            return f"{label} sub_goal[{goal_index}] has no non-empty name"
+        if not callable(getattr(goal, "check", None)):
+            return f"{label} sub_goal[{goal_index}] ({goal_name!r}) has no callable check()"
+    return None
+
+
+def _validate_scenarios(scenarios: Sequence[Any]) -> str | None:
+    for index, entry in enumerate(scenarios):
+        defect = _validate_scenario_entry(entry, index=index)
+        if defect is not None:
+            return defect
+    return None
+
+
+# =================================================================================================
 # Orchestration -- steps 1-8, in order.
 # =================================================================================================
 
@@ -1479,9 +1470,10 @@ async def run_job(
 
         # 4/5. Provision -- ProcessRuntimeProvider, hosted lane never passes
         # require_declared_user=False (the provider defaults it True on its own; the local lane's
-        # opt-out is a construction-site concern, not this module's). Wrapped in the §4.5b
-        # provider mutex (SerializingProvider) before it ever reaches WorldPool.
-        provider = SerializingProvider(deps.build_provider())
+        # opt-out is a construction-site concern, not this module's). §4.5b's provider mutex is
+        # `WorldPool`'s own `_provider_lock` now (mutation-verified: it serializes
+        # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
+        provider = deps.build_provider()
         pool = WorldPool(
             provider, bundle=manifest, source=source, bundle_dir=bundle_dir,
             work_directory=work_directory, instances=parallelism, outbound=adapter,
@@ -1502,13 +1494,13 @@ async def run_job(
                 code="scenario_preallocation_failed", message=str(exc),
             )
         except ProcessRuntimeError as exc:
-            # §2f's own domain (never the flattened `infrastructure`/"provision_failed" every
-            # provisioning failure used to get), stage `building_environment` per §2f.
+            # §2f's own CARRIED domain (never the flattened `infrastructure`/"provision_failed"
+            # every provisioning failure used to get), stage `building_environment` per §2f.
             if adapter.is_fenced:
                 await _bounded_close()
                 return EXIT_FENCED
             return await _fail(
-                domain=_process_runtime_error_domain(exc, manifest),
+                domain=_process_runtime_error_domain(exc),
                 fail_stage=HarnessStage.BUILDING_ENVIRONMENT,
                 code=_section_2f_code(exc.code), message=str(exc),
             )
@@ -1612,6 +1604,19 @@ async def run_job(
                 code="scenario_preallocation_failed", message=str(exc),
             )
 
+        # Defense against a malformed scenario entry (K1) reaching the scheduler, which reads
+        # `scenario_key`/`sub_goals`/`setup`/`ready` with plain attribute access and would raise
+        # AttributeError instead of failing the job cleanly.
+        scenario_defect = _validate_scenarios(scenarios)
+        if scenario_defect is not None:
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=_SCENARIO_ENTRY_INVALID_CODE, message=scenario_defect,
+            )
+
         # cancel/fence check at the post-pre-allocation stage boundary.
         if cancel_requested():
             return await _canceled()
@@ -1696,7 +1701,6 @@ __all__ = [
     "ScenarioSource",
     "ScenarioSourceNotWired",
     "ScenariosClient",
-    "SerializingProvider",
     "WorldFactoryError",
     "install_sigterm_handler",
     "job_secret_purposes",

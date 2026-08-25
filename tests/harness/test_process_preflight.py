@@ -507,6 +507,25 @@ def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
+@pytest.mark.parametrize("colliding_port", [24000, 24099, 25000, 25799])
+def test_a_fixed_port_colliding_with_the_rabbitmq_management_band_is_rejected(
+    tmp_path: Path, colliding_port: int
+) -> None:
+    """M4: `process_runtime.py`'s own rabbitmq management listener binds at `amqp_port + 10000`
+    (`_rabbitmq_management_port`) -- a `fixed_port` landing there is not covered by either base
+    port-formula band, so a bundle could claim a port the harness itself is about to bind. Bands:
+    24000-24099 (job-shared amqp shifted) and 25000-25799 (per-world amqp shifted, the one
+    reachable in practice since rabbitmq's catalog entry is `datadir_copy`-only)."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["fixed_port"] = colliding_port
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="fixed_port_reserved"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+
+
 def test_a_fixed_port_outside_both_bands_is_accepted(tmp_path: Path) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["fixed_port"] = 9000
