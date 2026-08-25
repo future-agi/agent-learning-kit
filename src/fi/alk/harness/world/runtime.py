@@ -15,6 +15,7 @@ one.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -105,7 +106,7 @@ def settled(value: Any) -> Any:
         return pool.submit(asyncio.run, value).result()
 
 
-def _is_refusal(raised: BaseException) -> bool:
+def _is_refusal(raised: BaseException, refusal_signature: str = "") -> bool:
     """Whether an exception is the world saying no, rather than the world falling over.
 
     Matched by name as well as by identity. A generated handler often declares its own
@@ -116,7 +117,24 @@ def _is_refusal(raised: BaseException) -> bool:
     """
     if isinstance(raised, ToolError):
         return True
-    return any(base.__name__ == "ToolError" for base in type(raised).__mro__)
+    classes = [base.__name__ for base in type(raised).__mro__]
+    if "ToolError" in classes:
+        return True
+    # Submitted tools commonly use their own semantic exception type (for example
+    # ``LookupError`` for a missing account) rather than importing the harness's ToolError.
+    # Treat it as a refusal only when source understanding explicitly recorded that exception
+    # in the contract. Broadly classifying LookupError/ValueError would hide handler defects;
+    # grounding this in the refusal signature preserves the refusal-versus-crash boundary.
+    described = refusal_signature or ""
+    semantic_classes = [
+        name
+        for name in classes
+        if name not in {"BaseException", "Exception"} and name.endswith("Error")
+    ]
+    return any(
+        re.search(rf"\b{re.escape(name)}\b", described) is not None
+        for name in semantic_classes
+    )
 
 
 @dataclass
@@ -295,7 +313,7 @@ class GeneratedWorld(EnvironmentAdapter):
                 raise RuntimeError("handler defines no handle(args, db)")
             value = handle(args, Db(self.store, self.state_object))
         except Exception as raised:
-            if _is_refusal(raised):
+            if _is_refusal(raised, self.refusal_signature):
                 return self._record(
                     Call(
                         name=name,

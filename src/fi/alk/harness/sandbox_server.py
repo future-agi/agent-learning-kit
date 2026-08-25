@@ -114,6 +114,24 @@ class SandboxPreflightRequest(BaseModel):
         return self
 
 
+class SandboxRerunRequest(BaseModel):
+    """Fresh credentials for replaying an already-built harness session.
+
+    The saved contract, sealed environment bundle and scenarios are reused. Secret values are
+    deliberately supplied again (or resolved from fresh references); they are never recovered
+    from the completed job's persisted payload.
+    """
+
+    secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
+    environment_values: dict[str, SecretStr] = Field(default_factory=dict)
+    only: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _valid_environment(self) -> "SandboxRerunRequest":
+        _validate_environment_values(self.environment_values, self.secret_refs)
+        return self
+
+
 class SandboxPreflightResponse(BaseModel):
     source_kind: SourceKind
     source_label: str
@@ -365,6 +383,210 @@ class LocalSandbox:
         self._tasks[identifier] = asyncio.create_task(self._execute(job, source))
         return self.get(identifier)
 
+    def rerun(self, job_id: str, request: SandboxRerunRequest) -> SandboxJobResponse:
+        response = self.get(job_id)
+        if not response.status.stage.terminal:
+            raise HTTPException(
+                status_code=409, detail="harness job is already running"
+            )
+        output = self.artifacts_root / response.job.run_id
+        required = (
+            output / "contract.json",
+            output / "scenarios.json",
+            output / "environment-bundle" / "manifest.json",
+            output / "platform.json",
+        )
+        missing = [path.name for path in required if not path.is_file()]
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "saved harness session cannot be rerun; missing "
+                    + ", ".join(missing)
+                ),
+            )
+
+        runtime_configuration = {
+            name: value.get_secret_value()
+            for name, value in request.environment_values.items()
+        }
+        resolved = resolve_worker_secrets(request.secret_refs, environment=os.environ)
+        runtime_configuration.update(resolved)
+        self._ephemeral_secrets[job_id] = dict(runtime_configuration)
+
+        state_path = self.jobs_root / job_id / "state.json"
+        state = _read_json(state_path)
+        operation_started_at = _now()
+        state.update(
+            stage=HarnessStage.QUEUED.value,
+            detail="waiting to restart the saved environment",
+            failure=None,
+            completed_scenarios=0,
+            total_scenarios=(len(request.only) or response.job.scenario_count),
+            operation="rerun",
+            operation_started_at=operation_started_at,
+            attempt=int(state.get("attempt", 0) or 0) + 1,
+            updated_at=operation_started_at,
+        )
+        _write_json(state_path, state)
+        self._tasks[job_id] = asyncio.create_task(
+            self._execute_rerun(response.job, request.only)
+        )
+        return self.get(job_id)
+
+    async def _execute_rerun(self, job: HarnessJob, only: list[str]) -> None:
+        """Run calls from immutable saved artifacts, with a fresh environment lifecycle."""
+
+        directory = self.jobs_root / job.job_id
+        state_path = directory / "state.json"
+        output = self.artifacts_root / job.run_id
+        async with self._semaphore:
+            state = _read_json(state_path)
+            if state.get("stage") == HarnessStage.CANCELED.value:
+                return
+            state.update(
+                stage=HarnessStage.RUNNING.value,
+                detail="restarting the saved environment and running scenarios",
+                updated_at=_now(),
+            )
+            _write_json(state_path, state)
+            log_handle = (directory / "worker.log").open("ab")
+            try:
+                runtime_configuration = self._ephemeral_secrets.get(job.job_id, {})
+                child_environment = worker_environment(
+                    {}, runtime_configuration=runtime_configuration
+                )
+                child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
+                    sorted(runtime_configuration)
+                )
+                child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
+                session = _read_json(output / "session.json")
+                source = str(session.get("source") or "").strip()
+                if not source:
+                    raise RuntimeError(
+                        "saved harness session does not identify its submitted source"
+                    )
+
+                async def run_stage(command: list[str]) -> int:
+                    process = await asyncio.create_subprocess_exec(
+                        *command,
+                        stdout=log_handle,
+                        stderr=asyncio.subprocess.STDOUT,
+                        start_new_session=True,
+                        env=child_environment,
+                    )
+                    self._processes[job.job_id] = process
+                    return await process.wait()
+
+                environment_up = [
+                    sys.executable,
+                    "-m",
+                    "fi.alk.harness.cli",
+                    "environment",
+                    "up",
+                    "--path",
+                    source,
+                    "--out",
+                    str(output),
+                ]
+                simulation = [
+                    sys.executable,
+                    "-m",
+                    "fi.alk.harness.cli",
+                    "simulate",
+                    "--name",
+                    str(job.metadata.get("agent_name") or job.run_id),
+                    "--out",
+                    str(output),
+                ]
+                if only:
+                    simulation.extend(["--only", *only])
+                environment_down = [
+                    sys.executable,
+                    "-m",
+                    "fi.alk.harness.cli",
+                    "environment",
+                    "down",
+                    "--out",
+                    str(output),
+                ]
+
+                up_code = await run_stage(environment_up)
+                simulation_code = 1
+                cleanup_code = 0
+                if up_code == 0:
+                    try:
+                        simulation_code = await run_stage(simulation)
+                    finally:
+                        cleanup_code = await run_stage(environment_down)
+
+                # Exit 2 is a completed suite whose submitted agent failed checks.
+                successful_execution = (
+                    up_code == 0 and simulation_code in (0, 2) and cleanup_code == 0
+                )
+                failed_stage = (
+                    "environment_up"
+                    if up_code != 0
+                    else "environment_down"
+                    if cleanup_code != 0
+                    else "simulation"
+                )
+                return_code = (
+                    up_code
+                    if up_code != 0
+                    else cleanup_code
+                    if cleanup_code != 0
+                    else simulation_code
+                )
+                state = _read_json(state_path)
+                if state.get("stage") != HarnessStage.CANCELED.value:
+                    state.update(
+                        stage=(
+                            HarnessStage.COMPLETED.value
+                            if successful_execution
+                            else HarnessStage.FAILED.value
+                        ),
+                        detail=(
+                            "saved harness session rerun completed"
+                            if successful_execution
+                            else f"saved harness session rerun exited {return_code}"
+                        ),
+                        completed_scenarios=(len(only) if only else job.scenario_count)
+                        if successful_execution
+                        else 0,
+                        failure=None
+                        if successful_execution
+                        else {
+                            "domain": "environment",
+                            "stage": failed_stage,
+                            "code": "saved_session_rerun_failed",
+                            "message": f"{failed_stage} exited {return_code}",
+                            "retryable": False,
+                        },
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+            except Exception as exc:
+                state = _read_json(state_path)
+                state.update(
+                    stage=HarnessStage.FAILED.value,
+                    detail=f"{type(exc).__name__}: {exc}",
+                    failure={
+                        "domain": "infrastructure",
+                        "stage": HarnessStage.RUNNING.value,
+                        "code": type(exc).__name__,
+                        "message": str(exc),
+                        "retryable": False,
+                    },
+                    updated_at=_now(),
+                )
+                _write_json(state_path, state)
+            finally:
+                log_handle.close()
+                self._processes.pop(job.job_id, None)
+                self._tasks.pop(job.job_id, None)
+                self._ephemeral_secrets.pop(job.job_id, None)
+
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
         if request.source_path or request.source_id:
             source = (
@@ -599,6 +821,7 @@ class LocalSandbox:
                     child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                         sorted(runtime_configuration)
                     )
+                    child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
                     process = await asyncio.create_subprocess_exec(
                         sys.executable,
                         "-m",
@@ -712,6 +935,13 @@ class LocalSandbox:
         raw_state = _read_json(directory / "state.json")
         events = _events(self.artifacts_root / job.run_id / "harness-events.jsonl")
         event_stage = _stage_from_events(events)
+        if (
+            raw_state.get("operation") == "rerun"
+            and raw_state.get("stage") not in _TERMINAL_STAGES
+        ):
+            # Historic event streams end in ``completed``. During a rerun the current state is
+            # authoritative until the new invocation emits/commits its terminal result.
+            event_stage = None
         stage = event_stage or raw_state.get("stage", "queued")
         updated_at = raw_state.get("updated_at", _now())
         detail = raw_state.get("detail")
@@ -737,6 +967,41 @@ class LocalSandbox:
         discovered_scenarios = (
             len(scenario_index) if isinstance(scenario_index, list) else 0
         )
+        completed_scenarios = int(raw_state.get("completed_scenarios", 0) or 0)
+        if stage == HarnessStage.RUNNING.value:
+            # The worker writes state.json only at process boundaries, while each scenario result
+            # is committed as soon as that scenario finishes. Derive live progress from the newest
+            # campaign directory so a multi-call run does not remain at 0/N until finalization.
+            # Only immediate scenario result files count; nested SDK/debug artifacts are ignored.
+            runs_root = self.artifacts_root / job.run_id / "runs"
+            campaigns = [path for path in runs_root.glob("run-*") if path.is_dir()]
+            operation_started_at = str(
+                raw_state.get("operation_started_at") or ""
+            ).strip()
+            if raw_state.get("operation") == "rerun" and operation_started_at:
+                try:
+                    started_ns = int(
+                        datetime.fromisoformat(operation_started_at).timestamp()
+                        * 1_000_000_000
+                    )
+                    campaigns = [
+                        path
+                        for path in campaigns
+                        if path.stat().st_mtime_ns >= started_ns
+                    ]
+                except ValueError:
+                    campaigns = []
+            if campaigns:
+                latest = max(campaigns, key=lambda path: path.stat().st_mtime_ns)
+                committed = sum(
+                    1
+                    for scenario in latest.iterdir()
+                    if scenario.is_dir() and (scenario / "result.json").is_file()
+                )
+                completed_scenarios = min(
+                    raw_state.get("total_scenarios", job.scenario_count),
+                    max(completed_scenarios, committed),
+                )
         status_value = HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
@@ -744,7 +1009,7 @@ class LocalSandbox:
             updated_at=updated_at,
             detail=detail,
             failure=raw_state.get("failure"),
-            completed_scenarios=raw_state.get("completed_scenarios", 0),
+            completed_scenarios=completed_scenarios,
             total_scenarios=max(
                 raw_state.get("total_scenarios", job.scenario_count),
                 discovered_scenarios,
@@ -1057,19 +1322,21 @@ def _stage_outputs(root: Path) -> list[dict[str, Any]]:
         )
     environment = _json_artifact(root / "environment.json")
     if isinstance(environment, dict):
-        visible = _presentation_value({
-            key: value
-            for key, value in environment.items()
-            if key
-            not in {
-                "source",
-                "compose_file",
-                "compose_override_file",
-                "internal_overrides",
-                "runtime_trace_path",
-                "source_fingerprint",
+        visible = _presentation_value(
+            {
+                key: value
+                for key, value in environment.items()
+                if key
+                not in {
+                    "source",
+                    "compose_file",
+                    "compose_override_file",
+                    "internal_overrides",
+                    "runtime_trace_path",
+                    "source_fingerprint",
+                }
             }
-        })
+        )
         outputs.append(
             {
                 "id": "environment",
@@ -1310,6 +1577,19 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def get_job(job_id: str) -> SandboxJobResponse:
         try:
             return sandbox.get(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="job not found") from exc
+
+    @app.post(
+        "/v1/jobs/{job_id}/rerun",
+        response_model=SandboxJobResponse,
+        dependencies=[Depends(_authorize)],
+    )
+    async def rerun_job(
+        job_id: str, request: SandboxRerunRequest
+    ) -> SandboxJobResponse:
+        try:
+            return sandbox.rerun(job_id, request)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="job not found") from exc
 

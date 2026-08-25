@@ -340,6 +340,24 @@ def test_generated_context_omits_explicit_large_output_directory(
     assert not Path(plan.context_directory, "data/results").exists()
 
 
+def test_generated_context_allows_excluding_not_yet_created_runtime_state(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+
+    plan = prepare_generated_runtime(
+        source,
+        tmp_path / "session",
+        Runtime(context_excludes=["fake_data/hotel.db"]),
+    )
+
+    assert plan.context_excludes == ()
+    assert Path(plan.context_directory, "agent.py").is_file()
+
+
 def test_generated_context_cannot_exclude_submitted_entrypoint(tmp_path: Path) -> None:
     source = tmp_path / "agent"
     source.mkdir()

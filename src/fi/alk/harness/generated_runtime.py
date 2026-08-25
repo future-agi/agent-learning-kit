@@ -689,9 +689,10 @@ def _context_excludes(
                 f"generated_runtime_context_exclude_invalid: {raw}"
             ) from exc
         if not target.exists():
-            raise GeneratedRuntimeError(
-                f"generated_runtime_context_exclude_missing: {normalized}"
-            )
+            # Generated/local state files are commonly listed even before the
+            # first run creates them. A missing exclusion is already excluded
+            # from the immutable build context and is therefore safe to ignore.
+            continue
         excluded_path = Path(normalized)
         if any(
             excluded_path == required_path or excluded_path in required_path.parents
