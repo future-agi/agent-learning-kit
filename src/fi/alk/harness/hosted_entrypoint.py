@@ -62,6 +62,7 @@ from .process_runtime import (
     ProcessRuntimeProvider,
     RuntimeEndpoint,
 )
+from .scenario_source import BundleScenarioSource, ScenarioDocumentInvalid, bundle_has_scenarios
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -256,6 +257,7 @@ class ScenarioSource(Protocol):
         *,
         pool: WorldPool,
         world_factory: WorldFactory,
+        bundle_dir: Path,
     ) -> Sequence[Scenario]: ...
 
 
@@ -268,8 +270,9 @@ class NotWiredScenarioSource:
         *,
         pool: WorldPool,
         world_factory: WorldFactory,
+        bundle_dir: Path,
     ) -> Sequence[Scenario]:
-        del job, bundle, scenarios_client, pool, world_factory
+        del job, bundle, scenarios_client, pool, world_factory, bundle_dir
         raise ScenarioSourceNotWired(
             "no ScenarioSource wired -- scenario generation is not implemented in this repo yet "
             "(Scenario Generation Contract, in review)"
@@ -1576,9 +1579,19 @@ async def run_job(
         adapter.stage_changed(HarnessStage.VALIDATING_SCENARIOS)
         await adapter.aflush_events()
         world_factory = deps.build_world_factory(work_directory)
+        # An injected `ScenarioSource` (every test, every future caller) always wins -- the real
+        # bundle-reading adapter (scenario_source.py) only steps in when the default
+        # `NotWiredScenarioSource` is still in place AND the bundle actually carries a `scenarios/`
+        # directory (the LAYOUT DECISION's presence test). A bundle without one keeps the existing
+        # typed `ScenarioSourceNotWired` failure below -- no regression for a job whose scenarios
+        # are not generated yet.
+        scenario_source = deps.scenario_source
+        if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(bundle_dir):
+            scenario_source = BundleScenarioSource()
         try:
-            scenarios = await deps.scenario_source.build(
-                job, manifest, scenarios_client, pool=pool, world_factory=world_factory
+            scenarios = await scenario_source.build(
+                job, manifest, scenarios_client, pool=pool, world_factory=world_factory,
+                bundle_dir=bundle_dir,
             )
         except (ob.HostedFencedError, ob.HostedAttemptSupersededError):
             # `ScenariosClient._post` re-raises these after latching `channel_state` -- a fence
@@ -1602,6 +1615,18 @@ async def run_job(
             return await _fail(
                 domain=FailureDomain.PLATFORM_SYNC, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
                 code="scenario_preallocation_failed", message=str(exc),
+            )
+        except ScenarioDocumentInvalid as exc:
+            # A scenario document that will not even compile is a generation-stage content defect
+            # (deterministic on retry), never a transport failure -- same rationale as
+            # `_SCENARIO_ENTRY_INVALID_CODE`'s other use below, reused rather than inventing a new
+            # code for the same pair of (domain, stage).
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=_SCENARIO_ENTRY_INVALID_CODE, message=str(exc),
             )
 
         # Defense against a malformed scenario entry (K1) reaching the scheduler, which reads
