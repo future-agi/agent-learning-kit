@@ -1574,7 +1574,16 @@ class HostedScheduler:
                     # M8: this scenario already ran and produced a real attempt-1 failure — losing
                     # it to skipped-synthesis just because the retry lease found nothing would
                     # report "never ran" for a scenario that manifestly did.
-                    abort_holder[0] = _abort_from_no_worlds(exc)  # v1.13 §5.4
+                    #
+                    # P=1 failure preservation (v1.15): when the pool exhaustion carries no typed
+                    # §2f code of its own (exc.code is None), the original call failure is more
+                    # informative than the generic world_pool_exhausted — preserve it as the
+                    # job-level abort so a deterministic call_failed/CallAborted is returned as
+                    # its original typed failure, not masked behind world_pool_exhausted.
+                    if exc.code is None and pending.outcome.failure is not None:
+                        abort_holder[0] = pending.outcome.failure
+                    else:
+                        abort_holder[0] = _abort_from_no_worlds(exc)  # v1.13 §5.4
                     return await self._emit_pending_retry_receipt(scenario, pending)
 
                 if next_leased is None:

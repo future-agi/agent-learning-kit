@@ -54,10 +54,28 @@ fi
 
 # Cache a Python venv with the Daytona SDK (the SDK is an ops dependency, not an
 # ALK runtime dependency, so it is not in pyproject).
+# Prefer python3.12 or python3.11 over bare python3, which may be 3.9 on some
+# systems and the Daytona SDK (>=0.207) requires >=3.10.
+_find_python() {
+  for candidate in python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      local ver
+      ver="$("$candidate" -c 'import sys; print(sys.version_info[:2]>=(3,10))' 2>/dev/null)"
+      if [ "$ver" = "True" ]; then
+        echo "$candidate"
+        return
+      fi
+    fi
+  done
+  echo "error: no python >=3.10 found (daytona SDK requires it)" >&2
+  exit 1
+}
+
 py="$DAYTONA_VENV/bin/python"
 if [ ! -x "$py" ]; then
-  echo ">> creating Daytona SDK venv at $DAYTONA_VENV"
-  python3 -m venv "$DAYTONA_VENV"
+  _base_python="$(_find_python)"
+  echo ">> creating Daytona SDK venv at $DAYTONA_VENV (using $_base_python)"
+  "$_base_python" -m venv "$DAYTONA_VENV"
   "$py" -m pip install -q --upgrade pip
 fi
 if ! "$py" -c "import daytona" 2>/dev/null; then

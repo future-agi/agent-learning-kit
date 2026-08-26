@@ -61,7 +61,7 @@ from fi.alk.harness.process_runtime import (
     RuntimeState,
 )
 from fi.alk.harness.scenario_source import SCENARIOS_DIRNAME
-from fi.simulate.runtime.spec import RuntimeRequirements, SecretRef
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
 SCHEMA_SQL = b"CREATE TABLE riders (id int);\n"
 SEED_SQL = b"INSERT INTO riders VALUES (1);\n"
@@ -143,6 +143,11 @@ def _job(
     *, connector: str = "vapi", parallelism: int = 1,
     artifacts: HarnessArtifactPolicy | None = None,
 ) -> HarnessJob:
+    runtime = RuntimeRequirements(
+        isolation=RuntimeIsolation.DEDICATED_VM,
+        cpu_units=max(parallelism, 1),
+    )
+    runtime = runtime.model_copy(update={"parallelism": parallelism})
     return HarnessJob(
         job_id="job-1", run_id="run-1", execution=ExecutionMode.HOSTED,
         source=RepositorySource(
@@ -159,7 +164,7 @@ def _job(
         ),
         scenario_count=2,
         seed=1234,
-        runtime=RuntimeRequirements(parallelism=parallelism),
+        runtime=runtime,
         **({"artifacts": artifacts} if artifacts is not None else {}),
     )
 
@@ -572,7 +577,7 @@ def _build_harness(
 
     holder: dict[str, he.OutboundAdapter] = {}
 
-    def build_call_runner(adapter: he.OutboundAdapter) -> FakeCallRunner:
+    def build_call_runner(adapter: he.OutboundAdapter, meta: dict | None = None) -> FakeCallRunner:
         holder["adapter"] = adapter
         return FakeCallRunner(
             adapter, cancel_path=cancel_path, cancel_on_scenario=cancel_on_scenario,
@@ -1582,7 +1587,7 @@ def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
-        harness.deps.build_call_runner = lambda adapter: ChattyCallRunner(adapter, log_count=260)
+        harness.deps.build_call_runner = lambda adapter, meta=None: ChattyCallRunner(adapter, log_count=260)
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -1619,7 +1624,7 @@ def test_call_aborted_with_no_ended_at_still_produces_a_receipt() -> None:
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
-        harness.deps.build_call_runner = lambda adapter: AbortingCallRunner()
+        harness.deps.build_call_runner = lambda adapter, meta=None: AbortingCallRunner()
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -1708,7 +1713,7 @@ def test_traces_artifact_level_refuses_recording_upload_end_to_end() -> None:
             scenarios=scenarios, instances=1,
             artifacts=HarnessArtifactPolicy(level=ArtifactLevel.TRACES),
         )
-        harness.deps.build_call_runner = lambda adapter: RecordingCallRunner(adapter)
+        harness.deps.build_call_runner = lambda adapter, meta=None: RecordingCallRunner(adapter)
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -2173,7 +2178,7 @@ def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt
         harness = _build_harness(scenarios=scenarios, cancel_on_scenario="first", instances=1)
         transport = OrderTrackingTransport()
         harness.deps.build_transport = lambda: transport
-        harness.deps.build_call_runner = lambda adapter: ChattyCancelingCallRunner(
+        harness.deps.build_call_runner = lambda adapter, meta=None: ChattyCancelingCallRunner(
             adapter, cancel_path=harness.deps.cancel_path, cancel_on_scenario="first",
             chatter_count=260,
         )

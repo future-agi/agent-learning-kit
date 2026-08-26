@@ -409,13 +409,18 @@ class NotWiredCallRunner:
         )
 
 
-def _default_voice_call_runner() -> "CallRunner":
+def _default_voice_call_runner(
+    bundle_metadata: dict[str, Any] | None = None,
+) -> "CallRunner":
     """The hosted default: drive the real voice case against the provisioned agent and read its
     tool trace. Imported lazily so the voice/livekit stack is loaded only for an actual run, never
-    at module import (tests and non-voice callers inject their own `build_call_runner`)."""
+    at module import (tests and non-voice callers inject their own `build_call_runner`).
+
+    `bundle_metadata` threads the manifest's `metadata` dict into the runner so
+    `_resolve_voice_case` can consult `metadata.voice_case` (shared precedence contract)."""
     from .hosted_call_runner import VoiceCallRunner
 
-    return VoiceCallRunner(Path("/work/bundle"))
+    return VoiceCallRunner(Path("/work/bundle"), bundle_metadata=bundle_metadata)
 
 
 # =================================================================================================
@@ -1189,8 +1194,10 @@ class HostedEntrypointDeps:
     # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that referenced
     # artifacts are uploaded+acked BEFORE the receipt that names them -- the adapter is threaded in
     # once `run_job` has built it, rather than the CallRunner reaching for a global.
-    build_call_runner: Callable[["OutboundAdapter"], CallRunner] = field(
-        default=lambda adapter: _default_voice_call_runner()
+    # `bundle_metadata` (v1.15): the manifest's metadata dict, threaded so _resolve_voice_case
+    # can consult metadata.voice_case (shared precedence contract).
+    build_call_runner: Callable[["OutboundAdapter", dict[str, Any]], CallRunner] = field(
+        default=lambda adapter, meta: _default_voice_call_runner(bundle_metadata=meta)
     )
     build_world_factory: Callable[[Path], WorldFactory] = field(default=ProcessWorldFactory)
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
@@ -1698,7 +1705,7 @@ async def run_job(
         # 5/6. Scheduler wiring.
         adapter.stage_changed(HarnessStage.RUNNING)
         await adapter.aflush_events()
-        call_runner = deps.build_call_runner(adapter)
+        call_runner = deps.build_call_runner(adapter, dict(manifest.metadata))
         scheduler = HostedScheduler(
             pool=pool, world_factory=world_factory, call_runner=call_runner, outbound=adapter,
             job_seed=job_seed, cancel_requested=cancel_requested,
