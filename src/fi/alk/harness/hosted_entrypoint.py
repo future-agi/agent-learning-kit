@@ -154,6 +154,22 @@ def peek_secret_values(secrets_path: Path) -> tuple[str, ...]:
     return tuple(str(value) for value in raw.values() if value)
 
 
+def peek_secret_map(secrets_path: Path) -> dict[str, str]:
+    """A non-destructive read of `/run/futureagi/secrets.json` as a name->value map, for the
+    caller lane. The provisioner deletes this file during `provision()`, so the entrypoint peeks
+    the full map at boot and populates the caller-lane provider creds (LiveKit / Deepgram /
+    simulator LLM) into `os.environ` before that deletion -- the voice CallRunner and the voice
+    case it spawns read them from the environment. Never fatal: a missing/malformed file yields an
+    empty map (the run then fails later at the call with a clear, typed error)."""
+    try:
+        raw = json.loads(secrets_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(name): str(value) for name, value in raw.items() if value is not None}
+
+
 # =================================================================================================
 # Bundle source -- §2 bundle authoring is not this module's (or built anywhere yet); injectable.
 # =================================================================================================
@@ -390,6 +406,15 @@ class NotWiredCallRunner:
         raise CallRunnerNotWired(
             "no CallRunner wired -- the live voice-simulation call runner is a separate track"
         )
+
+
+def _default_voice_call_runner() -> "CallRunner":
+    """The hosted default: drive the real voice case against the provisioned agent and read its
+    tool trace. Imported lazily so the voice/livekit stack is loaded only for an actual run, never
+    at module import (tests and non-voice callers inject their own `build_call_runner`)."""
+    from .hosted_call_runner import VoiceCallRunner
+
+    return VoiceCallRunner(Path("/work/bundle"))
 
 
 # =================================================================================================
@@ -1164,7 +1189,7 @@ class HostedEntrypointDeps:
     # artifacts are uploaded+acked BEFORE the receipt that names them -- the adapter is threaded in
     # once `run_job` has built it, rather than the CallRunner reaching for a global.
     build_call_runner: Callable[["OutboundAdapter"], CallRunner] = field(
-        default=lambda adapter: NotWiredCallRunner()
+        default=lambda adapter: _default_voice_call_runner()
     )
     build_world_factory: Callable[[Path], WorldFactory] = field(default=ProcessWorldFactory)
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
@@ -1453,6 +1478,13 @@ async def run_job(
         job_seed = job.seed if job.seed is not None else 0
         parallelism = resolve_parallelism(job)
         secret_purposes = job_secret_purposes(job)
+        # Caller lane: populate the simulator/verifier provider creds (LiveKit / Deepgram /
+        # simulator LLM) into this process env BEFORE the provisioner deletes secrets.json, so the
+        # voice CallRunner and the voice case it spawns can place the call. setdefault never
+        # overrides an existing var. (V1 single sandbox: caller shares it with the agent; a
+        # separate actor/verifier secret split is a follow-up.)
+        for _secret_name, _secret_value in peek_secret_map(deps.secrets_path).items():
+            os.environ.setdefault(_secret_name, _secret_value)
         adapter.configure_artifacts(job.artifacts)  # level table + budget, now that job.json is known.
 
         adapter.stage_changed(HarnessStage.VALIDATING_ENVIRONMENT)
