@@ -162,6 +162,30 @@ Pre-agreeing to something the agent has not done yet is the most damaging form. 
 whether or not it happened. Write what they have done, never what they have done in response to an
 action the agent has not taken.
 
+**Steps that happen outside the conversation need a state, not a response.** Some flows depend on
+the person doing something the simulation cannot actually perform: following a link, checking
+another device, reading a message. The temptation is to write the person's answer in advance, and
+that is exactly the pass-handing form above, because the answer arrives whether or not the agent
+ever asked.
+
+Give them a standing disposition instead, and let the agent's action trigger it:
+
+```
+BAD    The agent will send you <the out-of-band thing>. Tell them you have
+       completed it when asked.
+       (the scenario is testing whether the agent sends it. This person confirms
+        completing it even in a run where nothing was ever sent)
+
+GOOD   You have your <device> with you and you are willing to follow anything you
+       are sent. You have not been sent anything yet.
+       (a state. If the agent sends it, this person can act on it and say so
+        truthfully. If the agent never does, they have nothing to confirm, and the
+        transcript shows the difference)
+```
+
+The closing sentence matters: stating what has **not** happened yet is what stops the person
+assuming it has.
+
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
 from a polite one only if the agent must handle that difference. Persona never contains the
