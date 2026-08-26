@@ -10,18 +10,25 @@ scheduler needs off a `scenario.json` written in the newer shape. So this module
 instead of depending on either model -- see the report's design-decisions section for the
 consequences of that choice (HEAD-model drift).
 
-Karthik's Scenario Generation Contract (the `provision`/`begin` wire shapes) has not landed. This
-module builds the bundle-reading + compiling + wrapping side only; `register_with_platform` below
-is the one seam a later change wires in once that contract exists.
+RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the `provision`/`begin` wire
+shapes below follow the platform's actual, live route (futureagi/simulate/serializers/services/
+views `hosted_harness.py`) rather than Karthik's Scenario Generation Contract text (PR #63), where
+the two disagree -- a single `POST .../scenarios/` discriminated by a body-level `operation` field,
+`begin` keyed on the full `scenario_keys` set, and a provision response KEYED by `scenario_key`
+(never a position-ordered array). `register_with_platform` below is the seam that builds those
+payloads and merges the platform-assigned `scenario_id`s back onto each scenario.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
+
+from . import outbound as ob
+from .job import FailureDomain
 
 if TYPE_CHECKING:
     from .hosted_entrypoint import ScenariosClient
@@ -323,12 +330,12 @@ class BundleScenarioSource:
         world_factory: Any,
         bundle_dir: Path,
     ) -> Sequence[_CompiledScenario]:
-        del job, bundle, scenarios_client, pool, world_factory
+        del bundle, pool, world_factory
         # `Path.read_text`/`iterdir`/`compile` are all blocking filesystem+CPU work -- run off the
         # event loop the same way `hosted_entrypoint.py` already does for `bundle_source.load` and
         # `preflight_bundle`, rather than stalling every other in-flight scenario behind it.
         try:
-            return await asyncio.wait_for(
+            scenarios = await asyncio.wait_for(
                 asyncio.to_thread(load_scenarios, bundle_dir), timeout=_LOAD_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError as exc:
@@ -340,22 +347,167 @@ class BundleScenarioSource:
                 f"{bundle_dir / SCENARIOS_DIRNAME}: loading scenario documents exceeded "
                 f"{_LOAD_TIMEOUT_SECONDS:.0f}s"
             ) from exc
+        # An empty `scenario_key` is carried VERBATIM off the document by design (module docstring
+        # -- never synthesized here), but it is also the one shape `hosted_entrypoint.py`'s own
+        # downstream `_validate_scenarios` would reject as a local, deterministic ENVIRONMENT-domain
+        # content defect -- checked HERE, before `register_with_platform` ever reaches the network,
+        # so that cheaper, existing local classification wins over a round trip that would only
+        # rediscover the same defect as a `platform_sync` failure instead (Azain's serializer
+        # rejects a blank `scenario_key` with its own 400 -- `scenario_key` is a plain
+        # non-`allow_blank` `CharField`, hosted_harness.py:169). `ScenarioDocumentInvalid` reuses
+        # `run_job`'s EXISTING `except ScenarioDocumentInvalid` clause (domain=environment) --
+        # nothing new to catch there.
+        if any(not scenario.scenario_key for scenario in scenarios):
+            raise ScenarioDocumentInvalid(
+                f"{bundle_dir / SCENARIOS_DIRNAME}: a scenario document has no non-empty "
+                "scenario_key"
+            )
+        # p13: pre-allocation, after load and before the scheduler ever sees a scenario (spine
+        # step 3.5) -- `register_with_platform` raises `ScenarioPreallocationError`/
+        # `ob.HostedFencedError`/`ob.HostedChannelFailedError`/`ob.HostedAttemptSupersededError` on
+        # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
+        # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
+        # terminal (or the fenced exit) -- nothing new to catch here.
+        return await register_with_platform(scenarios_client, scenarios, run_name=job.run_id)
+
+
+def _preallocation_error(code: str, message: str) -> Exception:
+    """Builds a `hosted_entrypoint.ScenarioPreallocationError` for a guard failure below --
+    imported lazily (not at module level) because `hosted_entrypoint.py` imports THIS module at
+    its own top level (`BundleScenarioSource`/`ScenarioDocumentInvalid`/`bundle_has_scenarios`), so
+    a top-level import back would be a circular import. Reusing that exact exception class (rather
+    than inventing a new one) is what lets these guard failures land on `run_job`'s ALREADY-WIRED
+    `except (ScenarioSourceNotWired, ScenarioPreallocationError)` clause with no changes there.
+    """
+    from .hosted_entrypoint import ScenarioPreallocationError
+
+    return ScenarioPreallocationError(
+        ob.ChannelError(ob.ChannelOutcome.PERMANENT_ITEM, FailureDomain.PLATFORM_SYNC, code, message)
+    )
+
+
+def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+    """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
+    (futureagi/simulate/serializers/hosted_harness.py:168-190): `operation`/`name`/`personas` (with
+    each persona's `scenario_key`) are the only fields this module can actually supply -- `name`/
+    `role`/`situation`/`outcome`/`persona` are all `required=False` on the real serializer, and
+    `_CompiledScenario` itself carries none of them BY DESIGN (this module's own LAYOUT DECISION,
+    see the module docstring: it reads `scenario.json` for the scheduler-facing fields only, never
+    through pr63's full `Scenario` model). Sending bare `scenario_key` per persona still validates
+    against the real endpoint; see CONTRACT NOTES in reports/p13-worker-r2.md.
+    """
+    return {
+        "operation": "provision",
+        "name": run_name,
+        "personas": [{"scenario_key": scenario.scenario_key} for scenario in scenarios],
+    }
+
+
+def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+    """`HarnessScenarioBeginSerializer` (futureagi/simulate/serializers/hosted_harness.py:193-198):
+    `scenario_keys` is `allow_empty=False` and REQUIRED, and `begin_scenarios`
+    (services/hosted_harness.py:323-329) 409s (`scenario_key_mismatch`) on anything but an EXACT
+    match against the full sealed set -- there is no "subset to run" semantics on the real
+    platform (Karthik's contract text describes an optional partial-subset `scenario_ids`; the
+    live route does not implement that -- CONTRACT NOTES). The full set is sent every time.
+    """
+    return {
+        "operation": "begin",
+        "run_test_id": run_test_id,
+        "scenario_keys": [scenario.scenario_key for scenario in scenarios],
+    }
+
+
+def _scenario_ids_by_key(
+    submitted: Sequence[_CompiledScenario], raw_scenarios: Any
+) -> dict[str, str]:
+    """Matches the platform's KEYED provision response
+    (`{"scenarios": [{"scenario_key", "scenario_id"}, ...]}`,
+    futureagi/simulate/serializers/hosted_harness.py:251-260 +
+    services/hosted_harness.py:487-501's `_provision_response`) back onto `submitted` BY
+    `scenario_key` -- a dict lookup, never a positional zip. A positional zip (matching Karthik's
+    documented `scenario_ids` array shape, not what the platform actually returns) would silently
+    mismatch scenario_id -> scenario the instant the response order differs from `submitted`'s
+    order, which nothing on the wire guarantees. Every check below raises rather than returning a
+    partial mapping -- "never partial assignment" per the brief: the caller only gets a mapping
+    once it is proven complete (every submitted key present, exactly once) and exact (no
+    unrecognized key).
+    """
+    if not isinstance(raw_scenarios, list):
+        raise _preallocation_error(
+            "scenarios_provision_response_invalid", "response 'scenarios' is not a list"
+        )
+    by_key: dict[str, str] = {}
+    for entry in raw_scenarios:
+        if not isinstance(entry, dict):
+            raise _preallocation_error(
+                "scenarios_provision_response_invalid", "a 'scenarios' entry is not an object"
+            )
+        key = entry.get("scenario_key")
+        scenario_id = entry.get("scenario_id")
+        if not isinstance(key, str) or not key:
+            raise _preallocation_error(
+                "scenarios_provision_response_invalid",
+                "a 'scenarios' entry has no non-empty scenario_key",
+            )
+        if key in by_key:
+            raise _preallocation_error(
+                "scenario_registration_duplicate_key",
+                f"scenario_key {key!r} appears more than once in the provision response",
+            )
+        if not isinstance(scenario_id, str) or not scenario_id:
+            raise _preallocation_error(
+                "scenarios_provision_response_invalid",
+                f"scenario_key {key!r} has no non-empty scenario_id",
+            )
+        by_key[key] = scenario_id
+
+    submitted_keys = [scenario.scenario_key for scenario in submitted]
+    unknown = sorted(set(by_key) - set(submitted_keys))
+    if unknown:
+        raise _preallocation_error(
+            "scenario_registration_unknown_key",
+            f"provision response named scenario_key(s) never submitted: {unknown}",
+        )
+    missing = sorted(set(submitted_keys) - set(by_key))
+    if missing:
+        raise _preallocation_error(
+            "scenario_registration_missing",
+            f"provision response is missing scenario_key(s): {missing}",
+        )
+    return by_key
 
 
 async def register_with_platform(
-    scenarios_client: "ScenariosClient", scenarios: Sequence[_CompiledScenario]
+    scenarios_client: "ScenariosClient",
+    scenarios: Sequence[_CompiledScenario],
+    *,
+    run_name: str,
 ) -> Sequence[_CompiledScenario]:
-    """SEAM -- not called anywhere in this module, and not wired into `BundleScenarioSource.build`
-    above. Once scenario-generation-contract.md section 3 publishes the `provision`/`begin` payload
-    and response shapes, this is where they get built from `scenarios` and posted through
-    `scenarios_client.provision(...)`/`.begin(...)`, and where the platform-assigned `scenario_id`s
-    that `provision` returns get merged back onto each scenario before `build` hands the list to
-    the scheduler. Left unimplemented rather than guessing a body the contract has not published
-    (CONTRACT GAP) -- wiring this in is the one remaining integration step this module cannot
-    finish alone.
+    """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
+    `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
+    `ScenariosClient`'s own docstring for the file:line evidence). `.provision()`/`.begin()` are
+    blocking network calls (same `ScenariosClient` the rest of `hosted_entrypoint.py` already
+    drives off the event loop via `asyncio.to_thread` -- matched here rather than diverging).
+
+    Sequence: provision (get platform-assigned ids, keyed by `scenario_key`) -> match ids back
+    onto `scenarios` with hard guards (`_scenario_ids_by_key`, raises before ANY assignment on any
+    mismatch) -> begin (seals execution against the FULL scenario_keys set; a begin failure means
+    NO scenario in this batch is returned with an id -- the whole call raises, same as a provision
+    failure) -> only then build and return the new scenario list with `scenario_id` filled in.
     """
-    del scenarios_client, scenarios
-    raise NotImplementedError(
-        "register_with_platform: scenario-generation-contract.md section 3 (the provision/begin "
-        "wire shapes) has not landed -- this seam is intentionally left unwired"
+    provision_result = await asyncio.to_thread(
+        scenarios_client.provision, _provision_payload(run_name, scenarios)
+    )
+    run_test_id = provision_result.get("run_test_id")
+    if not isinstance(run_test_id, str) or not run_test_id:
+        raise _preallocation_error(
+            "scenarios_provision_response_invalid", "provision response has no run_test_id"
+        )
+    id_by_key = _scenario_ids_by_key(scenarios, provision_result.get("scenarios"))
+
+    await asyncio.to_thread(scenarios_client.begin, _begin_payload(run_test_id, scenarios))
+
+    return tuple(
+        replace(scenario, scenario_id=id_by_key[scenario.scenario_key]) for scenario in scenarios
     )

@@ -266,10 +266,23 @@ class FakeTransport:
             self.artifacts[digest] = bytes(payload)
             return ob.TransportResponse(200 if existed else 201, {}, {})
         if "/scenarios/" in url and method == "POST" and json_body is not None:
+            # p13: Azain's real router mints exactly ONE url per attempt (a DRF detail `@action`,
+            # no `url_path`) -- provision vs begin is a body-level `operation` field, never a URL
+            # suffix, so routing here is on `json_body["operation"]`, not `url`.
             self.scenarios_calls.append((url, json_body))
-            if url.endswith("/provision/"):
-                ids = {key: f"platform-{key}" for key in json_body.get("scenario_keys", [])}
-                return ob.TransportResponse(200, {"result": {"scenario_ids": ids}}, {})
+            operation = json_body.get("operation")
+            if operation == "provision":
+                keys = [p.get("scenario_key") for p in json_body.get("personas", [])]
+                scenarios = [{"scenario_key": key, "scenario_id": f"platform-{key}"} for key in keys]
+                return ob.TransportResponse(
+                    200, {"result": {"run_test_id": "run-test-1", "scenarios": scenarios}}, {}
+                )
+            if operation == "begin":
+                return ob.TransportResponse(
+                    200, {"result": {"test_execution_id": "exec-1", "scenarios": []}}, {}
+                )
+            # No/unknown `operation` -- exercised by callers (e.g. `FakeScenarioSource`) that only
+            # care about the call happening, never the response shape.
             return ob.TransportResponse(200, {"result": {"ok": True}}, {})
         return ob.TransportResponse(
             404, {"error": "not_found", "message": f"unmapped route: {url}", "retryable": False}, {}
@@ -472,11 +485,18 @@ class FakeScenarioSource:
         # fake -- accepted only because `run_job` now forwards it to every `ScenarioSource.build`,
         # injected or not.
         del job, bundle, pool, world_factory, bundle_dir
+        # `operation` mirrors what `register_with_platform` (scenario_source.py) really sends --
+        # this fake's own `scenario_keys`/`scenario_ids` bodies are otherwise arbitrary (never
+        # parsed by `FakeTransport`, which only inspects `operation` to pick a response), kept only
+        # so `test_scenarios_channel_uses_bearer_auth_never_api_key` and friends see two distinct,
+        # non-empty POST bodies.
         await asyncio.to_thread(
             scenarios_client.provision,
-            {"scenario_keys": [s.scenario_key for s in self._scenarios]},
+            {"operation": "provision", "scenario_keys": [s.scenario_key for s in self._scenarios]},
         )
-        await asyncio.to_thread(scenarios_client.begin, {"scenario_ids": {}})
+        await asyncio.to_thread(
+            scenarios_client.begin, {"operation": "begin", "scenario_ids": {}}
+        )
         return self._scenarios
 
 
@@ -718,11 +738,40 @@ def test_world_pool_serializes_concurrent_provider_calls_end_to_end() -> None:
 
 
 def test_scenarios_client_provision_unwraps_the_result_envelope() -> None:
+    # p13: keyed response (`{"scenarios": [{"scenario_key", "scenario_id"}, ...]}`), matching the
+    # real platform's `_provision_response` (services/hosted_harness.py:487-501) -- never a
+    # position-ordered `scenario_ids` array.
     capabilities = _capabilities()
     transport = FakeTransport()
     client = he.ScenariosClient(capabilities, transport)
-    result = client.provision({"scenario_keys": ["a", "b"]})
-    assert result == {"scenario_ids": {"a": "platform-a", "b": "platform-b"}}
+    result = client.provision(
+        {
+            "operation": "provision", "name": "run-1",
+            "personas": [{"scenario_key": "a"}, {"scenario_key": "b"}],
+        }
+    )
+    assert result == {
+        "run_test_id": "run-test-1",
+        "scenarios": [
+            {"scenario_key": "a", "scenario_id": "platform-a"},
+            {"scenario_key": "b", "scenario_id": "platform-b"},
+        ],
+    }
+
+
+def test_scenarios_client_provision_and_begin_hit_the_same_single_url() -> None:
+    # p13: Azain's router mints exactly ONE url per attempt (views/hosted_harness.py:78-90's
+    # `scenarios` detail `@action`, no `url_path`; urls.py:128-132) -- `provision_path`/
+    # `begin_path` default to an EMPTY suffix now (not the old guessed `"provision/"`/`"begin/"`,
+    # which 404 against the real router), so both calls land on `capabilities.endpoints.scenarios`
+    # itself, discriminated only by the body's `operation` field.
+    capabilities = _capabilities()
+    transport = FakeTransport()
+    client = he.ScenariosClient(capabilities, transport)
+    client.provision({"operation": "provision", "name": "run-1", "personas": []})
+    client.begin({"operation": "begin", "run_test_id": "run-test-1", "scenario_keys": []})
+    urls = [call["url"] for call in transport.calls]
+    assert urls == [capabilities.endpoints.scenarios, capabilities.endpoints.scenarios]
 
 
 def test_scenarios_client_fencing_latches_the_shared_channel_state() -> None:
@@ -731,7 +780,7 @@ def test_scenarios_client_fencing_latches_the_shared_channel_state() -> None:
     channel_state = ob.ChannelState()
     client = he.ScenariosClient(capabilities, transport, channel_state=channel_state)
     try:
-        client.provision({"scenario_keys": []})
+        client.provision({"operation": "provision", "name": "run-1", "personas": []})
     except ob.HostedFencedError:
         pass
     else:
@@ -1246,9 +1295,15 @@ def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> 
         assert harness.provisioner.provision_calls >= 1
         assert harness.provisioner.closed is True
 
-        # Scenario pre-allocation (item 3) actually ran against endpoints.scenarios.
-        assert any(url.endswith("/provision/") for url, _ in harness.transport.scenarios_calls)
-        assert any(url.endswith("/begin/") for url, _ in harness.transport.scenarios_calls)
+        # Scenario pre-allocation (item 3) actually ran against endpoints.scenarios -- p13: a
+        # single url, discriminated by the body's `operation` field (never a `/provision/`/
+        # `/begin/` url suffix, which 404s against the real platform router).
+        assert any(
+            body.get("operation") == "provision" for _, body in harness.transport.scenarios_calls
+        )
+        assert any(
+            body.get("operation") == "begin" for _, body in harness.transport.scenarios_calls
+        )
 
     asyncio.run(scenario())
 
@@ -2363,16 +2418,17 @@ def test_mutation_adapter_off_makes_the_e2e_test_fail() -> None:
     test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present()
 
 
-def test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema() -> None:
-    # NEWLY DISCOVERED while writing the test above: `outbound.py`'s `ResultReceiptDraft` schema
-    # requires `scenario_id` to be non-empty (pydantic `min_length=1`). The brief mandates carrying
-    # `scenario_id` VERBATIM off the document -- including empty, until pre-allocation is wired --
-    # so a scenario whose pre-allocation has not run gets its receipt rejected at construction,
-    # logged as an error, and DROPPED, while the job still reports COMPLETED with that scenario
-    # counted as `passed`/`failed` in `scenario_counts`. This sharpens the brief's own "blocking
-    # integration obligation" from a documentation concern into a concrete, verified one: today, a
-    # bundle-sourced scenario can never actually deliver a receipt to the platform until pre-
-    # allocation assigns it a real `scenario_id`. See CONTRACT QUESTIONS in the report.
+def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers() -> None:
+    # p13 UPDATE of the former `test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema`
+    # (p12): that test pinned a real gap -- `outbound.py`'s `ResultReceiptDraft` schema requires
+    # `scenario_id` non-empty (pydantic `min_length=1`), and before this task nothing ever filled
+    # it in, so a bundle-sourced scenario's receipt was silently dropped. Registration
+    # (`register_with_platform`, scenario_source.py) now runs between load and the scheduler and
+    # OVERWRITES `scenario_id` with the platform-assigned one before `BundleScenarioSource.build`
+    # ever returns -- the document is written with `scenario_id=""` here specifically to prove the
+    # id on the wire came from the (fake) platform's provision response, not the document. See
+    # `test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely` just below for
+    # the property this test used to pin, preserved on the path that never registers at all.
     async def scenario() -> None:
         harness = _build_harness(
             scenarios=[], instances=1, use_default_scenario_source=True,
@@ -2384,6 +2440,47 @@ def test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema() -> None:
                 ),
             ),
         )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        payload = terminals[0]["payload"]
+        assert payload["stage"] == "completed"
+        assert payload["scenario_counts"]["passed"] == 1
+
+        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        assert statuses == {"passing": "passed"}  # the receipt DELIVERS now -- no drop.
+
+        (_, body), = [
+            (key, body) for key, body in harness.transport.receipts.items() if key[1] == "passing"
+        ]
+        # `FakeTransport`'s fake platform assigns `f"platform-{scenario_key}"` -- confirms the id
+        # on the wire is the PLATFORM's, not the document's own (empty) one.
+        assert body["scenario_id"] == "platform-passing"
+
+        error_logs = [
+            record for record in harness.transport.event_records
+            if record.get("type") == "log" and record["payload"].get("level") == "error"
+            and "ResultReceiptDraft" in record["payload"].get("message", "")
+        ]
+        assert error_logs == []  # no drop, so no drop log either.
+
+    asyncio.run(scenario())
+
+
+def test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely() -> None:
+    # Preserves the property the pre-p13 pinning test proved: a scenario that reaches the
+    # scheduler with an empty `scenario_id` (never pre-allocated) still has its receipt rejected by
+    # `ResultReceiptDraft`'s own schema (`min_length=1`) and DROPPED, loudly, rather than crashing
+    # the job or silently delivering a receipt the platform would 422 anyway. Through
+    # `BundleScenarioSource` this is now unreachable (registration always assigns a real id or the
+    # job fails first) -- so this is exercised through `FakeScenarioSource`'s injected-scenario
+    # path instead, which never calls `register_with_platform` at all (an "unregistered" scenario
+    # source, same shape as a future ScenarioSource that also skips pre-allocation).
+    async def scenario() -> None:
+        scenarios = [FakeScenario("passing", "", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(scenarios=scenarios, instances=1)  # FakeScenarioSource, as usual
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -2402,6 +2499,62 @@ def test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema() -> None:
             and "ResultReceiptDraft" in record["payload"].get("message", "")
         ]
         assert len(error_logs) == 1  # the drop is at least loud, not silent -- but still a drop.
+
+    asyncio.run(scenario())
+
+
+def test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal() -> None:
+    # p13: a provision response that fails `_scenario_ids_by_key`'s guards (scenario_source.py --
+    # here, naming NO scenario_key at all, so every submitted one is "missing") must fail the
+    # whole job through the SAME typed `validating_scenarios`/`platform_sync` terminal
+    # `run_job`'s existing `except (ScenarioSourceNotWired, ScenarioPreallocationError)` clause
+    # already produces for every other pre-allocation failure -- no new except clause needed. The
+    # scheduler must never run: no receipt for the scenario ever reaches the platform.
+    async def scenario() -> None:
+        class MismatchedProvisionTransport(FakeTransport):
+            def request(
+                self, method: str, url: str, *, headers: dict[str, str],
+                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                timeout: float = 30.0,
+            ) -> ob.TransportResponse:
+                if (
+                    method == "POST" and "/scenarios/" in url and json_body is not None
+                    and json_body.get("operation") == "provision"
+                ):
+                    self.calls.append({"method": method, "url": url, "headers": dict(headers)})
+                    self.scenarios_calls.append((url, json_body))
+                    return ob.TransportResponse(
+                        200, {"result": {"run_test_id": "run-test-1", "scenarios": []}}, {},
+                    )
+                return super().request(
+                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                )
+
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir,
+                _scenario_doc_files(
+                    "passing", scenario_key="passing", scenario_id="", sub_goals=["holds"],
+                    checks={"holds": "def check(world, calls):\n    return None\n"},
+                ),
+            ),
+        )
+        transport = MismatchedProvisionTransport()
+        harness.deps.build_transport = lambda: transport
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+
+        terminals = transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["stage"] == "validating_scenarios"
+        assert failure["domain"] == "platform_sync"
+        assert failure["code"] == "scenario_preallocation_failed"
+
+        assert transport.receipts == {}  # the scheduler never ran -- registration failed first
+        # `begin` must never have been attempted -- the provision-side guard stops it first.
+        assert not any(body.get("operation") == "begin" for _, body in transport.scenarios_calls)
 
     asyncio.run(scenario())
 
@@ -2534,6 +2687,7 @@ TESTS = [
     test_cancel_state_reads_reason_from_file,
     test_world_pool_serializes_concurrent_provider_calls_end_to_end,
     test_scenarios_client_provision_unwraps_the_result_envelope,
+    test_scenarios_client_provision_and_begin_hit_the_same_single_url,
     test_scenarios_client_fencing_latches_the_shared_channel_state,
     test_capabilities_failure_exits_boot_failure_with_no_channel_and_no_event,
     test_preflight_rejection_reaches_a_failed_terminal_event_before_any_provision,
@@ -2578,7 +2732,9 @@ TESTS = [
     test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present,
     test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_validation,
     test_mutation_adapter_off_makes_the_e2e_test_fail,
-    test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema,
+    test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers,
+    test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely,
+    test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal,
     test_injected_scenario_source_always_wins_over_the_bundle_adapter,
     test_module_level_sys_exit_zero_in_setup_is_contained_as_a_typed_failure,
     test_module_level_sys_exit_three_in_setup_does_not_hijack_the_guests_exit_code,

@@ -31,6 +31,7 @@ from unittest import mock
 import pytest
 
 from fi.alk.harness import scenario_source as ss
+from fi.alk.harness.hosted_entrypoint import ScenarioPreallocationError
 from fi.alk.harness.hosted_scheduler import Call, CallOutcome, HostedScheduler, WorldPool
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 
@@ -38,6 +39,15 @@ from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 # Scenario-folder fixture writer -- `folder.py`'s documented layout, hand-written (never through
 # `fi.alk.harness.folder`/`fi.alk.harness.scenario`, matching the module under test).
 # =================================================================================================
+
+
+@dataclass
+class _FakeJob:
+    """Stands in for `HarnessJob` wherever only `.run_id` is read (p13:
+    `BundleScenarioSource.build` uses it as the platform-facing provision run name) -- avoids
+    importing the real pydantic model into this module purely for one attribute."""
+
+    run_id: str = "job-1"
 
 
 def _write_scenario(
@@ -940,9 +950,19 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
         root = tmp_path / ss.SCENARIOS_DIRNAME
         _write_scenario(root, "s1", scenario_key="s1", sub_goals=[])
         source = ss.BundleScenarioSource()
-        scenarios = await source.build(
-            object(), object(), object(), pool=object(), world_factory=object(), bundle_dir=tmp_path
-        )
+
+        # p13: `build()` now calls `register_with_platform` after load -- this test is about the
+        # R1-5 timeout BUDGET specifically, not registration, so registration is stubbed to a
+        # passthrough (registration's own behavior is covered separately, below).
+        async def _passthrough(scenarios_client, scenarios, *, run_name):
+            del scenarios_client, run_name
+            return scenarios
+
+        with mock.patch.object(ss, "register_with_platform", _passthrough):
+            scenarios = await source.build(
+                _FakeJob(run_id="job-1"), object(), object(), pool=object(), world_factory=object(),
+                bundle_dir=tmp_path,
+            )
         assert [s.scenario_key for s in scenarios] == ["s1"]
 
     asyncio.run(scenario())
@@ -1040,3 +1060,356 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
 
     restored = ss.load_scenarios(tmp_path)[0]
     assert restored.scenario_key == ""  # confirms the patch was fully undone
+
+
+# =================================================================================================
+# p13 -- scenario pre-allocation (`register_with_platform`), wired against the platform's actual
+# route (a single `POST .../scenarios/`, discriminated by a body-level `operation` field, keyed
+# provision response, full-set `begin`) rather than Karthik's documented two-path/position-ordered
+# shape -- see `ScenariosClient`'s and `register_with_platform`'s own docstrings for the file:line
+# evidence, and reports/p13-worker-r2.md CONTRACT NOTES for where the two disagree.
+# =================================================================================================
+
+
+def _scenario(key: str, *, scenario_id: str = "") -> ss._CompiledScenario:
+    return ss._CompiledScenario(
+        scenario_key=key, scenario_id=scenario_id, sub_goals=(), setup=lambda w: None,
+        ready=lambda w: None,
+    )
+
+
+@dataclass
+class _FakeScenariosClient:
+    """Stands in for `hosted_entrypoint.ScenariosClient` -- records every payload it is called
+    with (so a test can assert on exactly what `register_with_platform` sends) and returns a
+    canned `{"result": {...}}`-unwrapped body per call, matching what the real
+    `ScenariosClient._post` already hands back (the envelope itself is that class's concern, not
+    this module's -- see `test_scenarios_client_provision_unwraps_the_result_envelope` in
+    `test_hosted_entrypoint.py`)."""
+
+    provision_response: dict[str, Any]
+    begin_response: dict[str, Any] = field(
+        default_factory=lambda: {"test_execution_id": "exec-1", "scenarios": []}
+    )
+    provision_error: Exception | None = None
+    begin_error: Exception | None = None
+    provision_calls: list[dict[str, Any]] = field(default_factory=list)
+    begin_calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def provision(self, payload: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+        del deadline
+        self.provision_calls.append(payload)
+        if self.provision_error is not None:
+            raise self.provision_error
+        return self.provision_response
+
+    def begin(self, payload: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+        del deadline
+        self.begin_calls.append(payload)
+        if self.begin_error is not None:
+            raise self.begin_error
+        return self.begin_response
+
+
+# -------------------------------------------------------------------------------------------------
+# `BundleScenarioSource.build` wiring -- registration runs after load, before the scheduler; a
+# LOCALLY-detectable defect (empty scenario_key) must never reach the network first.
+# -------------------------------------------------------------------------------------------------
+
+
+def test_build_rejects_empty_scenario_key_before_calling_register_with_platform(
+    tmp_path: Path,
+) -> None:
+    # An empty scenario_key is carried verbatim off the document (this module's own LAYOUT
+    # DECISION -- never synthesized), but `hosted_entrypoint.py`'s own `_validate_scenarios` would
+    # reject it downstream as a deterministic, `environment`-domain content defect. Checked here,
+    # before `register_with_platform` is ever called, so that existing classification wins over a
+    # round trip that would only rediscover the same defect as a `platform_sync` failure instead.
+    async def scenario() -> None:
+        root = tmp_path / ss.SCENARIOS_DIRNAME
+        _write_scenario(root, "s1", scenario_key="", sub_goals=[])
+        source = ss.BundleScenarioSource()
+
+        register_calls: list[Any] = []
+
+        async def _spy(scenarios_client, scenarios, *, run_name):
+            register_calls.append((scenarios_client, scenarios, run_name))
+            return scenarios
+
+        with mock.patch.object(ss, "register_with_platform", _spy):
+            with pytest.raises(ss.ScenarioDocumentInvalid, match="scenario_key"):
+                await source.build(
+                    _FakeJob(), object(), object(), pool=object(), world_factory=object(),
+                    bundle_dir=tmp_path,
+                )
+        assert register_calls == []  # never reached the network
+
+    asyncio.run(scenario())
+
+
+# -------------------------------------------------------------------------------------------------
+# Payload shape -- quote-driven against Azain's serializers (file:line in each docstring/comment).
+# -------------------------------------------------------------------------------------------------
+
+
+def test_provision_payload_only_sends_fields_azains_serializer_declares() -> None:
+    # HarnessProvisionPersonaSerializer (futureagi/simulate/serializers/hosted_harness.py:168-174):
+    # scenario_key is the only REQUIRED field; name/role/situation/outcome/persona are all
+    # `required=False`. `_CompiledScenario` carries none of the optional ones (this module's own
+    # LAYOUT DECISION -- see the module docstring), so the payload must send bare scenario_key
+    # only, never a synthesized value for a field this reader does not have.
+    scenarios = (_scenario("book_a_ride"), _scenario("cancel_ride"))
+    payload = ss._provision_payload("run-1", scenarios)
+    assert payload == {
+        "operation": "provision",
+        "name": "run-1",
+        "personas": [{"scenario_key": "book_a_ride"}, {"scenario_key": "cancel_ride"}],
+    }
+    for persona in payload["personas"]:
+        assert set(persona) == {"scenario_key"}
+
+
+def test_begin_payload_carries_operation_run_test_id_and_the_full_key_set() -> None:
+    # HarnessScenarioBeginSerializer (futureagi/simulate/serializers/hosted_harness.py:193-198):
+    # `scenario_keys` is REQUIRED and `allow_empty=False` -- the full sealed set every time, never
+    # a subset (`begin_scenarios`, services/hosted_harness.py:323-329, 409s on anything less).
+    scenarios = (_scenario("a"), _scenario("b"))
+    payload = ss._begin_payload("run-test-1", scenarios)
+    assert payload == {
+        "operation": "begin", "run_test_id": "run-test-1", "scenario_keys": ["a", "b"],
+    }
+
+
+# -------------------------------------------------------------------------------------------------
+# Keyed-response parsing (`_scenario_ids_by_key`) -- dict lookup by scenario_key, never a
+# positional zip; every malformed/mismatched shape raises rather than returning a partial mapping.
+# -------------------------------------------------------------------------------------------------
+
+
+def test_scenario_ids_by_key_matches_regardless_of_response_order() -> None:
+    # The platform's response order is not guaranteed to match submission order -- this is the
+    # load-bearing case a positional zip would get wrong (mutation-killed below).
+    submitted = (_scenario("a"), _scenario("b"))
+    reordered_response = [
+        {"scenario_key": "b", "scenario_id": "platform-b"},
+        {"scenario_key": "a", "scenario_id": "platform-a"},
+    ]
+    assert ss._scenario_ids_by_key(submitted, reordered_response) == {
+        "a": "platform-a", "b": "platform-b",
+    }
+
+
+def test_scenario_ids_by_key_raises_typed_error_for_non_list_response() -> None:
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key((_scenario("a"),), {"not": "a list"})
+    assert exc_info.value.error.code == "scenarios_provision_response_invalid"
+
+
+def test_scenario_ids_by_key_raises_typed_error_for_a_non_object_entry() -> None:
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key((_scenario("a"),), ["not an object"])
+    assert exc_info.value.error.code == "scenarios_provision_response_invalid"
+
+
+def test_scenario_ids_by_key_raises_typed_error_for_unknown_key() -> None:
+    submitted = (_scenario("a"),)
+    raw = [
+        {"scenario_key": "a", "scenario_id": "platform-a"},
+        {"scenario_key": "never-submitted", "scenario_id": "platform-x"},
+    ]
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key(submitted, raw)
+    assert exc_info.value.error.code == "scenario_registration_unknown_key"
+
+
+def test_scenario_ids_by_key_raises_typed_error_for_missing_key() -> None:
+    submitted = (_scenario("a"), _scenario("b"))
+    raw = [{"scenario_key": "a", "scenario_id": "platform-a"}]  # "b" never comes back
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key(submitted, raw)
+    assert exc_info.value.error.code == "scenario_registration_missing"
+
+
+def test_scenario_ids_by_key_raises_typed_error_for_duplicate_key() -> None:
+    submitted = (_scenario("a"),)
+    raw = [
+        {"scenario_key": "a", "scenario_id": "platform-a"},
+        {"scenario_key": "a", "scenario_id": "platform-a-again"},
+    ]
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key(submitted, raw)
+    assert exc_info.value.error.code == "scenario_registration_duplicate_key"
+
+
+def test_scenario_ids_by_key_raises_typed_error_for_empty_scenario_id() -> None:
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key((_scenario("a"),), [{"scenario_key": "a", "scenario_id": ""}])
+    assert exc_info.value.error.code == "scenarios_provision_response_invalid"
+
+
+# -------------------------------------------------------------------------------------------------
+# `register_with_platform` -- full sequence: provision -> match (guards) -> begin -> assign.
+# -------------------------------------------------------------------------------------------------
+
+
+def test_register_with_platform_assigns_platform_ids_and_begins_the_full_set() -> None:
+    async def scenario() -> None:
+        submitted = (_scenario("a"), _scenario("b"))
+        client = _FakeScenariosClient(
+            provision_response={
+                "run_test_id": "run-test-1",
+                # Deliberately out of order relative to `submitted` -- proves the match is by key.
+                "scenarios": [
+                    {"scenario_key": "b", "scenario_id": "platform-b"},
+                    {"scenario_key": "a", "scenario_id": "platform-a"},
+                ],
+            },
+        )
+        result = await ss.register_with_platform(client, submitted, run_name="run-1")
+
+        assert [s.scenario_key for s in result] == ["a", "b"]  # submission order preserved
+        assert [s.scenario_id for s in result] == ["platform-a", "platform-b"]  # matched by key
+        assert result[0].setup is submitted[0].setup  # untouched fields carried through verbatim
+        assert result[0].ready is submitted[0].ready
+        assert result[0].sub_goals is submitted[0].sub_goals
+
+        assert client.provision_calls == [
+            {
+                "operation": "provision", "name": "run-1",
+                "personas": [{"scenario_key": "a"}, {"scenario_key": "b"}],
+            }
+        ]
+        assert client.begin_calls == [
+            {"operation": "begin", "run_test_id": "run-test-1", "scenario_keys": ["a", "b"]},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_register_with_platform_guard_failure_never_calls_begin() -> None:
+    # "never partial assignment": a guard failure during provision-response parsing must stop
+    # BEFORE begin is ever called -- no scenario in this batch gets sealed for execution against a
+    # registration the client-side guard has already rejected.
+    async def scenario() -> None:
+        submitted = (_scenario("a"), _scenario("b"))
+        client = _FakeScenariosClient(
+            provision_response={
+                "run_test_id": "run-test-1",
+                "scenarios": [{"scenario_key": "a", "scenario_id": "platform-a"}],  # "b" missing
+            },
+        )
+        with pytest.raises(ScenarioPreallocationError) as exc_info:
+            await ss.register_with_platform(client, submitted, run_name="run-1")
+        assert exc_info.value.error.code == "scenario_registration_missing"
+        assert client.begin_calls == []
+
+    asyncio.run(scenario())
+
+
+def test_register_with_platform_missing_run_test_id_is_a_typed_failure_before_begin() -> None:
+    async def scenario() -> None:
+        submitted = (_scenario("a"),)
+        client = _FakeScenariosClient(
+            provision_response={
+                "scenarios": [{"scenario_key": "a", "scenario_id": "platform-a"}],
+            },
+        )
+        with pytest.raises(ScenarioPreallocationError) as exc_info:
+            await ss.register_with_platform(client, submitted, run_name="run-1")
+        assert exc_info.value.error.code == "scenarios_provision_response_invalid"
+        assert client.begin_calls == []
+
+    asyncio.run(scenario())
+
+
+# -------------------------------------------------------------------------------------------------
+# Mutations (p13 work item 5).
+# -------------------------------------------------------------------------------------------------
+
+
+def test_mutation_positional_zip_matching_is_killed() -> None:
+    # Mutant: `_scenario_ids_by_key` replaced with a positional zip (Karthik's documented shape --
+    # not what the platform actually returns). A reordered response must silently mismatch ids
+    # under the mutant; the real (key-matching) implementation must not.
+    submitted = (_scenario("a"), _scenario("b"))
+    reordered_response = [
+        {"scenario_key": "b", "scenario_id": "platform-b"},
+        {"scenario_key": "a", "scenario_id": "platform-a"},
+    ]
+
+    real = ss._scenario_ids_by_key(submitted, reordered_response)
+    assert real == {"a": "platform-a", "b": "platform-b"}  # baseline: correct regardless of order
+
+    def _positional_zip_mutant(submitted, raw_scenarios):
+        return {
+            scenario.scenario_key: entry["scenario_id"]
+            for scenario, entry in zip(submitted, raw_scenarios, strict=True)
+        }
+
+    with mock.patch.object(ss, "_scenario_ids_by_key", _positional_zip_mutant):
+        mutant = ss._scenario_ids_by_key(submitted, reordered_response)
+        assert mutant == {"a": "platform-b", "b": "platform-a"}  # mutant's defect: swapped ids
+        assert mutant != real
+
+    restored = ss._scenario_ids_by_key(submitted, reordered_response)
+    assert restored == real  # confirms the patch was fully undone
+
+
+def test_mutation_missing_scenario_guard_removed_is_killed() -> None:
+    # Mutant: the "every submitted key must appear in the response" check deleted from
+    # `_scenario_ids_by_key` -- as if a job with fewer provisioned scenarios than requested were
+    # silently accepted instead of failing the whole registration.
+    submitted = (_scenario("a"), _scenario("b"))
+    incomplete_response = [{"scenario_key": "a", "scenario_id": "platform-a"}]  # "b" never comes back
+
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key(submitted, incomplete_response)  # baseline: the real guard catches it
+    assert exc_info.value.error.code == "scenario_registration_missing"
+
+    def _no_missing_guard_mutant(submitted, raw_scenarios):
+        del submitted
+        return {entry["scenario_key"]: entry["scenario_id"] for entry in raw_scenarios}
+
+    with mock.patch.object(ss, "_scenario_ids_by_key", _no_missing_guard_mutant):
+        mutant = ss._scenario_ids_by_key(submitted, incomplete_response)  # mutant: no longer raises
+        assert "b" not in mutant  # confirms the mutant's defect: an incomplete mapping got through
+
+    with pytest.raises(ScenarioPreallocationError) as exc_info:
+        ss._scenario_ids_by_key(submitted, incomplete_response)  # restored
+    assert exc_info.value.error.code == "scenario_registration_missing"
+
+
+def test_mutation_id_assignment_skipped_is_killed() -> None:
+    # Mutant: `register_with_platform`'s final `replace(scenario, scenario_id=...)` step deleted --
+    # provision/begin both still run (a response-shape bug would not be caught by this mutant), but
+    # the scenarios handed back to the scheduler never actually carry the platform's id.
+    async def scenario() -> None:
+        submitted = (_scenario("a"),)
+        client = _FakeScenariosClient(
+            provision_response={
+                "run_test_id": "run-test-1",
+                "scenarios": [{"scenario_key": "a", "scenario_id": "platform-a"}],
+            },
+        )
+
+        real = await ss.register_with_platform(client, submitted, run_name="run-1")
+        assert real[0].scenario_id == "platform-a"  # baseline: the real fix assigns it
+
+        async def _skip_assignment_mutant(scenarios_client, scenarios, *, run_name):
+            provision_result = await asyncio.to_thread(
+                scenarios_client.provision, ss._provision_payload(run_name, scenarios)
+            )
+            await asyncio.to_thread(
+                scenarios_client.begin,
+                ss._begin_payload(provision_result["run_test_id"], scenarios),
+            )
+            return scenarios  # mutant's defect: returned VERBATIM, ids never merged in
+
+        with mock.patch.object(ss, "register_with_platform", _skip_assignment_mutant):
+            mutant = await ss.register_with_platform(client, submitted, run_name="run-1")
+            assert mutant[0].scenario_id == ""  # mutant's defect: id never assigned
+
+        restored = await ss.register_with_platform(client, submitted, run_name="run-1")
+        assert restored[0].scenario_id == "platform-a"  # confirms the patch was fully undone
+
+    asyncio.run(scenario())
