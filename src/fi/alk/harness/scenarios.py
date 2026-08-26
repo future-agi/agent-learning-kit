@@ -455,7 +455,7 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
 def _suite_summary(suite: list[Scenario]) -> str:
     """The whole suite as a reviewer needs to see it: what each row claims to test."""
     return "\n".join(
-        f"  {one.name} | use case: {one.use_case} | branch: {one.branch} | tests: {one.tests}"
+        f"  {one.name} | use case: {one.use_case} | branch: {one.branch} | passes when: {one.tests}"
         for one in suite
     )
 

@@ -579,10 +579,9 @@ def _scenario() -> simulate.Scenario:
             simulate.Persona(
                 persona=persona,
                 situation=_required("HARNESS_INSTRUCTION"),
-                outcome=os.environ.get(
-                    "HARNESS_OUTCOME",
-                    "Complete the requested task and close naturally.",
-                ),
+                # Empty by default: the instruction already says what this person wants, in
+                # their own words. A generic objective here only competes with it.
+                outcome=os.environ.get("HARNESS_OUTCOME", ""),
                 knowledge=knowledge,
                 behavior_policy={
                     "disclosure_policy": 0.72,

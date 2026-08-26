@@ -21,7 +21,12 @@ afterwards.
 name          short identifier; it becomes this scenario's folder
 use_case      which of the agent's use cases this belongs to
 branch        what makes this one different from its siblings in that use case
-tests         one line: what this scenario is trying to find out
+tests         one line: the condition this scenario passes on. It is shown to people as
+              "passes when", so write it to complete that phrase. Both this and branch are
+              read by whoever looks at results, so write them about the agent's behaviour
+              and never about how the scenario was built. "synthetic", "seeded",
+              "setup_code", "fixture" and the like name your own machinery, not anything
+              the agent did, and they are noise in a report
 instruction   what this person is trying to achieve, written to them, plus everything
               they need to pursue it without inventing anything
 persona       who that person is: identity, communication style, languages/accent and characteristics
