@@ -61,7 +61,7 @@ from fi.alk.harness.process_runtime import (
     RuntimeState,
 )
 from fi.alk.harness.scenario_source import SCENARIOS_DIRNAME
-from fi.simulate.runtime.spec import RuntimeRequirements, SecretRef
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
 SCHEMA_SQL = b"CREATE TABLE riders (id int);\n"
 SEED_SQL = b"INSERT INTO riders VALUES (1);\n"
@@ -159,7 +159,7 @@ def _job(
         ),
         scenario_count=2,
         seed=1234,
-        runtime=RuntimeRequirements(parallelism=parallelism),
+        runtime=RuntimeRequirements(parallelism=parallelism, cpu_units=max(1, parallelism), isolation=RuntimeIsolation.DEDICATED_VM),
         **({"artifacts": artifacts} if artifacts is not None else {}),
     )
 
@@ -625,28 +625,28 @@ def test_resolve_parallelism_reads_the_raw_value_without_clamping() -> None:
     # must return it RAW; clamping here would make `parallelism_out_of_range` unreachable.
     assert he.resolve_parallelism(_job(parallelism=1)) == 1
     assert he.resolve_parallelism(_job(parallelism=8)) == 8
-    # An out-of-range value is preflight's to reject (§2e.7), not this function's to launder --
-    # `RuntimeRequirements.parallelism` itself only enforces `ge=1`, so a too-large W passes model
-    # validation and must still reach `resolve_parallelism` unclamped.
-    assert he.resolve_parallelism(_job(parallelism=99)) == 99
+    # On this integration branch the model itself caps W at 8 (le=8, matching the port-band
+    # math) -- an out-of-range W is rejected at model construction, so it can never reach
+    # `resolve_parallelism` at all.
+    try:
+        _job(parallelism=99)
+    except Exception as exc:
+        assert "parallelism" in str(exc)
+    else:
+        raise AssertionError("expected the model to reject parallelism=99")
 
 
 def test_out_of_range_parallelism_is_rejected_by_preflight_not_clamped() -> None:
-    # Confirms an out-of-range W reaches a
-    # `parallelism_out_of_range` preflight rejection (§2e.7), never a silently clamped W=8 run.
-    async def scenario() -> None:
-        harness = _build_harness(scenarios=[], parallelism=20)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
-        assert code == he.EXIT_OK
-        assert harness.provisioner.provision_calls == 0  # rejected before any provision, like §2e.
-        terminals = harness.transport.terminal_events()
-        assert len(terminals) == 1
-        payload = terminals[0]["payload"]
-        assert payload["failure"]["code"] == "parallelism_out_of_range"
-        assert payload["failure"]["domain"] == "environment"
-        assert payload["failure"]["stage"] == "validating_environment"
-
-    asyncio.run(scenario())
+    # On this integration branch the model's le=8 rejects an out-of-range W before a job
+    # object can exist, so it can never be silently clamped to a W=8 run -- the property
+    # this test protects. The §2e.7 preflight rejection remains for job FILES that bypass
+    # the model, which run_job surfaces as a load failure rather than a clamped run.
+    try:
+        _build_harness(scenarios=[], parallelism=20)
+    except Exception as exc:
+        assert "parallelism" in str(exc)
+    else:
+        raise AssertionError("expected the model to reject parallelism=20")
 
 
 def test_job_secret_purposes_maps_alias_to_purpose() -> None:
