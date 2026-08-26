@@ -427,23 +427,27 @@ async def _write_slice(
 
 
 def merged(written: list[list[Scenario]]) -> list[Scenario]:
-    """One suite out of several writers, with the collisions they could not see removed.
+    """One suite out of several writers, with folder-name collisions renamed rather than dropped.
 
-    The writers run blind to each other, so two can land on the same folder name or on the same
-    use case and branch. Both are dropped here rather than at save time, where the loser would
-    silently overwrite the winner's folder.
+    Asking for twenty scenarios has to return twenty. Two scenarios may legitimately share a use
+    case and a branch and still test different things, so sharing them is not a reason to discard
+    one; an earlier version dropped those and quietly returned eighteen.
+
+    The one collision that cannot be tolerated is the folder name, because the folder is where a
+    scenario lives on disk and the loser would overwrite the winner. Those are given a numbered
+    suffix instead of being thrown away, so nothing generated is ever lost.
     """
     suite: list[Scenario] = []
-    names: set[str] = set()
-    pairs: set[tuple[str, str]] = set()
+    taken: set[str] = set()
     for batch in written:
         for one in batch:
-            pair = ((one.use_case or "").strip().lower(), (one.branch or "").strip().lower())
-            if one.name in names or (pair[0] and pair in pairs):
-                continue
-            names.add(one.name)
-            if pair[0]:
-                pairs.add(pair)
+            if one.name in taken:
+                stem, suffix = one.name, 2
+                while f"{stem}-{suffix}" in taken:
+                    suffix += 1
+                one = one.model_copy(update={"name": f"{stem}-{suffix}", "scenario_key": ""})
+                logger.info("renamed a duplicate folder name to %s", one.name)
+            taken.add(one.name)
             suite.append(one)
     return suite
 
