@@ -693,6 +693,16 @@ def build_process_tree(
             domain=FailureDomain.ENVIRONMENT,
         ) from exc
 
+    # The source checkout is delivered read-only (the gateway chmods /work/source `a-w` for
+    # integrity) and copytree preserves that mode, but the build tree is a private, writable
+    # workspace — a build step such as `python -m venv .venv` must create files here. Restore
+    # owner-write on the whole copy before any build_commands run.
+    for _path in (build_dir, *build_dir.rglob("*")):
+        try:
+            _path.chmod(_path.stat().st_mode | 0o200)
+        except OSError:
+            pass
+
     resolved_user = _resolve_process_user(
         process.user, resolver=user_resolver, require=require_declared_user,
         process_name=process.name, stage="build", domain=FailureDomain.AGENT,
