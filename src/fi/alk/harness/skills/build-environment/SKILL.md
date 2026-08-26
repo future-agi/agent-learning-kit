@@ -142,6 +142,12 @@ seed what the adopted data does not already hold. `create_schema` and `seed` are
 with nothing to take, or for the parts a scenario needs that the agent's own data has no example
 of.
 
+For a hardcoded process-local store with no connection or injection seam, this rule is absolute:
+run the submitted seed/loader and adopt its result. Do not hand-seed a plausible replica. The live
+target will construct its own process-local copy from that submitted fixture, so an invented row in
+the world is invisible to it even when schema and field values look valid. If the submitted loader
+cannot be invoked or its output cannot be adopted, stop and report the missing seam.
+
 **Check the size afterwards, and say the number.** Compare what the world now holds against what
 the source holds. If the agent reads a thousand orders and the world has eight, the data was not
 adopted -- it was retyped, and every scenario written against it will look for records that do

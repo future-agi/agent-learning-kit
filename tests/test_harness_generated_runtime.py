@@ -166,6 +166,18 @@ def test_selected_component_accepts_contract_relative_monorepo_hint(
     assert plan.command == ("python", "agent.py")
 
 
+def test_repository_root_workdir_sentinel_uses_submitted_source(tmp_path: Path) -> None:
+    source = tmp_path / "agent"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+
+    plan = detect_generated_runtime(source, Runtime(workdir="/"))
+
+    assert plan.component == ""
+    assert plan.command == ("python", "agent.py")
+
+
 def test_unrelated_absolute_workdir_remains_rejected(tmp_path: Path) -> None:
     source = tmp_path / "agent"
     source.mkdir()
