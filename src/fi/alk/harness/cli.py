@@ -22,7 +22,6 @@ from .build import opening as build_opening
 from .build import require_buildable
 from .chat import open_conversation
 from .config import (
-    DEFAULT_MODEL,
     artifact_dir,
     chosen_model,
     credentials_hint,
@@ -970,7 +969,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="run unattended instead of staying open for corrections",
     )
-    understand.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+    understand.add_argument("--model", default=None, help=argparse.SUPPRESS)
     understand.set_defaults(run=_understand, interactive=True)
 
     world = sub.add_parser("build", help="build the world from an agent's contract")
@@ -1087,7 +1086,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="fresh artifact directory (defaults to a unique session directory)",
     )
     auto.add_argument("--count", type=int, default=10, help="number of scenarios")
-    auto.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+    auto.add_argument("--model", default=None, help=argparse.SUPPRESS)
     auto.add_argument("--run-model", default=None, help=argparse.SUPPRESS)
     auto.set_defaults(run=_auto)
 

@@ -36,6 +36,7 @@ dependencies = [
   "claude-agent-sdk>=0.2.139",
   "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
+  "google-genai>=1.16",
   "httpx>=0.24.0",
   "jsonschema>=4.25.1,<5",
   "levenshtein>=0.25.0",

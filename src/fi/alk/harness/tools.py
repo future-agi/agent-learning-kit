@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
+from .backends import tool, tool_server
 
 from .contract import MODALITIES, AgentContract, validate_contract
 
@@ -632,7 +633,7 @@ def contract_tools(destination: Path) -> Any:
             )
         return accept_contract(payload, destination)
 
-    return create_sdk_mcp_server(
+    return tool_server(
         name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract]
     )
 
@@ -714,9 +715,6 @@ def _typed(kind: str, *, optional: bool) -> dict[str, Any]:
     return {"type": [kind, "null"]} if optional else {"type": kind}
 
 
-def qualified(server: str, tool_name: str) -> str:
-    """The name an in-process MCP tool is granted under."""
-    return f"mcp__{server}__{tool_name}"
 
 
 def brief(value: Any, limit: int = 1800) -> str:

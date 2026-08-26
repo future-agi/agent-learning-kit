@@ -21,19 +21,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+from ..backends import SessionSpec, tool, tool_server
 
-from ..config import (
-    UNWANTED,
-    chosen_model,
-    gate_hooks,
-    permission_gate,
-    provider_env,
-)
+from ..config import chosen_model
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..session import Stage
-from ..tools import qualified
 from ..checks import Outcome, run_check
 from ..catalogue import Catalogue, SuiteEval
 from ..world.runtime import GeneratedWorld
@@ -211,7 +204,7 @@ def _verdict_tool(collected: list[dict[str, Any]]) -> Any:
             ]
         }
 
-    return create_sdk_mcp_server(
+    return tool_server(
         name=JUDGE_SERVER, version="0.1.0", tools=[submit_verdict]
     )
 
@@ -391,24 +384,13 @@ async def judge(
             return judged, 0.0
 
     collected: list[dict[str, Any]] = []
-    allowed = [qualified(JUDGE_SERVER, "submit_verdict")]
-    options = ClaudeAgentOptions(
+    spec = SessionSpec(
         system_prompt=_judge_prompt(contract),
-        allowed_tools=allowed,
-        mcp_servers={JUDGE_SERVER: _verdict_tool(collected)},
-        # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
-        # consulted, so a session can rewrite an artifact by hand and skip the tool whose whole
-        # job is to validate that change.
-        permission_mode="default",
-        setting_sources=[],
+        servers={JUDGE_SERVER: _verdict_tool(collected)},
         max_turns=6,
         model=chosen_model(model),
-        env=provider_env(model),
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(granted=allowed)
-    stage = Stage(options, name="judge")
+    stage = Stage(spec, name="judge")
     listed = "\n".join(
         f"{index + 1}. [{kind}] {claim}" for index, (claim, kind) in enumerate(claims)
     )

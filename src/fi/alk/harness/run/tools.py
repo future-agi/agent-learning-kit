@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from ..backends import tool, tool_server
 
 from .. import platform
 from ..catalogue import load_catalogue
@@ -539,7 +539,7 @@ def run_tools(
         passed = sum(1 for record in results if record.get("passed"))
         return _ok("\n".join(lines) + f"\n\n{passed} of {len(results)} passed")
 
-    server = create_sdk_mcp_server(
+    server = tool_server(
         name=RUN_SERVER,
         version="0.1.0",
         tools=[

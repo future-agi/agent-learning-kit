@@ -14,8 +14,10 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
-from claude_agent_sdk import ClaudeAgentOptions
+from .backends import SessionSpec, resolve
 
+# The first backend's default, kept importable because callers and tests name it. The model a
+# run actually gets comes from chosen_model, which asks the selected backend.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 SKILLS_ROOT = Path(__file__).parent / "skills"
@@ -48,8 +50,15 @@ def chosen_model(model: str | None = None) -> str:
     Passed to the session explicitly as well as through the environment. The environment alone
     does not win: the CLI has its own default and will quietly use it, so a run meant for Haiku
     goes out on whatever the CLI felt like and the bill says so afterwards.
+
+    With nothing named anywhere, the selected backend's own default runs, so switching
+    ``ALK_HARNESS`` never sends one vendor's model name to another vendor's loop.
     """
-    return model or os.environ.get("ALK_HARNESS_MODEL", DEFAULT_MODEL)
+    return (
+        model
+        or os.environ.get("ALK_HARNESS_MODEL")
+        or resolve().default_model
+    )
 
 
 def thinking_config() -> dict[str, Any]:
@@ -123,36 +132,28 @@ def read_only_session(
     *,
     system_prompt: str,
     cwd: str | Path,
-    mcp_servers: dict[str, Any] | None = None,
-    extra_tools: Iterable[str] = (),
+    servers: dict[str, Any] | None = None,
+    extra_builtins: Iterable[str] = (),
     max_turns: int = 40,
     model: str | None = None,
-) -> ClaudeAgentOptions:
+) -> SessionSpec:
     """A session that may read the agent under test but never write to it.
 
     The agent under test is somebody's real repository. The harness reads it and writes its own
     artifacts elsewhere, so the built-in write tools are simply not granted; the only way this
     session can produce anything is by calling one of ours.
     """
-    allowed = [*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_tools]
-    options = ClaudeAgentOptions(
+    return SessionSpec(
         system_prompt=system_prompt,
-        allowed_tools=allowed,
-        mcp_servers=dict(mcp_servers or {}),
-        # Not acceptEdits: that auto-approves Edit and Write before the permission callback
-        # is consulted, which silently defeats the gate below.
-        permission_mode="default",
+        servers=dict(servers or {}),
+        builtins=tuple(
+            dict.fromkeys([*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_builtins])
+        ),
         cwd=str(cwd),
-        setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(model),
-        env=provider_env(model),
+        thinking=True,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(granted=allowed)
-    options.thinking = thinking_config()
-    return options
 
 
 # Tools the host offers every session that no stage of this harness has any use for. Denying

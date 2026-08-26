@@ -18,32 +18,22 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+from .backends import SessionSpec, ToolServer, tool, tool_server
 
-from .config import (
-    UNWANTED,
-    artifact_dir,
-    chosen_model,
-    gate_hooks,
-    load_skill,
-    permission_gate,
-    provider_env,
-    thinking_config,
-)
+from .config import artifact_dir, chosen_model, load_skill
 from .catalogue import load_catalogue
 from .contract import AgentContract
 from .scenario import Scenario
 from .scenario_tools import (
     parallel_suites,
     SCENARIO_SERVER,
-    TOOL_NAMES,
     load_scenarios,
     scenario_tools,
     world_summary,
     write_scenarios,
 )
 from .session import Stage
-from .tools import qualified, schema
+from .tools import schema
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +73,7 @@ def open_stage(
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
-    allowed = [
-        "AskUserQuestion",
-        *(qualified(SCENARIO_SERVER, name) for name in TOOL_NAMES),
-    ]
-    options = ClaudeAgentOptions(
+    spec = SessionSpec(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
@@ -99,23 +85,15 @@ def open_stage(
                 + ". Submitting one under an existing name replaces it."
             )
         ),
-        allowed_tools=allowed,
-        mcp_servers={SCENARIO_SERVER: server},
-        # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
-        # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
-        # whole job is to validate that change.
-        permission_mode="default",
+        servers={SCENARIO_SERVER: server},
+        builtins=("AskUserQuestion",),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        setting_sources=[],
         max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
-        env=provider_env(),
+        ask=ask,
+        thinking=True,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(ask, allowed)
-    options.thinking = thinking_config()
-    return Stage(options, name=SKILL), destination
+    return Stage(spec, name=SKILL), destination
 
 
 def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
@@ -388,29 +366,28 @@ async def _write_slice(
         if on_event:
             on_event(event)
 
-    allowed = [
-        qualified(SCENARIO_SERVER, name) for name in TOOL_NAMES if name != "save_scenarios"
-    ]
-    options = ClaudeAgentOptions(
+    # A slice writer never saves the suite; withholding the tool structurally means no backend
+    # has to be told to deny it.
+    sliced = SessionSpec(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
-        allowed_tools=allowed,
-        mcp_servers={SCENARIO_SERVER: server},
-        permission_mode="default",
+        servers={
+            SCENARIO_SERVER: ToolServer(
+                name=server.name,
+                version=server.version,
+                tools=[spec for spec in server.tools if spec.name != "save_scenarios"],
+            )
+        },
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        setting_sources=[],
         max_turns=turns_for(mine.count),
         model=chosen_model(),
-        env=provider_env(),
+        ask=ask,
+        thinking=True,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(ask, allowed)
-    options.thinking = thinking_config()
-    stage = Stage(options, name=f"{SKILL}:{mine.named()[:40]}")
+    stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
     try:
         async with stage:
             await stage.say(
@@ -527,9 +504,8 @@ async def gaps_in(
             ]
         }
 
-    server = create_sdk_mcp_server(name=REVIEW_SERVER, version="0.1.0", tools=[submit_gaps])
-    allowed = [qualified(REVIEW_SERVER, "submit_gaps")]
-    options = ClaudeAgentOptions(
+    server = tool_server(name=REVIEW_SERVER, version="0.1.0", tools=[submit_gaps])
+    review = SessionSpec(
         system_prompt=(
             "You are reviewing a suite of tests somebody else wrote for an AI agent, in "
             "parallel, each writer blind to the others. Your only job is to say what is "
@@ -543,19 +519,13 @@ async def gaps_in(
             "A suite of the right size that covers what matters is finished, and saying so is "
             f"the useful answer.\n\n## This agent\n\n{contract.brief()}"
         ),
-        allowed_tools=allowed,
-        mcp_servers={REVIEW_SERVER: server},
-        permission_mode="default",
+        servers={REVIEW_SERVER: server},
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        setting_sources=[],
         max_turns=8,
         model=chosen_model(),
-        env=provider_env(),
+        ask=ask,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(ask, allowed)
-    stage = Stage(options, name=f"{SKILL}:review")
+    stage = Stage(review, name=f"{SKILL}:review")
     try:
         async with stage:
             await stage.say(

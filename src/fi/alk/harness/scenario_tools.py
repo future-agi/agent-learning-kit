@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .catalogue import (
@@ -862,7 +862,7 @@ def scenario_tools(
             )
         return _ok(said)
 
-    server = create_sdk_mcp_server(
+    server = tool_server(
         name=SCENARIO_SERVER,
         version="0.1.0",
         tools=[

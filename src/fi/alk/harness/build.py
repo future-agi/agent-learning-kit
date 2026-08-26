@@ -15,24 +15,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions
-
-from .config import (
-    UNWANTED,
-    artifact_dir,
-    chosen_model,
-    gate_hooks,
-    load_skill,
-    permission_gate,
-    provider_env,
-    provisioning,
-    thinking_config,
-)
+from .backends import SessionSpec
+from .config import artifact_dir, chosen_model, load_skill, provisioning
 from .contract import AgentContract
 from .session import Stage
-from .tools import qualified
 from .world.snapshot import saved as world_saved
-from .world.tools import TOOL_NAMES, WORLD_SERVER, world_tools
+from .world.tools import WORLD_SERVER, world_tools
 
 SKILL = "build-environment"
 
@@ -177,34 +165,22 @@ def open_stage(
             )
         )
     server, _world = world_tools(contract, destination, source_root=source_root)
-    allowed = [
-        "AskUserQuestion",
-        *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),
-    ]
-    options = ClaudeAgentOptions(
+    spec = SessionSpec(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
             + environment_note
         ),
         # No file tools and no shell. Everything this stage can do goes through a tool that
         # executes it and reports back, which is what makes the guardrails meaningful.
-        allowed_tools=allowed,
-        mcp_servers={WORLD_SERVER: server},
-        # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
-        # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
-        # whole job is to validate that change.
-        permission_mode="default",
+        servers={WORLD_SERVER: server},
+        builtins=("AskUserQuestion",),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        setting_sources=[],
         max_turns=max_turns or turns_for(contract),
         model=chosen_model(),
-        env=provider_env(),
+        ask=ask,
+        thinking=True,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(ask, allowed)
-    options.thinking = thinking_config()
-    return Stage(options, name=SKILL), destination
+    return Stage(spec, name=SKILL), destination
 
 
 def opening(contract: AgentContract, *, provisioned: bool = False) -> str:

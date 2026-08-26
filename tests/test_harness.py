@@ -1875,13 +1875,27 @@ def _request_handler(instance, method):
     return Handler()
 
 
+def _instance(server):
+    """The in-process MCP server behind whatever shape a stage handed us.
+
+    Stages now describe tools neutrally (ToolServer); the Claude backend is what turns that
+    into a real MCP server. Routing through the adapter here keeps these tests about what is
+    *actually published*, adapter included, not about the description."""
+    from fi.alk.harness.backends import ToolServer
+    from fi.alk.harness.backends.claude import _sdk_server
+
+    if isinstance(server, ToolServer):
+        server = _sdk_server(server)
+    return server.get("instance") if isinstance(server, dict) else server
+
+
 def _published(server):
     """The tool names an in-process MCP server really exposes."""
     import asyncio
 
     from mcp.types import PaginatedRequestParams
 
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def ask():
         handler = _request_handler(instance, "tools/list")
@@ -2158,7 +2172,7 @@ def test_a_row_put_in_wrong_can_be_taken_out_again(tmp_path):
     async def call(name, payload):
         from mcp.types import CallToolRequestParams
 
-        instance = server.get("instance") if isinstance(server, dict) else server
+        instance = _instance(server)
         handler = _request_handler(instance, "tools/call")
         result = await handler.handler(
             None, CallToolRequestParams(name=name, arguments=payload)
@@ -3733,7 +3747,7 @@ def test_submit_contract_schema_teaches_and_leaves_gating_to_the_gate(tmp_path):
     from mcp.types import PaginatedRequestParams
 
     server = contract_tools(tmp_path)
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def schema_of():
         handler = _request_handler(instance, "tools/list")
@@ -3766,7 +3780,7 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     from fi.alk.harness.tools import contract_tools
 
     server = contract_tools(tmp_path)
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def call(payload):
         from mcp.types import CallToolRequestParams
@@ -3794,32 +3808,37 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
 
 
 def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
-    """The hook closes over the granted set when the stage is built, so appending to
-    allowed_tools alone leaves the new tool denied. grant() must rebuild all three."""
+    """A grant has to reach the permission gate, not only the tool list. The gate is built
+    from the spec when the backend opens the session, so a tool granted to the spec must be
+    permitted by the hooks of a session built afterwards."""
     import asyncio
 
-    from claude_agent_sdk import ClaudeAgentOptions
-    from fi.alk.harness.config import gate_hooks
+    from fi.alk.harness.backends import SessionSpec, ToolSpec, ToolServer
+    from fi.alk.harness.backends.claude import ClaudeBackend
     from fi.alk.harness.session import Stage
 
-    allowed = ["Read"]
-    options = ClaudeAgentOptions(
-        system_prompt="x",
-        allowed_tools=allowed,
-        permission_mode="default",
-        setting_sources=[],
-        max_turns=1,
-    )
-    options.hooks = gate_hooks(allowed)
-    stage = Stage(options, name="t")
-    stage.grant("flow", object(), ["hand_to_next_stage"])
+    spec = SessionSpec(system_prompt="x", builtins=("Read",), max_turns=1)
+    stage = Stage(spec, name="t")
 
+    async def hand(_args):
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    server = ToolServer(
+        name="flow",
+        tools=[ToolSpec("hand_to_next_stage", "hand over", {"request": str}, hand)],
+    )
+    stage.grant("flow", server, ["hand_to_next_stage"])
+    assert "mcp__flow__hand_to_next_stage" in spec.granted()
+
+    options = ClaudeBackend().create(spec)._options
     assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
     refuse = options.hooks["PreToolUse"][0].hooks[0]
     granted = asyncio.run(
         refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None)
     )
     assert granted == {}
+    denied = asyncio.run(refuse({"tool_name": "Bash"}, None, None))
+    assert denied != {}
 
 
 def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
@@ -3832,7 +3851,7 @@ def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
     conversation = Conversation(source=None, out=tmp_path, workspace=tmp_path)
     conversation.stage_name = "understand"
     server = conversation._flow_server()
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def call():
         handler = _request_handler(instance, "tools/call")
@@ -4005,7 +4024,7 @@ def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
     from fi.alk.harness.tools import contract_tools
 
     server = contract_tools(tmp_path)
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def call(payload):
         from mcp.types import CallToolRequestParams
@@ -4038,33 +4057,22 @@ def test_only_a_tool_that_says_it_saved_reports_an_artifact():
     """Matching any path-shaped token in any result meant reading a file announced itself as an
     artifact: the stage looks like it is producing output while it is still only looking around,
     and a front end reloads its panes on every read."""
-    from dataclasses import dataclass
-
+    from fi.alk.harness.backends.claude import _flattened
     from fi.alk.harness.session import _saved_path
 
-    @dataclass
-    class Block:
-        content: object
-        is_error: bool = False
-
     # a read
-    assert (
-        _saved_path(Block("     1\timport json\n     2\tfrom pathlib import Path"))
-        == ""
-    )
-    assert _saved_path(Block("/some/agent/envs/retail/__init__.py")) == ""
+    assert _saved_path("     1\timport json\n     2\tfrom pathlib import Path") == ""
+    assert _saved_path("/some/agent/envs/retail/__init__.py") == ""
     # a write
     assert (
-        _saved_path(Block("Accepted and saved to out/contract.json."))
-        == "out/contract.json"
+        _saved_path("Accepted and saved to out/contract.json.") == "out/contract.json"
     )
     assert (
-        _saved_path(Block("Saved 3 scenarios to out/scenarios.json."))
-        == "out/scenarios.json"
+        _saved_path("Saved 3 scenarios to out/scenarios.json.") == "out/scenarios.json"
     )
-    # list-shaped content, as the SDK sometimes gives it
+    # list-shaped content, as the SDK sometimes gives it, flattened by the backend
     assert (
-        _saved_path(Block([{"text": "Saved to artifacts/x/world.sqlite"}]))
+        _saved_path(_flattened([{"text": "Saved to artifacts/x/world.sqlite"}]))
         == "artifacts/x/world.sqlite"
     )
 

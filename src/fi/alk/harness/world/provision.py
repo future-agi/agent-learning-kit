@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from ..backends import tool, tool_server
 
 from ..contract import AgentContract
 from ..environment import (
@@ -455,7 +455,7 @@ def provision_tools(
             f"{len(catalogue.sub_goals)} sub-goals."
         )
 
-    server = create_sdk_mcp_server(
+    server = tool_server(
         name=PROVISION_SERVER,
         version="0.1.0",
         tools=[

@@ -209,8 +209,7 @@ class Conversation:
         request is not its job, so the handoff is a tool it calls; whether moving on is allowed
         is still decided by code, from whether this stage's artifact exists.
         """
-        from claude_agent_sdk import create_sdk_mcp_server, tool
-
+        from .backends import tool, tool_server
         from .tools import schema
 
         wanted = self._handoff
@@ -253,7 +252,7 @@ class Conversation:
                 ]
             }
 
-        return create_sdk_mcp_server(
+        return tool_server(
             name="flow", version="0.1.0", tools=[hand_to_next_stage]
         )
 
