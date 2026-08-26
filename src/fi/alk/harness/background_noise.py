@@ -32,16 +32,17 @@ _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 def enabled() -> bool:
     """Whether any scenario may be heard through background noise on this run.
 
-    On by default. Set ``ALK_BACKGROUND_NOISE=0`` to silence every call regardless of what the
-    scenarios ask for, which is the switch to reach for while diagnosing turn-taking: continuous
-    ambient audio under the caller competes with endpoint detection, and removing it separates a
-    scenario that fails from a call that could not be heard.
+    Off unless ``ALK_BACKGROUND_NOISE`` opts in, so a run needs no environment at all to be
+    silent. Continuous ambient audio under the caller competes with endpoint detection, and calls
+    carrying it end earlier and on fewer turns, so silence is the setting a run should fall into
+    rather than the one it has to ask for. Opting in still only permits noise: a scenario that
+    asked for none stays silent either way.
     """
-    return os.environ.get("ALK_BACKGROUND_NOISE", "1").strip().lower() not in (
-        "0",
-        "off",
-        "false",
-        "no",
+    return os.environ.get("ALK_BACKGROUND_NOISE", "0").strip().lower() in (
+        "1",
+        "on",
+        "true",
+        "yes",
     )
 
 
