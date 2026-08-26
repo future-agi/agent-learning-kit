@@ -416,11 +416,18 @@ def _cartesia_voice_for(persona: dict) -> str:
 def _voice_providers() -> tuple[str, str]:
     """The (stt, tts) providers for the caller. An explicit env override wins; otherwise Cartesia
     when its key is present (richer, multi-language voices), else Deepgram aura."""
-    default = (
-        "cartesia" if os.environ.get("CARTESIA_API_KEY", "").strip() else "deepgram"
-    )
+    keyed = bool(os.environ.get("CARTESIA_API_KEY", "").strip())
+    default = "cartesia" if keyed else "deepgram"
     stt = os.environ.get("SIMULATOR_STT_PROVIDER", "").strip() or default
     tts = os.environ.get("SIMULATOR_TTS_PROVIDER", "").strip() or default
+    if tts == "deepgram" and not keyed and not os.environ.get("SIMULATOR_TTS_PROVIDER"):
+        # Deepgram aura is one voice, so every persona sounds the same and the accent, language
+        # and gender the scenario chose are silently dropped. The call still runs, which is why
+        # this has to be said out loud rather than left to whoever listens to the recording.
+        logger.warning(
+            "cartesia_key_missing_personas_share_one_voice",
+            extra={"tts": "deepgram/aura-asteria-en"},
+        )
     return stt, tts
 
 
