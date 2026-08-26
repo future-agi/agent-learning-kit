@@ -314,10 +314,19 @@ def format_voice_persona(
     return "\n\n".join(sections)
 
 
-def _closing_anchor(objective: str) -> str:
+def _closing_anchor(objective: str, name: str = "") -> str:
     """The last thing the caller reads. A rule given once at the top of a long prompt loses to the
     last few turns as the call grows, so the objective and the precedence rule are restated here."""
     anchor = "\n\n---\n\n"
+    who = name.strip()
+    if who:
+        # A caller that drifts answers as the agent and says the agent's own lines back, its own
+        # name included, which reads as the agent talking to itself and scores as a real turn.
+        anchor += (
+            f"**You are {who}, the person on the customer's side of this call.** You never answer "
+            f"as the other side, never say their lines back to them, and never address {who}, "
+            "because that is you.\n\n"
+        )
     if objective.strip():
         anchor += f"**What you came for:** {objective.strip()}\n\n"
     anchor += (
@@ -435,7 +444,9 @@ def render_simulator_prompt(
             "\n\n# ADDITIONAL SIMULATOR INSTRUCTIONS\n\n"
             + additional_instructions.strip()
         )
-    return prompt + _closing_anchor(persona.outcome or "")
+    return prompt + _closing_anchor(
+        persona.outcome or "", str(_persona_data(persona).get("name") or "")
+    )
 
 
 def _channel_sentence(call_type: CallType, agent_name: str | None) -> str:
