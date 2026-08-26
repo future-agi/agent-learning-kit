@@ -275,7 +275,11 @@ def persona_of(scenario: Any) -> dict[str, Any]:
         "name": str(persona.get("name") or getattr(scenario, "name", "") or "caller")[
             :255
         ],
-        "scenario_key": str(getattr(scenario, "name", "") or "")[:255],
+        # The scenario's own key, not its folder name: the key is ASCII-sanitised and falls back
+        # to a digest, which the name does not, and this value travels as an HTTP header.
+        "scenario_key": str(
+            getattr(scenario, "scenario_key", "") or getattr(scenario, "name", "") or ""
+        )[:255],
         "scenario_name": display_scenario_name(scenario),
         "role": str(persona.get("role") or persona.get("occupation") or "")[:255],
         "situation": str(getattr(scenario, "instruction", "") or ""),

@@ -6347,6 +6347,21 @@ def test_background_noise_is_decided_the_same_way_twice():
     assert Scenario(name="x", background_noise="street").background_noise == "street"
 
 
+def test_background_noise_needs_opting_in(monkeypatch):
+    """Silence is what a run with no environment set falls into: noise shortens calls, so it is
+    asked for rather than escaped. Anything unrecognised stays silent instead of turning it on."""
+    from fi.alk.harness.background_noise import enabled
+
+    monkeypatch.delenv("ALK_BACKGROUND_NOISE", raising=False)
+    assert enabled() is False
+    for off in ("", "0", "off", "false", "no", "ture"):
+        monkeypatch.setenv("ALK_BACKGROUND_NOISE", off)
+        assert enabled() is False, off
+    for on in ("1", "on", "TRUE", "yes"):
+        monkeypatch.setenv("ALK_BACKGROUND_NOISE", on)
+        assert enabled() is True, on
+
+
 def test_a_transcript_line_keeps_one_speaker_not_two():
     """``agent: assistant: ...`` reached the judges as two speakers deep for every turn."""
     from fi.alk.harness.run.simulation import _said

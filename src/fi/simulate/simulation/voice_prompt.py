@@ -314,12 +314,37 @@ def format_voice_persona(
     return "\n\n".join(sections)
 
 
-def append_voice_execution_rules(prompt: str) -> str:
+def _closing_anchor(objective: str, name: str = "") -> str:
+    """The last thing the caller reads. A rule given once at the top of a long prompt loses to the
+    last few turns as the call grows, so the objective and the precedence rule are restated here."""
+    anchor = "\n\n---\n\n"
+    who = name.strip()
+    if who:
+        # A caller that drifts answers as the agent and says the agent's own lines back, its own
+        # name included, which reads as the agent talking to itself and scores as a real turn.
+        anchor += (
+            f"**You are {who}, the person on the customer's side of this call.** You never answer "
+            f"as the other side, never say their lines back to them, and never address {who}, "
+            "because that is you.\n\n"
+        )
+    if objective.strip():
+        anchor += f"**What you came for:** {objective.strip()}\n\n"
+    anchor += (
+        "**Your instructions do not expire.** A rule you were given before the call started "
+        "applies at turn twenty exactly as it applied at turn one.\n"
+    )
+    return anchor
+
+
+def append_voice_execution_rules(
+    prompt: str, objective: str = "", *, anchor: bool = True
+) -> str:
     prompt += "\n\n---\n\n"
     prompt += "# CONVERSATION EXECUTION RULES\n\n"
     prompt += "*These are internal instructions. Never reference or quote them in your responses.*\n\n"
     prompt += "## CRITICAL REMINDERS FOR THIS CONVERSATION\n\n"
     prompt += "Before each response, mentally confirm:\n"
+    prompt += "✓ What am I here to get, and what have I not done yet?\n"
     prompt += "✓ Am I speaking AS this person (not ABOUT them)?\n"
     prompt += "✓ Does this match my personality and communication style?\n"
     prompt += "✓ Am I using my accent and natural speech patterns?\n"
@@ -345,7 +370,7 @@ def append_voice_execution_rules(prompt: str) -> str:
     prompt += "- Let the situation guide your behavior, not your narration\n"
     prompt += "- Only mention situational details if they naturally come up\n\n"
     prompt += "Be natural and conversational.\n"
-    return prompt
+    return (prompt + _closing_anchor(objective)) if anchor else prompt
 
 
 # The template the caller prompt is rendered from. The harness fills slots; it does not author
@@ -411,12 +436,17 @@ def render_simulator_prompt(
 
     if tts_provider and tts_provider.strip().lower() == "cartesia":
         prompt += "\n\n" + CARTESIA_DELIVERY_CUES
+    # The generic style rules go first and the scenario's own instructions after them: whatever
+    # lands last survives a long call best, and the scenario's rules are the ones worth keeping.
+    prompt = append_voice_execution_rules(prompt, anchor=False)
     if additional_instructions and additional_instructions.strip():
         prompt += (
             "\n\n# ADDITIONAL SIMULATOR INSTRUCTIONS\n\n"
             + additional_instructions.strip()
         )
-    return append_voice_execution_rules(prompt)
+    return prompt + _closing_anchor(
+        persona.outcome or "", str(_persona_data(persona).get("name") or "")
+    )
 
 
 def _channel_sentence(call_type: CallType, agent_name: str | None) -> str:

@@ -51,32 +51,102 @@ def _json_env(name: str, default):
 # so a persona resolves to the same language here as it does there. Anything unrecognised
 # falls back to English, which is what the platform does too.
 _LANGUAGE_CODES: dict[str, str] = {
-    "ar": "ar", "ar-sa": "ar", "arabic": "ar", "bg": "bg",
-    "bulgarian": "bg", "ca": "ca", "catalan": "ca", "chinese": "zh", "chinese simplified": "zh", "chinese traditional": "zh-TW",
-    "chinese (cantonese, traditional)": "zh-HK", "chinese (mandarin, simplified)": "zh", "chinese (mandarin, traditional)": "zh-TW", "cs": "cs",
-    "czech": "cs", "da": "da", "da-dk": "da", "danish": "da",
-    "de": "de", "de-ch": "de-CH", "dutch": "nl", "el": "el",
-    "en": "en-US", "en-au": "en-AU", "en-gb": "en-GB", "en-in": "en-IN",
-    "en-nz": "en-NZ", "en-us": "en-US", "english": "en-US", "es": "es",
-    "es-419": "es-419", "estonian": "et", "et": "et", "fi": "fi",
-    "finnish": "fi", "flemish": "nl-BE", "fr": "fr", "fr-ca": "fr-CA",
-    "french": "fr", "german": "de", "greek": "el", "hi": "hi",
-    "hindi": "hi", "hu": "hu", "hungarian": "hu", "id": "id",
-    "indonesian": "id", "it": "it", "italian": "it", "ja": "ja",
-    "japanese": "ja", "ko": "ko", "ko-kr": "ko", "korean": "ko",
-    "latvian": "lv", "lithuanian": "lt", "lt": "lt", "lv": "lv",
-    "malay": "ms", "ms": "ms", "nl": "nl", "nl-be": "nl-BE",
-    "no": "no", "norwegian": "no", "pl": "pl", "polish": "pl",
-    "portuguese": "pt", "pt": "pt", "pt-br": "pt-BR", "pt-pt": "pt-PT",
-    "ro": "ro", "romanian": "ro", "ru": "ru", "russian": "ru",
-    "sk": "sk", "slovak": "sk", "spanish": "es", "sv": "sv",
-    "sv-se": "sv", "swedish": "sv", "th": "th", "th-th": "th",
-    "thai": "th", "tr": "tr", "turkish": "tr", "uk": "uk",
-    "ukrainian": "uk", "vi": "vi", "vietnamese": "vi", "zh": "zh",
-    "zh-cn": "zh", "zh-hans": "zh", "zh-hant": "zh-TW", "zh-hk": "zh-HK",
+    "ar": "ar",
+    "ar-sa": "ar",
+    "arabic": "ar",
+    "bg": "bg",
+    "bulgarian": "bg",
+    "ca": "ca",
+    "catalan": "ca",
+    "chinese": "zh",
+    "chinese simplified": "zh",
+    "chinese traditional": "zh-TW",
+    "chinese (cantonese, traditional)": "zh-HK",
+    "chinese (mandarin, simplified)": "zh",
+    "chinese (mandarin, traditional)": "zh-TW",
+    "cs": "cs",
+    "czech": "cs",
+    "da": "da",
+    "da-dk": "da",
+    "danish": "da",
+    "de": "de",
+    "de-ch": "de-CH",
+    "dutch": "nl",
+    "el": "el",
+    "en": "en-US",
+    "en-au": "en-AU",
+    "en-gb": "en-GB",
+    "en-in": "en-IN",
+    "en-nz": "en-NZ",
+    "en-us": "en-US",
+    "english": "en-US",
+    "es": "es",
+    "es-419": "es-419",
+    "estonian": "et",
+    "et": "et",
+    "fi": "fi",
+    "finnish": "fi",
+    "flemish": "nl-BE",
+    "fr": "fr",
+    "fr-ca": "fr-CA",
+    "french": "fr",
+    "german": "de",
+    "greek": "el",
+    "hi": "hi",
+    "hindi": "hi",
+    "hu": "hu",
+    "hungarian": "hu",
+    "id": "id",
+    "indonesian": "id",
+    "it": "it",
+    "italian": "it",
+    "ja": "ja",
+    "japanese": "ja",
+    "ko": "ko",
+    "ko-kr": "ko",
+    "korean": "ko",
+    "latvian": "lv",
+    "lithuanian": "lt",
+    "lt": "lt",
+    "lv": "lv",
+    "malay": "ms",
+    "ms": "ms",
+    "nl": "nl",
+    "nl-be": "nl-BE",
+    "no": "no",
+    "norwegian": "no",
+    "pl": "pl",
+    "polish": "pl",
+    "portuguese": "pt",
+    "pt": "pt",
+    "pt-br": "pt-BR",
+    "pt-pt": "pt-PT",
+    "ro": "ro",
+    "romanian": "ro",
+    "ru": "ru",
+    "russian": "ru",
+    "sk": "sk",
+    "slovak": "sk",
+    "spanish": "es",
+    "sv": "sv",
+    "sv-se": "sv",
+    "swedish": "sv",
+    "th": "th",
+    "th-th": "th",
+    "thai": "th",
+    "tr": "tr",
+    "turkish": "tr",
+    "uk": "uk",
+    "ukrainian": "uk",
+    "vi": "vi",
+    "vietnamese": "vi",
+    "zh": "zh",
+    "zh-cn": "zh",
+    "zh-hans": "zh",
+    "zh-hant": "zh-TW",
+    "zh-hk": "zh-HK",
     "zh-tw": "zh-TW",
 }
-
 
 
 def _normalised_language(raw: str) -> str:
@@ -137,33 +207,147 @@ def _persona_stt_language() -> str:
 # present; otherwise the Deepgram aura path below is used unchanged.
 _CARTESIA_SUPPORTED_LANGS = frozenset(
     {
-        "en", "es", "hi", "de", "fr", "it", "pl", "ru", "pt", "ja", "ko", "zh", "tr", "sv",
-        "nl", "no", "te", "kn", "fi", "mr", "da", "bn", "sk", "uk", "el", "ta", "vi", "id",
-        "ro", "ka", "ml", "ms", "he", "bg", "th", "hu", "pa", "cs", "tl", "ar", "gu", "hr",
+        "en",
+        "es",
+        "hi",
+        "de",
+        "fr",
+        "it",
+        "pl",
+        "ru",
+        "pt",
+        "ja",
+        "ko",
+        "zh",
+        "tr",
+        "sv",
+        "nl",
+        "no",
+        "te",
+        "kn",
+        "fi",
+        "mr",
+        "da",
+        "bn",
+        "sk",
+        "uk",
+        "el",
+        "ta",
+        "vi",
+        "id",
+        "ro",
+        "ka",
+        "ml",
+        "ms",
+        "he",
+        "bg",
+        "th",
+        "hu",
+        "pa",
+        "cs",
+        "tl",
+        "ar",
+        "gu",
+        "hr",
     }
 )
 _CARTESIA_ACCENT_TO_LANG: dict[str, str] = {
-    "spanish": "es", "south american": "es", "indian": "hi", "german": "de", "french": "fr",
-    "italian": "it", "polish": "pl", "russian": "ru", "portuguese": "pt", "brazilian": "pt",
-    "japanese": "ja", "korean": "ko", "chinese": "zh", "mandarin": "zh", "turkish": "tr",
-    "swedish": "sv", "dutch": "nl", "norwegian": "no", "finnish": "fi", "danish": "da",
-    "slovak": "sk", "ukrainian": "uk", "greek": "el", "romanian": "ro", "georgian": "ka",
-    "bulgarian": "bg", "thai": "th", "hungarian": "hu", "czech": "cs", "croatian": "hr",
-    "vietnamese": "vi", "indonesian": "id", "malay": "ms", "malaysian": "ms", "tagalog": "tl",
-    "filipino": "tl", "arabic": "ar", "hebrew": "he", "israeli": "he", "telugu": "te",
-    "kannada": "kn", "marathi": "mr", "bengali": "bn", "tamil": "ta", "malayalam": "ml",
-    "punjabi": "pa", "gujarati": "gu",
+    "spanish": "es",
+    "south american": "es",
+    "indian": "hi",
+    "german": "de",
+    "french": "fr",
+    "italian": "it",
+    "polish": "pl",
+    "russian": "ru",
+    "portuguese": "pt",
+    "brazilian": "pt",
+    "japanese": "ja",
+    "korean": "ko",
+    "chinese": "zh",
+    "mandarin": "zh",
+    "turkish": "tr",
+    "swedish": "sv",
+    "dutch": "nl",
+    "norwegian": "no",
+    "finnish": "fi",
+    "danish": "da",
+    "slovak": "sk",
+    "ukrainian": "uk",
+    "greek": "el",
+    "romanian": "ro",
+    "georgian": "ka",
+    "bulgarian": "bg",
+    "thai": "th",
+    "hungarian": "hu",
+    "czech": "cs",
+    "croatian": "hr",
+    "vietnamese": "vi",
+    "indonesian": "id",
+    "malay": "ms",
+    "malaysian": "ms",
+    "tagalog": "tl",
+    "filipino": "tl",
+    "arabic": "ar",
+    "hebrew": "he",
+    "israeli": "he",
+    "telugu": "te",
+    "kannada": "kn",
+    "marathi": "mr",
+    "bengali": "bn",
+    "tamil": "ta",
+    "malayalam": "ml",
+    "punjabi": "pa",
+    "gujarati": "gu",
 }
 _CARTESIA_LANGUAGE_TO_LANG: dict[str, str] = {
-    "english": "en", "chinese simplified": "zh", "chinese traditional": "zh", "hinglish": "hi", "spanish": "es", "hindi": "hi", "german": "de",
-    "french": "fr", "italian": "it", "polish": "pl", "russian": "ru", "portuguese": "pt",
-    "japanese": "ja", "korean": "ko", "chinese": "zh", "mandarin": "zh", "turkish": "tr",
-    "swedish": "sv", "dutch": "nl", "norwegian": "no", "telugu": "te", "kannada": "kn",
-    "finnish": "fi", "marathi": "mr", "danish": "da", "bengali": "bn", "slovak": "sk",
-    "ukrainian": "uk", "greek": "el", "tamil": "ta", "vietnamese": "vi", "indonesian": "id",
-    "romanian": "ro", "georgian": "ka", "malayalam": "ml", "malay": "ms", "hebrew": "he",
-    "bulgarian": "bg", "thai": "th", "hungarian": "hu", "punjabi": "pa", "czech": "cs",
-    "tagalog": "tl", "filipino": "tl", "arabic": "ar", "gujarati": "gu", "croatian": "hr",
+    "english": "en",
+    "chinese simplified": "zh",
+    "chinese traditional": "zh",
+    "hinglish": "hi",
+    "spanish": "es",
+    "hindi": "hi",
+    "german": "de",
+    "french": "fr",
+    "italian": "it",
+    "polish": "pl",
+    "russian": "ru",
+    "portuguese": "pt",
+    "japanese": "ja",
+    "korean": "ko",
+    "chinese": "zh",
+    "mandarin": "zh",
+    "turkish": "tr",
+    "swedish": "sv",
+    "dutch": "nl",
+    "norwegian": "no",
+    "telugu": "te",
+    "kannada": "kn",
+    "finnish": "fi",
+    "marathi": "mr",
+    "danish": "da",
+    "bengali": "bn",
+    "slovak": "sk",
+    "ukrainian": "uk",
+    "greek": "el",
+    "tamil": "ta",
+    "vietnamese": "vi",
+    "indonesian": "id",
+    "romanian": "ro",
+    "georgian": "ka",
+    "malayalam": "ml",
+    "malay": "ms",
+    "hebrew": "he",
+    "bulgarian": "bg",
+    "thai": "th",
+    "hungarian": "hu",
+    "punjabi": "pa",
+    "czech": "cs",
+    "tagalog": "tl",
+    "filipino": "tl",
+    "arabic": "ar",
+    "gujarati": "gu",
+    "croatian": "hr",
 }
 _CARTESIA_DEFAULT_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 
@@ -223,16 +407,27 @@ def _cartesia_voice_for(persona: dict) -> str:
     )
     if not voices:
         return _CARTESIA_DEFAULT_VOICE
-    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(voices)
+    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
+        voices
+    )
     return voices[index]
 
 
 def _voice_providers() -> tuple[str, str]:
     """The (stt, tts) providers for the caller. An explicit env override wins; otherwise Cartesia
     when its key is present (richer, multi-language voices), else Deepgram aura."""
-    default = "cartesia" if os.environ.get("CARTESIA_API_KEY", "").strip() else "deepgram"
+    keyed = bool(os.environ.get("CARTESIA_API_KEY", "").strip())
+    default = "cartesia" if keyed else "deepgram"
     stt = os.environ.get("SIMULATOR_STT_PROVIDER", "").strip() or default
     tts = os.environ.get("SIMULATOR_TTS_PROVIDER", "").strip() or default
+    if tts == "deepgram" and not keyed and not os.environ.get("SIMULATOR_TTS_PROVIDER"):
+        # Deepgram aura is one voice, so every persona sounds the same and the accent, language
+        # and gender the scenario chose are silently dropped. The call still runs, which is why
+        # this has to be said out loud rather than left to whoever listens to the recording.
+        logger.warning(
+            "cartesia_key_missing_personas_share_one_voice",
+            extra={"tts": "deepgram/aura-asteria-en"},
+        )
     return stt, tts
 
 
@@ -249,7 +444,11 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
     )
     defaults = {
         "llm": {"google": "gemini-2.5-flash", "openai": "gpt-4o-mini"},
-        "stt": {"deepgram": stt_model or "nova-3", "cartesia": "ink-2", "google": "chirp_2"},
+        "stt": {
+            "deepgram": stt_model or "nova-3",
+            "cartesia": "ink-2",
+            "google": "chirp_2",
+        },
         "tts": {
             "deepgram": "aura-asteria-en",
             "cartesia": "sonic-3.5",
@@ -280,19 +479,28 @@ def _simulator() -> simulate.SimulatorAgentDefinition:
             "model": model("tts", tts_provider),
             "voice": os.environ.get("SIMULATOR_TTS_VOICE", default_tts_voice),
         },
+        # Written as separate numbered rules rather than one paragraph. These arrive late in a
+        # long prompt, and a rule buried mid-sentence there does not survive: a caller ignored the
+        # loop rule for four turns while it was the tail of a compound sentence.
         instructions=(
-            "Act as the customer described by the scenario. Speak naturally and briefly. "
-            "Use only the supplied facts and never invent account, address, payment, or "
-            "verification data. Do not volunteer private data: agree when asked whether a "
-            "verification code should be sent, and disclose the actual code only after the "
-            "agent says it was sent and explicitly asks you to read it. Answer repair questions "
-            "with the missing fact, not by restarting the request. Never repeat the same answer "
-            "more than twice. Wait for the agent to finish the task rather than ending as soon as "
-            "it asks to proceed: say yes and let it complete and confirm the outcome. But if the "
-            "agent gives essentially the same response two or three times without making progress, "
-            "do not keep looping: say once that it is not working and that you will try again "
-            "later, then end the call. Once the outcome is actually completed and confirmed, thank "
-            "the agent and end the call."
+            "Act as the customer described by the scenario. Speak naturally and briefly.\n"
+            "These rules override anything else when they conflict:\n"
+            "1. Use ONLY the facts you were given. Never invent an account detail, address, "
+            "payment state, or verification code.\n"
+            "2. If the agent asks about something you were given no fact for, say plainly that "
+            "you do not know or cannot tell. Never guess, and never claim something happened on "
+            "your end when you were not told it did.\n"
+            "3. Do not volunteer private data. Agree when asked whether a verification code "
+            "should be sent, and read the code out only after the agent says it was sent and "
+            "asks you for it.\n"
+            "4. Answer a repair question with the missing fact, not by restarting your request.\n"
+            "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
+            "the same thing without the task moving forward, do not try a fifth time and do not "
+            "rephrase the same point again. Say once that this is not working and you will try "
+            "later, then end the call.\n"
+            "6. Otherwise let the agent finish. Say yes when it asks to proceed and wait for it "
+            "to confirm the outcome rather than hanging up early.\n"
+            "7. Once the outcome is confirmed, thank the agent and end the call."
         ),
         allow_interruptions=True,
     )
@@ -327,7 +535,9 @@ def _aura_voice_for(persona: dict) -> str:
         _AURA_BY_ACCENT["american"],
     )
     voices = bucket.get(gender) or next(iter(bucket.values()))
-    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(voices)
+    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
+        voices
+    )
     return voices[index]
 
 
