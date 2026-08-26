@@ -26,6 +26,8 @@ from fi.alk.harness.job import (
     ExecutionMode,
     HarnessJob,
     RepositorySource,
+    RuntimeIsolation,
+    RuntimeRequirements,
     SourceKind,
     SourceVisibility,
 )
@@ -69,6 +71,11 @@ def _job(*, connector: str = "livekit", config: dict[str, Any] | None = None) ->
             commit_sha="a" * 40,
         ),
         agent=AgentConnection(connector=connector, config=config or {}),
+        # The hosted job model requires dedicated-VM isolation; mirror the
+        # production default the platform submits.
+        runtime=RuntimeRequirements(
+            parallelism=1, cpu_units=1, isolation=RuntimeIsolation.DEDICATED_VM
+        ),
         scenario_count=1,
         seed=1,
     )
