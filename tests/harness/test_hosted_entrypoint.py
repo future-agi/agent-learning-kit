@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from unittest import mock
 
 from fi.alk.harness import hosted_entrypoint as he
 from fi.alk.harness import outbound as ob
@@ -59,6 +60,7 @@ from fi.alk.harness.process_runtime import (
     RuntimeEndpoint,
     RuntimeState,
 )
+from fi.alk.harness.scenario_source import SCENARIOS_DIRNAME
 from fi.simulate.runtime.spec import RuntimeRequirements, SecretRef
 
 SCHEMA_SQL = b"CREATE TABLE riders (id int);\n"
@@ -464,9 +466,12 @@ class FakeScenarioSource:
 
     async def build(
         self, job: HarnessJob, bundle: Any, scenarios_client: he.ScenariosClient, *, pool: Any,
-        world_factory: Any,
+        world_factory: Any, bundle_dir: Path,
     ) -> list[FakeScenario]:
-        del job, bundle, pool, world_factory
+        # `bundle_dir` (p12: the scenario-source adapter's own seam) is unused by this in-memory
+        # fake -- accepted only because `run_job` now forwards it to every `ScenarioSource.build`,
+        # injected or not.
+        del job, bundle, pool, world_factory, bundle_dir
         await asyncio.to_thread(
             scenarios_client.provision,
             {"scenario_keys": [s.scenario_key for s in self._scenarios]},
@@ -490,6 +495,7 @@ class Harness:
     transport: FakeTransport
     provisioner: FakeProvisioner
     deps: he.HostedEntrypointDeps
+    bundle_dir: Path
 
 
 def _build_harness(
@@ -506,6 +512,14 @@ def _build_harness(
     parallelism: int = 1,
     build_output: dict[str, Any] | None = None,
     artifacts: HarnessArtifactPolicy | None = None,
+    # p12: leaves `deps.scenario_source` at its real default (`NotWiredScenarioSource`) instead of
+    # the usual `FakeScenarioSource` -- for the scenario_source.py wiring tests, which need
+    # `run_job` to actually choose between the default and the real `BundleScenarioSource` itself.
+    use_default_scenario_source: bool = False,
+    # p12: swaps in `_write_bundle_with_scenario_files` for the scenario-source wiring tests, which
+    # need real scenario documents hashed into the manifest's `files[]` (§2e `bundle_file_unlisted`
+    # otherwise rejects them at preflight) -- every other caller keeps the plain `_write_bundle`.
+    bundle_writer: Callable[[Path], Any] = _write_bundle,
 ) -> Harness:
     tmp = Path(tempfile.mkdtemp(prefix="p10-e2e-"))
     work = tmp / "work"
@@ -513,7 +527,7 @@ def _build_harness(
     output = work / "artifacts"
     bundle_dir = work / he.DEFAULT_BUNDLE_DIR_NAME
     source.mkdir(parents=True, exist_ok=True)
-    _write_bundle(bundle_dir)
+    bundle_writer(bundle_dir)
     if corrupt_bundle is not None:
         corrupt_bundle(bundle_dir)
 
@@ -548,7 +562,9 @@ def _build_harness(
     deps = he.HostedEntrypointDeps(
         load_capabilities=lambda: capabilities,
         bundle_source=he.DefaultBundleSource(),
-        scenario_source=FakeScenarioSource(scenarios),
+        scenario_source=(
+            he.NotWiredScenarioSource() if use_default_scenario_source else FakeScenarioSource(scenarios)
+        ),
         build_transport=lambda: transport,
         build_provider=lambda: provisioner,
         build_call_runner=build_call_runner,
@@ -560,7 +576,7 @@ def _build_harness(
     )
     return Harness(
         tmp=tmp, work=work, source=source, output=output, job_path=job_path, transport=transport,
-        provisioner=provisioner, deps=deps,
+        provisioner=provisioner, deps=deps, bundle_dir=bundle_dir,
     )
 
 
@@ -1250,8 +1266,8 @@ def test_pool_close_backstop_runs_even_when_scenario_source_raises_untyped() -> 
     # the `finally` with no explicit close anywhere on this path -- only the backstop can close it.
     async def scenario() -> None:
         class ExplodingScenarioSource:
-            async def build(self, job, bundle, scenarios_client, *, pool, world_factory):
-                del job, bundle, scenarios_client, pool, world_factory
+            async def build(self, job, bundle, scenarios_client, *, pool, world_factory, bundle_dir):
+                del job, bundle, scenarios_client, pool, world_factory, bundle_dir
                 raise MemoryError("boom")
 
         harness = _build_harness(scenarios=[], instances=1)
@@ -1329,9 +1345,9 @@ def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerr
 
         async def build(
             self, job: Any, bundle: Any, scenarios_client: he.ScenariosClient, *, pool: Any,
-            world_factory: Any,
+            world_factory: Any, bundle_dir: Path,
         ) -> list[Any]:
-            del job, bundle, scenarios_client, pool, world_factory
+            del job, bundle, scenarios_client, pool, world_factory, bundle_dir
             return self._scenarios
 
     async def scenario() -> None:
@@ -2005,9 +2021,9 @@ def test_drain_alone_delivers_a_pre_run_backlog_larger_than_one_batch() -> None:
 
             async def build(
                 self, job: HarnessJob, bundle: Any, scenarios_client: he.ScenariosClient, *,
-                pool: Any, world_factory: Any,
+                pool: Any, world_factory: Any, bundle_dir: Path,
             ) -> list[FakeScenario]:
-                del job, bundle, scenarios_client, world_factory
+                del job, bundle, scenarios_client, world_factory, bundle_dir
                 adapter = pool._outbound  # no adapter seam on ScenarioSource itself
                 for i in range(self._chatter_count):
                     await adapter.log(level="info", message=f"pre-run chatter {i}")
@@ -2163,6 +2179,350 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
     asyncio.run(scenario())
 
 
+# =================================================================================================
+# p12: scenario_source.py wiring -- item 4. Writes real scenario documents (`folder.py`'s own
+# on-disk layout) straight into `harness.bundle_dir`, matching `scenario_source.py`'s
+# `SCENARIOS_DIRNAME` constant. Deliberately its own tiny writer rather than importing
+# `test_scenario_source.py`'s `_write_scenario` (no cross-test-module private-helper imports).
+#
+# §2e preflight (`bundle_file_unlisted`) rejects any bundle file absent from the manifest's
+# `files[]` -- exactly the CONTRACT QUESTIONS obligation the report calls out for a real Scenario
+# Generation Contract bundle author. So a scenario-bearing bundle for these tests cannot just drop
+# files under `bundle_dir/scenarios/` after `_write_bundle` has already sealed the manifest; the
+# scenario files have to be hashed into `files[]` and the bundle re-sealed, the same way
+# `test_process_preflight.py`'s own `_build_bundle(extra_files=...)` does it.
+# =================================================================================================
+
+
+def _scenario_doc_files(
+    name: str, *, scenario_key: str, scenario_id: str = "", sub_goals: list[str] | None = None,
+    setup_code: str = "", checks: dict[str, str] | None = None,
+) -> dict[str, bytes]:
+    """One scenario folder's contents as {relative path: bytes} -- fed to
+    `_write_bundle_with_scenario_files` below rather than written straight to disk, so every byte
+    can be hashed into the manifest's `files[]` before the bundle is sealed."""
+    body = {
+        "name": name, "scenario_key": scenario_key, "scenario_id": scenario_id,
+        "sub_goals": sub_goals or [],
+    }
+    prefix = f"{SCENARIOS_DIRNAME}/{name}"
+    files = {f"{prefix}/scenario.json": json.dumps(body).encode("utf-8")}
+    if setup_code:
+        files[f"{prefix}/setup.py"] = setup_code.encode("utf-8")
+    for goal_name, code in (checks or {}).items():
+        files[f"{prefix}/checks/{goal_name}.py"] = code.encode("utf-8")
+    return files
+
+
+def _write_bundle_with_scenario_files(root: Path, scenario_files: dict[str, bytes]) -> EnvironmentBundleV2:
+    """`_write_bundle`, plus `scenario_files` hashed into `files[]` and the digest re-sealed over
+    all of it -- otherwise every one of these trips `bundle_file_unlisted` at preflight, before
+    `scenario_source.build()` is ever reached."""
+    root.mkdir(parents=True, exist_ok=True)
+    body = _base_manifest_body()
+    file_contents = {"db/schema.sql": SCHEMA_SQL, "db/seed.sql": SEED_SQL, **scenario_files}
+    files: list[dict[str, Any]] = []
+    for relative, content in file_contents.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        files.append(
+            {"path": relative, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
+        )
+    body["files"] = files
+    digest = compute_inputs_digest(
+        root, ["db/schema.sql"], ["db/seed.sql"], engine=ManagedEngine.POSTGRES, version="16"
+    )
+    body["seed"] = {
+        "stores": [
+            {
+                "capability": "database", "migrations": ["db/schema.sql"], "seed_files": ["db/seed.sql"],
+                "baseline": {"strategy": "template_database", "inputs_digest": digest},
+                "sentinel": {"query": "SELECT count(*) FROM riders", "expected": "1"},
+            }
+        ]
+    }
+    body["digest"] = "sha256:" + "0" * 64
+    normalized = EnvironmentBundleV2.model_validate(body)
+    body["digest"] = seal_bundle_v2(normalized)
+    (root / "manifest.json").write_text(json.dumps(body, indent=2), encoding="utf-8")
+    return EnvironmentBundleV2.model_validate(body)
+
+
+def test_bundle_without_scenarios_keeps_the_notwired_regression() -> None:
+    # item 4: a bundle that does not carry a `scenarios/` directory must keep behaving exactly as
+    # it did before this adapter existed -- the default `NotWiredScenarioSource`'s typed failure,
+    # never a crash and never a silently-empty run.
+    async def scenario() -> None:
+        harness = _build_harness(scenarios=[], instances=1, use_default_scenario_source=True)
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["stage"] == "validating_scenarios"
+        assert failure["domain"] == "platform_sync"
+        assert failure["code"] == "scenario_preallocation_failed"
+
+    asyncio.run(scenario())
+
+
+def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present() -> None:
+    # item 4 + 5c (end to end): the presence test flips the default over to the real
+    # `BundleScenarioSource` -- no `FakeScenarioSource` involved anywhere in this test. One
+    # deterministic sub_goal that genuinely holds against the fake world, so this proves a real
+    # COMPLETED pass, not just that the vacuous-pass guard fired.
+    async def scenario() -> None:
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir,
+                _scenario_doc_files(
+                    # `scenario_id` non-empty here on purpose -- see
+                    # `test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema` just below for
+                    # the (newly discovered, load-bearing) reason an EMPTY one cannot be used to
+                    # prove a receipt actually arrives.
+                    "passing", scenario_key="passing", scenario_id="platform-passing",
+                    sub_goals=["holds"],
+                    checks={"holds": "def check(world, calls):\n    return None\n"},
+                ),
+            ),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        payload = terminals[0]["payload"]
+        assert payload["stage"] == "completed"
+        assert payload["failure"] is None
+
+        # terminal last: the terminal record is the final event this run ever pushed.
+        assert harness.transport.event_records[-1].get("type") == "terminal"
+
+        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        assert statuses == {"passing": "passed"}  # the real scheduler actually ran it, and it held
+
+    asyncio.run(scenario())
+
+
+def test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_validation() -> None:
+    # Mutation table item 2: "empty-key fixture -> typed failure", at the FULL integration level --
+    # a hand-written document with an empty `scenario_key` flows verbatim through this adapter
+    # (work item 3: never synthesized) into the scheduler's OWN pre-existing defense
+    # (`_validate_scenario_entry`, untouched by this task), which must catch it as a typed FAILED
+    # terminal rather than an `AttributeError` deep in the scheduler. `test_scenario_source.py`
+    # covers the reader's verbatim carry and the mutation that would break it; this is the
+    # end-to-end proof that the two halves agree.
+    async def scenario() -> None:
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir, _scenario_doc_files("s1", scenario_key="", sub_goals=[])
+            ),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["stage"] == "validating_scenarios"
+        assert failure["domain"] == "environment"
+        assert failure["code"] == "scenario_preallocation_failed"
+        assert "scenario_key" in failure["message"]
+
+    asyncio.run(scenario())
+
+
+def test_mutation_adapter_off_makes_the_e2e_test_fail() -> None:
+    # Mutation table item 1: "adapter-off -> e2e test fails". Patches `bundle_has_scenarios` (as
+    # seen from `hosted_entrypoint.py`'s own namespace, where it was imported) to always report
+    # "no scenarios here" -- simulating hard-rule edit (b) never having been made, i.e. the wiring
+    # `if isinstance(...) and bundle_has_scenarios(...)` guard permanently failing closed.
+    #
+    # R1-6 fold-in (p12-review-r1.md LOW finding): the original version of this test asserted the
+    # MUTANT's own failure terminal directly -- true, but it never actually ran the `stage ==
+    # "completed"` assertion that is the real kill. This version runs the REAL
+    # `test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present` under the
+    # patch and checks THAT it fails. `mock.patch.object` restores the original function in its own
+    # `finally` regardless of how the inner call ends -- no manual restore bookkeeping needed.
+    with mock.patch.object(he, "bundle_has_scenarios", lambda bundle_dir: False):
+        try:
+            test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present()
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                "adapter-off mutant did not fail "
+                "test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present "
+                "(no pytest.raises here -- this file runs stand-alone via TESTS, per its own "
+                "module docstring)"
+            )
+
+    # Restored: the real test passes again.
+    test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present()
+
+
+def test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema() -> None:
+    # NEWLY DISCOVERED while writing the test above: `outbound.py`'s `ResultReceiptDraft` schema
+    # requires `scenario_id` to be non-empty (pydantic `min_length=1`). The brief mandates carrying
+    # `scenario_id` VERBATIM off the document -- including empty, until pre-allocation is wired --
+    # so a scenario whose pre-allocation has not run gets its receipt rejected at construction,
+    # logged as an error, and DROPPED, while the job still reports COMPLETED with that scenario
+    # counted as `passed`/`failed` in `scenario_counts`. This sharpens the brief's own "blocking
+    # integration obligation" from a documentation concern into a concrete, verified one: today, a
+    # bundle-sourced scenario can never actually deliver a receipt to the platform until pre-
+    # allocation assigns it a real `scenario_id`. See CONTRACT QUESTIONS in the report.
+    async def scenario() -> None:
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir,
+                _scenario_doc_files(
+                    "passing", scenario_key="passing", scenario_id="", sub_goals=["holds"],
+                    checks={"holds": "def check(world, calls):\n    return None\n"},
+                ),
+            ),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        payload = terminals[0]["payload"]
+        assert payload["stage"] == "completed"  # the job itself does not fail
+        assert payload["scenario_counts"]["passed"] == 1  # ...and reports the scenario as passed...
+
+        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        assert statuses == {}  # ...yet no receipt for it ever reached the platform.
+
+        error_logs = [
+            record for record in harness.transport.event_records
+            if record.get("type") == "log" and record["payload"].get("level") == "error"
+            and "ResultReceiptDraft" in record["payload"].get("message", "")
+        ]
+        assert len(error_logs) == 1  # the drop is at least loud, not silent -- but still a drop.
+
+    asyncio.run(scenario())
+
+
+def test_injected_scenario_source_always_wins_over_the_bundle_adapter() -> None:
+    # item 4: even when the bundle ALSO carries a valid `scenarios/` directory, an explicitly
+    # injected `ScenarioSource` must be used untouched -- the presence test only ever applies to
+    # the untouched default.
+    async def scenario() -> None:
+        injected = [FakeScenario("from-fake", "platform-from-fake", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(
+            scenarios=injected, instances=1,  # FakeScenarioSource, as usual -- not the default
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir, _scenario_doc_files("from-bundle", scenario_key="from-bundle", sub_goals=[])
+            ),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        assert statuses == {"from-fake": "passed"}  # the bundle's own scenario never ran
+
+    asyncio.run(scenario())
+
+
+# =================================================================================================
+# R1-1 (CRITICAL, p12-review-r1.md) -- through the REAL `run_job`, on a sealed, preflight-clean
+# bundle: a scenario document must never be able to set the guest's own exit code, and an unreadable
+# or malformed scenario file must never escape as an unhandled exception with zero terminal events.
+# The chmod-000 "unreadable file" trigger is proven directly against `scenario_source.py` in
+# `test_scenario_source.py` instead of here -- see that file's R1-1 section docstring for why the
+# full bundle/preflight pipeline cannot exercise it without touching `process_preflight.py`.
+# =================================================================================================
+
+
+def test_module_level_sys_exit_zero_in_setup_is_contained_as_a_typed_failure() -> None:
+    # Before the fix: `sys.exit(0)` at module level inside `setup.py` propagated as a raw
+    # `SystemExit` straight out of `run_job` -- the guest process itself would exit 0 with ZERO
+    # terminal events (a "clean terminal that never happened", per spine §0.6), on a bundle whose
+    # every byte was hashed into the manifest and §2e preflight passed.
+    async def scenario() -> None:
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir,
+                _scenario_doc_files(
+                    "s1", scenario_key="s1", sub_goals=[], setup_code="import sys\nsys.exit(0)\n",
+                ),
+            ),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        # The GUEST's own exit code -- EXIT_OK means "a terminal was reached and flushed", the
+        # same meaning it carries for any other typed FAILED terminal, never the scenario's own
+        # sys.exit(0) leaking through `run_job`'s return value.
+        assert code == he.EXIT_OK
+
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1  # a terminal event WAS delivered -- not an empty event stream
+        payload = terminals[0]["payload"]
+        assert payload["stage"] == "failed"
+        failure = payload["failure"]
+        assert failure["domain"] == "environment"
+        assert failure["stage"] == "validating_scenarios"
+        assert failure["code"] == "scenario_preallocation_failed"
+
+    asyncio.run(scenario())
+
+
+def test_module_level_sys_exit_three_in_setup_does_not_hijack_the_guests_exit_code() -> None:
+    # EXIT_FENCED == 3: before the fix, `sys.exit(3)` here was indistinguishable from the guest
+    # itself choosing to exit fenced -- the platform would read an ordinary scenario content defect
+    # as a fenced/superseded attempt instead.
+    async def scenario() -> None:
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir,
+                _scenario_doc_files(
+                    "s1", scenario_key="s1", sub_goals=[], setup_code="import sys\nsys.exit(3)\n",
+                ),
+            ),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+        assert code != he.EXIT_FENCED  # explicit: the scenario's own exit code did not leak through
+
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["domain"] == "environment"
+        assert failure["code"] == "scenario_preallocation_failed"
+
+    asyncio.run(scenario())
+
+
+def test_non_utf8_setup_file_is_contained_as_a_typed_failure_not_an_escape() -> None:
+    # Before the fix: a raw `UnicodeDecodeError` from `_read_text`'s `.read_text(encoding="utf-8")`
+    # propagated straight out of `run_job` -- per spine §0.6 a non-zero exit with no terminal event
+    # reads as `infrastructure` and gets retried to exhaustion, even though this is a deterministic
+    # content defect that will never succeed on retry. The non-UTF-8 bytes hash and seal fine (§2e
+    # preflight only hashes raw bytes, never decodes) -- only this module's own `.read_text()` call
+    # ever attempts to decode them.
+    async def scenario() -> None:
+        files = _scenario_doc_files("s1", scenario_key="s1", sub_goals=[])
+        files[f"{SCENARIOS_DIRNAME}/s1/setup.py"] = b"def setup(world):\n    return '\xff\xfe'\n"
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(bundle_dir, files),
+        )
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["domain"] == "environment"
+        assert failure["stage"] == "validating_scenarios"
+        assert failure["code"] == "scenario_preallocation_failed"
+
+    asyncio.run(scenario())
+
+
 TESTS = [
     test_resolve_parallelism_reads_the_raw_value_without_clamping,
     test_out_of_range_parallelism_is_rejected_by_preflight_not_clamped,
@@ -2214,6 +2574,15 @@ TESTS = [
     test_drain_alone_delivers_a_pre_run_backlog_larger_than_one_batch,
     test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt_under_backlog,
     test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window,
+    test_bundle_without_scenarios_keeps_the_notwired_regression,
+    test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present,
+    test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_validation,
+    test_mutation_adapter_off_makes_the_e2e_test_fail,
+    test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema,
+    test_injected_scenario_source_always_wins_over_the_bundle_adapter,
+    test_module_level_sys_exit_zero_in_setup_is_contained_as_a_typed_failure,
+    test_module_level_sys_exit_three_in_setup_does_not_hijack_the_guests_exit_code,
+    test_non_utf8_setup_file_is_contained_as_a_typed_failure_not_an_escape,
 ]
 
 
