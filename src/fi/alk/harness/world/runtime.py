@@ -83,7 +83,7 @@ class Db:
             if all(record.get(field) == value for field, value in fields.items())
         ]
 
-    def add(self, collection: str, record: Mapping[str, Any]) -> int:
+    def add(self, collection: str, record: Mapping[str, Any]) -> int | dict[str, Any]:
         return self.store.add(collection, record)
 
 

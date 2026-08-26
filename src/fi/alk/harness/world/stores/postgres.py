@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ..errors import WorldQueryRejected
 from . import Held, Snapshot, StoreError
 from .container import ContainerStore, docker
 
@@ -93,6 +94,34 @@ class PostgresStore(ContainerStore):
             cursor = connection.execute(statement, tuple(params))
             return max(0, int(cursor.rowcount or 0))
 
+    def query(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+        """Run one read statement, on a connection Postgres itself will not let write.
+
+        Autocommit, with the session's own default flipped to read-only rather than one shared
+        ``SET TRANSACTION READ ONLY`` transaction: every statement becomes its own implicit
+        read-only transaction, so nothing here is ever held open, and ``reset``'s drop of the
+        database can always proceed regardless of what a caller just read.
+
+        An empty ``params`` tuple is passed through as ``None`` rather than as itself: psycopg
+        scans for placeholders whenever it is handed anything other than ``None``, and an
+        ordinary ``LIKE '%turkey%'`` with nothing to bind then reads its own ``%t`` as an
+        unmatched one and raises before the statement ever reaches Postgres.
+        """
+        with _psycopg().connect(
+            self.dsn(), autocommit=True, options="-c default_transaction_read_only=on"
+        ) as connection:
+            cursor = connection.execute(statement, tuple(params) if params else None)
+            columns = [description[0] for description in cursor.description or []]
+            seen: set[str] = set()
+            for column in columns:
+                if column in seen:
+                    raise WorldQueryRejected(
+                        f"query() returned more than one column named {column!r}; alias one "
+                        "of them so a row does not silently lose one under the other."
+                    )
+                seen.add(column)
+            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
     def _tables(self, connection: Any) -> list[str]:
         rows = connection.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
@@ -100,16 +129,24 @@ class PostgresStore(ContainerStore):
         return [row[0] for row in rows]
 
     def _primary_key(self, connection: Any, table: str) -> list[str]:
-        """The primary key columns, used only to read rows back in a stable order."""
+        """The primary key columns, used only to read rows back in a stable order.
+
+        Joined through ``pg_class``/``pg_namespace`` rather than a ``%s::regclass`` cast over an
+        f-string, so a table name is only ever a bound value — an embedded ``"`` (a table
+        created as ``CREATE TABLE "we""ird" (...)``) is just a character in that value instead
+        of something a regclass cast has to parse.
+        """
         rows = connection.execute(
             """
             SELECT a.attname
               FROM pg_index i
               JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-             WHERE i.indrelid = %s::regclass AND i.indisprimary
+              JOIN pg_class c ON c.oid = i.indrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'public' AND c.relname = %s AND i.indisprimary
              ORDER BY array_position(i.indkey, a.attnum)
             """,
-            (f'public."{table}"',),
+            (table,),
         ).fetchall()
         return [row[0] for row in rows]
 
@@ -125,28 +162,47 @@ class PostgresStore(ContainerStore):
         ).fetchall()
         return {row[0]: row[1] for row in rows}
 
-    def state(self) -> dict[str, list[dict[str, Any]]]:
+    def _select_ordered(self, connection: Any, table: str) -> list[dict[str, Any]]:
+        """Every row of one table, ordered by its primary key where it has one.
+
+        Without that order the same data comes back in whatever sequence the heap happens to
+        hold it, and a check comparing the first row is reading a coin toss rather than the
+        agent's behaviour. Built with ``sql.Identifier`` rather than an f-string because
+        ``table`` is a name the harness only just read out of the catalogue, not a literal it
+        wrote itself.
+        """
+        sql = _psycopg().sql
+        key = self._primary_key(connection, table)
+        statement = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))
+        if key:
+            statement += sql.SQL(" ORDER BY ") + sql.SQL(", ").join(
+                sql.Identifier(column) for column in key
+            )
+        cursor = connection.execute(statement)
+        columns = [description[0] for description in cursor.description or []]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+    def state(self, only: Sequence[str] | None = None) -> dict[str, list[dict[str, Any]]]:
         """Every table and its rows, in the shape the checks already expect.
 
-        Ordered by primary key where there is one. Without that the same data comes back in
-        whatever order the heap happens to hold it, and a check comparing the first row is
-        reading a coin toss rather than the agent's behaviour.
+        ``only`` narrows the read to the named tables, still inside the one connection — a
+        caller that already knows it wants a subset (``HostedWorld`` excluding over-cap tables)
+        never pays to read and discard rows for the ones it does not. ``None`` reads every table
+        in ``public``, exactly as before.
         """
         with self._connect() as connection:
-            out: dict[str, list[dict[str, Any]]] = {}
-            for table in self._tables(connection):
-                key = self._primary_key(connection, table)
-                order = (
-                    " ORDER BY " + ", ".join(f'"{column}"' for column in key)
-                    if key
-                    else ""
-                )
-                cursor = connection.execute(f'SELECT * FROM "{table}"{order}')
-                columns = [description[0] for description in cursor.description or []]
-                out[table] = [
-                    dict(zip(columns, row, strict=True)) for row in cursor.fetchall()
-                ]
-            return out
+            tables = self._tables(connection) if only is None else list(only)
+            return {table: self._select_ordered(connection, table) for table in tables}
+
+    def table(self, name: str) -> list[dict[str, Any]]:
+        """One table's rows, ordered by primary key where it has one.
+
+        The read-side counterpart to ``state()``'s per-table loop, for a caller that wants only
+        one of them: still a single connection, so reading one table never costs a second round
+        trip just to learn how to order it.
+        """
+        with self._connect() as connection:
+            return self._select_ordered(connection, name)
 
     # -- how to put it back ----------------------------------------------------------
 
@@ -244,30 +300,57 @@ class PostgresStore(ContainerStore):
 
     # -- what a scenario changes -----------------------------------------------------
 
-    def add(self, collection: str, record: Any) -> int:
+    def add(self, collection: str, record: Any) -> dict[str, Any]:
+        """Insert one record and hand back exactly what Postgres stored.
+
+        ``RETURNING *`` rather than a second read: a caller after the row's generated key (an
+        identity column, a default, a trigger) would otherwise have to guess which column that
+        is, and a table with no natural way to re-select the row it just inserted could not be
+        read back at all.
+        """
         columns = list(record)
-        quoted = ", ".join(f'"{column}"' for column in columns)
-        placeholders = ", ".join(["%s"] * len(columns))
+        sql = _psycopg().sql
+        statement = sql.SQL("INSERT INTO {} ({}) VALUES ({}) RETURNING *").format(
+            sql.Identifier(collection),
+            sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+            sql.SQL(", ").join(sql.SQL("%s") for _ in columns),
+        )
         with self._connect() as connection:
             types = self._column_types(connection, collection)
             cursor = connection.execute(
-                f'INSERT INTO "{collection}" ({quoted}) VALUES ({placeholders})',
+                statement,
                 tuple(
                     _adapt(record[column], types.get(column, "")) for column in columns
                 ),
             )
-            return cursor.rowcount
+            stored = cursor.fetchone()
+            if stored is None:
+                raise StoreError(
+                    f"INSERT INTO {collection!r} ... RETURNING * came back with no row; a rule "
+                    "or a BEFORE INSERT trigger the agent's own migrations declared can turn an "
+                    "insert into a no-op, and put() cannot report a record that was never "
+                    "written."
+                )
+            out = [description[0] for description in cursor.description or []]
+            return dict(zip(out, stored, strict=True))
 
     def amend(self, collection: str, key: str, changes: Any, *, by: str = "") -> int:
         if not by:
             raise StoreError(
                 f"{collection} is a table, so changing a record needs the column it is keyed on"
             )
-        sets = ", ".join(f'"{column}" = %s' for column in changes)
+        sql = _psycopg().sql
+        statement = sql.SQL("UPDATE {} SET {} WHERE {} = %s").format(
+            sql.Identifier(collection),
+            sql.SQL(", ").join(
+                sql.SQL("{} = %s").format(sql.Identifier(column)) for column in changes
+            ),
+            sql.Identifier(by),
+        )
         with self._connect() as connection:
             types = self._column_types(connection, collection)
             cursor = connection.execute(
-                f'UPDATE "{collection}" SET {sets} WHERE "{by}" = %s',
+                statement,
                 (
                     *(
                         _adapt(value, types.get(column, ""))
@@ -283,9 +366,10 @@ class PostgresStore(ContainerStore):
             raise StoreError(
                 f"{collection} is a table, so removing one record needs the column it is keyed on"
             )
-        statement = f'DELETE FROM "{collection}"' + (
-            f' WHERE "{by}" = %s' if key else ""
-        )
+        sql = _psycopg().sql
+        statement = sql.SQL("DELETE FROM {}").format(sql.Identifier(collection))
+        if key:
+            statement += sql.SQL(" WHERE {} = %s").format(sql.Identifier(by))
         with self._connect() as connection:
             cursor = connection.execute(statement, (key,) if key else ())
             return cursor.rowcount

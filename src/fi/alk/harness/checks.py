@@ -69,13 +69,23 @@ def run_check(
         return Outcome(
             name,
             False,
-            f"the check raised {type(failed).__name__}: {failed}",
+            f"the check raised {type(failed).__name__}: {str(failed)[:200]}",
             broken=True,
         )
 
-    if said is None or said is True:
+    if said is None or said is True or (isinstance(said, str) and not said.strip()):
         return Outcome(name, True)
-    return Outcome(name, False, str(said) if said is not True else "")
+    if said is False:
+        return Outcome(name, False, "False")
+    if not isinstance(said, str):
+        return Outcome(
+            name,
+            False,
+            f"the check returned {type(said).__name__} {repr(said)[:200]}; a check returns a "
+            "sentence naming what is wrong, or None when it held.",
+            broken=True,
+        )
+    return Outcome(name, False, said)
 
 
 def all_held(outcomes: Sequence[Outcome]) -> bool:
@@ -120,7 +130,7 @@ def run_world_check(
         return Outcome(
             name,
             False,
-            f"the check raised {type(failed).__name__}: {failed}",
+            f"the check raised {type(failed).__name__}: {str(failed)[:200]}",
             broken=True,
         )
     return Outcome(name, said is None, "" if said is None else str(said))
