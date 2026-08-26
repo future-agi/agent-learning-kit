@@ -30,9 +30,10 @@ import os
 # this is the setting worth revisiting first once the target can be handed to ALK.
 AGENT = "claude-sonnet-4-6"
 USER = "claude-sonnet-4-6"
-# Kept separate and stronger. A judged sub-goal is the one place a cheap wrong answer is
-# expensive: it decides a pass, it runs once per scenario, and nobody re-reads it.
-JUDGE = "claude-opus-4-7"
+# One model for every role. A judged sub-goal was kept on a stronger model, but a run that mixes
+# tiers is slower and harder to reason about, and the checks that decide a pass are code rather
+# than judgement wherever they can be. Override with ALK_JUDGE_MODEL when a run needs it.
+JUDGE = "claude-sonnet-4-6"
 
 
 def for_roles(override: str | None = None) -> dict[str, str]:

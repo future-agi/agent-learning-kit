@@ -38,7 +38,12 @@ DONE = "done"
 # remain alive forever after a dropped upstream stream, though, which previously left a hosted
 # job looking healthy while making no progress.  Bound *inactivity*, not total stage duration:
 # long scenario suites remain valid as long as they keep producing observable work.
-DEFAULT_STAGE_IDLE_TIMEOUT_SECONDS = 600.0
+# The bound exists to catch a wedged stream, but it measures silence from the session rather than
+# from the work. Writing a suite is one tool call that runs every writer inside it, so the session
+# is legitimately silent for as long as generation takes and a bound shorter than that kills a
+# healthy run. Sized for the longest suite rather than the commonest one; a genuinely wedged
+# stage still fails, just later.
+DEFAULT_STAGE_IDLE_TIMEOUT_SECONDS = 2700.0
 STAGE_IDLE_TIMEOUT_SECONDS = float(
     os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", str(DEFAULT_STAGE_IDLE_TIMEOUT_SECONDS))
 )
