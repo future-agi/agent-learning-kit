@@ -201,6 +201,20 @@ class VoiceCallRunner:
             os.environ["HARNESS_SCRIPTED_CALLER"] = json.dumps(persona.get("scripted_caller") or {})
             os.environ["HARNESS_FIXTURE"] = json.dumps(doc.get("fixture") or {}, default=str)
 
+            # sdk_voice requires LIVEKIT_TARGET_SYSTEM_PROMPT — the caller's system prompt
+            # produced by the environment authoring step. In the local lane, run/simulation reads
+            # it from simulator_prompt.md; in the hosted lane it lives in the bundle.
+            prompt_path = self._bundle_dir / "simulator_prompt.md"
+            if prompt_path.is_file():
+                os.environ["LIVEKIT_TARGET_SYSTEM_PROMPT"] = prompt_path.read_text(
+                    encoding="utf-8"
+                ).strip()
+            elif "LIVEKIT_TARGET_SYSTEM_PROMPT" not in os.environ:
+                # Fallback: use the scenario instruction as a minimal prompt.
+                os.environ["LIVEKIT_TARGET_SYSTEM_PROMPT"] = str(
+                    doc.get("instruction") or "You are a customer."
+                )
+
             if str(trace_path):
                 try:
                     trace_path.unlink()
