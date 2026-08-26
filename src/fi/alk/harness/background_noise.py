@@ -29,6 +29,22 @@ _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
 _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 
 
+def enabled() -> bool:
+    """Whether any scenario may be heard through background noise on this run.
+
+    On by default. Set ``ALK_BACKGROUND_NOISE=0`` to silence every call regardless of what the
+    scenarios ask for, which is the switch to reach for while diagnosing turn-taking: continuous
+    ambient audio under the caller competes with endpoint detection, and removing it separates a
+    scenario that fails from a call that could not be heard.
+    """
+    return os.environ.get("ALK_BACKGROUND_NOISE", "1").strip().lower() not in (
+        "0",
+        "off",
+        "false",
+        "no",
+    )
+
+
 def source_for(environment: str = "", seed: str = "") -> str:
     """A background-noise source for a scenario.
 

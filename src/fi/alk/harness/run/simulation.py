@@ -611,7 +611,9 @@ async def _spoken_to(
             # A scenario that asks to be heard through background noise selects a clip for the
             # caller's environment; the voice engine mixes it under the caller. Cleared otherwise so
             # a previous call's noise never leaks into a quiet one.
-            noisy = getattr(scenario, "background_noise", False)
+            from ..background_noise import enabled as noise_enabled
+
+            noisy = getattr(scenario, "background_noise", False) and noise_enabled()
             if noisy:
                 from ..background_noise import source_for
 
