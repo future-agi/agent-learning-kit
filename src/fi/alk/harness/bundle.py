@@ -539,6 +539,21 @@ def export_session_bundle(
             create_environment_plan,
             write_environment_plan,
         )
+        from .environment_resolution import (
+            ENVIRONMENT_RESOLUTION_FILE,
+            load_environment_resolution,
+        )
+
+        resolution = None
+        if (session / ENVIRONMENT_RESOLUTION_FILE).is_file():
+            resolution = load_environment_resolution(session)
+            if resolution.source_fingerprint != raw["provenance"]["source_digest"]:
+                raise BundleError("environment_resolution_source_fingerprint_mismatch")
+            shutil.copy2(
+                session / ENVIRONMENT_RESOLUTION_FILE,
+                staging / ENVIRONMENT_RESOLUTION_FILE,
+            )
+            generated.append(ENVIRONMENT_RESOLUTION_FILE)
 
         plan = create_environment_plan(
             source=PlanSource(
@@ -553,6 +568,15 @@ def export_session_bundle(
             readiness=[ReadinessProbe.model_validate(item) for item in readiness],
             metadata={
                 "managed": bool(provisioned and provisioned.managed),
+                "packaging_type": (
+                    provisioned.packaging_type if provisioned else "unknown"
+                ),
+                "runtime_adapter": (
+                    provisioned.runtime_adapter if provisioned else "unknown"
+                ),
+                "selected_runtime": (
+                    provisioned.selected_runtime if provisioned else ""
+                ),
                 "generated_runtime_fingerprint": (
                     provisioned.runtime_fingerprint if provisioned else ""
                 ),
@@ -561,7 +585,10 @@ def export_session_bundle(
         write_environment_plan(staging, plan)
         generated.append(ENVIRONMENT_PLAN_FILE)
         raw["provenance"]["generated_files"] = generated
-        raw["metadata"] = {"environment_plan_digest": plan.digest}
+        raw["metadata"] = {
+            "environment_plan_digest": plan.digest,
+            "environment_resolution_digest": resolution.digest if resolution else "",
+        }
         seal_bundle(staging, raw)
         if final.exists():
             shutil.rmtree(final)

@@ -27,8 +27,13 @@ from fi.alk.harness.executor import (
     HarnessExecutor,
     _failure_from_events,
 )
+from fi.alk.harness.failure_reporting import (
+    clear_stage_failure,
+    load_stage_failure,
+    record_stage_failure,
+)
 from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
-from fi.alk.harness.provision import source_fingerprint
+from fi.alk.harness.provision import environment_adapter_context, source_fingerprint
 from fi.simulate.runtime.spec import RuntimeIsolation
 from fi.simulate.runtime.events import CanonicalEvent
 
@@ -159,6 +164,57 @@ def test_autonomous_pipeline_cleans_environment_when_a_stage_raises(
     assert cleaned == [output.resolve()]
 
 
+def test_autonomous_pipeline_emits_safe_progress_and_failure_detail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+    from fi.alk.harness.failure_reporting import record_stage_failure
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    output = tmp_path / "artifacts"
+
+    async def failed_understanding(_args) -> int:
+        record_stage_failure(
+            "understanding_contract_missing",
+            "The submitted source did not produce an agent contract",
+        )
+        return 1
+
+    monkeypatch.setattr(cli, "_understand", failed_understanding)
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
+
+    status = asyncio.run(
+        cli._auto(
+            SimpleNamespace(
+                path=str(source),
+                name="agent",
+                kind="repo",
+                out=str(output),
+                count=1,
+                model=None,
+                run_model=None,
+            )
+        )
+    )
+
+    events = [
+        json.loads(line)
+        for line in (output / "harness-events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    progress = next(
+        event for event in events if event["type"] == "harness.stage.progress"
+    )
+    failed = next(event for event in events if event["type"] == "harness.stage.failed")
+    assert status == 1
+    assert progress["payload"]["detail"].startswith("Understanding source · inspecting")
+    assert failed["payload"]["code"] == "understanding_contract_missing"
+    assert "agent contract" in failed["payload"]["detail"]
+
+
 def test_bundle_is_content_addressed_and_reproducible(tmp_path: Path) -> None:
     (tmp_path / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
     first = seal_bundle(tmp_path, _manifest())
@@ -167,6 +223,29 @@ def test_bundle_is_content_addressed_and_reproducible(tmp_path: Path) -> None:
     assert first.digest == second.digest
     assert load_bundle(tmp_path).digest == first.digest
     assert first.files[0].path == "compose.yaml"
+
+
+def test_environment_adapter_decision_is_stable_for_customer_errors_and_plans(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    contract = SimpleNamespace(
+        runtime=SimpleNamespace(compose_file="", dockerfile="Dockerfile")
+    )
+
+    first = environment_adapter_context(tmp_path, contract)
+    second = environment_adapter_context(tmp_path, contract)
+
+    assert (
+        first
+        == second
+        == {
+            "packaging_type": "dockerfile",
+            "runtime_adapter": "managed_compose_for_dockerfile",
+            "failed_adapter": "managed_compose_for_dockerfile",
+            "selected_runtime": "Dockerfile",
+        }
+    )
 
 
 def test_bundle_detects_file_tampering(tmp_path: Path) -> None:
@@ -329,7 +408,9 @@ def test_environment_up_rejects_a_corrupt_bundle_before_provisioning(
     )
     monkeypatch.setattr(
         "fi.alk.harness.provision.provision",
-        lambda *_args, **_kwargs: pytest.fail("corrupt bundle reached Docker provisioning"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "corrupt bundle reached Docker provisioning"
+        ),
     )
 
     result = asyncio.run(
@@ -515,6 +596,57 @@ def test_failed_stage_is_reported_as_structured_non_retryable_failure(tmp_path: 
     assert failure.domain.value == "simulator"
     assert failure.stage.value == "validating_scenarios"
     assert failure.retryable is False
+
+
+def test_failed_stage_preserves_safe_packaging_and_adapter_details(tmp_path: Path):
+    (tmp_path / "harness-events.jsonl").write_text(
+        '{"type":"harness.stage.failed","payload":'
+        '{"stage":"environment","status":1,'
+        '"code":"environment_provision_failed",'
+        '"detail":"Cannot create the source environment: no runtime",'
+        '"details":{"packaging_type":"unpackaged",'
+        '"failed_adapter":"generated_runtime"}}}\n',
+        encoding="utf-8",
+    )
+
+    failure = _failure_from_events(tmp_path)
+
+    assert failure.message.endswith("no runtime")
+    assert failure.details == {
+        "packaging_type": "unpackaged",
+        "failed_adapter": "generated_runtime",
+        "status": 1,
+    }
+
+
+def test_stage_failure_sidecar_is_sanitized_and_structured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "failure.json"
+    source = tmp_path / "private-checkout"
+    source.mkdir()
+    monkeypatch.setenv("ALK_HARNESS_FAILURE_PATH", str(target))
+    monkeypatch.setenv("VENDOR_API_KEY", "super-secret-value")
+    clear_stage_failure()
+
+    record_stage_failure(
+        "environment_provision_failed",
+        f"{source} rejected api_key=super-secret-value",
+        source=source,
+        action="Provide a supported runtime without api_key=super-secret-value.",
+        details={
+            "packaging_type": "dockerfile",
+            "failed_adapter": "managed_compose_for_dockerfile",
+        },
+    )
+
+    failure = load_stage_failure(target)
+    assert failure is not None
+    assert str(source) not in failure["detail"]
+    assert "super-secret-value" not in failure["detail"]
+    assert "super-secret-value" not in failure["action"]
+    assert failure["action"] == "Provide a supported runtime without api_key=[REDACTED]"
+    assert failure["details"]["packaging_type"] == "dockerfile"
 
 
 def test_only_agent_failures_are_owned_by_the_customer() -> None:

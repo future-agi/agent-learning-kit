@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,6 +58,7 @@ class Checkpoint:
     detail: str = ""
     # The eval that decided it, where one did. Empty for anything settled by code or judged here.
     by: str = ""
+    grading_error: bool = False
 
     def line(self) -> str:
         return f"  [{'x' if self.passed else ' '}] {self.kind}: {self.name}" + (
@@ -72,6 +74,10 @@ class Judgement:
     why: str = ""
     # Which eval decided this, when it was decided by one rather than here.
     by: str = ""
+    # True means the grading system failed to produce a verdict. This is an
+    # infrastructure/product failure, not evidence that the submitted agent
+    # failed the claim.
+    grading_error: bool = False
 
 
 @dataclass
@@ -115,6 +121,10 @@ class Result:
     @property
     def conduct_failures(self) -> list[Judgement]:
         return [item for item in self.conduct if not item.holds]
+
+    @property
+    def grading_failures(self) -> list[Judgement]:
+        return [item for item in self.conduct if item.grading_error]
 
     @property
     def passed(self) -> bool:
@@ -276,12 +286,22 @@ def judge_suite_evals(
     """
     from . import platform_evals
 
-    if (
-        contract.modality != "voice"
-        or not suite_evals
-        or not platform_evals.configured()
-    ):
+    if contract.modality != "voice" or not suite_evals:
         return []
+    hosted = os.getenv("ALK_HOSTED_EXECUTION", "") == "1"
+    if not platform_evals.configured():
+        if not hosted:
+            return []
+        return [
+            Judgement(
+                claim=suite_eval.name,
+                kind=suite_eval.name,
+                holds=False,
+                why="Required platform evaluation is not configured for this hosted job.",
+                grading_error=True,
+            )
+            for suite_eval in suite_evals
+        ]
     verdicts: list[Judgement] = []
     for suite_eval in suite_evals:
         inputs = {
@@ -295,6 +315,17 @@ def judge_suite_evals(
                 suite_eval.name,
                 ", ".join(missing),
             )
+            if hosted:
+                verdicts.append(
+                    Judgement(
+                        claim=suite_eval.name,
+                        kind=suite_eval.name,
+                        holds=False,
+                        why="Required evaluation inputs were unavailable: "
+                        + ", ".join(missing),
+                        grading_error=True,
+                    )
+                )
             continue
         try:
             answered = platform_evals.judge_builtin(
@@ -305,6 +336,16 @@ def judge_suite_evals(
             logging.getLogger(__name__).warning(
                 "platform suite eval %s unavailable: %s", suite_eval.name, failed
             )
+            if hosted:
+                verdicts.append(
+                    Judgement(
+                        claim=suite_eval.name,
+                        kind=suite_eval.name,
+                        holds=False,
+                        why=f"Required platform evaluation could not run: {failed}",
+                        grading_error=True,
+                    )
+                )
             continue
         output = answered["output"]
         choice = output.get("choice") if isinstance(output, dict) else None
@@ -487,6 +528,7 @@ def checkpoints(settled: list[Outcome], judged: list[Judgement]) -> list[Checkpo
             passed=item.holds,
             detail=item.why,
             by=item.by,
+            grading_error=item.grading_error,
         )
         for item in judged
     )

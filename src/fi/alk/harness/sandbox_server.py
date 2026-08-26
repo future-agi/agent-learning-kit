@@ -43,7 +43,13 @@ from .credentials import (
     discover_credentials,
 )
 from .executor import GitHubSourceAcquirer, SourceAcquisitionError
+from .failure_reporting import (
+    FAILURE_PATH_ENVIRONMENT,
+    load_stage_failure,
+    sanitize_failure_message,
+)
 from .github import parse_github_location
+from .environment_resolution import ResolvedEnvironmentPlan, resolve_environment_plan
 from .job import (
     AgentConnection,
     ExecutionMode,
@@ -78,6 +84,7 @@ class LocalSandboxRequest(BaseModel):
     connector_config: dict[str, Any] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
+    controller_environment_values: dict[str, SecretStr] = Field(default_factory=dict)
     platform_run_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -92,6 +99,7 @@ class LocalSandboxRequest(BaseModel):
         ):
             raise ValueError("exactly_one_source_required")
         _validate_environment_values(self.environment_values, self.secret_refs)
+        _validate_controller_environment_values(self.controller_environment_values)
         return self
 
 
@@ -129,11 +137,13 @@ class SandboxRerunRequest(BaseModel):
 
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
+    controller_environment_values: dict[str, SecretStr] = Field(default_factory=dict)
     only: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _valid_environment(self) -> "SandboxRerunRequest":
         _validate_environment_values(self.environment_values, self.secret_refs)
+        _validate_controller_environment_values(self.controller_environment_values)
         return self
 
 
@@ -144,6 +154,7 @@ class SandboxPreflightResponse(BaseModel):
     checkout_required: bool = False
     credentials: CredentialManifest
     packaging: PackagingManifest | None = None
+    environment_plan: ResolvedEnvironmentPlan | None = None
     notes: list[str] = Field(default_factory=list)
 
 
@@ -227,6 +238,7 @@ class LocalSandbox:
         # Values supplied through the platform's .env flow live only for the lifetime of the
         # job. Persisted job/state artifacts contain the opaque mounted references created below.
         self._ephemeral_secrets: dict[str, dict[str, str]] = {}
+        self._ephemeral_controller_secrets: dict[str, dict[str, str]] = {}
         self._ephemeral_secret_file_names: dict[str, set[str]] = {}
         self._recover_orphans()
 
@@ -477,6 +489,19 @@ class LocalSandbox:
                 purpose=f"job-scoped environment value for {name}",
             )
             mounted_values[internal_key] = value.get_secret_value()
+        controller_refs: dict[str, SecretRef] = {}
+        for index, (name, value) in enumerate(
+            request.controller_environment_values.items()
+        ):
+            internal_key = (
+                f"ALK_CONTROLLER_{identifier.replace('-', '').upper()}_{index}"
+            )
+            controller_refs[name] = SecretRef(
+                manager="mounted",
+                key=internal_key,
+                purpose=f"job-scoped harness controller value for {name}",
+            )
+            mounted_values[internal_key] = value.get_secret_value()
         claimed_files, secret_file_names = self._claim_secret_files(
             identifier, request.secret_refs
         )
@@ -514,7 +539,11 @@ class LocalSandbox:
                 agent=AgentConnection(
                     connector=request.connector,
                     config=request.connector_config,
-                    secret_refs={**request.secret_refs, **mounted_refs},
+                    secret_refs={
+                        **request.secret_refs,
+                        **mounted_refs,
+                        **controller_refs,
+                    },
                 ),
                 scenario_count=request.scenario_count,
                 seed=request.seed,
@@ -598,6 +627,10 @@ class LocalSandbox:
             name: value.get_secret_value()
             for name, value in request.environment_values.items()
         }
+        controller_configuration = {
+            name: value.get_secret_value()
+            for name, value in request.controller_environment_values.items()
+        }
         claimed_files, secret_file_names = self._claim_secret_files(
             job_id, request.secret_refs
         )
@@ -610,7 +643,8 @@ class LocalSandbox:
             self._delete_job_secret_files(job_id)
             raise
         runtime_configuration.update(resolved)
-        self._ephemeral_secrets[job_id] = dict(runtime_configuration)
+        self._ephemeral_secrets[job_id] = runtime_configuration
+        self._ephemeral_controller_secrets[job_id] = controller_configuration
         self._ephemeral_secret_file_names[job_id] = secret_file_names
 
         state_path = self.jobs_root / job_id / "state.json"
@@ -657,13 +691,18 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
             log_handle = (directory / "worker.log").open("ab")
+            failure_path = directory / "stage-failure.json"
             try:
                 shutil.rmtree(replay_root, ignore_errors=True)
                 replay_root.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(output / "environment-bundle", replay_root)
                 runtime_configuration = self._ephemeral_secrets.get(job.job_id, {})
+                controller_configuration = self._ephemeral_controller_secrets.get(
+                    job.job_id, {}
+                )
                 child_environment = worker_environment(
-                    {}, runtime_configuration=runtime_configuration
+                    controller_configuration,
+                    runtime_configuration=runtime_configuration,
                 )
                 child_environment["ALK_RUNTIME_CONFIGURATION_NAMES"] = ",".join(
                     sorted(runtime_configuration)
@@ -676,16 +715,23 @@ class LocalSandbox:
                 )
                 child_environment["ALK_HARNESS_JOB_ID"] = job.job_id
 
-                async def run_stage(command: list[str]) -> int:
+                async def run_stage(
+                    command: list[str],
+                ) -> tuple[int, dict[str, Any] | None]:
+                    failure_path.unlink(missing_ok=True)
+                    stage_environment = {
+                        **child_environment,
+                        FAILURE_PATH_ENVIRONMENT: str(failure_path),
+                    }
                     process = await asyncio.create_subprocess_exec(
                         *command,
                         stdout=log_handle,
                         stderr=asyncio.subprocess.STDOUT,
                         start_new_session=True,
-                        env=child_environment,
+                        env=stage_environment,
                     )
                     self._processes[job.job_id] = process
-                    return await process.wait()
+                    return await process.wait(), load_stage_failure(failure_path)
 
                 environment_up = [
                     sys.executable,
@@ -720,14 +766,20 @@ class LocalSandbox:
                     str(output),
                 ]
 
-                up_code = await run_stage(environment_up)
+                up_code, up_failure = await run_stage(environment_up)
                 simulation_code = 1
+                simulation_failure = None
                 cleanup_code = 0
+                cleanup_failure = None
                 if up_code == 0:
                     try:
-                        simulation_code = await run_stage(simulation)
+                        simulation_code, simulation_failure = await run_stage(
+                            simulation
+                        )
                     finally:
-                        cleanup_code = await run_stage(environment_down)
+                        cleanup_code, cleanup_failure = await run_stage(
+                            environment_down
+                        )
 
                 # Exit 2 is a completed suite whose submitted agent failed checks.
                 successful_execution = (
@@ -754,6 +806,13 @@ class LocalSandbox:
                     if cleanup_code != 0
                     else simulation_code
                 )
+                structured_failure = (
+                    up_failure
+                    if up_code != 0
+                    else cleanup_failure
+                    if cleanup_code != 0
+                    else simulation_failure
+                ) or {}
                 state = _read_json(state_path)
                 if state.get("stage") != HarnessStage.CANCELED.value:
                     state.update(
@@ -775,23 +834,32 @@ class LocalSandbox:
                         else {
                             "domain": "environment",
                             "stage": failure_stage,
-                            "code": "saved_session_rerun_failed",
-                            "message": f"{failed_stage} exited {return_code}",
-                            "retryable": False,
+                            "code": structured_failure.get(
+                                "code", "saved_session_rerun_failed"
+                            ),
+                            "message": structured_failure.get(
+                                "detail", f"{failed_stage} exited {return_code}"
+                            ),
+                            "retryable": bool(
+                                structured_failure.get("retryable", False)
+                            ),
+                            "details": structured_failure.get("details", {}),
+                            "action": structured_failure.get("action", ""),
                         },
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)
             except Exception as exc:
+                safe_message = sanitize_failure_message(exc)
                 state = _read_json(state_path)
                 state.update(
                     stage=HarnessStage.FAILED.value,
-                    detail=f"{type(exc).__name__}: {exc}",
+                    detail=f"{type(exc).__name__}: {safe_message}",
                     failure={
                         "domain": "infrastructure",
                         "stage": HarnessStage.RUNNING.value,
                         "code": type(exc).__name__,
-                        "message": str(exc),
+                        "message": safe_message,
                         "retryable": False,
                     },
                     updated_at=_now(),
@@ -802,8 +870,10 @@ class LocalSandbox:
                 self._processes.pop(job.job_id, None)
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
+                self._ephemeral_controller_secrets.pop(job.job_id, None)
                 self._ephemeral_secret_file_names.pop(job.job_id, None)
                 self._delete_job_secret_files(job.job_id)
+                failure_path.unlink(missing_ok=True)
                 shutil.rmtree(replay_root, ignore_errors=True)
 
     def preflight(self, request: SandboxPreflightRequest) -> SandboxPreflightResponse:
@@ -829,6 +899,11 @@ class LocalSandbox:
                 },
                 scan_paths=_credential_scan_paths(packaging),
             )
+            environment_plan = resolve_environment_plan(
+                source,
+                packaging,
+                source_fingerprint=manifest.source_digest,
+            )
             return SandboxPreflightResponse(
                 source_kind=(
                     SourceKind.ARCHIVE
@@ -840,11 +915,11 @@ class LocalSandbox:
                 ),
                 ready_to_submit=(
                     manifest.ready
-                    and packaging.ready
-                    and (packaging.agent_runtime_packaged or not packaging.candidates)
+                    and environment_plan.execution_ready
                 ),
                 credentials=manifest,
                 packaging=packaging,
+                environment_plan=environment_plan,
             )
         location = _github_location(request.github_repository or "")
         repository = location.repository
@@ -1127,6 +1202,7 @@ class LocalSandbox:
                     )
                     _write_json(state_path, state)
             except Exception as exc:
+                safe_message = sanitize_failure_message(exc, source=source)
                 state = _read_json(state_path)
                 domain = (
                     "connectivity"
@@ -1135,12 +1211,12 @@ class LocalSandbox:
                 )
                 state.update(
                     stage=HarnessStage.FAILED.value,
-                    detail=f"{type(exc).__name__}: {exc}",
+                    detail=f"{type(exc).__name__}: {safe_message}",
                     failure={
                         "domain": domain,
                         "stage": HarnessStage.ACQUIRING_SOURCE.value,
                         "code": type(exc).__name__,
-                        "message": str(exc),
+                        "message": safe_message,
                         "retryable": isinstance(exc, SourceAcquisitionError),
                     },
                     updated_at=_now(),
@@ -1151,6 +1227,7 @@ class LocalSandbox:
                 self._processes.pop(job.job_id, None)
                 self._tasks.pop(job.job_id, None)
                 self._ephemeral_secrets.pop(job.job_id, None)
+                self._ephemeral_controller_secrets.pop(job.job_id, None)
                 self._ephemeral_secret_file_names.pop(job.job_id, None)
                 self._delete_job_secret_files(job.job_id)
 
@@ -1178,7 +1255,16 @@ class LocalSandbox:
             # source of truth, so expose its timestamp and stage instead of making
             # a healthy long-running job look stale in the platform UI.
             updated_at = events[-1].get("wall_time") or updated_at
-            detail = {
+            event_detail = next(
+                (
+                    str(event.get("payload", {}).get("detail"))
+                    for event in reversed(events)
+                    if event.get("payload", {}).get("detail")
+                    and _stage_from_events([event]) == event_stage
+                ),
+                None,
+            )
+            detail = event_detail or {
                 HarnessStage.UNDERSTANDING_AGENT.value: "understanding agent source",
                 HarnessStage.GENERATING_ENVIRONMENT.value: "provisioning and validating environment",
                 HarnessStage.GENERATING_SCENARIOS.value: "generating and validating scenarios",
@@ -1321,6 +1407,7 @@ class LocalSandbox:
             )
             _write_json(state_path, state)
         self._ephemeral_secrets.pop(job_id, None)
+        self._ephemeral_controller_secrets.pop(job_id, None)
         self._ephemeral_secret_file_names.pop(job_id, None)
         self._delete_job_secret_files(job_id)
         return self.get(job_id)
@@ -1386,6 +1473,30 @@ _RUNNER_RESERVED_ENVIRONMENT = {
     "PATH",
     "PYTHONPATH",
 }
+_CONTROLLER_ENVIRONMENT_NAMES = {
+    "FI_API_KEY",
+    "FI_SECRET_KEY",
+    "HARNESS_PLATFORM_API_KEY",
+    "HARNESS_PLATFORM_SECRET_KEY",
+    "HARNESS_PLATFORM_WORKSPACE_ID",
+}
+
+
+def _validate_controller_environment_values(values: dict[str, SecretStr]) -> None:
+    """Accept only reporting identity supplied by the trusted control plane.
+
+    This field is not part of the customer source/environment contract. Keeping
+    a strict allow-list prevents the platform-to-provider seam from becoming a
+    general way to mutate the harness controller process.
+    """
+
+    unsupported = sorted(set(values) - _CONTROLLER_ENVIRONMENT_NAMES)
+    if unsupported:
+        raise ValueError(
+            "controller_environment_name_unsupported: " + ", ".join(unsupported)
+        )
+    if sum(len(name) + len(value.get_secret_value()) for name, value in values.items()) > 4096:
+        raise ValueError("controller_environment_values_size_exceeded")
 
 
 def _validate_environment_values(
@@ -1677,13 +1788,28 @@ def _adjustments(directory: Path) -> list[dict[str, Any]]:
 
 def _scenario_delta(instruction: str) -> int | None:
     match = re.search(
-        r"\b(?:add|create|generate|write)\s+(\d{1,3})\s+(?:more\s+)?scenarios?\b",
+        r"\b(?:add|create|generate|write)\s+"
+        r"(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?:more\s+)?scenarios?\b",
         instruction,
         re.IGNORECASE,
     )
     if not match:
         return None
-    return min(100, int(match.group(1)))
+    raw_count = match.group(1).lower()
+    word_counts = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    return min(100, word_counts.get(raw_count, int(raw_count) if raw_count.isdigit() else 0))
 
 
 def _adjustment_stage(instruction: str, current_stage: str) -> str:
