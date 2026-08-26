@@ -2,6 +2,7 @@ FROM node:20-bookworm-slim AS node20
 FROM node:22-bookworm-slim AS node22
 FROM python:3.11-slim-bookworm AS python311
 FROM rabbitmq:3.13.7-management AS rabbitmq313
+FROM ghcr.io/astral-sh/uv:latest AS uvbin
 
 FROM ubuntu:24.04
 
@@ -22,6 +23,7 @@ COPY --from=python311 /usr/local /opt/python311
 COPY --from=rabbitmq313 /opt/rabbitmq /opt/rabbitmq
 RUN rm -f /opt/rabbitmq/etc/rabbitmq/enabled_plugins /etc/rabbitmq/enabled_plugins || true
 COPY --from=rabbitmq313 /opt/erlang /opt/erlang
+COPY --from=uvbin /uv /uvx /usr/local/bin/
 
 RUN python3.12 -m venv /opt/alk-venv \
     && ln -s /opt/node22/bin/node /usr/local/bin/node \

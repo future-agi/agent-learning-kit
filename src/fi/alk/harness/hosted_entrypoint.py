@@ -1151,8 +1151,14 @@ class HostedEntrypointDeps:
     bundle_source: BundleSource = field(default_factory=DefaultBundleSource)
     scenario_source: ScenarioSource = field(default_factory=NotWiredScenarioSource)
     build_transport: Callable[[], ob.Transport] = field(default=lambda: ob.RequestsTransport())
+    # Daytona forces the sandbox to a fixed non-root user (svc-control) and ignores os_user
+    # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
+    # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
+    # users (the model validates them); they are simply not enforced at runtime here.
     build_provider: Callable[[], WorldProvisioner] = field(
-        default=lambda: ProcessRuntimeProvider()
+        default=lambda: ProcessRuntimeProvider(
+            user_resolver=lambda _name: None, require_declared_user=False
+        )
     )
     # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that referenced
     # artifacts are uploaded+acked BEFORE the receipt that names them -- the adapter is threaded in
