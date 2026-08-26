@@ -180,9 +180,10 @@ def _check_config(
 
 def _dispatch_agent_name(runtime: EnvironmentRuntime) -> str | None:
     """The ONLY place this repo reads the dispatch-identity metadata key, so a
-    change to the key name/convention is a one-line adapt. `EnvironmentRuntime.metadata` defaults to `{}` and nothing
-    in `process_runtime.py` populates it yet -- every real "livekit" job
-    hits the caller's typed `CallAborted` below until a producer lands."""
+    change to the key name/convention is a one-line adapt. The provisioner
+    mirrors the agent process's rendered LIVEKIT_AGENT_NAME here; a bundle
+    that declares none (or an ambiguous set) leaves the key absent and the
+    caller's typed `CallAborted` below fires."""
     value = runtime.metadata.get("livekit_agent_name")
     return value.strip() if isinstance(value, str) and value.strip() else None
 
