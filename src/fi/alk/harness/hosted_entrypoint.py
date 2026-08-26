@@ -406,12 +406,22 @@ class ScenarioPreallocationError(RuntimeError):
 
 
 class ScenariosClient:
-    """CROSS-DOC GAP: the Scenario Generation Contract that defines the exact
-    `provision`/`begin` payload and path shape is Karthik's, "in review," and not available to this
-    module. `provision_path`/`begin_path` are constructor-injectable placeholders rather than a
-    guess baked into the URL, so the real paths can be supplied without touching this class once
-    that contract lands. Shares `channel_state` with the other three channels (a fence on any one
-    must stop all of them, per outbound.py's own `ChannelState` docstring)."""
+    """RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): Karthik's Scenario
+    Generation Contract (PR #63) documented two paths (`run-tests/provision/` +
+    `run-tests/{id}/test-executions/`) and a position-ordered `scenario_ids` response, but the
+    platform's actual, live route (futureagi/simulate/views/hosted_harness.py:78-90,
+    urls.py:128-132) mints exactly ONE url per attempt -- a DRF detail `@action` with no
+    `url_path`, so the router only ever produces `.../scenarios/`, never a `provision/`/`begin/`
+    sub-resource. The real dispatch key is a body-level `operation: "provision"|"begin"` field
+    (serializers/hosted_harness.py:201-226's `HarnessScenarioOperationSerializer`). This class's
+    transport (`_post`) is unchanged -- `provision_path`/`begin_path` are the SAME
+    constructor-injectable placeholders as before, now correctly defaulted to an EMPTY suffix (the
+    real route needs none) rather than a guessed path segment; `register_with_platform`
+    (scenario_source.py) is what adds the `operation` field into each payload before calling
+    `.provision()`/`.begin()`, matching this class's existing "operation field in payload" seam
+    rather than requiring a change to either method's body. Shares `channel_state` with the other
+    three channels (a fence on any one must stop all of them, per outbound.py's own `ChannelState`
+    docstring)."""
 
     def __init__(
         self,
@@ -422,8 +432,8 @@ class ScenariosClient:
         sleep: Callable[[float], None] = time.sleep,
         rng: Callable[[], float] = random.random,
         channel_state: ob.ChannelState | None = None,
-        provision_path: str = "provision/",
-        begin_path: str = "begin/",
+        provision_path: str = "",
+        begin_path: str = "",
     ) -> None:
         self._capabilities = capabilities
         self._transport = transport or ob.RequestsTransport()
