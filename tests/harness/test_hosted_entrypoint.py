@@ -28,6 +28,7 @@ from fi.alk.harness import outbound as ob
 from fi.alk.harness.bundle_v2 import (
     BUNDLE_V2_SCHEMA_VERSION,
     EnvironmentBundleV2,
+    EvidenceSeam,
     ManagedEngine,
     compute_inputs_digest,
     seal_bundle_v2,
@@ -572,8 +573,11 @@ def _build_harness(
 
     holder: dict[str, he.OutboundAdapter] = {}
 
-    def build_call_runner(adapter: he.OutboundAdapter) -> FakeCallRunner:
+    def build_call_runner(
+        adapter: he.OutboundAdapter, context: he.CallRunnerContext
+    ) -> FakeCallRunner:
         holder["adapter"] = adapter
+        holder["call_runner_context"] = context
         return FakeCallRunner(
             adapter, cancel_path=cancel_path, cancel_on_scenario=cancel_on_scenario,
             cancel_reason=cancel_reason,
@@ -685,6 +689,136 @@ def test_peek_secret_values_reads_without_deleting(tmp_path_factory: Path | None
 
 def test_peek_secret_values_missing_file_is_empty() -> None:
     assert he.peek_secret_values(Path("/nonexistent/does-not-exist.json")) == ()
+
+
+def test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="p14-secrets-"))
+    path = tmp / "secrets.json"
+    path.write_text(
+        json.dumps(
+            {
+                "LIVEKIT_API_KEY": "lk-secret",
+                "GITHUB_INSTALLATION_TOKEN": "gh-secret",
+            }
+        ),
+        encoding="utf-8",
+    )
+    values = he.peek_target_provider_secret_values(
+        path,
+        {"LIVEKIT_API_KEY": "target_provider", "GITHUB_INSTALLATION_TOKEN": "source_checkout"},
+    )
+    assert values == {"LIVEKIT_API_KEY": "lk-secret"}
+    assert path.exists()  # non-destructive read, same timing contract as peek_secret_values.
+
+
+def test_peek_target_provider_secret_values_missing_file_is_empty() -> None:
+    assert (
+        he.peek_target_provider_secret_values(
+            Path("/nonexistent/does-not-exist.json"), {"LIVEKIT_API_KEY": "target_provider"}
+        )
+        == {}
+    )
+
+
+def test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="p14-secrets-"))
+    path = tmp / "secrets.json"
+    path.write_text(json.dumps({"UNKNOWN_ALIAS": "value"}), encoding="utf-8")
+    assert he.peek_target_provider_secret_values(path, {}) == {}
+
+
+# =================================================================================================
+# CallRunner wiring (p14): the extended build_call_runner(adapter, context) seam, and the
+# NotWired-stays-the-fallback / real-CallRunnerImpl split on `agent.connector`.
+# =================================================================================================
+
+
+def _call_runner_context(
+    *, job: HarnessJob | None = None, evidence_seam: Any = EvidenceSeam.HTTP_TOOL
+) -> he.CallRunnerContext:
+    return he.CallRunnerContext(
+        job=job or _job(),
+        bundle_dir=Path("/nonexistent/bundle"),
+        work_directory=Path("/nonexistent/work"),
+        evidence_seam=evidence_seam,
+        target_provider_secret_values={},
+        attempt_number=1,
+    )
+
+
+def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector() -> None:
+    # `_job()`'s own default is `connector="vapi"` -- out of this worker's mission, by design.
+    runner = he._default_build_call_runner(mock.Mock(), _call_runner_context(job=_job(connector="vapi")))
+    assert isinstance(runner, he.NotWiredCallRunner)
+
+
+def test_default_build_call_runner_returns_notwired_for_retell_and_auto_too() -> None:
+    for connector in ("retell", "auto"):
+        runner = he._default_build_call_runner(
+            mock.Mock(), _call_runner_context(job=_job(connector=connector))
+        )
+        assert isinstance(runner, he.NotWiredCallRunner)
+
+
+def test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit() -> None:
+    runner = he._default_build_call_runner(mock.Mock(), _call_runner_context(job=_job(connector="livekit")))
+    assert isinstance(runner, he.CallRunnerImpl)
+
+
+def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam() -> None:
+    """End-to-end through the real `run_job` wiring point (~line 1728): `secret_purposes =
+    job_secret_purposes(job)` runs, `deps.peek_target_provider_secret_values` captures the alias
+    map BEFORE `pool.start()` deletes `secrets.json`, and the resulting `CallRunnerContext` reaches
+    whatever factory `deps.build_call_runner` names -- verified by capturing it, not by asserting
+    on `CallRunnerImpl` internals (that belongs to test_call_runner.py).
+
+    `SecretDeletingProvisioner` mirrors the REAL `ProcessRuntimeProvider`'s own lifetime rule
+    (process_runtime.py:3535-3544): `secrets.json` is deleted on the provisioner's FIRST
+    `provision()` call, which `pool.start()` awaits synchronously. Without this, `FakeProvisioner`
+    never touches the file at all, and a capture that happened AFTER `pool.start()` instead of
+    before would still see the intact secrets file and still pass -- the deletion is what makes
+    the capture's timing actually load-bearing here, not just documented in a comment."""
+
+    class SecretDeletingProvisioner(FakeProvisioner):
+        def __init__(self, *args: Any, secrets_path: Path, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._secrets_path = secrets_path
+
+        async def provision(self, *args: Any, **kwargs: Any) -> list[EnvironmentRuntime]:
+            runtimes = await super().provision(*args, **kwargs)
+            self._secrets_path.unlink(missing_ok=True)
+            return runtimes
+
+    harness = _build_harness(scenarios=[])
+    harness.deps.secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    harness.deps.secrets_path.write_text(
+        json.dumps({TARGET_PROVIDER_ALIAS: "lk-secret-value"}), encoding="utf-8"
+    )
+    harness.deps.build_provider = lambda: SecretDeletingProvisioner(
+        instances=1, secrets_path=harness.deps.secrets_path
+    )
+
+    captured: dict[str, he.CallRunnerContext] = {}
+
+    def build_call_runner(adapter: he.OutboundAdapter, context: he.CallRunnerContext) -> FakeCallRunner:
+        captured["context"] = context
+        return FakeCallRunner(adapter, cancel_path=harness.deps.cancel_path)
+
+    harness.deps.build_call_runner = build_call_runner
+    code = _run(harness)
+    assert code == he.EXIT_OK
+
+    context = captured["context"]
+    assert context.job.job_id == "job-1"
+    assert context.bundle_dir == harness.bundle_dir
+    # `_base_manifest_body()` (this file's own bundle fixture) declares `evidence_seam: "http_tool"`.
+    assert context.evidence_seam is EvidenceSeam.HTTP_TOOL
+    assert context.attempt_number == 1
+    # The load-bearing assertion: the secrets file is genuinely gone by the time `provision()`
+    # (inside `pool.start()`) returns -- if the capture had happened AFTER `pool.start()` instead
+    # of before, this map would be empty, not the real alias -> value pair.
+    assert context.target_provider_secret_values == {TARGET_PROVIDER_ALIAS: "lk-secret-value"}
+    assert not harness.deps.secrets_path.exists()
 
 
 def test_row_counts_for_capability_returns_the_matching_store() -> None:
@@ -1582,7 +1716,7 @@ def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
-        harness.deps.build_call_runner = lambda adapter: ChattyCallRunner(adapter, log_count=260)
+        harness.deps.build_call_runner = lambda adapter, context: ChattyCallRunner(adapter, log_count=260)
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -1619,7 +1753,7 @@ def test_call_aborted_with_no_ended_at_still_produces_a_receipt() -> None:
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
-        harness.deps.build_call_runner = lambda adapter: AbortingCallRunner()
+        harness.deps.build_call_runner = lambda adapter, context: AbortingCallRunner()
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -1708,7 +1842,7 @@ def test_traces_artifact_level_refuses_recording_upload_end_to_end() -> None:
             scenarios=scenarios, instances=1,
             artifacts=HarnessArtifactPolicy(level=ArtifactLevel.TRACES),
         )
-        harness.deps.build_call_runner = lambda adapter: RecordingCallRunner(adapter)
+        harness.deps.build_call_runner = lambda adapter, context: RecordingCallRunner(adapter)
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
 
@@ -2173,7 +2307,7 @@ def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt
         harness = _build_harness(scenarios=scenarios, cancel_on_scenario="first", instances=1)
         transport = OrderTrackingTransport()
         harness.deps.build_transport = lambda: transport
-        harness.deps.build_call_runner = lambda adapter: ChattyCancelingCallRunner(
+        harness.deps.build_call_runner = lambda adapter, context: ChattyCancelingCallRunner(
             adapter, cancel_path=harness.deps.cancel_path, cancel_on_scenario="first",
             chatter_count=260,
         )
@@ -2682,6 +2816,13 @@ TESTS = [
     test_job_secret_purposes_maps_alias_to_purpose,
     test_peek_secret_values_reads_without_deleting,
     test_peek_secret_values_missing_file_is_empty,
+    test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias,
+    test_peek_target_provider_secret_values_missing_file_is_empty,
+    test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry,
+    test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector,
+    test_default_build_call_runner_returns_notwired_for_retell_and_auto_too,
+    test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit,
+    test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam,
     test_row_counts_for_capability_returns_the_matching_store,
     test_row_counts_for_capability_raises_when_the_capability_is_absent,
     test_cancel_state_reads_reason_from_file,
