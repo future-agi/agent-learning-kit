@@ -19,9 +19,19 @@ afterwards.
 
 ```
 name          short identifier; it becomes this scenario's folder
-use_case      which of the agent's use cases this belongs to
-tests         one line: what this scenario is trying to find out
-instruction   the task, written to the person the agent is serving
+use_case      which of the agent's use cases this belongs to, copied from the contract
+              word for word. Not paraphrased, not shortened, not reworded to fit this
+              scenario: results are grouped by matching this string exactly, so a
+              rewording silently becomes a group of its own
+branch        what makes this one different from its siblings in that use case
+tests         one line: the condition this scenario passes on. It is shown to people as
+              "passes when", so write it to complete that phrase. Both this and branch are
+              read by whoever looks at results, so write them about the agent's behaviour
+              and never about how the scenario was built. "synthetic", "seeded",
+              "setup_code", "fixture" and the like name your own machinery, not anything
+              the agent did, and they are noise in a report
+instruction   what this person is trying to achieve, written to them, plus everything
+              they need to pursue it without inventing anything
 persona       who that person is: identity, communication style, languages/accent and characteristics
 setup_code    Python: def setup(world) — what this scenario changes first
 ready_code    Python: def ready(world) — is the world ready for this scenario
@@ -45,7 +55,7 @@ scenario that looks fine and measures nothing.
 
 | | What it is | What it must never contain |
 |---|---|---|
-| **instruction** | what the person on the other side is living through | the answer, the checks, or facts they could not know |
+| **instruction** | what the person on the other side is living through | the answer, the checks, facts they could not know, or anything the agent is expected to do |
 | **setup** | the world's condition | anything the person is supposed to say |
 | **checks** | the hidden pass or fail rules | anything the agent was told |
 
@@ -109,6 +119,81 @@ not exist, and no lookup will ever find them.
 **Possessing and volunteering are separate.** Whether the person offers a value unprompted is the
 scenario's business. Whether they have it at all is not optional.
 
+**Write the instruction as an objective, not a situation.** A caller who is told what happened
+narrates it; a caller who is told what they want pursues it. Open with the goal in their own words
+("Get <the thing they want> put right"), not with the history that led to it ("You were charged
+<the amount>"), then give them the facts they hold, the values they can be asked for, and what
+they will only say once asked for it. Every value read out of the world, never invented.
+
+**Never tell the caller what the agent will do.** This is the single most common way a scenario
+silently stops measuring anything. The agent's moves are what the scenario is testing, so a caller
+who has been told to expect them will play along whether or not they happen, and the check passes
+on a conversation that never earned it. Write only what this person knows before the call starts.
+
+```
+BAD    The agent will tell you about <the condition>. Accept it and say yes when
+       asked to confirm.
+       (the scenario is testing whether the agent discloses <the condition>. A caller
+        primed to accept it agrees even when the agent never says it, so the run
+        reports a pass for behaviour that did not occur)
+
+GOOD   You want <the outcome>. You will accept <the condition> if there is one, but
+       you want to know <the detail> before you agree to anything.
+       (the caller's own position. If the agent discloses, they accept; if it does
+        not, they ask, and the transcript records which happened)
+```
+
+The same rule covers every phrasing of it: "the agent will send you <a value>", "they will offer
+you <an option>", "they should transfer you". Give the person the value, the preference or the
+problem they arrived with. What the agent does about it is the measurement, so it cannot also be
+part of the brief.
+
+**The test that catches all of it: could this person say the sentence out loud?** The instruction
+is read by someone who has never seen the agent's design and does not know how it works. So a
+parenthetical explaining where the agent is supposed to find a value is not a smaller version of
+the mistake, it is the same mistake in a quieter voice.
+
+```
+BAD    Your <destination>: <value> (the agent should find this from your <record>)
+       (the caller has no idea the agent has records, let alone which one. The note is
+        written for whoever reads the scenario, not for the person on the call, and it
+        tells them the mechanism that is being tested)
+
+GOOD   Your <destination> is the same one you used last time. You do not remember the
+       exact address and would rather not look it up.
+       (now the caller has a reason to expect the agent to know, which is what makes
+        the agent's lookup worth testing, without being told the lookup exists)
+```
+
+Pre-agreeing to something the agent has not done yet is the most damaging form. "You have already
+<completed the step> that the agent will <send>" hands the agent a pass: the person confirms it
+whether or not it happened. Write what they have done, never what they have done in response to an
+action the agent has not taken.
+
+**Steps that happen outside the conversation need a state, not a response.** Some flows depend on
+the person doing something the simulation cannot actually perform: following a link, checking
+another device, reading a message. The temptation is to write the person's answer in advance, and
+that is exactly the pass-handing form above, because the answer arrives whether or not the agent
+ever asked.
+
+Give them a standing disposition instead, and let the agent's action trigger it:
+
+```
+BAD    The agent will send you <the out-of-band thing>. Tell them you have
+       completed it when asked.
+       (the scenario is testing whether the agent sends it. This person confirms
+        completing it even in a run where nothing was ever sent)
+
+GOOD   You have your <device> with you and you are willing to follow anything you
+       are sent. You have not been sent anything yet.
+       (a state. If the agent sends it, this person can act on it and say so
+        truthfully. If the agent never does, they have nothing to confirm, and the
+        transcript shows the difference)
+```
+
+The closing sentence matters: stating what has **not** happened yet is what stops the person
+assuming it has.
+
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
 from a polite one only if the agent must handle that difference. Persona never contains the
@@ -157,6 +242,21 @@ rule under pressure, the state that has to carry, the same request against a dif
 world.
 
 Keep that plan concise and continue immediately unless the person explicitly asked to review it.
+
+**Pass your plan to it.** The tool takes the split as an argument, and you have just read the
+world and know which use cases have
+something in them; it is the part of this only you can do. Each slice names its use case,
+the angle it should take, how many scenarios it is worth, and why. Left to itself the work is
+divided evenly, which is how a use case with one real branch pads to three and one with six gets
+three.
+
+A large request comes back a batch at a time rather than all at once, with the rest offered. When
+that happens, show what came back and ask whether to carry on, change direction first, or stop.
+Do not silently loop until the number is reached.
+
+Use `submit_scenario` for what it is good at: one scenario somebody asked for by name, a
+replacement for one that came back wrong, or filling a specific gap in a suite that already
+exists. Anything described as a number of scenarios is a suite.
 After inspecting the world, submit the first scenario in the same response. Then prove and save
 one scenario at a time. Never silently compose the whole suite before the next tool call: the UI
 must show progress, and already-proved work must survive a stopped or timed-out model turn.
@@ -220,9 +320,7 @@ Every stance still obeys the bar above: a real person could bring it, a competen
 fail it, and the values are real. A stance chooses *what to look at*, never whether the scenario
 has to be honest.
 
-Two rules keep this from turning into noise. **Each scenario carries one use case, and no two
-scenarios carry the same one** — a duplicate is either the same test twice or one of them is
-mislabelled, and it hides a gap while appearing to fill it. And a stance that produces nothing new
+Two rules keep this from turning into noise. **Each scenario carries one use case and one branch, and no two scenarios carry the same pair**: a duplicate is either the same test twice or one of them is mislabelled, and it hides a gap while appearing to fill it. Several scenarios sharing a use case is normal and expected; that is what branches are for. What is not allowed is two rows that agree on both. And a stance that produces nothing new
 for a given agent produces nothing: an agent with no rules to bend does not need an adversarial
 scenario invented for it.
 
@@ -384,10 +482,13 @@ hides the problem and everything built afterwards inherits it.
 1. `inspect_world` with no table, then look at the ones that matter. Read the sub-goals already
    defined.
 2. Read the agent's hard rules. Each one is a branch waiting to be written.
-3. For each scenario: work out the solution, `try_calls` it with your `setup_code`, then
+3. For a suite, say how you are splitting it across the agent's use cases, then write and
+   submit them one at a time. A large ask comes back a batch at a time rather than all at once.
+   writes the whole thing and saves it, and you report what came back.
+4. For a single scenario: work out the solution, `try_calls` it with your `setup_code`, then
    `submit_scenario`.
-4. Read what comes back. A refusal names which gate failed and why.
-5. `save_scenarios` when you have the number that was asked for.
+5. Read what comes back. A refusal names which gate failed and why.
+6. `save_scenarios` when you have the number that was asked for.
 
 ## Finishing
 

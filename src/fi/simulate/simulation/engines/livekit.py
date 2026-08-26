@@ -16,7 +16,16 @@ from uuid import uuid4
 
 try:
     from livekit import api, rtc
-    from livekit.agents import Agent, AgentSession, RunContext, function_tool, metrics
+    from livekit.agents import (
+        Agent,
+        AgentSession,
+        AudioConfig,
+        BackgroundAudioPlayer,
+        RunContext,
+        function_tool,
+        metrics,
+    )
+    from livekit.agents.voice.background_audio import BuiltinAudioClip
     from livekit.agents.types import (
         ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
         TOPIC_TRANSCRIPTION,
@@ -320,7 +329,79 @@ class _TestRunnerAgent(Agent):
             room=room,
             room_options=RoomOptions(**room_kwargs),
         )
+        await self._maybe_start_background_audio(room, session)
         return session
+
+    async def _maybe_start_background_audio(
+        self, room: "rtc.Room", session: "AgentSession"
+    ) -> None:
+        """Mix caller-side ambient noise under the simulated caller, if the run asked for it.
+
+        Off unless HARNESS_BACKGROUND_NOISE names a source: a LiveKit builtin clip name, or an
+        http(s) URL to an ambient file. Any failure is swallowed, because a call without ambience is
+        preferable to a dropped one.
+        """
+        source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
+        if not source:
+            return
+
+        def _download() -> str | None:
+            import tempfile
+            import urllib.request
+
+            try:
+                suffix = (
+                    ".mp3" if ".mp3" in source else ".ogg" if ".ogg" in source else ".wav"
+                )
+                with urllib.request.urlopen(source, timeout=15) as response:
+                    data = response.read()
+                handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                handle.write(data)
+                handle.close()
+                return handle.name
+            except Exception:
+                return None
+
+        try:
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "0.3"))
+            if source.startswith(("http://", "https://")):
+                clip_source: Any = await asyncio.to_thread(_download)
+                if not clip_source:
+                    return
+                self._background_noise_file = clip_source
+            else:
+                clip_source = getattr(BuiltinAudioClip, source, None)
+                if clip_source is None:
+                    logger.warning("background audio clip %r is not one LiveKit ships", source)
+                    return
+            player = BackgroundAudioPlayer(
+                ambient_sound=AudioConfig(clip_source, volume=volume)
+            )
+            await player.start(room=room, agent_session=session)
+            self._background_player = player
+        except Exception:
+            logger.warning("background audio not started", exc_info=True)
+
+    async def _stop_background_audio(self) -> None:
+        """Close the ambience player and remove any clip downloaded for it.
+
+        Without this the mixer task, its audio source and the published track outlive the call,
+        and a suite leaks one of each (plus a temp file) per scenario.
+        """
+        player = getattr(self, "_background_player", None)
+        if player is not None:
+            self._background_player = None
+            try:
+                await player.aclose()
+            except Exception:
+                logger.warning("background audio not closed cleanly", exc_info=True)
+        downloaded = getattr(self, "_background_noise_file", None)
+        if downloaded:
+            self._background_noise_file = None
+            try:
+                Path(downloaded).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("background audio clip not removed: %s", downloaded)
 
     def open_conversation(self) -> None:
         if self._session is None:
@@ -1305,6 +1386,13 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            # The ambience belongs to the caller agent, not the engine. Guarded because teardown
+            # must never be the reason a case fails.
+            if customer_agent is not None:
+                try:
+                    await customer_agent._stop_background_audio()
+                except Exception:
+                    logger.warning("background audio not closed cleanly", exc_info=True)
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
             pending_target_transcriptions.clear()
@@ -1560,6 +1648,12 @@ class LiveKitEngine(BaseEngine):
             ),
             default_language=(
                 simulator.stt.language if simulator is not None else None
+            ),
+            variables={"instruction": persona.situation or ""},
+            # Delivery cues are Cartesia only. Passing the provider here rather than reading it
+            # inside the prompt keeps the decision where the provider is actually known.
+            tts_provider=(
+                simulator.tts.provider if simulator is not None else None
             ),
         )
         if simulator is None:

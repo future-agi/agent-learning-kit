@@ -270,7 +270,7 @@ def run_tools(
                 )
             )
             lines.append(
-                f"{one.name}{mark}\n  tests: {one.tests or one.use_case or '—'}\n"
+                f"{one.name}{mark}\n  passes when: {one.tests or one.use_case or '—'}\n"
                 f"  settled by code: {', '.join(settled) or 'none'}\n"
                 f"  judged: {', '.join(judged) or 'none'}"
             )
@@ -464,7 +464,10 @@ def run_tools(
                 # how a simulated caller behaves is not decided in two places.
                 os.environ["HARNESS_INSTRUCTION"] = instruction
                 os.environ["HARNESS_SCENARIO"] = scenario.name
-                os.environ["HARNESS_OUTCOME"] = scenario.tests
+                # The caller is never handed the grader's pass question. `tests` is written about
+                # the agent in the third person, so as an objective it reads as a rubric rather
+                # than a motive. What this person wants is already in the instruction.
+                os.environ.pop("HARNESS_OUTCOME", None)
                 os.environ["HARNESS_PERSONA"] = json.dumps(
                     scenario.persona.model_dump(exclude_none=True)
                     if scenario.persona is not None
