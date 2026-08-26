@@ -20,7 +20,7 @@ P0 additions (v1.15):
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` ADC materialization: a per-job mode-0600 file written
   before `place_the_call` and cleaned in all terminal paths.
 - `voice_case` resolved dynamically per call via shared precedence:
-  scenario doc -> bundle metadata -> HARNESS_VOICE_CASE env -> fallback '2.1.2'.
+  scenario doc -> bundle metadata -> HARNESS_VOICE_CASE env -> fallback '1.1.2'.
 - Named-agent LiveKit dispatch: `LIVEKIT_TARGET_AGENT_NAME` set for the subprocess, ensuring the
   caller joins the correct agent's room (the agent process itself registers under this name).
 """
@@ -46,15 +46,15 @@ logger = logging.getLogger(__name__)
 
 # The module-level constant is gone. Voice case is resolved dynamically per call using
 # `_resolve_voice_case()`, which implements the shared precedence contract:
-#   scenario document voice_case -> bundle metadata voice_case -> HARNESS_VOICE_CASE -> '2.1.2'.
-_VOICE_CASE_FALLBACK = "2.1.2"
+#   scenario document voice_case -> bundle metadata voice_case -> HARNESS_VOICE_CASE -> '1.1.2'.
+_VOICE_CASE_FALLBACK = "1.1.2"
 
 
 def _resolve_voice_case(
     scenario_doc: dict[str, Any],
     bundle_metadata: dict[str, Any],
 ) -> str:
-    """Shared precedence: scenario doc -> bundle metadata -> env -> fallback '2.1.2'."""
+    """Shared precedence: scenario doc -> bundle metadata -> env -> fallback '1.1.2'."""
     case = scenario_doc.get("voice_case")
     if isinstance(case, str) and case.strip():
         return case.strip()
