@@ -693,6 +693,16 @@ def build_process_tree(
             domain=FailureDomain.ENVIRONMENT,
         ) from exc
 
+    # The source checkout is delivered read-only (the gateway chmods /work/source `a-w` for
+    # integrity) and copytree preserves that mode, but the build tree is a private, writable
+    # workspace — a build step such as `python -m venv .venv` must create files here. Restore
+    # owner-write on the whole copy before any build_commands run.
+    for _path in (build_dir, *build_dir.rglob("*")):
+        try:
+            _path.chmod(_path.stat().st_mode | 0o200)
+        except OSError:
+            pass
+
     resolved_user = _resolve_process_user(
         process.user, resolver=user_resolver, require=require_declared_user,
         process_name=process.name, stage="build", domain=FailureDomain.AGENT,
@@ -3452,6 +3462,7 @@ class ProcessRuntimeProvider:
         secrets_path: Path = Path("/run/futureagi/secrets.json"),
         close_wait_timeout_seconds: float = _TERMINATE_WAIT_SECONDS,
         secret_purpose_map: dict[str, str] | None = None,
+        require_declared_user: bool = True,
     ) -> None:
         self._runner = runner
         self._sync_run = sync_run
@@ -3477,6 +3488,12 @@ class ProcessRuntimeProvider:
         # local/test lane's own shape (no job.json on a dev box); a hosted caller leaves this
         # `None` and `_load_and_delete_secrets` reads `agent.secret_refs` itself.
         self._secret_purpose_map = secret_purpose_map
+        # Construction-time default for `provision(require_declared_user=...)` when the caller
+        # passes nothing (WorldPool does). Daytona forces the sandbox to a fixed non-root user
+        # (svc-control) and rejects os_user overrides, so the hosted guest constructs this False +
+        # a null user_resolver to run every process uniformly, since setuid/chown to svc-* is
+        # impossible there.
+        self._require_declared_user = require_declared_user
 
         self._manifest: EnvironmentBundleV2 | None = None
         self._bundle_digest: str | None = None
@@ -3505,10 +3522,14 @@ class ProcessRuntimeProvider:
         contract: Any | None = None,  # accepted for §4 shape-compatibility; not consumed here —
         # evidence-seam wiring is out of this phase's scope, same as `runtime.py`'s own providers.
         instances: int = 1,
-        require_declared_user: bool = True,
+        require_declared_user: bool | None = None,
     ) -> list[EnvironmentRuntime]:
         import asyncio
 
+        # None => use the construction-time default (WorldPool passes nothing; the hosted guest
+        # constructs the provider with require_declared_user=False for Daytona's fixed-user sandbox).
+        if require_declared_user is None:
+            require_declared_user = self._require_declared_user
         return await asyncio.to_thread(
             self._provision_sync, bundle, source=source, bundle_dir=bundle_dir,
             work_directory=work_directory, instances=instances,
