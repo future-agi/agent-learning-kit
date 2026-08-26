@@ -646,20 +646,37 @@ def test_a_recorded_inputs_digest_that_does_not_match_the_seed_files_is_rejected
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-# --- item 6: no_sql_store ------------------------------------------------------------------------
+# --- item 6: store / evidence-seam coherence -----------------------------------------------------
 
 
-def test_a_process_bundle_with_no_postgres_capability_is_rejected(tmp_path: Path) -> None:
-    """Keeps the `database` capability (so the `{{DATABASE_URL}}` placeholder in `agent`'s
-    environment still resolves) and only changes its protocol away from postgres, isolating this
-    from the placeholder-vocabulary check that would otherwise fire first."""
+def _storeless(body: dict[str, Any]) -> dict[str, Any]:
+    """Zero postgres-protocol capabilities. Keeps the `database` capability slug (so the
+    `{{DATABASE_URL}}` placeholder in `agent`'s environment still resolves) and only changes its
+    protocol away from postgres, isolating these tests from the placeholder-vocabulary check that
+    would otherwise fire first."""
+    body["capabilities"]["database"]["protocol"] = "http"
+    body["seed"] = None
+    return body
+
+
+def test_a_storeless_process_bundle_passes_preflight(tmp_path: Path) -> None:
+    # A stateless agent is legal: nothing else in the checklist needs a store, and the runtime's
+    # storeless world only fails, by type, when scenario code actually asks it for state.
+    manifest = _build_bundle(tmp_path, body_overrides=_storeless, include_seed=False)
+    preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_a_storeless_bundle_declaring_tool_trace_evidence_is_rejected(tmp_path: Path) -> None:
+    # `tool_trace` reads the agent's tool calls out of the world's postgres store — with no store
+    # the seam can never produce evidence, so it must fail here, not as `evidence_missing` on
+    # every scenario at runtime.
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
-        body["capabilities"]["database"]["protocol"] = "http"
-        body["seed"] = None
+        body = _storeless(body)
+        body["runtime"]["evidence_seam"] = "tool_trace"
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate, include_seed=False)
-    with pytest.raises(PreflightError, match="no_sql_store"):
+    with pytest.raises(PreflightError, match="evidence_seam_unsatisfiable"):
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
@@ -912,6 +929,10 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset({
     "fixed_port_reserved",  # §2e, v1.9.
 })
 _SECTION_2E_MECHANICAL_CODES = frozenset({
+    "agent_name_not_world_unique",
+    # storeless bundles: a bundle with no postgres capability cannot satisfy `evidence_seam:
+    # tool_trace` — the §2e contract table still needs the amendment adding this code.
+    "evidence_seam_unsatisfiable",
     "bundle_schema_unsupported", "bundle_manifest_invalid", "bundle_manifest_drifted",
     "bundle_digest_mismatch", "bundle_digest_invalid", "inputs_digest_invalid",
     "file_sha256_invalid", "source_digest_invalid", "bundle_file_missing",
@@ -1056,3 +1077,27 @@ def test_the_section_2f_extraction_itself_finds_a_nonempty_set() -> None:
     assert "spawn_failed" in raised
     assert "source_tree_unavailable" in raised
     assert "unsupported_capability_protocol" in raised
+
+def test_parallel_static_agent_name_is_refused(tmp_path: Path) -> None:
+    def overrides(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "static-agent"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=overrides)
+    with pytest.raises(PreflightError, match="agent_name_not_world_unique"):
+        preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_parallel_world_indexed_agent_name_passes_the_guard(tmp_path: Path) -> None:
+    manifest = _build_bundle(tmp_path)
+    preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_single_world_static_agent_name_is_allowed(tmp_path: Path) -> None:
+    def overrides(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "static-agent"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=overrides)
+    preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+

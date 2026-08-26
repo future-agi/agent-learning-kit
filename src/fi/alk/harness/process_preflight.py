@@ -7,7 +7,7 @@ per-file hashes, symlinks, path escapes, secret content), the pydantic `extra="f
 `unknown_field` translation, and every rule that needs the job the bundle will run under
 (placeholder vocabulary, secret purposes against the job's `secret_refs`, the `depends_on` graph,
 the engine catalog, `seed_missing`, `inputs_digest` verification, reserved-name content scanning,
-`no_sql_store`, and resource sanity). `seed_strategy_unsupported`, `sentinel_shape_mismatch`,
+store/evidence-seam coherence, and resource sanity). `seed_strategy_unsupported`, `sentinel_shape_mismatch`,
 `capability_unresolved`, `configuration_name_duplicate`, `user_assignment_invalid`, and
 `capability_engine_mismatch` are already enforced by the model layer and are not repeated here.
 
@@ -37,6 +37,7 @@ from .bundle_v2 import (
     BUNDLE_V2_SCHEMA_VERSION,
     BundleFileV2,
     EnvironmentBundleV2,
+    EvidenceSeam,
     ManagedEngine,
     ManagedProcess,
     RuntimeKindV2,
@@ -204,7 +205,7 @@ def preflight_bundle(
         _verify_reserved_names(bundle_dir, manifest)  # 5
         _verify_seed_files_on_disk_and_listed(bundle_dir, manifest, files)  # 5
 
-    _verify_no_sql_store(manifest)  # 6
+    _verify_no_sql_store(manifest)  # 6 (relaxed: storeless bundles are legal)
     _verify_resource_sanity(manifest, parallelism=parallelism)  # 7
 
 
@@ -614,18 +615,28 @@ def _verify_seed_files_on_disk_and_listed(
             )
 
 
-# --- item 6: no_sql_store ------------------------------------------------------------------------
+# --- item 6: store / evidence-seam coherence -----------------------------------------------------
 
 
 def _verify_no_sql_store(manifest: EnvironmentBundleV2) -> None:
+    """A `kind: process` bundle with zero postgres-protocol capabilities is a legal stateless
+    agent: its worlds hold no state, and only scenario code that actually asks for state gets a
+    typed failure (`ProcessWorldFactory`'s storeless handle). The one thing a storeless bundle can
+    never satisfy is `evidence_seam: tool_trace` — that seam reads the agent's tool calls out of
+    the world's own postgres database, so accepting it here would guarantee zero evidence at
+    runtime and fail every scenario with `evidence_missing` instead of a preflight verdict."""
     if manifest.runtime.kind is not RuntimeKindV2.PROCESS:
         return
-    if not any(
+    if any(
         capability.protocol is CapabilityProtocol.POSTGRES
         for capability in manifest.capabilities.values()
     ):
+        return
+    if manifest.runtime.evidence_seam is EvidenceSeam.TOOL_TRACE:
         raise PreflightError(
-            "no_sql_store", "kind: process requires at least one postgres-protocol capability"
+            "evidence_seam_unsatisfiable",
+            "evidence_seam: tool_trace reads evidence from a postgres store, and this bundle "
+            "declares no postgres-protocol capability",
         )
 
 
@@ -643,6 +654,20 @@ def _verify_resource_sanity(manifest: EnvironmentBundleV2, *, parallelism: int) 
             "parallelism_out_of_range",
             f"parallelism={parallelism} is outside {_MIN_PARALLELISM}..{_MAX_PARALLELISM}",
         )
+    if parallelism > 1:
+        # Concurrent worlds dial their agents by LiveKit identity. A static
+        # agent name registers every world's agent under the same identity, so
+        # a dispatch lands on an arbitrary world — evidence silently crosses
+        # worlds. The {{WORLD_INDEX}} placeholder is what makes names per-world.
+        for process in manifest.processes:
+            environment = getattr(process, "environment", None) or {}
+            value = environment.get("LIVEKIT_AGENT_NAME")
+            if isinstance(value, str) and value and "{{WORLD_INDEX}}" not in value:
+                raise PreflightError(
+                    "agent_name_not_world_unique",
+                    f"process {process.name} renders a static LIVEKIT_AGENT_NAME "
+                    f"with parallelism={parallelism}; include {{{{WORLD_INDEX}}}}",
+                )
 
 
 __all__ = ["PreflightError", "preflight_bundle"]
