@@ -29,8 +29,8 @@ from typing import Any
 from .hosted_scheduler import CallAborted, CallOutcome, EnvironmentRuntime, Scenario
 from .run.call import place_the_call
 from .run.simulation import _semantic_calls
-
-_VOICE_CASE = os.environ.get("HARNESS_VOICE_CASE", "2.1.2")
+from . import outbound as ob
+from .hosted_scheduler import CallAborted, CallOutcome, EnvironmentRuntime, Scenario
 
 
 def _load_contract(bundle_dir: Path):
@@ -109,8 +109,8 @@ class VoiceCallRunner:
         outcome = CallOutcome(
             calls=tuple(calls),
             turns=turns["n"],
-            started_at=started.isoformat(),
-            ended_at=ended.isoformat(),
+            started_at=ob.format_rfc3339_millis(started),
+            ended_at=ob.format_rfc3339_millis(ended),
             duration_ms=duration_ms,
         )
         # A non-zero voice case that still produced tool evidence is a completed-but-imperfect
