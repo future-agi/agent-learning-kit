@@ -245,6 +245,12 @@ def _runtime_override(runtime: Any | None, **values: str) -> Any:
 
 
 def _component_root(root: Path, configured: str) -> Path:
+    # Understanding occasionally records ``/`` to mean "the repository root".  A generated
+    # runtime can never use the sandbox filesystem root as its source component; its hard
+    # boundary is the submitted checkout.  Normalize only this root sentinel while continuing
+    # to reject every unrelated absolute path below.
+    if configured.strip() == "/":
+        return root
     # Contracts produced for a selected monorepo component sometimes retain the
     # repository-relative path with a leading slash (for example
     # ``/examples/drive_thru``).  The submitted ``root`` is already the hard

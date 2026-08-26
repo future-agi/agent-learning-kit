@@ -168,6 +168,14 @@ different prose. Add scenario-local records with `setup_code` when coverage need
 credential, address, balance, status, code, or prior transaction the base world does not contain.
 `ready_code` must verify those exact records.
 
+There is one important exception: when the contract says the target's store is hardcoded and
+process-local, with no configuration or injection seam, `setup_code` cannot add or alter target
+records. The world and the live target are separate process-local copies. In that case use only
+exact source-seeded records already present in the frozen base, keep setup empty for those records,
+and settle outcomes from captured calls/results. Never invent an ID or add a scenario-local row;
+if coverage requires state absent from the submitted seed, report that the target needs a seed or
+reset seam instead of writing an unexecutable scenario.
+
 Every scenario must include a `fixture` manifest whose origin field is set to seed, generated, or
 mixed, plus the exact identity, credentials/verification data, locations, preferences and
 account state the caller may rely on. This manifest is supplied to the live caller model; facts

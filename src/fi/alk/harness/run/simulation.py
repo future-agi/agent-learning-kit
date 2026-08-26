@@ -637,9 +637,9 @@ async def _spoken_to(
         # attempt before retrying so only the attempt whose transcript is graded can contribute.
         world.calls = []
         code, case, runtime_output = await asyncio.to_thread(placed_once)
-        attempt_calls = _semantic_calls(trace_path, contract=contract) or _livekit_log_calls(
-            runtime_output, contract=contract
-        )
+        attempt_calls = _semantic_calls(
+            trace_path, contract=contract
+        ) or _livekit_log_calls(runtime_output, contract=contract)
         if (
             not _voice_attempt_should_retry(
                 code, case, has_agent_calls=bool(attempt_calls or world.calls)
@@ -924,17 +924,23 @@ def _livekit_log_calls(
     This fallback is intentionally narrow: a start event alone earns no evidence, and arbitrary
     application prose is never interpreted as a call.  LiveKit's structured ``executing tool``
     and matching ``tools execution completed`` records are stable SDK lifecycle events.  The
-    result value is not present in those logs, so it is represented honestly as completion
-    evidence rather than fabricated output.
+    Successful result values are not present in those logs, so they are represented honestly as
+    completion evidence rather than fabricated output. Structured ``ToolError while executing
+    tool`` records do carry a refusal reason; correlate those with the matching start so a
+    truthful refusal is never normalized as success.
     """
     endpoint_names = {
         entry.endpoint.strip("/"): entry.tool
         for entry in (contract.tool_entrypoints if contract is not None else [])
         if entry.endpoint.strip("/")
     }
+    contract_tools = (
+        {tool.name: tool for tool in contract.tools} if contract is not None else {}
+    )
     decoder = json.JSONDecoder()
     starts: list[dict[str, Any]] = []
     completed: set[str] = set()
+    refusals: dict[tuple[str, str], str] = {}
     for raw_line in str(output or "").splitlines():
         line = _ANSI.sub("", raw_line)
         marker = "executing tool"
@@ -944,12 +950,15 @@ def _livekit_log_calls(
             structured = json.loads(line)
         except (json.JSONDecodeError, TypeError):
             structured = None
-        if isinstance(structured, dict) and structured.get("message") in {
-            marker,
-            completion,
-        }:
+        structured_message = (
+            str(structured.get("message") or "") if isinstance(structured, dict) else ""
+        )
+        refusal = structured_message.startswith("ToolError while executing tool:")
+        if isinstance(structured, dict) and (
+            structured_message in {marker, completion} or refusal
+        ):
             record = structured
-            event = str(structured["message"])
+            event = "refusal" if refusal else structured_message
         elif marker in line:
             brace = line.find("{", line.find(marker) + len(marker))
             if brace < 0:
@@ -972,10 +981,19 @@ def _livekit_log_calls(
             continue
         if not isinstance(record, dict):
             continue
-        if event == marker:
+        if event == "refusal":
+            speech_id = str(record.get("speech_id") or "")
+            function = str(record.get("function") or "").strip("/")
+            if speech_id and function:
+                refusals[(speech_id, function)] = structured_message.split(":", 1)[
+                    -1
+                ].strip()
+        elif event == marker:
             if not record.get("function"):
                 continue
             speech_id = str(record.get("speech_id") or "")
+            recorded_name = str(record["function"]).strip("/")
+            name = endpoint_names.get(recorded_name, recorded_name)
             arguments: Any = record.get("lk.pii.arguments") or {}
             if isinstance(arguments, str):
                 try:
@@ -984,9 +1002,20 @@ def _livekit_log_calls(
                     arguments = {"raw": arguments}
             if not isinstance(arguments, dict):
                 arguments = {"value": arguments}
+            if contract is not None:
+                specification = contract_tools.get(name)
+                # LiveKit also logs SDK/workflow functions which are not target tools. Only the
+                # contract can make a runtime-log fallback authoritative target evidence.
+                if specification is None:
+                    continue
+                # A speech-level completion has no per-tool result. Do not turn a malformed start
+                # into success merely because the surrounding speech completed.
+                if any(argument not in arguments for argument in specification.args):
+                    continue
             starts.append(
                 {
-                    "name": str(record["function"]).strip("/"),
+                    "name": name,
+                    "recorded_name": recorded_name,
                     "arguments": arguments,
                     "speech_id": speech_id,
                     "at": _log_timestamp(str(record.get("timestamp") or line)),
@@ -995,20 +1024,41 @@ def _livekit_log_calls(
         elif event == completion:
             if record.get("speech_id"):
                 completed.add(str(record["speech_id"]))
-    return [
-        Call(
-            name=endpoint_names.get(one["name"], one["name"]),
-            arguments=one["arguments"],
-            result={
-                "evidence": "livekit_runtime_log",
-                "execution": "completed",
-            },
-            ok=True,
-            at=float(one["at"]),
+    calls: list[Call] = []
+    starts_per_speech = {
+        speech_id: sum(one["speech_id"] == speech_id for one in starts)
+        for speech_id in completed
+    }
+    for one in starts:
+        if not one["speech_id"] or one["speech_id"] not in completed:
+            continue
+        # A single LiveKit completion can close a batch of tool starts but cannot prove which
+        # individual invocation succeeded. Native semantic traces remain authoritative for that
+        # case; the bounded-log fallback deliberately emits no ambiguous evidence.
+        if starts_per_speech.get(one["speech_id"]) != 1:
+            continue
+        error = refusals.get(
+            (one["speech_id"], one["recorded_name"]), ""
+        ) or refusals.get((one["speech_id"], one["name"]), "")
+        calls.append(
+            Call(
+                name=one["name"],
+                arguments=one["arguments"],
+                result=(
+                    error
+                    if error
+                    else {
+                        "evidence": "livekit_runtime_log",
+                        "execution": "completed",
+                    }
+                ),
+                ok=not error,
+                refused=bool(error),
+                error=error,
+                at=float(one["at"]),
+            )
         )
-        for one in starts
-        if one["speech_id"] and one["speech_id"] in completed
-    ]
+    return calls
 
 
 def _log_timestamp(line: str) -> float:
