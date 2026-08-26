@@ -59,6 +59,9 @@ def test_simulator_instructions_supplement_scenario_prompt() -> None:
     assert "Ask for an escalation" in prompt
     assert "Your specialist appointment was cancelled without notice." in prompt
     assert "Get a new appointment time and confirm the clinic location." in prompt
-    assert prompt.index("# ADDITIONAL SIMULATOR INSTRUCTIONS") < prompt.index(
+    # The call's own instructions come after the general rules, and the objective closes the
+    # prompt: what lands last is what survives a long conversation.
+    assert prompt.index("# ADDITIONAL SIMULATOR INSTRUCTIONS") > prompt.index(
         "# CONVERSATION EXECUTION RULES"
     )
+    assert prompt.rstrip().endswith("applies at turn twenty exactly as it applied at turn one.")
