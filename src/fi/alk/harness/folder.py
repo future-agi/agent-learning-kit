@@ -54,8 +54,9 @@ if __name__ == "__main__":
     if len(_sys.argv) > 2:
         _calls = [_Call(**_one) for _one in _json.loads(_Path(_sys.argv[2]).read_text())]
     _said = check(_world, _calls)
-    print("held" if _said is None else f"FAILED: {_said}")
-    raise SystemExit(0 if _said is None else 1)
+    _held = _said is None or _said is True or (isinstance(_said, str) and not _said.strip())
+    print("held" if _held else f"FAILED: {_said}")
+    raise SystemExit(0 if _held else 1)
 """
 
 
@@ -99,10 +100,23 @@ def _run(source: str, name: str, entry: str, *args: Any) -> Outcome:
     if said is None or said is True or (isinstance(said, str) and not said.strip()):
         return Outcome(True)
     if said is False:
+        # Bare False from ready() names no precondition, so a scenario that hits it cannot be
+        # told apart from one whose ready.py is simply wrong — that is our mistake, not a
+        # generation-time precondition failure, so ready() alone reports it broken.
         return Outcome(
             False,
             f"{name} returned False without saying what is wrong. Return the sentence instead, "
             "or None if it holds.",
+            broken=(entry == "ready"),
+        )
+    if entry == "ready" and not isinstance(said, str):
+        # Same reasoning as bare False, widened: ready() has no way to turn a non-string value
+        # into a precondition sentence, so any of them is our mistake rather than the world's.
+        return Outcome(
+            False,
+            f"{name} returned {type(said).__name__} {repr(said)[:200]}. Return the sentence "
+            "naming what is missing, or None if it holds.",
+            broken=True,
         )
     return Outcome(False, str(said))
 

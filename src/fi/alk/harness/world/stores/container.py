@@ -169,8 +169,13 @@ class ContainerStore(Held):
                 last = exc
                 time.sleep(0.25)
         logs = docker("logs", "--tail", "20", self.container, check=False)
+        container = self.container
+        # A container that never answers is not a container to leave running -- `start()` already
+        # set `_started`, so without this the caller's own teardown never runs (nothing ever calls
+        # `stop()` on a store whose `start()` raised) and the container leaks for good.
+        self.stop()
         raise StoreError(
-            f"{self.container} did not answer within {READY_TIMEOUT_SECONDS:.0f}s: {last}\n"
+            f"{container} did not answer within {READY_TIMEOUT_SECONDS:.0f}s: {last}\n"
             f"last lines of its log:\n{logs}"
         )
 
