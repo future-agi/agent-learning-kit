@@ -62,6 +62,7 @@ from .process_runtime import (
     ProcessRuntimeProvider,
     RuntimeEndpoint,
 )
+from .scenario_source import BundleScenarioSource, ScenarioDocumentInvalid, bundle_has_scenarios
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -256,6 +257,7 @@ class ScenarioSource(Protocol):
         *,
         pool: WorldPool,
         world_factory: WorldFactory,
+        bundle_dir: Path,
     ) -> Sequence[Scenario]: ...
 
 
@@ -268,8 +270,9 @@ class NotWiredScenarioSource:
         *,
         pool: WorldPool,
         world_factory: WorldFactory,
+        bundle_dir: Path,
     ) -> Sequence[Scenario]:
-        del job, bundle, scenarios_client, pool, world_factory
+        del job, bundle, scenarios_client, pool, world_factory, bundle_dir
         raise ScenarioSourceNotWired(
             "no ScenarioSource wired -- scenario generation is not implemented in this repo yet "
             "(Scenario Generation Contract, in review)"
@@ -403,12 +406,22 @@ class ScenarioPreallocationError(RuntimeError):
 
 
 class ScenariosClient:
-    """CROSS-DOC GAP: the Scenario Generation Contract that defines the exact
-    `provision`/`begin` payload and path shape is Karthik's, "in review," and not available to this
-    module. `provision_path`/`begin_path` are constructor-injectable placeholders rather than a
-    guess baked into the URL, so the real paths can be supplied without touching this class once
-    that contract lands. Shares `channel_state` with the other three channels (a fence on any one
-    must stop all of them, per outbound.py's own `ChannelState` docstring)."""
+    """RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): Karthik's Scenario
+    Generation Contract (PR #63) documented two paths (`run-tests/provision/` +
+    `run-tests/{id}/test-executions/`) and a position-ordered `scenario_ids` response, but the
+    platform's actual, live route (futureagi/simulate/views/hosted_harness.py:78-90,
+    urls.py:128-132) mints exactly ONE url per attempt -- a DRF detail `@action` with no
+    `url_path`, so the router only ever produces `.../scenarios/`, never a `provision/`/`begin/`
+    sub-resource. The real dispatch key is a body-level `operation: "provision"|"begin"` field
+    (serializers/hosted_harness.py:201-226's `HarnessScenarioOperationSerializer`). This class's
+    transport (`_post`) is unchanged -- `provision_path`/`begin_path` are the SAME
+    constructor-injectable placeholders as before, now correctly defaulted to an EMPTY suffix (the
+    real route needs none) rather than a guessed path segment; `register_with_platform`
+    (scenario_source.py) is what adds the `operation` field into each payload before calling
+    `.provision()`/`.begin()`, matching this class's existing "operation field in payload" seam
+    rather than requiring a change to either method's body. Shares `channel_state` with the other
+    three channels (a fence on any one must stop all of them, per outbound.py's own `ChannelState`
+    docstring)."""
 
     def __init__(
         self,
@@ -419,8 +432,8 @@ class ScenariosClient:
         sleep: Callable[[float], None] = time.sleep,
         rng: Callable[[], float] = random.random,
         channel_state: ob.ChannelState | None = None,
-        provision_path: str = "provision/",
-        begin_path: str = "begin/",
+        provision_path: str = "",
+        begin_path: str = "",
     ) -> None:
         self._capabilities = capabilities
         self._transport = transport or ob.RequestsTransport()
@@ -1576,9 +1589,19 @@ async def run_job(
         adapter.stage_changed(HarnessStage.VALIDATING_SCENARIOS)
         await adapter.aflush_events()
         world_factory = deps.build_world_factory(work_directory)
+        # An injected `ScenarioSource` (every test, every future caller) always wins -- the real
+        # bundle-reading adapter (scenario_source.py) only steps in when the default
+        # `NotWiredScenarioSource` is still in place AND the bundle actually carries a `scenarios/`
+        # directory (the LAYOUT DECISION's presence test). A bundle without one keeps the existing
+        # typed `ScenarioSourceNotWired` failure below -- no regression for a job whose scenarios
+        # are not generated yet.
+        scenario_source = deps.scenario_source
+        if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(bundle_dir):
+            scenario_source = BundleScenarioSource()
         try:
-            scenarios = await deps.scenario_source.build(
-                job, manifest, scenarios_client, pool=pool, world_factory=world_factory
+            scenarios = await scenario_source.build(
+                job, manifest, scenarios_client, pool=pool, world_factory=world_factory,
+                bundle_dir=bundle_dir,
             )
         except (ob.HostedFencedError, ob.HostedAttemptSupersededError):
             # `ScenariosClient._post` re-raises these after latching `channel_state` -- a fence
@@ -1602,6 +1625,18 @@ async def run_job(
             return await _fail(
                 domain=FailureDomain.PLATFORM_SYNC, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
                 code="scenario_preallocation_failed", message=str(exc),
+            )
+        except ScenarioDocumentInvalid as exc:
+            # A scenario document that will not even compile is a generation-stage content defect
+            # (deterministic on retry), never a transport failure -- same rationale as
+            # `_SCENARIO_ENTRY_INVALID_CODE`'s other use below, reused rather than inventing a new
+            # code for the same pair of (domain, stage).
+            if adapter.is_fenced:
+                await _bounded_close()
+                return EXIT_FENCED
+            return await _fail(
+                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=_SCENARIO_ENTRY_INVALID_CODE, message=str(exc),
             )
 
         # Defense against a malformed scenario entry (K1) reaching the scheduler, which reads
