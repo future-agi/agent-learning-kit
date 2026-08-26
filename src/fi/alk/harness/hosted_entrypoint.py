@@ -34,6 +34,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 from . import outbound as ob
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
+from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
     CallOutcome,
     CallRunner,
@@ -152,6 +153,30 @@ def peek_secret_values(secrets_path: Path) -> tuple[str, ...]:
     if not isinstance(raw, dict):
         return ()
     return tuple(str(value) for value in raw.values() if value)
+
+
+def peek_target_provider_secret_values(
+    secrets_path: Path, secret_purposes: dict[str, str]
+) -> dict[str, str]:
+    """The same non-destructive, no-unlink read as `peek_secret_values` (same file, same timing
+    constraint -- called BEFORE `pool.start()`, which is what actually deletes the file), but
+    ALIAS-preserving and filtered to `purpose: target_provider` -- `peek_secret_values` throws the
+    alias away, which is fine for outbound redaction (it only needs the raw values) but useless for
+    the real `CallRunner`, which needs to pick e.g. `LIVEKIT_API_KEY` out of the map by name. Never
+    fatal: a missing/malformed file just means no target-provider secrets are available yet,
+    matching `CallRunnerImpl`'s own pre-dial validation (it reports the gap as a typed
+    `CallAborted`, never crashes on an empty map)."""
+    try:
+        raw = json.loads(secrets_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(alias): str(value)
+        for alias, value in raw.items()
+        if secret_purposes.get(str(alias)) == "target_provider"
+    }
 
 
 # =================================================================================================
@@ -373,7 +398,10 @@ class ProcessWorldFactory:
 
 
 # =================================================================================================
-# CallRunner -- the real voice track wires this later. Typed NotWired default only.
+# CallRunner -- the real voice track. NotWired stays the fallback for every job whose
+# `agent.connector` is not `"livekit"` (absent voice config entirely, or a connector outside the
+# LiveKit-dispatched voice path -- vapi/retell/auto) -- by design, not "improved"
+# (hosted-execution-seams.md: `"connector": "livekit | vapi | retell | auto"`).
 # =================================================================================================
 
 
@@ -390,6 +418,23 @@ class NotWiredCallRunner:
         raise CallRunnerNotWired(
             "no CallRunner wired -- the live voice-simulation call runner is a separate track"
         )
+
+
+_LIVEKIT_CONNECTOR = "livekit"
+
+
+def _default_build_call_runner(
+    adapter: "OutboundAdapter", context: CallRunnerContext
+) -> CallRunner:
+    """The real factory: `NotWiredCallRunner` stays exactly as documented for every connector
+    outside the LiveKit-dispatched voice path; a `"livekit"` job gets a real `CallRunnerImpl`,
+    whose OWN pre-dial validation (`call_runner._check_config`) is what surfaces an
+    incomplete-but-present config as a typed `call_failed`/infrastructure retry --
+    `capability_unavailable` stays unreachable from this seam (would require a scheduler edit;
+    the contract itself calls it "a follow-up, not shipped with this text")."""
+    if context.job.agent.connector != _LIVEKIT_CONNECTOR:
+        return NotWiredCallRunner()
+    return CallRunnerImpl(adapter, context)
 
 
 # =================================================================================================
@@ -1160,11 +1205,14 @@ class HostedEntrypointDeps:
             user_resolver=lambda _name: None, require_declared_user=False
         )
     )
-    # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that referenced
-    # artifacts are uploaded+acked BEFORE the receipt that names them -- the adapter is threaded in
-    # once `run_job` has built it, rather than the CallRunner reaching for a global.
-    build_call_runner: Callable[["OutboundAdapter"], CallRunner] = field(
-        default=lambda adapter: NotWiredCallRunner()
+    # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that
+    # referenced artifacts are uploaded+acked BEFORE the receipt that names them -- the adapter is
+    # threaded in once `run_job` has built it, rather than the CallRunner reaching for a global.
+    # `CallRunnerContext` carries everything else `CallRunnerImpl` needs (job, bundle_dir,
+    # evidence_seam, the target_provider secret map, attempt_number) that the bare
+    # `CallRunner.run(scenario, runtime)` protocol has no room for.
+    build_call_runner: Callable[["OutboundAdapter", CallRunnerContext], CallRunner] = field(
+        default=lambda adapter, context: _default_build_call_runner(adapter, context)
     )
     build_world_factory: Callable[[Path], WorldFactory] = field(default=ProcessWorldFactory)
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
@@ -1195,6 +1243,11 @@ class HostedEntrypointDeps:
 
     def peek_secret_values(self) -> tuple[str, ...]:
         return peek_secret_values(self.secrets_path)
+
+    def peek_target_provider_secret_values(
+        self, secret_purposes: dict[str, str]
+    ) -> dict[str, str]:
+        return peek_target_provider_secret_values(self.secrets_path, secret_purposes)
 
 
 # =================================================================================================
@@ -1453,6 +1506,13 @@ async def run_job(
         job_seed = job.seed if job.seed is not None else 0
         parallelism = resolve_parallelism(job)
         secret_purposes = job_secret_purposes(job)
+        # `ProcessRuntimeProvider` deletes `secrets.json` on its FIRST `provision()` call, inside
+        # `pool.start()` below -- this capture must happen (and does: `job` is only just now
+        # available, but `pool.start()` is still ~50 lines further down) strictly BEFORE that
+        # point, same constraint `deps.peek_secret_values()` already satisfies for redaction,
+        # above at adapter construction. Alias-preserving so `CallRunnerImpl` can pick e.g.
+        # `LIVEKIT_API_KEY` out of the map by name.
+        target_provider_secret_values = deps.peek_target_provider_secret_values(secret_purposes)
         adapter.configure_artifacts(job.artifacts)  # level table + budget, now that job.json is known.
 
         adapter.stage_changed(HarnessStage.VALIDATING_ENVIRONMENT)
@@ -1665,7 +1725,15 @@ async def run_job(
         # 5/6. Scheduler wiring.
         adapter.stage_changed(HarnessStage.RUNNING)
         await adapter.aflush_events()
-        call_runner = deps.build_call_runner(adapter)
+        call_runner_context = CallRunnerContext(
+            job=job,
+            bundle_dir=bundle_dir,
+            work_directory=work_directory,
+            evidence_seam=manifest.runtime.evidence_seam,
+            target_provider_secret_values=target_provider_secret_values,
+            attempt_number=capabilities.attempt_number,
+        )
+        call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(
             pool=pool, world_factory=world_factory, call_runner=call_runner, outbound=adapter,
             job_seed=job_seed, cancel_requested=cancel_requested,

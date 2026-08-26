@@ -29,7 +29,6 @@ style elsewhere in the harness suite.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import subprocess
 import sys
@@ -4578,3 +4577,85 @@ def test_provider_healthy_port_raises_typed_before_provision(tmp_path: Path) -> 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         asyncio.run(provider.healthy(fake_runtime, work_directory=tmp_path))
     assert excinfo.value.code == "internal_invariant_violated"
+
+
+# --- voice dispatch identity on runtime metadata ---------------------------------------------
+
+
+def test_spawn_source_process_carries_rendered_dispatch_agent_name(tmp_path: Path) -> None:
+    """The dial identity exists only in the rendered per-world env; the handle must carry the
+    RESOLVED value (world index substituted), and carry None when the process declares none."""
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    plan = _solo_port_plan("svc")
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        return FakeHandle()
+
+    with_name = pr.spawn_source_process(
+        _source_process(environment={"LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}"}),
+        build_dir=build_dir, world_dir=tmp_path / "worlds" / "w2" / "svc", world_index=2,
+        port_plan=plan, configuration_addresses={}, secret_values={}, secret_purposes={},
+        runner=fake_runner,
+    )
+    assert with_name.dispatch_agent_name == "agent-w2"
+
+    without = pr.spawn_source_process(
+        _source_process(environment={}),
+        build_dir=build_dir, world_dir=tmp_path / "worlds" / "w0" / "svc", world_index=0,
+        port_plan=plan, configuration_addresses={}, secret_values={}, secret_purposes={},
+        runner=fake_runner,
+    )
+    assert without.dispatch_agent_name is None
+
+
+def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Zero agents -> absent (the call runner's typed pre-dial failure owns that outcome);
+    one distinct name (even from several handles) -> set; conflicting names -> absent, and
+    loudly, because the pre-dial message cannot say WHY the key is missing."""
+
+    def handle(name: str | None) -> pr.SpawnedWorldProcess:
+        return pr.SpawnedWorldProcess(
+            process_name="p", handle=FakeHandle(), port=1, world_index=0,
+            dispatch_agent_name=name,
+        )
+
+    assert pr._dispatch_metadata({}) == {}
+    assert pr._dispatch_metadata({"a": handle(None)}) == {}
+    assert pr._dispatch_metadata({"a": handle("agent-w0")}) == {
+        "livekit_agent_name": "agent-w0"
+    }
+    assert pr._dispatch_metadata({"a": handle("agent-w0"), "b": handle("agent-w0")}) == {
+        "livekit_agent_name": "agent-w0"
+    }
+    with caplog.at_level("WARNING"):
+        assert pr._dispatch_metadata(
+            {"a": handle("agent-w0"), "b": handle("other")}
+        ) == {}
+    assert any("distinct LIVEKIT_AGENT_NAME" in record.message for record in caplog.records)
+
+
+def test_provision_surfaces_dispatch_identity_on_runtime_metadata(tmp_path: Path) -> None:
+    """End to end through provision(): a bundle whose agent process declares LIVEKIT_AGENT_NAME
+    lands the per-world RESOLVED value on runtime.metadata, which is exactly where the call
+    runner reads its dial identity."""
+
+    def add_dispatch_env(body: dict[str, Any]) -> dict[str, Any]:
+        for process in body["processes"]:
+            if process["name"] == "agent":
+                process["environment"]["LIVEKIT_AGENT_NAME"] = "agent-w{{WORLD_INDEX}}"
+        return body
+
+    manifest = _manifest(add_dispatch_env)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
+    runtimes = asyncio.run(provider.provision(
+        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
+        require_declared_user=False,
+    ))
+    assert [runtime.metadata for runtime in runtimes] == [
+        {"livekit_agent_name": "agent-w0"},
+        {"livekit_agent_name": "agent-w1"},
+    ]

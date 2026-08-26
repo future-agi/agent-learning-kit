@@ -946,6 +946,33 @@ class SpawnedWorldProcess:
     # it a second time. `None` in the local-lane fallback, same as `spawn_uid`/`spawn_gid` above.
     uid: int | None = None
     gid: int | None = None
+    # The voice dispatch identity (LIVEKIT_AGENT_NAME) exists only in the process's rendered
+    # per-world environment, which is discarded after spawn — carried here so the provider can
+    # surface it on the world's runtime metadata without re-rendering templates.
+    dispatch_agent_name: str | None = None
+
+
+def _dispatch_metadata(
+    handles: "dict[str, SpawnedWorldProcess]",
+) -> dict[str, "JsonValue"]:
+    """A world with exactly one voice agent gets its dispatch identity on the runtime metadata;
+    anything else leaves the key absent so the call runner's own typed pre-dial failure fires
+    instead of a call being dialed at an arbitrarily chosen agent. Ambiguity is loud here
+    because the pre-dial message cannot say WHY the key is missing."""
+    names = sorted({
+        name
+        for handle in handles.values()
+        if (name := (handle.dispatch_agent_name or "").strip())
+    })
+    if len(names) == 1:
+        return {"livekit_agent_name": names[0]}
+    if len(names) > 1:
+        logger.warning(
+            "world declares %d distinct LIVEKIT_AGENT_NAME values (%s); "
+            "leaving dispatch identity unset",
+            len(names), ", ".join(names),
+        )
+    return {}
 
 
 # --- managed-engine launch commands ---------------------------------------------------------
@@ -1286,6 +1313,7 @@ def spawn_source_process(
         process_name=process.name, handle=handle, port=port, world_index=world_index,
         uid=resolved_user.pw_uid if resolved_user is not None else None,
         gid=resolved_user.pw_gid if resolved_user is not None else None,
+        dispatch_agent_name=rendered.get("LIVEKIT_AGENT_NAME") or None,
     )
 
 
@@ -3760,16 +3788,19 @@ class ProcessRuntimeProvider:
         # live `EnvironmentRuntime` objects") reads as ONE object per world for the provider's
         # whole life. Minting a new object every rebuild meant `reset()`'s own state write (m5)
         # landed on an object no caller who captured an EARLIER reference would ever see again.
+        metadata = _dispatch_metadata(result.handles)
         if existing is not None:
             existing.runtime_id = new_runtime_id(self._bundle_digest, world_index)
             existing.endpoints = result.endpoints
             existing.state = RuntimeState.PREPARING
+            existing.metadata = metadata
             self._runtimes[world_index] = existing
         else:
             self._runtimes[world_index] = EnvironmentRuntime(
                 runtime_id=new_runtime_id(self._bundle_digest, world_index),
                 world_index=world_index, bundle_digest=self._bundle_digest,
                 state=RuntimeState.PREPARING, endpoints=result.endpoints,
+                metadata=metadata,
             )
 
     def _drop_world_shared_databases(self, world_index: int) -> None:
