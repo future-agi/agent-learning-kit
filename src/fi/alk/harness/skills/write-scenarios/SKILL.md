@@ -19,7 +19,10 @@ afterwards.
 
 ```
 name          short identifier; it becomes this scenario's folder
-use_case      which of the agent's use cases this belongs to
+use_case      which of the agent's use cases this belongs to, copied from the contract
+              word for word. Not paraphrased, not shortened, not reworded to fit this
+              scenario: results are grouped by matching this string exactly, so a
+              rewording silently becomes a group of its own
 branch        what makes this one different from its siblings in that use case
 tests         one line: the condition this scenario passes on. It is shown to people as
               "passes when", so write it to complete that phrase. Both this and branch are
