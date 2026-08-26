@@ -64,6 +64,7 @@ from .process_runtime import (
     RuntimeEndpoint,
 )
 from .scenario_source import BundleScenarioSource, ScenarioDocumentInvalid, bundle_has_scenarios
+from .world.errors import WorldStoreless
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -312,8 +313,9 @@ class NotWiredScenarioSource:
 
 class WorldFactoryError(RuntimeError):
     """The provisioner handed back a runtime this factory cannot build a `World` for — a bug
-    upstream (no postgres endpoint despite §2e's `no_sql_store` guarantee, or `build.json` missing
-    the row counts for that store), never a scenario-code fault."""
+    upstream (no postgres endpoint despite `build.json` recording a seeded store, or `build.json`
+    missing the row counts for that store), never a scenario-code fault. A bundle that declared
+    no store at all is NOT this: that is the legal storeless lane (`StorelessWorld`, below)."""
 
 
 def _process_runtime_error_domain(exc: ProcessRuntimeError) -> FailureDomain:
@@ -346,14 +348,11 @@ def _section_2f_code(code: str) -> str:
     return code if code in _SECTION_2F_CODES else "spawn_failed"
 
 
-def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> RuntimeEndpoint:
+def _find_postgres_endpoint(runtime: EnvironmentRuntime) -> RuntimeEndpoint | None:
     for endpoint in runtime.endpoints.values():
         if endpoint.protocol == "postgres":
             return endpoint
-    raise WorldFactoryError(
-        f"world {runtime.world_index}: no postgres-protocol endpoint in {sorted(runtime.endpoints)} "
-        "-- §2e's no_sql_store rule should make this unreachable"
-    )
+    return None
 
 
 def load_build_output(work_directory: Path) -> dict[str, Any]:
@@ -378,11 +377,57 @@ def row_counts_for_capability(build_output: dict[str, Any], capability: str) -> 
     )
 
 
+class StorelessWorld:
+    """The `World` handle for a bundle that declared no SQL store — a stateless agent.
+
+    Every state-touching method raises `WorldStoreless` (a `WorldError` subclass), which the
+    scheduler's phase classifier routes to the typed `world_usage` receipt failure: the scenario
+    errors by name, the run keeps going, and nothing crashes. A scenario whose setup/ready/checks
+    never touch state runs and passes exactly as it would anywhere else. `read_only()` returns the
+    handle itself — there is nothing writable to protect, and raising there would escape the
+    scheduler's phase machinery instead of landing in it."""
+
+    def __init__(self, world_index: int, rng: random.Random) -> None:
+        self.world_index = world_index
+        self.rng = rng
+
+    def _refuse(self, operation: str) -> WorldStoreless:
+        return WorldStoreless(
+            f"{operation}: this bundle declares no SQL store, so its worlds hold no state — "
+            "a scenario check that needs state cannot run against a storeless bundle"
+        )
+
+    def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        raise self._refuse("state()")
+
+    def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> dict[str, Any]:
+        raise self._refuse("put()")
+
+    def change(self, collection: str, key: str, changes: dict[str, Any], *, by: str = "") -> int:
+        raise self._refuse("change()")
+
+    def drop(self, collection: str, key: str = "", *, by: str = "") -> int:
+        raise self._refuse("drop()")
+
+    def call(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        raise self._refuse("call()")
+
+    def query(self, sql: str, params: Any = ()) -> list[dict[str, Any]]:
+        raise self._refuse("query()")
+
+    def read_only(self) -> "StorelessWorld":
+        return self
+
+
 class ProcessWorldFactory:
     """Builds a real `HostedWorld` over the runtime's postgres endpoint. `AttachedPostgresStore`
     (not the bare `PostgresStore`) is the correct base here — it takes a raw DSN and never manages
     a container's own lifecycle, matching a hosted world where `ProcessRuntimeProvider` already
-    owns the postgres process."""
+    owns the postgres process.
+
+    A runtime with no postgres endpoint forks on what `build.json` recorded: zero seeded stores
+    means the bundle is legitimately storeless (`StorelessWorld`); any recorded store means the
+    provisioner seeded one and then lost its endpoint — a bug upstream, still `WorldFactoryError`."""
 
     def __init__(self, work_directory: Path) -> None:
         self._work_directory = work_directory
@@ -390,6 +435,13 @@ class ProcessWorldFactory:
     async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> World:
         endpoint = _find_postgres_endpoint(runtime)
         build_output = await asyncio.to_thread(load_build_output, self._work_directory)
+        if endpoint is None:
+            if build_output.get("stores"):
+                raise WorldFactoryError(
+                    f"world {runtime.world_index}: build.json records seeded stores but the "
+                    f"runtime has no postgres-protocol endpoint in {sorted(runtime.endpoints)}"
+                )
+            return StorelessWorld(runtime.world_index, rng)
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
         store = AttachedPostgresStore(endpoint.address)
         return await asyncio.to_thread(
@@ -1109,6 +1161,97 @@ class OutboundAdapter:
         return self.is_fenced
 
 
+
+async def _upload_terminal_artifacts(
+    adapter: "OutboundAdapter",
+    work_directory: Path,
+    run_result: "RunResult | None",
+) -> None:
+    """Channel 3's level table requires every complete manifest to carry `build`,
+    `result`, and `log` -- the platform refuses the manifest ack without exactly
+    those three, which stamped fully-completed runs as failed. At `traces` the
+    event trace is contract-required too, but the ack does not enforce it.
+    Best-effort throughout: a refusal or failure leaves the manifest listing only
+    what genuinely uploaded (the refusal log events raised this late are dropped
+    locally -- the run is already past its terminal)."""
+    deadline = adapter.deadline()
+
+    build_path = work_directory / "artifacts" / "build.json"
+    try:
+        build_bytes = build_path.read_bytes()
+    except OSError:
+        build_bytes = json.dumps(
+            {"build_record": None, "reason": "build.json missing at finalize"}
+        ).encode("utf-8")
+
+    receipts = list(run_result.receipts) if run_result is not None else []
+    # Receipt text (reasons, failure fields) is redacted on every other outbound
+    # surface; the stored artifacts must not be the one copy that leaks a secret --
+    # build.json can carry endpoint URLs with embedded credentials.
+    secret_values = adapter._extra_secret_values
+    try:
+        build_bytes = ob.redact_outbound_text(
+            build_bytes.decode("utf-8", errors="replace"), secret_values
+        ).encode("utf-8")
+    except Exception:
+        # Fail closed: a redaction that could not run must never let the raw
+        # bytes (which may carry credential-bearing endpoint URLs) reach storage.
+        build_bytes = json.dumps(
+            {"build_record": None, "reason": "build.json redaction failed at finalize"}
+        ).encode("utf-8")
+    await adapter.upload_artifact(build_bytes, kind=ob.ArtifactKind.BUILD, deadline=deadline)
+
+    def _clean(value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _cap_failure_message(ob.redact_outbound_text(value, secret_values))
+
+    result_doc = {
+        "schema_version": "futureagi.harness-result-set.v1",
+        "receipts": [
+            {
+                "scenario_key": receipt.scenario_key,
+                "scenario_attempt": receipt.scenario_attempt,
+                "world_index": receipt.world_index,
+                "status": receipt.status,
+                "sub_goals": [
+                    {"name": goal.name, "held": goal.held, "judged": goal.judged,
+                     "reason": _clean(goal.reason)}
+                    for goal in receipt.sub_goals
+                ],
+                "failure": (
+                    {"code": _clean(receipt.failure.code), "stage": receipt.failure.stage,
+                     "domain": receipt.failure.domain,
+                     "message": _clean(receipt.failure.message)}
+                    if receipt.failure is not None else None
+                ),
+            }
+            for receipt in receipts
+        ],
+    }
+    await adapter.upload_artifact(
+        json.dumps(result_doc, sort_keys=True).encode("utf-8"),
+        kind=ob.ArtifactKind.RESULT, deadline=deadline,
+    )
+
+    log_lines = [f"scenario {r.scenario_key} attempt {r.scenario_attempt}: {r.status}" for r in receipts]
+    log_lines.append(f"receipts: {len(receipts)}")
+    await adapter.upload_artifact(
+        ("\n".join(log_lines) + "\n").encode("utf-8"),
+        kind=ob.ArtifactKind.LOG, deadline=deadline,
+    )
+
+    spool_path = work_directory / EVENTS_SPOOL_DIR_NAME / "events.spool.jsonl"
+    try:
+        spool_bytes = spool_path.read_bytes()
+    except OSError:
+        spool_bytes = b""
+    if spool_bytes:
+        await adapter.upload_artifact(
+            spool_bytes, kind=ob.ArtifactKind.TRACE, deadline=deadline,
+        )
+
+
 def _evaluation_wire(evaluation: Any) -> dict[str, Any]:
     if evaluation.kind == "metric":
         return {
@@ -1452,6 +1595,14 @@ async def run_job(
         if adapter.is_fenced:
             await _bounded_close()
             return EXIT_FENCED
+        if complete:
+            try:
+                await _upload_terminal_artifacts(
+                    adapter, work_directory,
+                    scheduler_result[1] if scheduler_result is not None else None,
+                )
+            except Exception as exc:  # noqa: BLE001 - post-terminal telemetry, never fatal
+                logger.error("terminal artifact upload failed: %s", exc)
         # the exit code comes from drain()'s own post-hoc fence check (deadline computed AFTER
         # emit_terminal, which is what arms the flush window), never a stale pre-drain read.
         fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
@@ -1749,10 +1900,15 @@ async def run_job(
                     "domain": result.aborted.domain, "stage": HarnessStage.RUNNING.value,
                     "code": result.aborted.code, "message": result.aborted.message,
                 },
-                complete=False,
+                # An aborted run's manifest is still COMPLETE -- nothing further
+                # will ever upload -- and the platform accepts an incomplete
+                # manifest only from a canceled attempt; sending false here made
+                # every aborted run unackable and let the gateway overwrite the
+                # real abort failure with terminal_delivery_incomplete.
+                complete=True,
                 scheduler_result=(scheduler, result),
             )
-        # `complete: true` only on a genuine, nothing-cut-short COMPLETED terminal.
+        # `complete: false` is reserved for the canceled lane alone.
         return await _finish(HarnessStage.COMPLETED, complete=True, scheduler_result=(scheduler, result))
     finally:
         if pool is not None:
@@ -1800,6 +1956,7 @@ __all__ = [
     "NotWiredScenarioSource",
     "OutboundAdapter",
     "ProcessWorldFactory",
+    "StorelessWorld",
     "ScenarioPreallocationError",
     "ScenarioSource",
     "ScenarioSourceNotWired",

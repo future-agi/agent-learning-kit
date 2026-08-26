@@ -140,6 +140,29 @@ def _write_bundle(root: Path) -> EnvironmentBundleV2:
     return EnvironmentBundleV2.model_validate(body)
 
 
+def _write_storeless_bundle(root: Path) -> EnvironmentBundleV2:
+    """A legal stateless-agent bundle: no managed postgres process, zero capabilities, no seed.
+    What the relaxed store rule admits — the run below must work end-to-end against it."""
+    root.mkdir(parents=True, exist_ok=True)
+    body = _base_manifest_body()
+    body["processes"] = [
+        {
+            "name": "agent", "kind": "source", "working_directory": ".",
+            "build_commands": [["pip", "install", "-r", "requirements.txt"]],
+            "run_command": ["python", "agent.py"],
+            "environment": {"LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}"},
+            "secret_purposes": ["target_provider"], "user": "svc-agent", "depends_on": [],
+        },
+    ]
+    body["capabilities"] = {}
+    body["files"] = []
+    body["digest"] = "sha256:" + "0" * 64
+    normalized = EnvironmentBundleV2.model_validate(body)
+    body["digest"] = seal_bundle_v2(normalized)
+    (root / "manifest.json").write_text(json.dumps(body, indent=2), encoding="utf-8")
+    return EnvironmentBundleV2.model_validate(body)
+
+
 def _job(
     *, connector: str = "vapi", parallelism: int = 1,
     artifacts: HarnessArtifactPolicy | None = None,
@@ -1209,6 +1232,14 @@ def test_world_pool_exhaustion_reaches_a_failed_terminal_world_pool_exhausted() 
         assert payload["failure"]["stage"] == "running"
         assert payload["failure"]["code"] == "world_pool_exhausted"
         assert harness.provisioner.closed is True
+        # The aborted lane still finalizes like a completed one: nothing further will ever
+        # upload, so the manifest must say complete AND carry the three kinds the platform
+        # refuses to ack a complete manifest without.
+        assert harness.transport.manifests, "no artifact manifest was pushed"
+        final_manifest = harness.transport.manifests[-1]
+        assert final_manifest["complete"] is True
+        kinds = {entry["kind"] for entry in final_manifest["entries"]}
+        assert {"build", "result", "log"} <= kinds
 
     asyncio.run(scenario())
 
@@ -1260,11 +1291,18 @@ def test_scenarios_channel_uses_bearer_auth_never_api_key() -> None:
     asyncio.run(scenario())
 
 
-def test_process_world_factory_raises_when_no_postgres_endpoint() -> None:
-    # `ProcessWorldFactory`/`_find_postgres_endpoint` had zero coverage -- only the pure
-    # `row_counts_for_capability` helper was unit-tested.
+def test_process_world_factory_raises_when_stores_recorded_but_no_endpoint() -> None:
+    # The endpoint-lost guard: build.json records seeded stores but the runtime has no
+    # postgres endpoint -- a provisioner fault that must fail loudly, never silently degrade
+    # to a storeless world. build.json is present and readable so the guard, not the
+    # "build.json unreadable" path, is what fires.
     async def scenario() -> None:
         tmp = Path(tempfile.mkdtemp(prefix="p10-wf-endpoint-"))
+        (tmp / "artifacts").mkdir(parents=True, exist_ok=True)
+        (tmp / "artifacts" / "build.json").write_text(
+            json.dumps({"stores": [{"capability": "database", "row_counts": {}}]}),
+            encoding="utf-8",
+        )
         factory = he.ProcessWorldFactory(tmp)
         runtime = EnvironmentRuntime(
             runtime_id="digest:w0", world_index=0, bundle_digest="digest",
@@ -1275,7 +1313,29 @@ def test_process_world_factory_raises_when_no_postgres_endpoint() -> None:
         except he.WorldFactoryError:
             pass
         else:
-            raise AssertionError("expected WorldFactoryError for a runtime with no postgres endpoint")
+            raise AssertionError(
+                "expected WorldFactoryError when build.json records stores but no endpoint exists"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_process_world_factory_builds_storeless_world_when_no_endpoint_and_no_stores() -> None:
+    # The relaxed storeless path: no postgres endpoint AND build.json records no stores is a
+    # legal stateless bundle -- the factory hands back a StorelessWorld, not an error.
+    async def scenario() -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="p10-wf-storeless-"))
+        (tmp / "artifacts").mkdir(parents=True, exist_ok=True)
+        (tmp / "artifacts" / "build.json").write_text(
+            json.dumps({"stores": []}), encoding="utf-8"
+        )
+        factory = he.ProcessWorldFactory(tmp)
+        runtime = EnvironmentRuntime(
+            runtime_id="digest:w0", world_index=0, bundle_digest="digest",
+            state=RuntimeState.READY, endpoints={},
+        )
+        world = await factory.create(runtime, rng=random.Random(0))
+        assert isinstance(world, he.StorelessWorld)
 
     asyncio.run(scenario())
 
@@ -1424,7 +1484,13 @@ def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> 
 
         assert len(harness.transport.manifests) >= 1
         assert harness.transport.manifests[-1]["complete"] is True
-        assert len(harness.transport.manifests[-1]["entries"]) == 2
+        # Channel 3's level table: a complete manifest carries the run-level kinds
+        # (`build`, `result`, `log`, plus the event trace) alongside the transcripts --
+        # the platform refuses the manifest ack without them.
+        manifest_kinds = [e["kind"] for e in harness.transport.manifests[-1]["entries"]]
+        assert manifest_kinds.count("transcript") == 2
+        for required in ("build", "result", "log"):
+            assert required in manifest_kinds, manifest_kinds
 
         assert harness.provisioner.provision_calls >= 1
         assert harness.provisioner.closed is True
@@ -1788,7 +1854,15 @@ def test_metadata_only_artifact_level_refuses_transcript_upload_end_to_end() -> 
         )
         code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
         assert code == he.EXIT_OK
-        assert harness.transport.artifacts == {}  # zero bytes reached the transport
+        # metadata-only forbids transcripts, but the level table MANDATES the run-level
+        # kinds -- so exactly build/result/log reach the transport, and nothing scenario-scoped.
+        entries = harness.transport.manifests[-1]["entries"]
+        uploaded_kinds = sorted(entry["kind"] for entry in entries)
+        assert "transcript" not in uploaded_kinds
+        for required in ("build", "result", "log"):
+            assert required in uploaded_kinds, uploaded_kinds
+        listed_digests = {e["artifact_id"].split(":", 1)[1] for e in entries}
+        assert set(harness.transport.artifacts) == listed_digests  # no unlisted bytes
 
         receipt_body = harness.transport.receipts[("job-1", "s1")]
         assert receipt_body["status"] == "passed"  # a refused upload must not error the scenario
@@ -1852,7 +1926,12 @@ def test_traces_artifact_level_refuses_recording_upload_end_to_end() -> None:
         assert receipt_body["call"]["recording_artifacts"] == []  # recordings refused at traces
 
         transcript_digest = receipt_body["call"]["transcript_artifact"].split(":", 1)[1]
-        assert set(harness.transport.artifacts) == {transcript_digest}  # the recording never uploaded
+        assert transcript_digest in harness.transport.artifacts
+        uploaded_kinds = {e["kind"] for e in harness.transport.manifests[-1]["entries"]}
+        assert "recording_combined" not in uploaded_kinds  # the recording never uploaded
+        assert {"build", "result", "log"} <= uploaded_kinds
+        recording_digest = hashlib.sha256(b"recording-bytes").hexdigest()
+        assert recording_digest not in harness.transport.artifacts  # not even the bytes
 
         log_events = [r for r in harness.transport.event_records if r.get("type") == "log"]
         assert any(
@@ -2031,6 +2110,37 @@ def test_receipt_failure_message_is_capped_like_the_terminal_message() -> None:
         message = body["failure"]["message"]
         assert len(message) <= he._TERMINAL_FAILURE_MESSAGE_MAX_CHARS
         assert message.endswith("…[truncated]")
+
+    asyncio.run(scenario())
+
+
+def test_stored_result_artifact_redacts_a_secret_spanning_the_cap_boundary() -> None:
+    # `_upload_terminal_artifacts._clean` must redact BEFORE capping -- capping first can cut a
+    # secret in half at the 4KB boundary, and exact-substring redaction can no longer find the
+    # surviving fragment, making the stored `result` artifact the one outbound copy that leaks.
+    async def scenario() -> None:
+        secret = "sk-" + "S" * 33  # 36 chars, spanning the 4084-char truncation point
+        transport = FakeTransport()
+        adapter = _build_adapter(transport, extra_secret_values=(secret,))
+        work = Path(tempfile.mkdtemp(prefix="p10-redact-cap-"))
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0,
+            status="errored", sub_goals=(), evaluations=(), call=None,
+            failure=ReceiptFailure(
+                domain="agent", stage="running", code="call_failed",
+                message="x" * 4070 + secret,
+            ),
+        )
+        await he._upload_terminal_artifacts(
+            adapter, work, RunResult(receipts=(receipt,), aborted=None)
+        )
+        result_blobs = [b for b in transport.artifacts.values() if b"harness-result-set" in b]
+        assert result_blobs
+        blob = result_blobs[0]
+        fragments = [
+            secret[i : i + 8] for i in range(len(secret) - 7) if secret[i : i + 8].encode() in blob
+        ]
+        assert not fragments, f"secret fragment survived into the stored result artifact: {fragments[:3]}"
 
     asyncio.run(scenario())
 
@@ -2723,6 +2833,63 @@ def test_injected_scenario_source_always_wins_over_the_bundle_adapter() -> None:
 # =================================================================================================
 
 
+def test_storeless_bundle_run_with_state_free_checks_passes_end_to_end() -> None:
+    # The relaxed store rule end-to-end: a bundle with zero postgres capabilities clears
+    # preflight, the real `ProcessWorldFactory` hands the scheduler a `StorelessWorld` (the fake
+    # provisioner's runtimes carry no endpoints and build.json records no stores), and a scenario
+    # whose checks never touch state passes exactly as it would against a postgres world.
+    async def scenario() -> None:
+        scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(
+            scenarios=scenarios, bundle_writer=_write_storeless_bundle,
+            build_output={"stores": []},
+        )
+        harness.deps.build_world_factory = he.ProcessWorldFactory
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+        receipt = harness.transport.receipts[("job-1", "s1")]
+        assert receipt["status"] == "passed"
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        assert terminals[0]["payload"]["stage"] == "completed"
+
+    asyncio.run(scenario())
+
+
+def test_storeless_bundle_check_touching_state_fails_typed_never_crashes() -> None:
+    # A check calling `world.state()` against a storeless world must land in the scheduler's
+    # typed `world_usage` lane — an errored receipt naming the missing store — while the run
+    # itself still completes cleanly.
+    @dataclass
+    class StateTouchingSubGoal:
+        name: str
+        judged: str = "yes"
+
+        def check(self, world: Any, calls: Any) -> object:
+            del calls
+            world.state()
+            return None
+
+    async def scenario() -> None:
+        scenarios = [FakeScenario("s1", "platform-s1", [StateTouchingSubGoal("reads-state")])]
+        harness = _build_harness(
+            scenarios=scenarios, bundle_writer=_write_storeless_bundle,
+            build_output={"stores": []},
+        )
+        harness.deps.build_world_factory = he.ProcessWorldFactory
+        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        assert code == he.EXIT_OK
+        receipt = harness.transport.receipts[("job-1", "s1")]
+        assert receipt["status"] == "errored"
+        assert receipt["failure"]["code"] == "world_usage"
+        assert "no SQL store" in receipt["failure"]["message"]
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        assert terminals[0]["payload"]["stage"] == "completed"
+
+    asyncio.run(scenario())
+
+
 def test_module_level_sys_exit_zero_in_setup_is_contained_as_a_typed_failure() -> None:
     # Before the fix: `sys.exit(0)` at module level inside `setup.py` propagated as a raw
     # `SystemExit` straight out of `run_job` -- the guest process itself would exit 0 with ZERO
@@ -2842,7 +3009,8 @@ TESTS = [
     test_fence_landing_on_the_final_drain_still_exits_fenced,
     test_fence_from_scenarios_client_exits_fenced_not_crashed,
     test_scenarios_channel_uses_bearer_auth_never_api_key,
-    test_process_world_factory_raises_when_no_postgres_endpoint,
+    test_process_world_factory_raises_when_stores_recorded_but_no_endpoint,
+    test_process_world_factory_builds_storeless_world_when_no_endpoint_and_no_stores,
     test_process_world_factory_raises_when_build_json_has_no_matching_store,
     test_build_json_two_stores_emit_two_baseline_frozen_events,
     test_build_json_degrade_payload_matches_the_recorded_values,

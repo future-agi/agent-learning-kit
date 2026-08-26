@@ -66,3 +66,13 @@ class WorldUsageError(WorldError):
     saying which column `key` names — hosted worlds cannot invent tables or guess a column, so
     both are reported here rather than attempted.
     """
+
+
+class WorldStoreless(WorldError):
+    """The bundle declared no SQL store, so this world holds no state at all.
+
+    A stateless agent's scenarios can still run and pass — but the moment scenario code asks the
+    handle for state (`state`, `put`, `query`, ...), there is nothing behind the handle to answer
+    with. Raised eagerly, by name, so the receipt says "this scenario's checks need a store the
+    bundle never declared" instead of crashing three layers down in a driver.
+    """
