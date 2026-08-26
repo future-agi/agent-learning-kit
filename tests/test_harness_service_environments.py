@@ -525,6 +525,7 @@ def test_static_ports_receive_a_job_scoped_compose_override(tmp_path, monkeypatc
     assert "ports: !override" in generated
     assert 'published: "0"' in generated
     assert 'host_ip: "127.0.0.1"' in generated
+    assert 'com.futureagi.harness.project: "isolated"' in generated
 
 
 def test_fixed_container_name_is_reset_for_project_isolation(tmp_path):
@@ -544,6 +545,28 @@ def test_fixed_container_name_is_reset_for_project_isolation(tmp_path):
 
     generated = Path(environment.compose_override_file).read_text()
     assert "container_name: !reset null" in generated
+    assert 'com.futureagi.harness.project: "isolated"' in generated
+
+
+def test_missing_env_file_and_isolation_share_one_service_override(tmp_path):
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  agent:\n    build: .\n    env_file: .env.local\n"
+    )
+    environment = ProvisionedEnvironment(
+        source=str(tmp_path), compose_file=str(compose), project="isolated"
+    )
+
+    _write_port_override(
+        tmp_path / "session",
+        environment,
+        {"services": {"agent": {"build": {"context": "."}}}},
+    )
+
+    generated = Path(environment.compose_override_file).read_text()
+    assert generated.count('  "agent":') == 1
+    assert "env_file: !reset []" in generated
+    assert 'com.futureagi.harness.project: "isolated"' in generated
 
 
 def test_profile_gated_service_ports_are_not_allocated(tmp_path, monkeypatch):

@@ -241,6 +241,7 @@ class HarnessFailure(BaseModel):
     message: str
     retryable: bool = False
     details: dict[str, JsonValue] = Field(default_factory=dict)
+    action: str = ""
 
     @property
     def owner(self) -> FailureOwner:

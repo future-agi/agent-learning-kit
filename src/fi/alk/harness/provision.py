@@ -37,6 +37,11 @@ from .generated_runtime import (
     can_generate_runtime,
     prepare_generated_runtime,
 )
+from .environment_resolution import (
+    ResolvedEnvironmentPlan,
+    resolve_environment_plan,
+    write_environment_resolution,
+)
 from .service_catalog import address, profile_for
 from .secrets import runtime_configuration_value
 
@@ -81,6 +86,19 @@ _AGENT_NAME_SETTING = re.compile(
 class ProvisionError(RuntimeError):
     """The source environment could not be discovered, started, or inspected."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "environment_provision_failed",
+        action: str = "",
+        details: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.action = action
+        self.details = details or {}
+
 
 @dataclass
 class ProvisionedEnvironment:
@@ -111,6 +129,11 @@ class ProvisionedEnvironment:
     # Names only. Values are resolved from the job secret environment immediately before the
     # ephemeral worker starts and are never serialized into environment.json or a bundle.
     runtime_configuration_names: list[str] = field(default_factory=list)
+    # Stable admission decision. These values are safe to persist and make failures/replays
+    # explainable without relying on private Docker logs or re-inferring repository packaging.
+    packaging_type: str = "unknown"
+    runtime_adapter: str = "unknown"
+    selected_runtime: str = ""
 
     def save(self, destination: Path) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
@@ -137,6 +160,19 @@ def compose_file(source: str | Path) -> Path | None:
         assert packaging.selected_path is not None
         return root / packaging.selected_path
     return None
+
+
+def environment_adapter_context(
+    source: str | Path, contract: Any | None
+) -> dict[str, str]:
+    """Return the stable packaging/adapter decision used for audit and customer errors."""
+    plan = resolve_environment_plan(source, contract=contract)
+    return {
+        "packaging_type": plan.packaging_type,
+        "runtime_adapter": plan.runtime_adapter,
+        "failed_adapter": plan.runtime_adapter,
+        "selected_runtime": plan.selected_runtime,
+    }
 
 
 _FINGERPRINT_IGNORED = {
@@ -546,10 +582,9 @@ def _write_port_override(
         # Compose excludes profiled services unless that profile is explicitly enabled. Do not
         # allocate ports for dormant TURN/admin/debug services; doing so can exhaust a runner's
         # ephemeral port range before the selected environment even starts.
-        if not _service_starts_by_default(service):
-            continue
+        starts_by_default = _service_starts_by_default(service)
         ports: list[dict[str, Any]] = []
-        for item in service.get("ports") or []:
+        for item in service.get("ports") or [] if starts_by_default else []:
             target = int(item.get("target") or 0)
             if not target or target in dynamic_targets:
                 continue
@@ -565,20 +600,39 @@ def _write_port_override(
                 }
             )
         fixed_container_name = bool(str(service.get("container_name") or "").strip())
-        if ports or fixed_container_name:
+        # Label default services and submitted build runtimes. Dormant third-party profiles are
+        # not part of this admitted environment and must remain untouched.
+        if ports or fixed_container_name or starts_by_default or service.get("build"):
             services.append((name, ports, fixed_container_name))
     reset_env_files = _missing_env_file_services(Path(environment.compose_file))
     if not services and not reset_env_files:
         return
+    service_overrides = {
+        name: (ports, fixed_container_name)
+        for name, ports, fixed_container_name in services
+    }
+    ordered_names = list(
+        dict.fromkeys([*reset_env_files, *(name for name, *_ in services)])
+    )
     lines = ["services:"]
-    for name in reset_env_files:
-        lines.extend((f"  {json.dumps(name)}:", "    env_file: !reset []"))
-    for name, ports, fixed_container_name in services:
+    for name in ordered_names:
         lines.append(f"  {json.dumps(name)}:")
+        if name in reset_env_files:
+            lines.append("    env_file: !reset []")
+        service_override = service_overrides.get(name)
+        if service_override is None:
+            continue
+        ports, fixed_container_name = service_override
         if fixed_container_name:
             # A submitted container_name bypasses Compose project scoping and collides across
             # concurrent jobs. Compose's reset tag restores its normal project-owned name.
             lines.append("    container_name: !reset null")
+        lines.extend(
+            (
+                "    labels:",
+                f"      com.futureagi.harness.project: {json.dumps(environment.project)}",
+            )
+        )
         if ports:
             lines.append("    ports: !override")
             for item in ports:
@@ -1773,6 +1827,31 @@ def provision(
     source_root = Path(source).expanduser().resolve()
     destination = Path(destination)
     packaging = inspect_packaging(source_root)
+    fingerprint = source_fingerprint(source_root)
+    resolved_plan: ResolvedEnvironmentPlan = resolve_environment_plan(
+        source_root,
+        packaging,
+        contract,
+        source_fingerprint=fingerprint,
+    )
+    write_environment_resolution(destination, resolved_plan)
+    if not resolved_plan.supported:
+        raise ProvisionError(
+            resolved_plan.message or "environment plan is unsupported",
+            code=resolved_plan.code or "environment_plan_unsupported",
+            action=resolved_plan.action,
+            details={
+                "packaging_type": resolved_plan.packaging_type,
+                "failed_adapter": resolved_plan.runtime_adapter,
+                "selected_runtime": resolved_plan.selected_runtime,
+                "environment_plan_hash": resolved_plan.digest,
+            },
+        )
+    adapter_context = {
+        "packaging_type": resolved_plan.packaging_type,
+        "runtime_adapter": resolved_plan.runtime_adapter,
+        "selected_runtime": resolved_plan.selected_runtime,
+    }
     generated_runtime: GeneratedRuntimePlan | None = None
     explicit_compose = str(
         getattr(getattr(contract, "runtime", None), "compose_file", "") or ""
@@ -1901,7 +1980,12 @@ def provision(
         raise ProvisionError(
             f"{source_root} does not ship a Compose file; a non-Compose runtime adapter is required"
         )
-    fingerprint = source_fingerprint(source_root)
+    if source_fingerprint(source_root) != resolved_plan.source_fingerprint:
+        raise ProvisionError(
+            "submitted source changed after environment planning",
+            code="environment_plan_source_fingerprint_mismatch",
+            action="Retry from a fresh immutable source snapshot.",
+        )
     runtime_fingerprint = generated_runtime.fingerprint if generated_runtime else ""
     runtime_configuration_names = sorted(
         {
@@ -1930,6 +2014,9 @@ def provision(
             existing.overrides = _overrides(existing, config)
             existing.internal_overrides = _internal_overrides(existing, config)
             existing.runtime_configuration_names = runtime_configuration_names
+            existing.packaging_type = adapter_context["packaging_type"]
+            existing.runtime_adapter = adapter_context["runtime_adapter"]
+            existing.selected_runtime = adapter_context["selected_runtime"]
             existing.save(destination)
             return existing
 
@@ -1960,6 +2047,9 @@ def provision(
         ),
         runtime_fingerprint=runtime_fingerprint,
         runtime_configuration_names=runtime_configuration_names,
+        packaging_type=adapter_context["packaging_type"],
+        runtime_adapter=adapter_context["runtime_adapter"],
+        selected_runtime=adapter_context["selected_runtime"],
     )
     _write_initial_env_file_override(destination, environment)
     config = _config(environment)

@@ -283,6 +283,9 @@ def _failure_from_events(output: Path) -> HarnessFailure:
             FailureDomain.ARTIFACT,
         ),
     }.get(label, (HarnessStage.RUNNING, FailureDomain.INFRASTRUCTURE))
+    event_details = failed.get("details")
+    details = dict(event_details) if isinstance(event_details, dict) else {}
+    details["status"] = failed.get("status", 1)
     return HarnessFailure(
         domain=domain,
         stage=stage,
@@ -291,7 +294,8 @@ def _failure_from_events(output: Path) -> HarnessFailure:
         # A job replay can repeat real calls. Only a failing stage that explicitly proves
         # it is safe may opt in to retry; deterministic agent/grading failures never do.
         retryable=bool(failed.get("retryable", False)),
-        details={"status": failed.get("status", 1)},
+        details=details,
+        action=str(failed.get("action") or ""),
     )
 
 

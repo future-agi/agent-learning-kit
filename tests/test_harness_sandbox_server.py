@@ -15,10 +15,25 @@ from fi.alk.harness.sandbox_server import (
     _CONTROLLER_TOKEN,
     _presentation_value,
     _process_identity,
+    _scenario_delta,
     _worker_failure_retryable,
     create_app,
 )
 from fi.alk.harness.secrets import resolve_worker_secrets
+
+
+@pytest.mark.parametrize(
+    ("instruction", "expected"),
+    [
+        ("Add 10 more scenarios covering payment failures", 10),
+        (
+            "generate one more scenario where the user asks for a discount",
+            1,
+        ),
+    ],
+)
+def test_scenario_delta_accepts_numeric_and_word_counts(instruction, expected):
+    assert _scenario_delta(instruction) == expected
 
 
 def test_presentation_redaction_handles_prose_with_email_before_url():
@@ -124,6 +139,19 @@ def test_local_sandbox_reports_live_stage_timestamp_and_detail_from_events(
                 "payload": {"stage": "scenarios"},
             }
         )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "harness.stage.progress",
+                "wall_time": "2026-08-22T01:02:18+00:00",
+                "payload": {
+                    "stage": "scenarios",
+                    "detail": "Generating scenarios · validating 1/2",
+                    "completed": 1,
+                    "total": 2,
+                },
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -131,8 +159,8 @@ def test_local_sandbox_reports_live_stage_timestamp_and_detail_from_events(
     current = client.get(f"/v1/jobs/{job_id}").json()["status"]
 
     assert current["stage"] == "generating_scenarios"
-    assert current["updated_at"] == "2026-08-22T01:02:03Z"
-    assert current["detail"] == "generating and validating scenarios"
+    assert current["updated_at"] == "2026-08-22T01:02:18Z"
+    assert current["detail"] == "Generating scenarios · validating 1/2"
 
 
 def test_local_sandbox_exposes_generated_stage_outputs_and_adjustments(
@@ -459,6 +487,56 @@ def test_uploaded_environment_is_mounted_for_worker_but_not_persisted(
     assert reference.key.startswith("ALK_JOB_")
 
 
+def test_controller_reporting_values_are_ephemeral_and_not_agent_runtime_values(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    sandbox = LocalSandbox(tmp_path / "state")
+    observed = {}
+
+    async def capture(job, _source):
+        observed["resolved"] = resolve_worker_secrets(
+            job.agent.secret_refs,
+            environment={
+                **os.environ,
+                **sandbox._ephemeral_secrets[job.job_id],
+            },
+        )
+        observed["runtime_names"] = job.metadata["environment_value_names"]
+
+    sandbox._execute = capture
+
+    async def submit():
+        response = sandbox.submit(
+            LocalSandboxRequest(
+                source_path=str(source),
+                controller_environment_values={
+                    "HARNESS_PLATFORM_API_KEY": "org-harness-key",
+                    "HARNESS_PLATFORM_SECRET_KEY": "org-harness-secret",
+                    "HARNESS_PLATFORM_WORKSPACE_ID": "workspace-1",
+                },
+            )
+        )
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    persisted = (
+        tmp_path / "state" / "jobs" / response.job.job_id / "job.json"
+    ).read_text()
+
+    assert observed["resolved"] == {
+        "HARNESS_PLATFORM_API_KEY": "org-harness-key",
+        "HARNESS_PLATFORM_SECRET_KEY": "org-harness-secret",
+        "HARNESS_PLATFORM_WORKSPACE_ID": "workspace-1",
+    }
+    assert observed["runtime_names"] == []
+    assert "org-harness-key" not in persisted
+    assert "org-harness-secret" not in persisted
+
+
 def test_saved_session_rerun_reuses_artifacts_and_keeps_fresh_values_ephemeral(
     tmp_path, monkeypatch
 ):
@@ -496,13 +574,20 @@ def test_saved_session_rerun_reuses_artifacts_and_keeps_fresh_values_ephemeral(
             observed["job"] = job.job_id
             observed["only"] = only
             observed["values"] = dict(sandbox._ephemeral_secrets[job.job_id])
+            observed["controller"] = dict(
+                sandbox._ephemeral_controller_secrets[job.job_id]
+            )
             sandbox._ephemeral_secrets.pop(job.job_id, None)
+            sandbox._ephemeral_controller_secrets.pop(job.job_id, None)
 
         sandbox._execute_rerun = capture
         queued = sandbox.rerun(
             job_id,
             SandboxRerunRequest(
-                environment_values={"OPENAI_API_KEY": "fresh-never-persist"}
+                environment_values={"OPENAI_API_KEY": "fresh-never-persist"},
+                controller_environment_values={
+                    "HARNESS_PLATFORM_API_KEY": "org-key"
+                },
             ),
         )
         await sandbox._tasks[job_id]
@@ -515,11 +600,13 @@ def test_saved_session_rerun_reuses_artifacts_and_keeps_fresh_values_ephemeral(
         "job": queued.job.job_id,
         "only": [],
         "values": {"OPENAI_API_KEY": "fresh-never-persist"},
+        "controller": {"HARNESS_PLATFORM_API_KEY": "org-key"},
     }
     assert "fresh-never-persist" not in state_path.read_text(encoding="utf-8")
     assert "fresh-never-persist" not in (state_path.parent / "job.json").read_text(
         encoding="utf-8"
     )
+    assert "org-key" not in state_path.read_text(encoding="utf-8")
 
 
 def test_uploaded_environment_rejects_runner_control_and_reference_conflicts(

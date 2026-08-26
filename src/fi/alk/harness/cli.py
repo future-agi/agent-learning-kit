@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import suppress
 import json
 import os
 import sys
@@ -37,6 +38,92 @@ from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
 from .understand import load, open_stage, opening
 from .world.snapshot import saved as world_saved
+
+
+def _environment_failure_context(
+    source: str | Path, contract: Any | None
+) -> dict[str, str]:
+    """Describe the selected packaging lane without exposing runner-local paths."""
+    from .provision import environment_adapter_context
+
+    return environment_adapter_context(source, contract)
+
+
+def _relevant_source_file_count(source: Path) -> int:
+    ignored = {".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__"}
+    count = 0
+    for path in source.rglob("*"):
+        if any(part in ignored for part in path.parts) or not path.is_file():
+            continue
+        count += 1
+        if count >= 10_000:
+            break
+    return count
+
+
+def _stage_progress(
+    label: str, stage_args: argparse.Namespace, elapsed: int
+) -> dict[str, Any]:
+    destination = Path(stage_args.out)
+    if label == "understand":
+        total = _relevant_source_file_count(Path(stage_args.path))
+        return {
+            "detail": f"Understanding source · inspecting {total} relevant files",
+            "activity": "source_inspection",
+            "total_files": total,
+            "elapsed_seconds": elapsed,
+        }
+    if label == "environment":
+        ready = (destination / "environment.json").is_file()
+        return {
+            "detail": (
+                "Building environment · validating runtime and seed data"
+                if ready
+                else "Building environment · resolving runtime and installing dependencies"
+            ),
+            "activity": "environment_validation" if ready else "environment_build",
+            "elapsed_seconds": elapsed,
+        }
+    if label == "scenarios":
+        created = 0
+        try:
+            value = json.loads(
+                (destination / "scenarios.json").read_text(encoding="utf-8")
+            )
+            created = len(value) if isinstance(value, list) else 0
+        except (OSError, ValueError):
+            pass
+        wanted = int(getattr(stage_args, "count", 0) or 0)
+        return {
+            "detail": (
+                f"Generating scenarios · validating {created}/{wanted}"
+                if created
+                else f"Generating scenarios · creating {wanted} scenarios"
+            ),
+            "activity": "scenario_validation" if created else "scenario_generation",
+            "completed": created,
+            "total": wanted,
+            "elapsed_seconds": elapsed,
+        }
+    completed = 0
+    runs = destination / "runs"
+    if runs.is_dir():
+        completed = sum(
+            1 for path in runs.glob("run-*/*/result.json") if path.is_file()
+        )
+    return {
+        "detail": f"Running scenarios · {completed} results committed",
+        "activity": "scenario_execution",
+        "completed": completed,
+        "elapsed_seconds": elapsed,
+    }
+
+
+def _progress_interval_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("ALK_HARNESS_PROGRESS_INTERVAL_SECONDS", "15")))
+    except ValueError:
+        return 15.0
 
 
 def _source_root(destination: Path, explicit: str = "") -> str:
@@ -106,6 +193,8 @@ def _guidance(args: argparse.Namespace) -> str:
 
 
 async def _understand(args: argparse.Namespace) -> int:
+    from .failure_reporting import record_stage_failure
+
     source = resolve(args.kind, name=args.name, root=args.path)
     stage, destination = open_stage(
         source,
@@ -132,6 +221,11 @@ async def _understand(args: argparse.Namespace) -> int:
 
     contract = load(destination)
     if contract is None:
+        record_stage_failure(
+            "understanding_contract_missing",
+            "Agent understanding finished without producing a valid contract.",
+            source=args.path,
+        )
         print("\nNo contract was submitted.", file=sys.stderr)
         return 1
     print(
@@ -178,10 +272,14 @@ async def _converse(
 
 
 async def _build(args: argparse.Namespace) -> int:
+    from .failure_reporting import record_stage_failure
+
     destination = Path(args.out) if args.out else artifact_dir(args.name)
     contract = load(destination)
     if contract is None:
-        print(f"No contract at {destination}. Run `understand` first.", file=sys.stderr)
+        message = "No saved agent contract is available. Run understanding first."
+        record_stage_failure("agent_contract_missing", message)
+        print(message, file=sys.stderr)
         return 1
 
     print(f"agent: {contract.agent}  ({len(contract.tools)} tools)")
@@ -192,6 +290,12 @@ async def _build(args: argparse.Namespace) -> int:
     try:
         require_buildable(contract, source_root)
     except RuntimeError as failed:
+        record_stage_failure(
+            "environment_not_buildable",
+            failed,
+            source=source_root,
+            details=_environment_failure_context(source_root, contract),
+        )
         print(str(failed), file=sys.stderr)
         return 1
 
@@ -202,6 +306,12 @@ async def _build(args: argparse.Namespace) -> int:
             provision_if_present, source_root, destination, contract
         )
     except ProvisionError as failed:
+        record_stage_failure(
+            "environment_provision_failed",
+            f"Cannot create the source environment: {failed}",
+            source=source_root,
+            details=_environment_failure_context(source_root, contract),
+        )
         print(f"Cannot create the source environment: {failed}", file=sys.stderr)
         return 1
     if environment is not None:
@@ -227,6 +337,12 @@ async def _build(args: argparse.Namespace) -> int:
     )
 
     if not world_saved(destination):
+        record_stage_failure(
+            "environment_world_missing",
+            "Environment generation finished without saving a validated world.",
+            source=source_root,
+            details=_environment_failure_context(source_root, contract),
+        )
         print("\nNo world was saved.", file=sys.stderr)
         return 1
     # Seal the exact environment now that its generated world exists. Local and hosted
@@ -242,6 +358,12 @@ async def _build(args: argparse.Namespace) -> int:
             name=f"{contract.agent}-environment",
         )
     except BundleError as failed:
+        record_stage_failure(
+            "environment_bundle_failed",
+            f"Cannot seal the environment bundle: {failed}",
+            source=source_root,
+            details=_environment_failure_context(source_root, contract),
+        )
         print(f"Cannot seal the environment bundle: {failed}", file=sys.stderr)
         return 1
     print(f"\nworld: {destination}")
@@ -261,6 +383,7 @@ async def _environment(args: argparse.Namespace) -> int:
     )
 
     destination = Path(args.out)
+    source_path = str(getattr(args, "path", "") or "")
     try:
         if args.action == "down":
             if not stop(destination):
@@ -294,10 +417,22 @@ async def _environment(args: argparse.Namespace) -> int:
                     if (bundle_root / ENVIRONMENT_PLAN_FILE).is_file():
                         load_environment_plan(bundle_root, bundle=bundle)
                 except (BundleError, EnvironmentPlanError) as failed:
+                    from .failure_reporting import record_stage_failure
+
+                    record_stage_failure(
+                        "environment_bundle_invalid",
+                        f"Environment bundle failed verification: {failed}",
+                    )
                     print(f"Environment bundle failed: {failed}", file=sys.stderr)
                     return 1
                 bundled_source = bundle_root / "services" / "source"
                 if not bundled_source.is_dir():
+                    from .failure_reporting import record_stage_failure
+
+                    record_stage_failure(
+                        "environment_bundle_source_missing",
+                        "The saved environment bundle has no source snapshot.",
+                    )
                     print(
                         f"Environment bundle has no source snapshot: {bundled_source}",
                         file=sys.stderr,
@@ -311,6 +446,23 @@ async def _environment(args: argparse.Namespace) -> int:
             # and report that a previously valid Compose environment cannot be started.
             environment = provision(source_path, destination, load(destination))
     except ProvisionError as failed:
+        from .failure_reporting import record_stage_failure
+
+        contract = load(destination)
+        record_stage_failure(
+            failed.code,
+            f"Environment failed: {failed}",
+            source=source_path or None,
+            action=failed.action,
+            details={
+                **(
+                    _environment_failure_context(source_path, contract)
+                    if source_path and Path(source_path).exists()
+                    else {"failed_adapter": "saved_environment_replay"}
+                ),
+                **failed.details,
+            },
+        )
         print(f"Environment failed: {failed}", file=sys.stderr)
         return 1
 
@@ -323,12 +475,22 @@ async def _environment(args: argparse.Namespace) -> int:
 
 
 async def _scenarios(args: argparse.Namespace) -> int:
+    from .failure_reporting import record_stage_failure
+
     destination = Path(args.out) if args.out else artifact_dir(args.name)
     contract = load(destination)
     if contract is None:
+        record_stage_failure(
+            "scenario_contract_missing",
+            "Scenario generation cannot start because the agent contract is missing.",
+        )
         print(f"No contract at {destination}. Run `understand` first.", file=sys.stderr)
         return 1
     if not world_saved(destination):
+        record_stage_failure(
+            "scenario_world_missing",
+            "Scenario generation cannot start because the validated environment world is missing.",
+        )
         print(f"No world at {destination}. Run `build` first.", file=sys.stderr)
         return 1
 
@@ -363,6 +525,10 @@ async def _scenarios(args: argparse.Namespace) -> int:
 
     written = load_written(destination)
     if not written:
+        record_stage_failure(
+            "scenarios_not_saved",
+            "Scenario generation finished without producing validated scenarios.",
+        )
         print("\nNo scenarios were saved.", file=sys.stderr)
         return 1
     print(f"\nscenarios: {len(written)} in {destination / 'scenarios.json'}")
@@ -471,9 +637,15 @@ async def _simulate(args: argparse.Namespace) -> int:
     from .world.snapshot import require_source_implementation
 
     destination = Path(args.out) if args.out else artifact_dir(args.name)
+    from .failure_reporting import record_stage_failure
+
     contract = load(destination)
     written = load_written(destination)
     if contract is None or not written:
+        record_stage_failure(
+            "simulation_inputs_missing",
+            "Simulation requires a saved agent contract and validated scenarios.",
+        )
         print(
             f"Need a contract and scenarios at {destination}.",
             file=sys.stderr,
@@ -482,10 +654,15 @@ async def _simulate(args: argparse.Namespace) -> int:
     try:
         require_source_implementation(destination)
     except (FileNotFoundError, RuntimeError) as failed:
+        record_stage_failure("simulation_world_invalid", failed)
         print(str(failed), file=sys.stderr)
         return 1
     chosen = [s for s in written if s.name in args.only] if args.only else written
     if not chosen:
+        record_stage_failure(
+            "simulation_scenarios_missing",
+            f"No scenario matched the requested selection: {args.only}",
+        )
         print(f"No scenario matching {args.only}.", file=sys.stderr)
         return 1
 
@@ -560,6 +737,11 @@ async def _simulate(args: argparse.Namespace) -> int:
     # means every scenario ran and the submitted agent failed one or more checks.  Hosted
     # execution retries/classifies the former and preserves the latter as valid RL evidence.
     if summary.get("unrunnable"):
+        record_stage_failure(
+            "simulation_unrunnable",
+            "One or more scenarios could not establish a runnable agent connection.",
+            details={"unrunnable_scenarios": int(summary.get("unrunnable") or 0)},
+        )
         return 1
     return 0 if summary["passed"] == summary["scenarios"] else 2
 
@@ -762,6 +944,7 @@ async def _auto(args: argparse.Namespace) -> int:
             ),
         ),
     ]
+    from .failure_reporting import clear_stage_failure, take_stage_failure
     from .provision import ProvisionError, stop
 
     cleanup_failed: ProvisionError | None = None
@@ -778,15 +961,55 @@ async def _auto(args: argparse.Namespace) -> int:
             label, operation, stage_args = stages[stage_index]
             print(f"\n=== {label} ===", flush=True)
             emit("harness.stage.started", label)
-            status = await operation(stage_args)
+            clear_stage_failure()
+            started = time.monotonic()
+            initial_progress = _stage_progress(label, stage_args, 0)
+            emit("harness.stage.progress", label, **initial_progress)
+
+            async def heartbeat() -> None:
+                interval = _progress_interval_seconds()
+                while True:
+                    await asyncio.sleep(interval)
+                    progress = (
+                        {**initial_progress}
+                        if label == "understand"
+                        else _stage_progress(
+                            label, stage_args, int(time.monotonic() - started)
+                        )
+                    )
+                    progress["elapsed_seconds"] = int(time.monotonic() - started)
+                    emit(
+                        "harness.stage.progress",
+                        label,
+                        **progress,
+                    )
+
+            heartbeat_task = asyncio.create_task(heartbeat())
+            try:
+                status = await operation(stage_args)
+            finally:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
+            stage_failure = take_stage_failure()
             # A completed call suite returns 2 when the submitted agent fails one or more checks.
             # That is a valid RL result. Earlier stages returning non-zero are harness failures.
             if status and label != "calls":
-                emit("harness.stage.failed", label, status=status)
+                emit(
+                    "harness.stage.failed",
+                    label,
+                    status=status,
+                    **(stage_failure or {}),
+                )
                 print(f"\nautomatic run stopped: {label} failed", file=sys.stderr)
                 return status
             if label == "calls" and status not in (0, 2):
-                emit("harness.stage.failed", label, status=status)
+                emit(
+                    "harness.stage.failed",
+                    label,
+                    status=status,
+                    **(stage_failure or {}),
+                )
                 return status
             emit("harness.stage.completed", label, status=status)
             for adjustment_id in applying[label]:

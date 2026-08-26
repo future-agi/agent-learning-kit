@@ -261,9 +261,10 @@ services:
     assert {"LIVEKIT_API_KEY", "LIVEKIT_URL", "DEEPGRAM_API_KEY"} <= set(
         environment.runtime_configuration_names
     )
-    assert (output / "compose.harness.override.yaml").read_text() == (
-        'services:\n  "agent":\n    env_file: !reset []\n'
-    )
+    override = (output / "compose.harness.override.yaml").read_text()
+    assert override.count('  "agent":') == 1
+    assert "env_file: !reset []" in override
+    assert "com.futureagi.harness.project:" in override
 
 
 def test_source_environment_uses_configured_docker_gateway(tmp_path, monkeypatch):
@@ -6365,6 +6366,30 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
     assert all(verdict.holds for verdict in verdicts)
 
 
+def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
+    monkeypatch,
+):
+    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import platform_evals
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.run.grade import judge_suite_evals
+    from fi.alk.harness.scenario import Scenario
+
+    monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
+    monkeypatch.setattr(platform_evals, "configured", lambda: False)
+    verdicts = judge_suite_evals(
+        default_suite_evals(),
+        Scenario(name="support", instruction="help", sub_goals=[]),
+        Transcript(),
+        AgentContract(agent="voice", modality="voice"),
+    )
+
+    assert len(verdicts) == len(default_suite_evals())
+    assert all(verdict.grading_error for verdict in verdicts)
+    assert all(not verdict.holds for verdict in verdicts)
+
+
 def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
     from fi.alk.harness.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
@@ -6611,6 +6636,71 @@ def test_a_scenario_that_never_ran_is_not_reported_as_one_the_agent_failed():
     assert ran["status"] == "completed"
     assert blocked["status"] == "failed"
     assert "not ready" in blocked["error_message"]
+
+
+def test_a_grading_failure_does_not_rewrite_completed_call_status():
+    from fi.alk.harness import platform
+    from fi.alk.harness.run.grade import Checkpoint, Judgement
+
+    result = _reported_result(
+        checkpoints=[
+            Checkpoint(
+                name="task completion",
+                kind="eval",
+                passed=False,
+                detail="evaluator unavailable",
+                grading_error=True,
+            )
+        ],
+        conduct=[
+            Judgement(
+                claim="task completion",
+                kind="eval",
+                holds=False,
+                why="evaluator unavailable",
+                grading_error=True,
+            )
+        ]
+    )
+
+    payload = platform.result_of(result)
+
+    assert payload["status"] == "completed"
+    assert "error_message" not in payload
+    assert payload["call_metadata"]["harness_eval_coverage"] == {
+        "expected": 1,
+        "executed": 0,
+        "failed": 1,
+        "complete": False,
+    }
+
+
+def test_platform_call_duration_excludes_connection_and_retry_waits():
+    from fi.alk.harness import platform
+
+    connected = _reported_result(seconds=255.0)
+    connected.exchanges = [
+        {
+            "speaker": "agent",
+            "text": "hello",
+            "start_time_ms": 1_000,
+            "end_time_ms": 4_000,
+        },
+        {
+            "speaker": "customer",
+            "text": "goodbye",
+            "start_time_ms": 102_000,
+            "end_time_ms": 107_205,
+        },
+    ]
+    unavailable = _reported_result(
+        seconds=301.1,
+        exchanges=[],
+        problems=["the target worker never joined"],
+    )
+
+    assert platform.result_of(connected)["duration_seconds"] == 106
+    assert platform.result_of(unavailable)["duration_seconds"] == 0
 
 
 def test_a_second_run_joins_the_same_test_rather_than_starting_another():
