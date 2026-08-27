@@ -578,6 +578,53 @@ def test_non_completed_status_raises_call_aborted_with_partial(tmp_path: Path) -
     assert "boom" in str(exc)
 
 
+def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed voice call must not discard tool evidence collected before the failure."""
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    captured = Call(
+        name="get_ride_options",
+        arguments={"pickup": "SFO"},
+        result={"options": ["economy"]},
+        ok=True,
+        error=None,
+        refused=False,
+        at="2026-01-01T00:00:01.000Z",
+    )
+    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime: (captured,))
+
+    async def place_call(spec):
+        failure = SimulationFailure(
+            stage=FailureStage.RUNNING,
+            code="call_timeout",
+            message="conversation exceeded its limit",
+        )
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=failure,
+            transcript="user: hello",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+
+    assert exc.partial is not None
+    assert exc.partial.calls == (captured,)
+    trace_uploads = [item for item in adapter.uploads if item[0] is cr.ArtifactKind.TOOL_TRACE]
+    assert len(trace_uploads) == 1
+    assert json.loads(trace_uploads[0][2].decode().splitlines()[0])["name"] == "get_ride_options"
+
+
 def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(
     tmp_path: Path,
 ) -> None:

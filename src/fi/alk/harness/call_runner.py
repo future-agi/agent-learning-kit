@@ -699,11 +699,48 @@ class CallRunnerImpl:
 
         transcript_artifact: str | None = None
         recording_artifacts: list[str] = []
+        # Evidence belongs to the call attempt, not only to successful calls.  Collect it before
+        # interpreting the simulator status so a timeout/agent failure still carries the exact
+        # tool activity in its partial receipt.  Previously the early CallAborted below discarded
+        # every tool call from failed calls, making a real upstream tool error indistinguishable
+        # from a proxy/transport failure.
+        calls = self._collect_calls(runtime) if case is not None else ()
+        if calls:
+            tool_trace = "\n".join(
+                json.dumps(
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "ok": call.ok,
+                        "error": call.error,
+                        "refused": call.refused,
+                        "at": call.at,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+                for call in calls
+            ).encode("utf-8")
+            await self._adapter.upload_artifact(
+                tool_trace,
+                kind=ArtifactKind.TOOL_TRACE,
+                scenario_key=scenario_key,
+            )
         if case is not None and case.result is not None:
             result = case.result
             if result.transcript:
+                transcript_payload = json.dumps(
+                    {
+                        "schema_version": "futureagi.call-transcript.v1",
+                        "transcript": result.transcript,
+                        "messages": result.messages,
+                    },
+                    sort_keys=True,
+                    default=str,
+                ).encode("utf-8")
                 transcript_artifact = await self._adapter.upload_artifact(
-                    result.transcript.encode("utf-8"),
+                    transcript_payload,
                     kind=ArtifactKind.TRANSCRIPT,
                     scenario_key=scenario_key,
                 )
@@ -727,7 +764,7 @@ class CallRunnerImpl:
                     recording_artifacts.append(artifact_id)
 
         base = CallOutcome(
-            calls=(),
+            calls=calls,
             turns=turns,
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
@@ -781,7 +818,7 @@ class CallRunnerImpl:
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator
         # regardless of turns (hosted_scheduler.py's own unconditioned-on-turns rule).
-        calls = () if is_silent_agent else self._collect_calls(runtime)
+        calls = () if is_silent_agent else base.calls
         return CallOutcome(
             calls=calls,
             turns=base.turns,
