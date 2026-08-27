@@ -197,13 +197,15 @@ async def _build(args: argparse.Namespace) -> int:
 
     from .provision import ProvisionError, provision_if_present
 
-    try:
-        environment = await asyncio.to_thread(
-            provision_if_present, source_root, destination, contract
-        )
-    except ProvisionError as failed:
-        print(f"Cannot create the source environment: {failed}", file=sys.stderr)
-        return 1
+    environment = None
+    if not bool(getattr(args, "skip_source_provision", False)):
+        try:
+            environment = await asyncio.to_thread(
+                provision_if_present, source_root, destination, contract
+            )
+        except ProvisionError as failed:
+            print(f"Cannot create the source environment: {failed}", file=sys.stderr)
+            return 1
     if environment is not None:
         print(f"environment: {environment.project} ({', '.join(environment.services)})")
         for name, value in sorted(environment.overrides.items()):
@@ -214,6 +216,7 @@ async def _build(args: argparse.Namespace) -> int:
         out=destination,
         ask=permission_gate(_ask_operator) if args.interactive else None,
         source_root=source_root,
+        deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
     )
     await _converse(
         stage,
@@ -715,6 +718,7 @@ async def _auto(args: argparse.Namespace) -> int:
             f"({len(loaded_connection)} names; values hidden)\n"
         )
 
+    authoring_only = bool(getattr(args, "authoring_only", False))
     stages = [
         (
             "understand",
@@ -738,6 +742,11 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 interactive=False,
                 guidance=[],
+                # Hosted V2 authoring resolves and provisions the submitted runtime inside the
+                # Daytona guest.  The authoring worker still creates the same logical world and
+                # scenarios, but must not start customer Compose/Docker resources on the control
+                # plane worker merely to describe them.
+                skip_source_provision=authoring_only,
             ),
         ),
         (
@@ -751,17 +760,20 @@ async def _auto(args: argparse.Namespace) -> int:
                 guidance=[],
             ),
         ),
-        (
-            "calls",
-            _simulate,
-            argparse.Namespace(
-                name=name,
-                out=str(destination),
-                only=None,
-                model=args.run_model,
-            ),
-        ),
     ]
+    if not authoring_only:
+        stages.append(
+            (
+                "calls",
+                _simulate,
+                argparse.Namespace(
+                    name=name,
+                    out=str(destination),
+                    only=None,
+                    model=args.run_model,
+                ),
+            )
+        )
     from .provision import ProvisionError, stop
 
     cleanup_failed: ProvisionError | None = None
@@ -879,6 +891,11 @@ async def _auto(args: argparse.Namespace) -> int:
 
     if cleanup_failed is not None:
         return 1
+
+    if authoring_only:
+        emit("harness.authoring.completed", "scenarios")
+        print(f"\nautomatic authoring complete: {destination}")
+        return 0
 
     from .artifacts import ArtifactIntegrityError, seal_artifacts
 
@@ -1090,6 +1107,29 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
     auto.add_argument("--run-model", default=None, help=argparse.SUPPRESS)
     auto.set_defaults(run=_auto)
+
+    author = sub.add_parser(
+        "author",
+        help=(
+            "understand an agent, create its logical environment, and write scenarios "
+            "without executing them"
+        ),
+    )
+    author.add_argument("--path", required=True, help="agent repository")
+    author.add_argument(
+        "--name",
+        default=None,
+        help="agent name (defaults to the repository folder name)",
+    )
+    author.add_argument(
+        "--kind", default="repo", choices=supported(), help="how the agent is supplied"
+    )
+    author.add_argument(
+        "--out", required=True, help="fresh authoring artifact directory"
+    )
+    author.add_argument("--count", type=int, default=10, help="number of scenarios")
+    author.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+    author.set_defaults(run=_auto, authoring_only=True, run_model=None)
 
     chat = sub.add_parser(
         "chat",

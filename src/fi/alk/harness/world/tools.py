@@ -187,7 +187,9 @@ def _base_data_problems(
         # provenance through that transformation by matching the stable record identity, then
         # exempt only leaf values that are themselves unchanged from the submitted row.
         for source_row in source_rows.get(collection, []):
-            if source_row and all(value.get(key) == item for key, item in source_row.items()):
+            if source_row and all(
+                value.get(key) == item for key, item in source_row.items()
+            ):
                 return source_row
             if any(
                 key in source_row and key in value and source_row[key] == value[key]
@@ -342,7 +344,11 @@ def _err(text: str) -> dict[str, Any]:
 
 
 def world_tools(
-    contract: AgentContract, destination: Path, *, source_root: str = ""
+    contract: AgentContract,
+    destination: Path,
+    *,
+    source_root: str = "",
+    deferred_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
@@ -383,17 +389,31 @@ def world_tools(
             # world store; import/construct bindings execute the submitted tool code normally.
             has_postgres = bool(
                 provisioned
-                and any("postgres" in service.lower() for service in provisioned.services)
+                and any(
+                    "postgres" in service.lower() for service in provisioned.services
+                )
             )
             world = (
                 GeneratedWorld(store=attached_postgres_store(destination), kind=named)
                 if has_postgres
                 else GeneratedWorld(":memory:", kind=named)
             )
-        if provisioned and provisioned.runtime_services and contract.modality == "voice":
+        if (
+            provisioned
+            and provisioned.runtime_services
+            and contract.modality == "voice"
+        ):
             # These tools execute only through a real call to the submitted worker. They need no
             # harness-authored handler and must not be smoke-called outside their captured RTC
             # session state while the world is being constructed.
+            world.runtime_tools = set(contract.tool_names())
+    elif deferred_runtime:
+        # Hosted authoring runs on a control-plane worker without Docker. The repository's
+        # exact processes and declared datastore are compiled into Bundle V2 and started in
+        # Daytona; this lightweight store exists only to author baseline data, checks and
+        # scenarios before execution-time validation against those real processes.
+        world = GeneratedWorld(":memory:", kind="sqlite")
+        if contract.modality == "voice" and contract.runtime:
             world.runtime_tools = set(contract.tool_names())
     else:
         world = GeneratedWorld(":memory:", kind=named)

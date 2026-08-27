@@ -115,6 +115,7 @@ def open_stage(
     ask: Callable[..., Any] | None = None,
     source_root: str = "",
     max_turns: int = 0,
+    deferred_runtime: bool = False,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -175,7 +176,22 @@ def open_stage(
                 else "one truthful service-backed sequence, check_world, and save_world."
             )
         )
-    server, _world = world_tools(contract, destination, source_root=source_root)
+    elif deferred_runtime:
+        environment_note = (
+            "\n\n## Runtime deferred to hosted execution\n\n"
+            "The submitted repository processes and datastore will be built, started and "
+            "validated inside the Daytona execution sandbox from the sealed process bundle. "
+            "Do not start containers here. Build the deterministic baseline, simulator prompt, "
+            "sub-goals and world checks. Voice runtime tools are owned by the submitted worker: "
+            "do not replace, bind or smoke-call them outside a real voice session. Their real "
+            "behavior is validated when the generated scenarios run in Daytona."
+        )
+    server, _world = world_tools(
+        contract,
+        destination,
+        source_root=source_root,
+        deferred_runtime=deferred_runtime,
+    )
     allowed = [
         "AskUserQuestion",
         *(qualified(WORLD_SERVER, name) for name in TOOL_NAMES),
