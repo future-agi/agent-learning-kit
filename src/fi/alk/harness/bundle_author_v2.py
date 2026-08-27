@@ -136,6 +136,27 @@ def _collections_sql(path: Path) -> str:
     return "\n".join(statements) + "\n"
 
 
+def _sqlite_type(declared: str) -> str:
+    normalized = declared.upper()
+    if "BOOL" in normalized:
+        return "boolean"
+    if "INT" in normalized:
+        return "bigint"
+    if any(mark in normalized for mark in ("REAL", "FLOA", "DOUB")):
+        return "double precision"
+    if any(mark in normalized for mark in ("NUMERIC", "DECIMAL")):
+        return "numeric"
+    if "BLOB" in normalized:
+        return "bytea"
+    return "text"
+
+
+def _sqlite_value(value: Any, sql_type: str) -> Any:
+    if value is not None and sql_type == "boolean":
+        return bool(value)
+    return value
+
+
 def _sqlite_sql(path: Path) -> str:
     statements: list[str] = []
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -152,21 +173,14 @@ def _sqlite_sql(path: Path) -> str:
             info = list(connection.execute(f"PRAGMA table_info({_identifier(table)})"))
             definitions: list[str] = []
             columns: list[str] = []
+            column_types: list[str] = []
             for row in info:
                 name = str(row[1])
-                declared = str(row[2] or "").upper()
-                sql_type = (
-                    "bigint"
-                    if "INT" in declared
-                    else "double precision"
-                    if any(mark in declared for mark in ("REAL", "FLOA", "DOUB"))
-                    else "bytea"
-                    if "BLOB" in declared
-                    else "text"
-                )
+                sql_type = _sqlite_type(str(row[2] or ""))
                 suffix = " PRIMARY KEY" if int(row[5] or 0) else ""
                 definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
                 columns.append(name)
+                column_types.append(sql_type)
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
             )
@@ -175,7 +189,10 @@ def _sqlite_sql(path: Path) -> str:
             ).fetchall()
             for record in selected:
                 names = ", ".join(_identifier(column) for column in columns)
-                values = ", ".join(_sql_literal(record[column]) for column in columns)
+                values = ", ".join(
+                    _sql_literal(_sqlite_value(record[column], sql_type))
+                    for column, sql_type in zip(columns, column_types, strict=True)
+                )
                 statements.append(
                     f"INSERT INTO {_identifier(table)} ({names}) VALUES ({values});"
                 )
