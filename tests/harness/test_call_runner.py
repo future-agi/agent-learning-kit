@@ -37,6 +37,7 @@ from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.report import SimulationReport, SimulationTestCaseResult
 from fi.simulate.runtime.run import RunStatus
 from fi.simulate.runtime.run import TestCaseStatus as CaseStatus
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements
 from fi.simulate.simulation.models import Persona as SimPersona
 from fi.simulate.simulation.models import TestCaseResult as SimTestCaseResult
 
@@ -70,6 +71,10 @@ def _job(*, connector: str = "livekit", config: dict[str, Any] | None = None) ->
         ),
         agent=AgentConnection(connector=connector, config=config or {}),
         scenario_count=1,
+        runtime=RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM,
+            cpu_units=1,
+        ),
         seed=1,
     )
 
