@@ -7,6 +7,7 @@ because every scenario and every probe starts from that copy.
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 from pathlib import Path
@@ -17,6 +18,13 @@ from . import Records, Snapshot, StoreError
 # What SQLite hands out that is not itself a record. Only present once a table is declared
 # AUTOINCREMENT, which is why its absence is normal rather than a gap.
 COUNTERS = "sqlite_sequence"
+
+
+def _sqlite_value(value: Any) -> Any:
+    """Encode structured seed values deterministically for SQLite TEXT columns."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return value
 
 
 class SqliteStore(Records):
@@ -43,7 +51,9 @@ class SqliteStore(Records):
     # -- statements ------------------------------------------------------------------
 
     def execute(self, statement: str, params: Sequence[Any] = ()) -> int:
-        cursor = self.connection.execute(statement, tuple(params))
+        cursor = self.connection.execute(
+            statement, tuple(_sqlite_value(value) for value in params)
+        )
         self.connection.commit()
         return cursor.rowcount
 
@@ -134,7 +144,7 @@ class SqliteStore(Records):
                     marks = ", ".join("?" for _ in row)
                     self.connection.execute(
                         f'INSERT INTO "{name}" ({columns}) VALUES ({marks})',
-                        list(row.values()),
+                        [_sqlite_value(value) for value in row.values()],
                     )
             self._reinstate(snapshot.counters)
             self.connection.commit()

@@ -307,7 +307,7 @@ class Seed(BaseModel):
 # §2b's closed placeholder vocabulary, mirrored here (not imported from `process_preflight.py`,
 # which imports this module) so a `configuration_name` can never shadow a builtin token — the
 # reverse dependency direction is preflight -> model, not model -> preflight.
-_RESERVED_CONFIGURATION_NAMES = {"WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
+_RESERVED_CONFIGURATION_NAMES = {"JOB_ID", "WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
 _RESERVED_CONFIGURATION_PREFIX = re.compile(r"^(PORT|HOST)_")
 
 

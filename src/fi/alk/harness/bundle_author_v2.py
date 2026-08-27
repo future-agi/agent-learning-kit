@@ -95,9 +95,14 @@ def _json_type(values: list[Any]) -> str:
     present = [value for value in values if value is not None]
     if present and all(isinstance(value, bool) for value in present):
         return "boolean"
-    if present and all(isinstance(value, int) and not isinstance(value, bool) for value in present):
+    if present and all(
+        isinstance(value, int) and not isinstance(value, bool) for value in present
+    ):
         return "bigint"
-    if present and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in present):
+    if present and all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in present
+    ):
         return "double precision"
     if present and all(isinstance(value, (dict, list)) for value in present):
         return "jsonb"
@@ -165,7 +170,9 @@ def _sqlite_sql(path: Path) -> str:
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
             )
-            selected = connection.execute(f"SELECT * FROM {_identifier(table)}").fetchall()
+            selected = connection.execute(
+                f"SELECT * FROM {_identifier(table)}"
+            ).fetchall()
             for record in selected:
                 names = ", ".join(_identifier(column) for column in columns)
                 values = ", ".join(_sql_literal(record[column]) for column in columns)
@@ -196,7 +203,9 @@ def _store_json_seed_sql(path: Path) -> str:
             raise BundleAuthorError(f"store_invalid: rows.{table} must be an array")
         records = [row for row in raw_rows if isinstance(row, dict)]
         if len(records) != len(raw_rows):
-            raise BundleAuthorError(f"store_invalid: rows.{table} contains a non-object row")
+            raise BundleAuthorError(
+                f"store_invalid: rows.{table} contains a non-object row"
+            )
         if not records:
             continue
         payload = json.dumps(records, sort_keys=True, separators=(",", ":"))
@@ -544,7 +553,10 @@ def resolve_environment_plan(source: str | Path, job: HarnessJob) -> Environment
             if service_name == control_name and "tools-api" in source_services:
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if is_livekit and service_name == control_name:
-                environment.setdefault("LIVEKIT_AGENT_NAME", "uber-voice-booking")
+                environment.setdefault(
+                    "LIVEKIT_AGENT_NAME",
+                    "uber-voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
+                )
             entry = (
                 "agent/agent.py"
                 if (service_root / "agent" / "agent.py").is_file()
@@ -564,6 +576,19 @@ def resolve_environment_plan(source: str | Path, job: HarnessJob) -> Environment
                 livekit_download=is_livekit and service_name == control_name,
                 run_override=_dockerfile_run(service_root),
             )
+            if is_livekit and service_name == control_name:
+                # The LiveKit worker opens its HTTP health port before it has registered with
+                # the dispatch service.  Treating the port as readiness creates a race where a
+                # named dispatch is submitted in that gap; self-hosted LiveKit leaves that
+                # dispatch unassigned even after the worker subsequently registers.  The worker
+                # log is the first observable signal that it can actually accept the call.
+                process = process.model_copy(
+                    update={
+                        "started_check": StartedCheck(
+                            log_marker="registered worker", timeout_seconds=180
+                        )
+                    }
+                )
             processes.append(process)
             if port:
                 slug = "target_http" if service_name == control_name else "tools_api"
@@ -626,7 +651,13 @@ def resolve_environment_plan(source: str | Path, job: HarnessJob) -> Environment
         control_name = "agent"
         port = None if is_livekit else 8080
         environment = (
-            {"LIVEKIT_AGENT_NAME": root.name.replace("_", "-")} if is_livekit else {}
+            {
+                "LIVEKIT_AGENT_NAME": (
+                    root.name.replace("_", "-") + "-{{JOB_ID}}-w{{WORLD_INDEX}}"
+                )
+            }
+            if is_livekit
+            else {}
         )
         process = _plan_python(
             root,
@@ -640,6 +671,14 @@ def resolve_environment_plan(source: str | Path, job: HarnessJob) -> Environment
             livekit_download=is_livekit,
             run_override=_dockerfile_run(component),
         )
+        if is_livekit:
+            process = process.model_copy(
+                update={
+                    "started_check": StartedCheck(
+                        log_marker="registered worker", timeout_seconds=180
+                    )
+                }
+            )
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(

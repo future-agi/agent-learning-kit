@@ -429,7 +429,11 @@ def _build_spec(
         "readiness_timeout": _READINESS_TIMEOUT_SECONDS,
         "cleanup_timeout": _CLEANUP_TIMEOUT_SECONDS,
         "conversation_direction": "agent_first",
-        "agent_first_silence_timeout_seconds": 45.0,
+        # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
+        # round-trip after the conversation has begun.  The previous 45-second value terminated
+        # an otherwise healthy LiveKit call at exactly the watchdog boundary.  Keep a finite
+        # liveness guard, but align it with the engine's 60-second conversation-silence backstop.
+        "agent_first_silence_timeout_seconds": 60.0,
     }
     agent = simulate.AgentDefinition(
         name="harness-livekit-target",

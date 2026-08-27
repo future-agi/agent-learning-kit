@@ -1948,6 +1948,63 @@ def test_call_aborted_with_no_partial_evidence_still_retries() -> None:
     asyncio.run(scenario())
 
 
+def test_call_aborted_retries_on_reset_same_world_when_pool_size_is_one() -> None:
+    """A single-world hosted job must still perform its one infrastructure retry."""
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, provisioner = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            def __init__(self) -> None:
+                self.attempts = 0
+
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise hs.CallAborted("target provider stalled", partial=None)
+                return _call_outcome(calls=(hs.Call(name="x", arguments={}),))
+
+        runner = Runner()
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        result = await scheduler.run(
+            [
+                FakeScenario(
+                    "s1",
+                    "id-1",
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                )
+            ]
+        )
+
+        receipt = result.receipts[0]
+        assert receipt.status == "passed"
+        assert receipt.scenario_attempt == 2
+        assert receipt.world_index == 0
+        assert runner.attempts == 2
+        # The initial fresh lease needs no reset; reacquiring the released world for attempt 2
+        # performs exactly one reset before the retry starts.
+        assert provisioner.reset_calls == 1
+        retry_events = [
+            kwargs for event, kwargs in outbound.events if event == "scenario_retried"
+        ]
+        assert retry_events == [
+            {"scenario_key": "s1", "from_world": 0, "to_world": 0}
+        ]
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_call_runner_raising_a_bare_exception_maps_to_call_failed() -> None:
     # T7/B3: a crash from the call runner that is not a `CallAborted` it deliberately raised is
     # the same world-handle-interface.md v3.3 row — "the simulated-call machinery crashed".

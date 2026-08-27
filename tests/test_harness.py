@@ -2175,6 +2175,30 @@ def test_a_row_put_in_wrong_can_be_taken_out_again(tmp_path):
     assert "UPDATE or DELETE" in refused
 
 
+def test_sqlite_world_seed_encodes_structured_values_as_json():
+    """World authoring may seed JSON-shaped fields into SQLite TEXT columns."""
+    from fi.alk.harness.world.stores.sqlite import SqliteStore
+
+    store = SqliteStore()
+    store.apply("CREATE TABLE config (id TEXT PRIMARY KEY, zones TEXT, pricing TEXT)")
+    store.add(
+        "config",
+        {
+            "id": "market",
+            "zones": ["downtown", "airport"],
+            "pricing": {"base": 4.5, "currency": "USD"},
+        },
+    )
+
+    assert store.records("config") == [
+        {
+            "id": "market",
+            "zones": '["downtown","airport"]',
+            "pricing": '{"base":4.5,"currency":"USD"}',
+        }
+    ]
+
+
 # --- the environment step: world, simulator prompt, sub-goal catalogue ---------------
 
 
@@ -4042,6 +4066,23 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
     assert granted == {}
 
 
+def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
+    from fi.alk.harness.build import environment_turns_for, turns_for
+    from fi.alk.harness.contract import AgentContract, ToolSpec
+
+    contract = AgentContract(
+        agent="large-agent",
+        tools=[ToolSpec(name=f"tool_{index}") for index in range(20)],
+    )
+    assert turns_for(contract) == 200
+    assert environment_turns_for(contract, deferred_runtime=False) == 200
+    assert environment_turns_for(contract, deferred_runtime=True) == 80
+
+    monkeypatch.setenv("ALK_HOSTED_ENVIRONMENT_MAX_TURNS", "40")
+    assert environment_turns_for(contract, deferred_runtime=True) == 40
+    assert environment_turns_for(contract, requested=25, deferred_runtime=True) == 25
+
+
 def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
     """Moving on is decided by code, from the artifacts, never by the model wanting to."""
     import asyncio
@@ -4466,6 +4507,55 @@ def test_structured_source_baseline_requires_fk_parent_rows(tmp_path):
     accepted = asyncio.run(call(payload))
     assert "Accepted" in accepted
     assert (tmp_path / "contract.json").exists()
+
+
+def test_structured_source_baseline_resolves_same_named_and_qualified_fk_keys(tmp_path):
+    """FK validation accepts real parent-key names instead of inventing an ``id`` column."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None,
+            CallToolRequestParams(name="submit_contract", arguments=payload),
+        )
+        return answer.content[0].text
+
+    base = {
+        "agent": "ride-agent",
+        "tools": [{"name": "list_payment_methods", "args": ["rider_id"]}],
+        "real_use_cases": ["list a rider's saved payment methods"],
+        "hard_constraints": ["only return methods belonging to the rider"],
+        "system_prompt_excerpt": "Use the rider's saved payment methods.",
+        "data_schema": {
+            "users": {"rider_id": "TEXT UNIQUE"},
+            "payment_methods": {"rider_id": "TEXT FK users"},
+        },
+        "base_environment": {
+            "users": [{"rider_id": "rdr_maya"}],
+            "payment_methods": [{"rider_id": "rdr_maya"}],
+        },
+        "data_store": {
+            "kind": "postgres",
+            "loader_module": "tools.seed",
+            "loaded_by": "seed_database",
+        },
+    }
+
+    accepted = asyncio.run(call(base))
+    assert "Accepted" in accepted
+
+    (tmp_path / "contract.json").unlink()
+    base["data_schema"]["payment_methods"]["rider_id"] = "TEXT FK users.rider_id"
+    accepted_qualified = asyncio.run(call(base))
+    assert "Accepted" in accepted_qualified
 
 
 def test_only_a_tool_that_says_it_saved_reports_an_artifact():

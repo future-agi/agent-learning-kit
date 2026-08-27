@@ -11,6 +11,7 @@ is the next thing said, and the tool is re-run on the spot.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -106,6 +107,35 @@ def turns_for(contract: AgentContract) -> int:
     bindings that must be exercised rather than a number that happened to fit the first agent.
     """
     return max(80, len(contract.tools or []) * 8 + 40)
+
+
+DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS = 80
+
+
+def environment_turns_for(
+    contract: AgentContract, *, requested: int = 0, deferred_runtime: bool = False
+) -> int:
+    """Bound unattended hosted correction without changing local authoring.
+
+    Local interactive/Compose authoring retains the size-aware budget. Hosted authoring has no
+    operator present and must not spend hundreds of turns trying variations when the runtime or
+    adapter cannot satisfy a validation gate. An explicit lower requested budget still wins;
+    an explicit larger one remains capped in the Dockerless hosted lane.
+    """
+    budget = requested or turns_for(contract)
+    if not deferred_runtime:
+        return budget
+    raw_limit = os.getenv(
+        "ALK_HOSTED_ENVIRONMENT_MAX_TURNS",
+        str(DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS),
+    )
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        limit = DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS
+    if limit < 1:
+        limit = DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS
+    return min(budget, limit)
 
 
 def open_stage(
@@ -211,7 +241,11 @@ def open_stage(
         permission_mode="default",
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         setting_sources=[],
-        max_turns=max_turns or turns_for(contract),
+        max_turns=environment_turns_for(
+            contract,
+            requested=max_turns,
+            deferred_runtime=deferred_runtime,
+        ),
         model=chosen_model(),
         env=provider_env(),
     )

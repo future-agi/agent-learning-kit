@@ -126,6 +126,17 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
     assert loaded.digest == first.digest
     assert loaded.metadata["packaging"] == packaging
     assert loaded.provenance.source_digest
+    if connector == "livekit":
+        control = next(
+            process
+            for process in loaded.processes
+            if process.name == loaded.runtime.control_service
+        )
+        dispatch_name = control.environment["LIVEKIT_AGENT_NAME"]
+        assert "{{JOB_ID}}" in dispatch_name
+        assert "{{WORLD_INDEX}}" in dispatch_name
+        assert control.started_check is not None
+        assert control.started_check.log_marker == "registered worker"
     preflight_bundle(
         output,
         loaded,
@@ -167,8 +178,12 @@ def test_bundle_limits_authoring_scenarios_to_requested_count(tmp_path: Path) ->
         json.dumps({"name": "two", "instruction": "Test two", "sub_goals": ["works"]}),
         encoding="utf-8",
     )
-    (second / "setup.py").write_text("def setup(world):\n    return None\n", encoding="utf-8")
-    (second / "ready.py").write_text("def ready(world):\n    return None\n", encoding="utf-8")
+    (second / "setup.py").write_text(
+        "def setup(world):\n    return None\n", encoding="utf-8"
+    )
+    (second / "ready.py").write_text(
+        "def ready(world):\n    return None\n", encoding="utf-8"
+    )
     (second / "checks" / "works.py").write_text(
         "def check(world, calls):\n    return None\n", encoding="utf-8"
     )
@@ -215,8 +230,8 @@ def test_bundle_combines_schema_with_frozen_store_rows(tmp_path: Path) -> None:
     )
     seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE public.users" in seed_sql
-    assert "INSERT INTO public.\"users\"" in seed_sql
-    assert "jsonb_populate_recordset(NULL::public.\"users\"" in seed_sql
+    assert 'INSERT INTO public."users"' in seed_sql
+    assert 'jsonb_populate_recordset(NULL::public."users"' in seed_sql
     assert '"priority"' in seed_sql
     assert "SET session_replication_role = replica;" in seed_sql
     assert "SET session_replication_role = origin;" in seed_sql

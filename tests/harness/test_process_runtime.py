@@ -49,6 +49,7 @@ from fi.alk.harness.bundle_v2 import (
     SourceProcess,
 )
 from fi.alk.harness import process_runtime as pr
+from fi.alk.harness.job import FailureDomain
 
 # --- shared manifest builder -----------------------------------------------------------------
 #
@@ -58,65 +59,96 @@ from fi.alk.harness import process_runtime as pr
 # already knows from that file carry over here.
 
 
-def _body(mutate: Callable[[dict[str, Any]], dict[str, Any]] | None = None) -> dict[str, Any]:
+def _body(
+    mutate: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     body: dict[str, Any] = {
         "schema_version": BUNDLE_V2_SCHEMA_VERSION,
         "name": "demo",
         "digest": "sha256:" + "0" * 64,
-        "runtime": {"kind": "process", "control_service": "agent", "evidence_seam": "http_tool"},
+        "runtime": {
+            "kind": "process",
+            "control_service": "agent",
+            "evidence_seam": "http_tool",
+        },
         "processes": [
             {
-                "name": "postgres", "kind": "managed", "engine": "postgres", "version": "16",
-                "user": "svc-data", "depends_on": [],
+                "name": "postgres",
+                "kind": "managed",
+                "engine": "postgres",
+                "version": "16",
+                "user": "svc-data",
+                "depends_on": [],
             },
             {
-                "name": "tools-api", "kind": "source", "working_directory": "services/tools-api",
-                "build_commands": [["npm", "ci"]], "run_command": ["node", "server.js"],
+                "name": "tools-api",
+                "kind": "source",
+                "working_directory": "services/tools-api",
+                "build_commands": [["npm", "ci"]],
+                "run_command": ["node", "server.js"],
                 "environment": {
-                    "DATABASE_URL": "{{DATABASE_URL}}", "PORT": "{{PORT_tools-api}}",
+                    "DATABASE_URL": "{{DATABASE_URL}}",
+                    "PORT": "{{PORT_tools-api}}",
                     "TMPDIR": "{{WORLD_DIR}}",
                 },
-                "secret_purposes": [], "user": "svc-tools", "depends_on": ["postgres"],
+                "secret_purposes": [],
+                "user": "svc-tools",
+                "depends_on": ["postgres"],
             },
             {
-                "name": "agent", "kind": "source", "working_directory": ".",
+                "name": "agent",
+                "kind": "source",
+                "working_directory": ".",
                 "build_commands": [["pip", "install", "-r", "requirements.txt"]],
                 "run_command": ["python3", "agent.py"],
                 "environment": {
-                    "DATABASE_URL": "{{DATABASE_URL}}", "TOOLS_API_URL": "{{TOOLS_API_URL}}",
+                    "DATABASE_URL": "{{DATABASE_URL}}",
+                    "TOOLS_API_URL": "{{TOOLS_API_URL}}",
                     "NAME": "agent-w{{WORLD_INDEX}}",
                 },
-                "secret_purposes": ["target_provider"], "user": "svc-agent",
+                "secret_purposes": ["target_provider"],
+                "user": "svc-agent",
                 "depends_on": ["postgres", "tools-api"],
             },
         ],
         "capabilities": {
             "database": {
-                "protocol": "postgres", "service": "postgres", "configuration_name": "DATABASE_URL",
+                "protocol": "postgres",
+                "service": "postgres",
+                "configuration_name": "DATABASE_URL",
             },
             "tools": {
-                "protocol": "http", "service": "tools-api", "configuration_name": "TOOLS_API_URL",
+                "protocol": "http",
+                "service": "tools-api",
+                "configuration_name": "TOOLS_API_URL",
             },
         },
         "readiness": [
             {
-                "capability": "tools", "path": "/health", "timeout_seconds": 5,
+                "capability": "tools",
+                "path": "/health",
+                "timeout_seconds": 5,
                 "interval_seconds": 0.1,
             },
         ],
         "seed": {
             "stores": [
                 {
-                    "capability": "database", "migrations": [], "seed_files": [],
+                    "capability": "database",
+                    "migrations": [],
+                    "seed_files": [],
                     "baseline": {
-                        "strategy": "template_database", "inputs_digest": "sha256:" + "a" * 64
+                        "strategy": "template_database",
+                        "inputs_digest": "sha256:" + "a" * 64,
                     },
                     "sentinel": {"query": "SELECT 1", "expected": "1"},
                 }
             ]
         },
         "provenance": {
-            "source_kind": "repository", "repository": "org/repo", "source_digest": "c" * 64
+            "source_kind": "repository",
+            "repository": "org/repo",
+            "source_digest": "c" * 64,
         },
         "metadata": {},
     }
@@ -131,9 +163,15 @@ def _manifest(
 
 def _source_process(**overrides: Any) -> SourceProcess:
     fields: dict[str, Any] = {
-        "name": "svc", "kind": "source", "working_directory": ".", "build_commands": [],
-        "run_command": ["python3", "-c", "pass"], "environment": {}, "secret_purposes": [],
-        "user": ProcessUser.SVC_TOOLS, "depends_on": [],
+        "name": "svc",
+        "kind": "source",
+        "working_directory": ".",
+        "build_commands": [],
+        "run_command": ["python3", "-c", "pass"],
+        "environment": {},
+        "secret_purposes": [],
+        "user": ProcessUser.SVC_TOOLS,
+        "depends_on": [],
     }
     fields.update(overrides)
     return SourceProcess(**fields)
@@ -144,8 +182,11 @@ def _solo_port_plan(process_name: str, *, ordinal: int = 0) -> pr.PortPlan:
     shared `_manifest()` topology — `spawn_source_process` always looks its own process up in the
     plan it is given, so the plan must actually know that process's name."""
     return pr.PortPlan(
-        ordinals={process_name: ordinal}, job_shared=frozenset(), fixed_ports={},
-        effective_instances=1, degraded_reason=None,
+        ordinals={process_name: ordinal},
+        job_shared=frozenset(),
+        fixed_ports={},
+        effective_instances=1,
+        degraded_reason=None,
     )
 
 
@@ -194,7 +235,9 @@ class _FakePasswd:
         self.pw_gid = gid
 
 
-def _fake_user_resolver(known: dict[str, tuple[int, int]]) -> Callable[[str], _FakePasswd | None]:
+def _fake_user_resolver(
+    known: dict[str, tuple[int, int]],
+) -> Callable[[str], _FakePasswd | None]:
     def resolver(username: str) -> _FakePasswd | None:
         if username in known:
             uid, gid = known[username]
@@ -242,11 +285,20 @@ def test_source_processes_use_the_per_world_stride_formula() -> None:
 
 def test_a_datadir_copy_managed_engine_is_per_world_not_job_shared() -> None:
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [
-            {**body["seed"]["stores"][0], "baseline": {
-                "strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64
-            }},
-        ]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "baseline": {
+                            "strategy": "datadir_copy",
+                            "inputs_digest": "sha256:" + "a" * 64,
+                        },
+                    },
+                ]
+            },
+        }
     )
     plan = pr.plan_ports(manifest, instances=2)
     assert not plan.is_job_shared("postgres")
@@ -267,13 +319,24 @@ def test_a_managed_engine_with_no_seed_entry_at_all_defaults_to_per_world() -> N
     manifest = _manifest(
         lambda body: {
             **body,
-            "processes": [*body["processes"], {
-                "name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-                "user": "svc-data", "depends_on": [],
-            }],
+            "processes": [
+                *body["processes"],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+            ],
             "capabilities": {
                 **body["capabilities"],
-                "cache": {"protocol": "redis", "service": "cache", "configuration_name": None},
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": None,
+                },
             },
         }
     )
@@ -291,29 +354,47 @@ def test_the_empty_baseline_strategy_managed_engine_is_per_world() -> None:
     manifest = _manifest(
         lambda body: {
             **body,
-            "processes": [*body["processes"], {
-                "name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-                "user": "svc-data", "depends_on": [],
-            }],
+            "processes": [
+                *body["processes"],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+            ],
             "capabilities": {
                 **body["capabilities"],
                 "cache": {
-                    "protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL",
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
                 },
             },
-            "seed": {"stores": [
-                body["seed"]["stores"][0],
-                {
-                    "capability": "cache", "migrations": [], "seed_files": [],
-                    "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-                    "sentinel": {"key": "_seeded", "expected": "1"},
-                },
-            ]},
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": [],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "_seeded", "expected": "1"},
+                    },
+                ]
+            },
         }
     )
     plan = pr.plan_ports(manifest, instances=2)
     assert not plan.is_job_shared("cache")
-    assert plan.port_for("cache", 0) == 15003  # ordinal 3 (postgres,tools-api,agent,cache), world 0
+    assert (
+        plan.port_for("cache", 0) == 15003
+    )  # ordinal 3 (postgres,tools-api,agent,cache), world 0
     assert plan.port_for("cache", 1) == 15103  # ordinal 3, world 1
 
 
@@ -347,7 +428,10 @@ def test_port_band_boundary_ordinal_99_world_7_equals_15799() -> None:
     """T6, p5-round1-review: the tiling is exact with zero slack (ordinal in [0,99], world in
     [0,7], per §2e item 7's caps) — nothing exercised the actual boundary before."""
     plan = pr.PortPlan(
-        ordinals={"last": 99}, job_shared=frozenset(), fixed_ports={}, effective_instances=8,
+        ordinals={"last": 99},
+        job_shared=frozenset(),
+        fixed_ports={},
+        effective_instances=8,
         degraded_reason=None,
     )
     assert plan.port_for("last", 7) == 15799
@@ -357,8 +441,11 @@ def test_job_shared_and_per_world_port_bands_are_disjoint() -> None:
     """T6: 900 ports of slack between [14000,14099] (job-shared) and [15000,15799] (per-world) —
     no ordinal/world combination within the contract's own caps can alias across bands."""
     plan = pr.PortPlan(
-        ordinals={"shared": 99, "world": 99}, job_shared=frozenset({"shared"}),
-        fixed_ports={}, effective_instances=8, degraded_reason=None,
+        ordinals={"shared": 99, "world": 99},
+        job_shared=frozenset({"shared"}),
+        fixed_ports={},
+        effective_instances=8,
+        degraded_reason=None,
     )
     job_shared_ports = {plan.port_for("shared", w) for w in range(8)}
     per_world_ports = {plan.port_for("world", w) for w in range(8)}
@@ -370,16 +457,23 @@ def test_job_shared_and_per_world_port_bands_are_disjoint() -> None:
 # --- §2b placeholder renderer --------------------------------------------------------------------
 
 
-def test_configuration_name_placeholder_renders_the_capabilitys_address(tmp_path: Path) -> None:
+def test_configuration_name_placeholder_renders_the_capabilitys_address(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     plan = pr.plan_ports(manifest, instances=2)
     credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
-    endpoints = pr.build_endpoints(manifest, world_index=1, port_plan=plan, credentials=credentials)
+    endpoints = pr.build_endpoints(
+        manifest, world_index=1, port_plan=plan, credentials=credentials
+    )
     addresses = pr.configuration_addresses_from_endpoints(endpoints)
     agent = manifest.processes[2]
     rendered = pr.render_environment(
-        agent, world_index=1, world_dir=tmp_path / "worlds" / "w1" / "agent",
-        port_plan=plan, configuration_addresses=addresses,
+        agent,
+        world_index=1,
+        world_dir=tmp_path / "worlds" / "w1" / "agent",
+        port_plan=plan,
+        configuration_addresses=addresses,
     )
     assert rendered["DATABASE_URL"] == "postgresql://harness:PW@localhost:14000/w1"
     assert rendered["TOOLS_API_URL"] == "http://localhost:15101"
@@ -407,12 +501,17 @@ def test_world_dir_db_name_host_and_port_placeholders(tmp_path: Path) -> None:
     )
     plan = pr.plan_ports(manifest, instances=1)
     credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
-    endpoints = pr.build_endpoints(manifest, world_index=0, port_plan=plan, credentials=credentials)
+    endpoints = pr.build_endpoints(
+        manifest, world_index=0, port_plan=plan, credentials=credentials
+    )
     addresses = pr.configuration_addresses_from_endpoints(endpoints)
     world_dir = tmp_path / "worlds" / "w0" / "tools-api"
     tools_api = manifest.processes[1]
     rendered = pr.render_environment(
-        tools_api, world_index=0, world_dir=world_dir, port_plan=plan,
+        tools_api,
+        world_index=0,
+        world_dir=world_dir,
+        port_plan=plan,
         configuration_addresses=addresses,
     )
     assert rendered["SCRATCH"] == str(world_dir)
@@ -424,10 +523,29 @@ def test_world_index_placeholder_renders_the_bare_integer() -> None:
     manifest = _manifest()
     plan = pr.plan_ports(manifest, instances=1)
     rendered = pr.render_template(
-        "world-{{WORLD_INDEX}}", process_name="agent", world_index=3, world_dir=Path("/x"),
-        port_plan=plan, configuration_addresses={},
+        "world-{{WORLD_INDEX}}",
+        process_name="agent",
+        world_index=3,
+        world_dir=Path("/x"),
+        port_plan=plan,
+        configuration_addresses={},
     )
     assert rendered == "world-3"
+
+
+def test_job_id_placeholder_scopes_external_dispatch_identity() -> None:
+    manifest = _manifest()
+    plan = pr.plan_ports(manifest, instances=1)
+    rendered = pr.render_template(
+        "agent-{{JOB_ID}}-w{{WORLD_INDEX}}",
+        process_name="agent",
+        job_id="job-123",
+        world_index=2,
+        world_dir=Path("/x"),
+        port_plan=plan,
+        configuration_addresses={},
+    )
+    assert rendered == "agent-job-123-w2"
 
 
 def test_an_unresolvable_token_is_an_internal_error_not_a_preflight_code() -> None:
@@ -438,20 +556,30 @@ def test_an_unresolvable_token_is_an_internal_error_not_a_preflight_code() -> No
     plan = pr.plan_ports(manifest, instances=1)
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.render_template(
-            "{{NOT_A_REAL_TOKEN}}", process_name="agent", world_index=0, world_dir=Path("/x"),
-            port_plan=plan, configuration_addresses={},
+            "{{NOT_A_REAL_TOKEN}}",
+            process_name="agent",
+            world_index=0,
+            world_dir=Path("/x"),
+            port_plan=plan,
+            configuration_addresses={},
         )
     assert excinfo.value.code == "internal_unknown_placeholder"
     assert excinfo.value.stage == "render"
 
 
-def test_a_port_placeholder_naming_an_unknown_process_is_also_an_internal_error() -> None:
+def test_a_port_placeholder_naming_an_unknown_process_is_also_an_internal_error() -> (
+    None
+):
     manifest = _manifest()
     plan = pr.plan_ports(manifest, instances=1)
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.render_template(
-            "{{PORT_ghost}}", process_name="agent", world_index=0, world_dir=Path("/x"),
-            port_plan=plan, configuration_addresses={},
+            "{{PORT_ghost}}",
+            process_name="agent",
+            world_index=0,
+            world_dir=Path("/x"),
+            port_plan=plan,
+            configuration_addresses={},
         )
     assert excinfo.value.code == "internal_unknown_placeholder"
 
@@ -472,8 +600,15 @@ def test_build_environment_is_merged_raw_and_never_templated(tmp_path: Path) -> 
 
     plan = _solo_port_plan("svc")
     pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
     )
     assert captured["env"]["TMPDIR"] == "{{WORLD_DIR}}"
 
@@ -486,7 +621,9 @@ def test_render_capability_address_raises_for_an_unsupported_protocol() -> None:
         protocol="mongodb", service="svc", configuration_name="MONGO_URL"
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        pr.render_capability_address(capability, port=15005, world_index=0, credentials=None)
+        pr.render_capability_address(
+            capability, port=15005, world_index=0, credentials=None
+        )
     assert excinfo.value.code == "unsupported_capability_protocol"
 
 
@@ -497,7 +634,9 @@ def test_render_capability_address_raises_for_missing_postgres_credentials() -> 
         protocol="postgres", service="postgres", configuration_name="DATABASE_URL"
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        pr.render_capability_address(capability, port=14000, world_index=0, credentials=None)
+        pr.render_capability_address(
+            capability, port=14000, world_index=0, credentials=None
+        )
     assert excinfo.value.code == "internal_missing_credentials"
 
 
@@ -522,7 +661,10 @@ def test_select_process_secrets_hard_excludes_source_checkout_even_if_claimed() 
     process = _source_process(secret_purposes=["target_provider", "source_checkout"])
     selected = pr.select_process_secrets(
         process,
-        secret_values={"A": "target-provider-value", "B": "checkout-value-must-not-move"},
+        secret_values={
+            "A": "target-provider-value",
+            "B": "checkout-value-must-not-move",
+        },
         secret_purposes={"A": "target_provider", "B": "source_checkout"},
     )
     assert selected == {"A": "target-provider-value"}
@@ -533,12 +675,23 @@ def test_select_process_secrets_hard_excludes_source_checkout_even_if_claimed() 
 
 def test_allowlisted_ambient_env_keeps_only_the_fixed_set() -> None:
     source = {
-        "PATH": "/bin", "HOME": "/root", "LANG": "C", "TZ": "UTC", "TMPDIR": "/tmp",
-        "LC_ALL": "C", "SECRET_TOKEN": "leak-me", "AWS_SECRET_ACCESS_KEY": "leak-me-too",
+        "PATH": "/bin",
+        "HOME": "/root",
+        "LANG": "C",
+        "TZ": "UTC",
+        "TMPDIR": "/tmp",
+        "LC_ALL": "C",
+        "SECRET_TOKEN": "leak-me",
+        "AWS_SECRET_ACCESS_KEY": "leak-me-too",
     }
     env = pr._allowlisted_ambient_env(source)
     assert env == {
-        "PATH": "/bin", "HOME": "/root", "LANG": "C", "TZ": "UTC", "TMPDIR": "/tmp", "LC_ALL": "C",
+        "PATH": "/bin",
+        "HOME": "/root",
+        "LANG": "C",
+        "TZ": "UTC",
+        "TMPDIR": "/tmp",
+        "LC_ALL": "C",
     }
 
 
@@ -561,13 +714,22 @@ def test_spawn_source_process_env_does_not_inherit_an_arbitrary_ambient_var(
         return FakeHandle()
 
     pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
     )
     assert "FUTUREAGI_PROVISIONER_MARKER" not in captured["env"]
 
 
-def test_base_process_env_path_prepend_has_no_empty_trailing_element(tmp_path: Path) -> None:
+def test_base_process_env_path_prepend_has_no_empty_trailing_element(
+    tmp_path: Path,
+) -> None:
     """F14, p5-round1-review: an unset/empty inherited `PATH` used to leave a trailing `:`, and
     POSIX `execvp` reads an empty PATH element as "current directory" — cwd for build/run is the
     customer's own tree, so a repo shipping an executable literally named `ls`/`git`/`sh` could
@@ -593,7 +755,9 @@ def test_build_process_tree_copies_the_working_directory(tmp_path: Path) -> None
     assert (build_dir / "sub" / "helper.py").read_text() == "print(2)\n"
 
 
-def test_build_commands_get_the_venv_and_node_modules_path_prepend(tmp_path: Path) -> None:
+def test_build_commands_get_the_venv_and_node_modules_path_prepend(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "source" / "svc").mkdir(parents=True)
     calls: list[list[str]] = []
 
@@ -605,9 +769,15 @@ def test_build_commands_get_the_venv_and_node_modules_path_prepend(tmp_path: Pat
         working_directory="svc", build_commands=[["npm", "ci"], ["npm", "build"]]
     )
     build_dir = pr.build_process_tree(
-        process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        run=fake_run,
     )
-    expected = [str(build_dir / ".venv" / "bin"), str(build_dir / "node_modules" / ".bin")]
+    expected = [
+        str(build_dir / ".venv" / "bin"),
+        str(build_dir / "node_modules" / ".bin"),
+    ]
     assert len(calls) == 2  # every step, not just the first
     assert calls[0] == expected
     assert calls[1] == expected
@@ -622,10 +792,15 @@ def test_build_environment_is_merged_into_the_build_step_env(tmp_path: Path) -> 
         return subprocess.CompletedProcess(step, 0)
 
     process = _source_process(
-        working_directory="svc", build_commands=[["true"]], build_environment={"FOO": "bar"}
+        working_directory="svc",
+        build_commands=[["true"]],
+        build_environment={"FOO": "bar"},
     )
     pr.build_process_tree(
-        process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        run=fake_run,
     )
     assert captured["FOO"] == "bar"
 
@@ -642,12 +817,17 @@ def test_build_runs_every_step_once_per_call_in_order(tmp_path: Path) -> None:
         working_directory="svc", build_commands=[["step-a"], ["step-b"], ["step-c"]]
     )
     pr.build_process_tree(
-        process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        run=fake_run,
     )
     assert order == [["step-a"], ["step-b"], ["step-c"]]
 
 
-def test_build_process_trees_builds_each_source_process_exactly_once(tmp_path: Path) -> None:
+def test_build_process_trees_builds_each_source_process_exactly_once(
+    tmp_path: Path,
+) -> None:
     """No world loop exists inside `build_process_trees` at all — structural proof of "once per
     job," not "once per world.\""""
     (tmp_path / "source" / "services" / "tools-api").mkdir(parents=True)
@@ -660,11 +840,20 @@ def test_build_process_trees_builds_each_source_process_exactly_once(tmp_path: P
         return subprocess.CompletedProcess(step, 0)
 
     context = pr.SpawnContext(
-        work_directory=tmp_path, port_plan=pr.plan_ports(manifest, instances=4), credentials={},
-        secret_values={}, secret_purposes={}, sync_run=fake_run,
+        work_directory=tmp_path,
+        port_plan=pr.plan_ports(manifest, instances=4),
+        credentials={},
+        secret_values={},
+        secret_purposes={},
+        sync_run=fake_run,
     )
-    build_dirs = pr.build_process_trees(manifest, source_root=tmp_path / "source", context=context)
-    assert set(build_dirs) == {"tools-api", "agent"}  # every `source` process, no managed ones
+    build_dirs = pr.build_process_trees(
+        manifest, source_root=tmp_path / "source", context=context
+    )
+    assert set(build_dirs) == {
+        "tools-api",
+        "agent",
+    }  # every `source` process, no managed ones
     # tools-api has 1 build step, agent has 1 build step — exactly 2 calls total, never per-world.
     assert len(calls) == 2
 
@@ -678,7 +867,10 @@ def test_a_nonzero_build_step_is_build_failed(tmp_path: Path) -> None:
     process = _source_process(working_directory="svc", build_commands=[["npm", "ci"]])
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.build_process_tree(
-            process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
         )
     assert excinfo.value.stage == "build"
     assert excinfo.value.code == "build_failed"
@@ -698,7 +890,10 @@ def test_a_missing_interpreter_is_runtime_unsupported(tmp_path: Path) -> None:
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.build_process_tree(
-            process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
         )
     assert excinfo.value.stage == "build"
     assert excinfo.value.code == "runtime_unsupported"
@@ -715,10 +910,15 @@ def test_a_missing_non_interpreter_build_tool_is_build_failed_not_runtime_unsupp
     def fake_run(step, *, cwd, env, **kwargs):
         raise FileNotFoundError(f"no such file: {step[0]!r}")
 
-    process = _source_process(working_directory="svc", build_commands=[["some-custom-tool", "x"]])
+    process = _source_process(
+        working_directory="svc", build_commands=[["some-custom-tool", "x"]]
+    )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.build_process_tree(
-            process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
         )
     assert excinfo.value.code == "build_failed"
 
@@ -734,7 +934,10 @@ def test_a_build_step_that_times_out_is_build_failed(tmp_path: Path) -> None:
     process = _source_process(working_directory="svc", build_commands=[["npm", "ci"]])
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.build_process_tree(
-            process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run,
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
             build_step_timeout_seconds=5,
         )
     assert excinfo.value.code == "build_failed"
@@ -780,7 +983,9 @@ def test_build_process_tree_wraps_a_copy_failure_as_source_tree_unavailable(
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.build_process_tree(
-            process, source_root=tmp_path / "source", build_root=tmp_path / "build",
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
             copy=failing_copy,
         )
     assert excinfo.value.code == "source_tree_unavailable"
@@ -789,7 +994,9 @@ def test_build_process_tree_wraps_a_copy_failure_as_source_tree_unavailable(
 # --- F2 (BLOCKER): symlink safety, exercised against a real filesystem ---------------------------
 
 
-def test_build_process_tree_rejects_a_symlink_escaping_the_source_root(tmp_path: Path) -> None:
+def test_build_process_tree_rejects_a_symlink_escaping_the_source_root(
+    tmp_path: Path,
+) -> None:
     """F2, p5-round1-review — BLOCKER. A repo can ship a symlink pointing outside `/work/source`
     (e.g. at `/run/futureagi/capabilities.json`); `copytree`'s default (`symlinks=False`) used to
     dereference it and copy the TARGET's bytes into the customer's own build tree, read as
@@ -811,7 +1018,9 @@ def test_build_process_tree_rejects_a_symlink_escaping_the_source_root(tmp_path:
     assert not (tmp_path / "build" / "svc").exists()
 
 
-def test_build_process_tree_preserves_a_within_tree_symlink_as_a_symlink(tmp_path: Path) -> None:
+def test_build_process_tree_preserves_a_within_tree_symlink_as_a_symlink(
+    tmp_path: Path,
+) -> None:
     """A link that stays inside the tree is legitimate and must keep working — `symlinks=True`
     copies it AS a link, it does not forbid it."""
     svc_dir = tmp_path / "source" / "svc"
@@ -840,14 +1049,18 @@ def test_build_process_tree_rejects_a_symlinked_working_directory_path_component
 
     process = _source_process(working_directory="services/tools-api", build_commands=[])
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        pr.build_process_tree(process, source_root=source_root, build_root=tmp_path / "build")
+        pr.build_process_tree(
+            process, source_root=source_root, build_root=tmp_path / "build"
+        )
     assert excinfo.value.code == "source_tree_unavailable"
 
 
 # --- F3 (BLOCKER): path-containment defense in depth ----------------------------------------------
 
 
-def test_build_tree_dir_rejects_a_name_that_escapes_the_work_directory(tmp_path: Path) -> None:
+def test_build_tree_dir_rejects_a_name_that_escapes_the_work_directory(
+    tmp_path: Path,
+) -> None:
     """F3, p5-round1-review — BLOCKER. Defense in depth, independent of the model-layer regex
     (`bundle_v2.SourceProcess`/`ManagedProcess.name`'s pattern) — these helpers take a plain
     `str`, so a caller bypassing model validation still cannot walk a name-derived directory
@@ -858,7 +1071,9 @@ def test_build_tree_dir_rejects_a_name_that_escapes_the_work_directory(tmp_path:
     assert excinfo.value.code == "process_name_invalid"
 
 
-def test_world_scratch_dir_rejects_a_traversal_name_that_truly_escapes(tmp_path: Path) -> None:
+def test_world_scratch_dir_rejects_a_traversal_name_that_truly_escapes(
+    tmp_path: Path,
+) -> None:
     # `world_scratch_dir` prepends TWO fixed levels ("worlds", "w<N>") before the name — 3 levels
     # of ".." is needed to escape `work_directory` itself (2 would only cancel the two prepended
     # levels and land back inside it, which is not an escape).
@@ -867,7 +1082,9 @@ def test_world_scratch_dir_rejects_a_traversal_name_that_truly_escapes(tmp_path:
     assert excinfo.value.code == "process_name_invalid"
 
 
-def test_managed_engine_data_dir_rejects_a_traversal_name_in_both_branches(tmp_path: Path) -> None:
+def test_managed_engine_data_dir_rejects_a_traversal_name_in_both_branches(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.managed_engine_data_dir(tmp_path, "/etc", world_index=None)
     assert excinfo.value.code == "process_name_invalid"
@@ -876,9 +1093,14 @@ def test_managed_engine_data_dir_rejects_a_traversal_name_in_both_branches(tmp_p
     assert excinfo.value.code == "process_name_invalid"
 
 
-def test_legitimate_process_names_are_unaffected_by_the_containment_check(tmp_path: Path) -> None:
+def test_legitimate_process_names_are_unaffected_by_the_containment_check(
+    tmp_path: Path,
+) -> None:
     assert pr.build_tree_dir(tmp_path, "tools-api") == tmp_path / "build" / "tools-api"
-    assert pr.world_scratch_dir(tmp_path, 2, "agent") == tmp_path / "worlds" / "w2" / "agent"
+    assert (
+        pr.world_scratch_dir(tmp_path, 2, "agent")
+        == tmp_path / "worlds" / "w2" / "agent"
+    )
     assert pr.managed_engine_data_dir(tmp_path, "postgres", world_index=None) == (
         tmp_path / "managed" / "postgres"
     )
@@ -887,7 +1109,9 @@ def test_legitimate_process_names_are_unaffected_by_the_containment_check(tmp_pa
 # --- F1 (BLOCKER): `user` honored — chown + privilege drop, verified structurally -----------------
 
 
-def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(tmp_path: Path) -> None:
+def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(
+    tmp_path: Path,
+) -> None:
     """F1, p5-round1-review — BLOCKER. The build tree (root AND every copied file, not just the
     directory) is chowned to the process's declared `user` after copy. `os.chown` to a foreign uid
     needs root, which this lane does not have and must not require — `chown` is faked here and the
@@ -898,7 +1122,9 @@ def test_build_process_tree_chowns_the_copied_tree_to_the_resolved_user(tmp_path
     chowned: list[tuple[str, int, int]] = []
 
     pr.build_process_tree(
-        process, source_root=tmp_path / "source", build_root=tmp_path / "build",
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
         chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
     )
@@ -918,7 +1144,10 @@ def test_build_commands_run_under_the_resolved_user(tmp_path: Path) -> None:
 
     process = _source_process(working_directory="svc", build_commands=[["true"]])
     pr.build_process_tree(
-        process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=fake_run,
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        run=fake_run,
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
         # `chown` faked too — real `os.chown` to a fake uid needs root, which this lane does not
         # have; the chown call itself is asserted separately (`test_build_process_tree_chowns_...`).
@@ -936,7 +1165,9 @@ def test_build_process_tree_falls_back_unprivileged_when_user_is_not_resolvable(
     (tmp_path / "source" / "svc").mkdir(parents=True)
     process = _source_process(working_directory="svc", build_commands=[])
     build_dir = pr.build_process_tree(
-        process, source_root=tmp_path / "source", build_root=tmp_path / "build",
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
         user_resolver=lambda name: None,
     )
     assert build_dir.is_dir()  # did not raise
@@ -949,13 +1180,18 @@ def test_build_process_tree_raises_when_user_is_required_but_not_resolvable(
     process = _source_process(working_directory="svc", build_commands=[])
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.build_process_tree(
-            process, source_root=tmp_path / "source", build_root=tmp_path / "build",
-            user_resolver=lambda name: None, require_declared_user=True,
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            user_resolver=lambda name: None,
+            require_declared_user=True,
         )
     assert excinfo.value.code == "spawn_failed"
 
 
-def test_spawn_source_process_applies_the_resolved_user_to_the_runner(tmp_path: Path) -> None:
+def test_spawn_source_process_applies_the_resolved_user_to_the_runner(
+    tmp_path: Path,
+) -> None:
     """Tests: assert the resolved user IS applied — the fake runner records `user=`."""
     build_dir = tmp_path / "build" / "svc"
     build_dir.mkdir(parents=True)
@@ -971,8 +1207,15 @@ def test_spawn_source_process_applies_the_resolved_user_to_the_runner(tmp_path: 
         return FakeHandle()
 
     pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
         user_resolver=_fake_user_resolver({"svc-tools": (1234, 5678)}),
         chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
     )
@@ -998,8 +1241,15 @@ def test_spawn_source_process_falls_back_unprivileged_when_user_is_not_resolvabl
         return FakeHandle()
 
     pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
         user_resolver=lambda name: None,
     )
     assert captured["user"] is None
@@ -1019,14 +1269,24 @@ def test_spawn_source_process_raises_when_user_is_required_but_not_resolvable(
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.spawn_source_process(
-            process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-            configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
-            user_resolver=lambda name: None, require_declared_user=True,
+            process,
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=plan,
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=fake_runner,
+            user_resolver=lambda name: None,
+            require_declared_user=True,
         )
     assert excinfo.value.code == "spawn_failed"
 
 
-def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(tmp_path: Path) -> None:
+def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     postgres = manifest.processes[0]
     creds = pr.EngineCredentials(username="harness", password="pw")
@@ -1039,18 +1299,27 @@ def test_spawn_managed_process_chowns_data_dir_to_the_resolved_user(tmp_path: Pa
         return subprocess.CompletedProcess(argv, 0)
 
     pr.spawn_managed_process(
-        postgres, port=14000, data_dir=data_dir, credentials=creds,
-        runner=lambda *a, **k: FakeHandle(), sync_run=fake_sync_run,
+        postgres,
+        port=14000,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=lambda *a, **k: FakeHandle(),
+        sync_run=fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
         chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
     )
     assert (str(data_dir), 2222, 3333) in chowned
     # The pwfile is chowned to the same user too — `initdb` runs as that user (below) and must be
     # able to read its own 0600 file.
-    assert any(uid == 2222 and gid == 3333 and path.endswith(".pwfile") for path, uid, gid in chowned)
+    assert any(
+        uid == 2222 and gid == 3333 and path.endswith(".pwfile")
+        for path, uid, gid in chowned
+    )
 
 
-def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(tmp_path: Path) -> None:
+def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(
+    tmp_path: Path,
+) -> None:
     """B6, p6-review-r1: `data_dir` is empty on the very FIRST spawn (`initdb` itself creates
     everything under it as the already-correct user), but `freeze_baseline`'s `datadir_copy`
     snapshot and `_seal_world_store`'s restore both populate it via a COPY that runs as the
@@ -1064,13 +1333,19 @@ def test_spawn_managed_process_chowns_a_pre_populated_data_dir_recursively(tmp_p
     creds = pr.EngineCredentials(username="harness", password="pw")
     data_dir = tmp_path / "pg"
     (data_dir / "base" / "1").mkdir(parents=True)
-    (data_dir / "PG_VERSION").write_text("16\n")  # already looks bootstrapped; initdb is skipped.
+    (data_dir / "PG_VERSION").write_text(
+        "16\n"
+    )  # already looks bootstrapped; initdb is skipped.
     (data_dir / "base" / "1" / "1234").write_text("data")
     chowned: list[tuple[str, int, int]] = []
 
     pr.spawn_managed_process(
-        postgres, port=14000, data_dir=data_dir, credentials=creds,
-        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+        postgres,
+        port=14000,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=lambda *a, **k: FakeHandle(),
+        sync_run=_fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
         chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
     )
@@ -1101,7 +1376,12 @@ def test_default_process_runner_forwards_user_and_group_to_popen(
     monkeypatch.setattr(pr.subprocess, "Popen", FakePopen)
     chowned: list[tuple[str, int, int]] = []
     pr.default_process_runner(
-        ["true"], cwd=tmp_path, env={}, log_path=tmp_path / "x.log", user=1234, group=5678,
+        ["true"],
+        cwd=tmp_path,
+        env={},
+        log_path=tmp_path / "x.log",
+        user=1234,
+        group=5678,
         chown=lambda path, uid, gid: chowned.append((str(path), uid, gid)),
     )
     assert captured["user"] == 1234
@@ -1116,7 +1396,9 @@ def test_default_process_runner_does_not_chown_the_log_when_no_user_is_given(
 ) -> None:
     chowned: list[Any] = []
     handle = pr.default_process_runner(
-        ["python3", "-c", "pass"], cwd=tmp_path, env={"PATH": "/usr/bin:/bin"},
+        ["python3", "-c", "pass"],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
         log_path=tmp_path / "logs" / "proc.log",
         chown=lambda *args: chowned.append(args),
     )
@@ -1132,7 +1414,9 @@ def test_default_process_runner_spawns_a_real_subprocess_and_captures_output(
 ) -> None:
     log_path = tmp_path / "logs" / "proc.log"
     handle = pr.default_process_runner(
-        ["python3", "-c", "print('hello-from-child')"], cwd=tmp_path, env={"PATH": "/usr/bin:/bin"},
+        ["python3", "-c", "print('hello-from-child')"],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
         log_path=log_path,
     )
     _reap(handle)
@@ -1143,41 +1427,151 @@ def test_a_process_claiming_the_purpose_receives_its_secret(tmp_path: Path) -> N
     build_dir = tmp_path / "build" / "agent"
     build_dir.mkdir(parents=True)
     world_dir = tmp_path / "worlds" / "w0" / "agent"
-    script = (
-        "import os,sys; sys.stdout.write('SECRET=' + os.environ.get('LIVEKIT_API_KEY', '<none>'))"
-    )
+    script = "import os,sys; sys.stdout.write('SECRET=' + os.environ.get('LIVEKIT_API_KEY', '<none>'))"
     process = _source_process(
         run_command=["python3", "-c", script], secret_purposes=["target_provider"]
     )
     plan = _solo_port_plan("svc")
     handle = pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={"LIVEKIT_API_KEY": "abc123", "OTHER": "zzz"},
-        secret_purposes={"LIVEKIT_API_KEY": "target_provider", "OTHER": "source_checkout"},
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={"LIVEKIT_API_KEY": "abc123", "OTHER": "zzz"},
+        secret_purposes={
+            "LIVEKIT_API_KEY": "target_provider",
+            "OTHER": "source_checkout",
+        },
     )
     _reap(handle.handle)
     assert handle.handle.captured_output() == "SECRET=abc123"
 
 
-def test_a_process_not_claiming_the_purpose_does_not_receive_the_secret(tmp_path: Path) -> None:
+def test_a_process_not_claiming_the_purpose_does_not_receive_the_secret(
+    tmp_path: Path,
+) -> None:
     build_dir = tmp_path / "build" / "svc"
     build_dir.mkdir(parents=True)
     world_dir = tmp_path / "worlds" / "w0" / "svc"
-    script = (
-        "import os,sys; sys.stdout.write('SECRET=' + os.environ.get('LIVEKIT_API_KEY', '<none>'))"
-    )
+    script = "import os,sys; sys.stdout.write('SECRET=' + os.environ.get('LIVEKIT_API_KEY', '<none>'))"
     process = _source_process(run_command=["python3", "-c", script], secret_purposes=[])
     plan = _solo_port_plan("svc")
     handle = pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={"LIVEKIT_API_KEY": "abc123"},
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={"LIVEKIT_API_KEY": "abc123"},
         secret_purposes={"LIVEKIT_API_KEY": "target_provider"},
     )
     _reap(handle.handle)
     assert handle.handle.captured_output() == "SECRET=<none>"
 
 
-def test_spawn_source_process_creates_the_per_world_scratch_directory(tmp_path: Path) -> None:
+def test_spawn_source_process_materializes_uploaded_google_credentials(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "agent"
+    build_dir.mkdir(parents=True)
+    world_dir = tmp_path / "worlds" / "w0" / "agent"
+    process = _source_process(
+        environment={"GOOGLE_APPLICATION_CREDENTIALS": "/etc/vertex/creds.json"},
+        secret_purposes=["target_provider"],
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured["env"] = env
+        return FakeHandle()
+
+    raw = '{"type":"service_account","project_id":"example"}'
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={"GOOGLE_APPLICATION_CREDENTIALS_JSON": raw},
+        secret_purposes={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider"},
+        runner=fake_runner,
+    )
+
+    credential_path = Path(captured["env"]["GOOGLE_APPLICATION_CREDENTIALS"])
+    assert credential_path.read_text(encoding="utf-8") == raw
+    assert credential_path.stat().st_mode & 0o777 == 0o600
+    assert credential_path.is_relative_to(world_dir)
+    assert "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in captured["env"]
+
+
+def test_spawn_source_process_rematerializes_google_credentials_after_world_reset(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "agent"
+    build_dir.mkdir(parents=True)
+    world_dir = tmp_path / "worlds" / "w0" / "agent"
+    process = _source_process(secret_purposes=["target_provider"])
+    captured: list[dict[str, str]] = []
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.append(env)
+        return FakeHandle()
+
+    for project_id in ("first", "second"):
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={
+                "GOOGLE_APPLICATION_CREDENTIALS_JSON": json.dumps(
+                    {"type": "service_account", "project_id": project_id}
+                )
+            },
+            secret_purposes={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider"},
+            runner=fake_runner,
+        )
+
+    credential_path = Path(captured[-1]["GOOGLE_APPLICATION_CREDENTIALS"])
+    assert (
+        json.loads(credential_path.read_text(encoding="utf-8"))["project_id"]
+        == "second"
+    )
+    assert credential_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_spawn_source_process_rejects_invalid_uploaded_google_credentials(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "agent"
+    build_dir.mkdir(parents=True)
+    process = _source_process(secret_purposes=["target_provider"])
+
+    with pytest.raises(pr.ProcessRuntimeError, match="not valid JSON") as excinfo:
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=tmp_path / "worlds" / "w0" / "agent",
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "not-json"},
+            secret_purposes={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider"},
+            runner=lambda *args, **kwargs: FakeHandle(),
+        )
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.domain is FailureDomain.AGENT
+
+
+def test_spawn_source_process_creates_the_per_world_scratch_directory(
+    tmp_path: Path,
+) -> None:
     build_dir = tmp_path / "build" / "svc"
     build_dir.mkdir(parents=True)
     world_dir = tmp_path / "worlds" / "w2" / "svc"
@@ -1188,8 +1582,15 @@ def test_spawn_source_process_creates_the_per_world_scratch_directory(tmp_path: 
         return FakeHandle()
 
     pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=2, port_plan=plan,
-        configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=2,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
     )
     assert world_dir.is_dir()
 
@@ -1209,24 +1610,38 @@ def test_spawn_source_process_cwd_is_the_build_tree_not_the_world_scratch_dir(
         return FakeHandle()
 
     pr.spawn_source_process(
-        process, build_dir=build_dir, world_dir=world_dir, world_index=0, port_plan=plan,
-        configuration_addresses={}, secret_values={}, secret_purposes={}, runner=fake_runner,
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
     )
     assert captured["cwd"] == build_dir
 
 
-def test_spawn_managed_process_requires_credentials_for_postgres(tmp_path: Path) -> None:
+def test_spawn_managed_process_requires_credentials_for_postgres(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     postgres = manifest.processes[0]
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.spawn_managed_process(
-            postgres, port=14000, data_dir=tmp_path / "pg", credentials=None,
+            postgres,
+            port=14000,
+            data_dir=tmp_path / "pg",
+            credentials=None,
             runner=lambda *a, **k: FakeHandle(),
         )
     assert excinfo.value.code == "spawn_failed"
 
 
-def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(tmp_path: Path) -> None:
+def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     postgres = manifest.processes[0]
     creds = pr.EngineCredentials(username="harness", password="pw")
@@ -1245,7 +1660,11 @@ def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(tmp_path: P
         return FakeHandle()
 
     pr.spawn_managed_process(
-        postgres, port=14000, data_dir=data_dir, credentials=creds, runner=fake_runner,
+        postgres,
+        port=14000,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=fake_runner,
         sync_run=fake_sync_run,
     )
     assert len(bootstrap_calls) == 1
@@ -1256,7 +1675,11 @@ def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(tmp_path: P
 
     # A second spawn against the same already-initialized data_dir must not bootstrap again.
     pr.spawn_managed_process(
-        postgres, port=14000, data_dir=data_dir, credentials=creds, runner=fake_runner,
+        postgres,
+        port=14000,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=fake_runner,
         sync_run=fake_sync_run,
     )
     assert len(bootstrap_calls) == 1
@@ -1296,8 +1719,12 @@ def test_spawn_managed_process_creates_the_pwfile_with_o_excl_and_0600_atomicall
     pr.os.open = spy_open
     try:
         pr.spawn_managed_process(
-            postgres, port=14000, data_dir=data_dir, credentials=creds,
-            runner=lambda *a, **k: FakeHandle(), sync_run=fake_sync_run,
+            postgres,
+            port=14000,
+            data_dir=data_dir,
+            credentials=creds,
+            runner=lambda *a, **k: FakeHandle(),
+            sync_run=fake_sync_run,
         )
     finally:
         pr.os.open = real_open
@@ -1310,7 +1737,9 @@ def test_spawn_managed_process_creates_the_pwfile_with_o_excl_and_0600_atomicall
 # --- §2b depends_on wait -----------------------------------------------------------------------
 
 
-def test_depends_on_with_neither_readiness_nor_started_check_returns_immediately() -> None:
+def test_depends_on_with_neither_readiness_nor_started_check_returns_immediately() -> (
+    None
+):
     manifest = _manifest(lambda body: {**body, "readiness": []})
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("postgres", FakeHandle(), 14000, None)
@@ -1321,9 +1750,16 @@ def test_depends_on_with_neither_readiness_nor_started_check_returns_immediately
         return True
 
     pr.wait_for_dependency(
-        manifest, "postgres", world_index=0, port_plan=plan, spawned=spawned, prober=fake_prober,
+        manifest,
+        "postgres",
+        world_index=0,
+        port_plan=plan,
+        spawned=spawned,
+        prober=fake_prober,
     )
-    assert calls["n"] == 0  # no readiness declared for `database` in this manifest -> immediate.
+    assert (
+        calls["n"] == 0
+    )  # no readiness declared for `database` in this manifest -> immediate.
 
 
 def test_depends_on_waits_for_the_capabilitys_readiness_probe() -> None:
@@ -1333,21 +1769,31 @@ def test_depends_on_waits_for_the_capabilitys_readiness_probe() -> None:
     seen: list[tuple[str, int]] = []
     calls = {"n": 0}
 
-    def fake_prober(*, protocol, host, port, path, user=None, password=None, dbname=None):
+    def fake_prober(
+        *, protocol, host, port, path, user=None, password=None, dbname=None
+    ):
         calls["n"] += 1
         seen.append((host, port))
         return calls["n"] >= 3
 
     ticks = {"t": 0.0}
     pr.wait_for_dependency(
-        manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned, prober=fake_prober,
-        clock=lambda: ticks["t"], sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
+        manifest,
+        "tools-api",
+        world_index=0,
+        port_plan=plan,
+        spawned=spawned,
+        prober=fake_prober,
+        clock=lambda: ticks["t"],
+        sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
     )
     assert calls["n"] == 3
     assert seen[0] == ("localhost", 15001)
 
 
-def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process() -> None:
+def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process() -> (
+    None
+):
     """F8, p5-round1-review: a process backing two capabilities is only "ready" once ALL of its
     declared readiness probes pass — matching `healthy()`'s own all-probes semantics (§4 point 3).
     A process used to be treated as ready by `depends_on` the moment the FIRST-listed probe
@@ -1358,13 +1804,17 @@ def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process(
             "capabilities": {
                 **body["capabilities"],
                 "tools_admin": {
-                    "protocol": "http", "service": "tools-api", "configuration_name": None,
+                    "protocol": "http",
+                    "service": "tools-api",
+                    "configuration_name": None,
                 },
             },
             "readiness": [
                 *body["readiness"],
                 {
-                    "capability": "tools_admin", "path": "/admin/health", "timeout_seconds": 5,
+                    "capability": "tools_admin",
+                    "path": "/admin/health",
+                    "timeout_seconds": 5,
                     "interval_seconds": 0.1,
                 },
             ],
@@ -1375,7 +1825,9 @@ def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process(
     ready = {"/health": False, "/admin/health": False}
     seen_paths: list[str | None] = []
 
-    def fake_prober(*, protocol, host, port, path, user=None, password=None, dbname=None):
+    def fake_prober(
+        *, protocol, host, port, path, user=None, password=None, dbname=None
+    ):
         seen_paths.append(path)
         return ready[path]
 
@@ -1389,8 +1841,14 @@ def test_wait_for_dependency_requires_every_readiness_probe_backing_the_process(
             ready["/admin/health"] = True
 
     pr.wait_for_dependency(
-        manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned, prober=fake_prober,
-        clock=lambda: ticks["t"], sleep=sleep,
+        manifest,
+        "tools-api",
+        world_index=0,
+        port_plan=plan,
+        spawned=spawned,
+        prober=fake_prober,
+        clock=lambda: ticks["t"],
+        sleep=sleep,
     )
     assert "/admin/health" in seen_paths
     assert ready["/health"] and ready["/admin/health"]
@@ -1403,9 +1861,14 @@ def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
     ticks = {"t": 0.0}
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.wait_for_dependency(
-            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned,
+            manifest,
+            "tools-api",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
             prober=lambda **kwargs: False,
-            clock=lambda: ticks["t"], sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
+            clock=lambda: ticks["t"],
+            sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.stage == "depends_on"
     assert excinfo.value.code == "depends_on_timeout"
@@ -1417,14 +1880,18 @@ def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
     being seeded into `captured_output()` up front — the old fixture could not distinguish "polls
     until the marker appears" from "checks once and returns.\""""
     manifest = _manifest(
-        lambda body: {**body, "readiness": [], "processes": [
-            body["processes"][0],
-            {
-                **body["processes"][1],
-                "started_check": {"log_marker": "listening", "timeout_seconds": 5},
-            },
-            body["processes"][2],
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                {
+                    **body["processes"][1],
+                    "started_check": {"log_marker": "listening", "timeout_seconds": 5},
+                },
+                body["processes"][2],
+            ],
+        }
     )
     plan = pr.plan_ports(manifest, instances=1)
     handle = FakeHandle("booting...\n")
@@ -1440,22 +1907,31 @@ def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
     handle.captured_output = mutating_captured_output
     ticks = {"t": 0.0}
     pr.wait_for_dependency(
-        manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned,
-        clock=lambda: ticks["t"], sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
+        manifest,
+        "tools-api",
+        world_index=0,
+        port_plan=plan,
+        spawned=spawned,
+        clock=lambda: ticks["t"],
+        sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
     )
     assert calls["n"] >= 3
 
 
 def test_started_check_log_marker_timeout_is_a_typed_error() -> None:
     manifest = _manifest(
-        lambda body: {**body, "readiness": [], "processes": [
-            body["processes"][0],
-            {
-                **body["processes"][1],
-                "started_check": {"log_marker": "listening", "timeout_seconds": 1},
-            },
-            body["processes"][2],
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                {
+                    **body["processes"][1],
+                    "started_check": {"log_marker": "listening", "timeout_seconds": 1},
+                },
+                body["processes"][2],
+            ],
+        }
     )
     plan = pr.plan_ports(manifest, instances=1)
     handle = FakeHandle("booting...\n")  # marker never appears
@@ -1463,8 +1939,13 @@ def test_started_check_log_marker_timeout_is_a_typed_error() -> None:
     ticks = {"t": 0.0}
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.wait_for_dependency(
-            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned,
-            clock=lambda: ticks["t"], sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
+            manifest,
+            "tools-api",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            clock=lambda: ticks["t"],
+            sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.code == "depends_on_timeout"
 
@@ -1483,14 +1964,19 @@ def test_started_check_port_variant_probes_the_dependencys_own_allocated_port() 
     port = server.getsockname()[1]
     try:
         manifest = _manifest(
-            lambda body: {**body, "readiness": [], "processes": [
-                body["processes"][0],
-                {
-                    **body["processes"][1], "fixed_port": port,
-                    "started_check": {"port": True, "timeout_seconds": 5},
-                },
-                body["processes"][2],
-            ]}
+            lambda body: {
+                **body,
+                "readiness": [],
+                "processes": [
+                    body["processes"][0],
+                    {
+                        **body["processes"][1],
+                        "fixed_port": port,
+                        "started_check": {"port": True, "timeout_seconds": 5},
+                    },
+                    body["processes"][2],
+                ],
+            }
         )
         plan = pr.plan_ports(manifest, instances=1)
         assert plan.port_for("tools-api", 0) == port
@@ -1509,15 +1995,24 @@ def test_started_check_port_variant_dials_the_world_specific_formula_port(
     proven by monkeypatching the underlying TCP probe and asserting the exact port dialed, which a
     real-server-bind test cannot show as directly (it can only prove "some port worked")."""
     manifest = _manifest(
-        lambda body: {**body, "readiness": [], "processes": [
-            body["processes"][0],
-            {**body["processes"][1], "started_check": {"port": True, "timeout_seconds": 5}},
-            body["processes"][2],
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                {
+                    **body["processes"][1],
+                    "started_check": {"port": True, "timeout_seconds": 5},
+                },
+                body["processes"][2],
+            ],
+        }
     )
     plan = pr.plan_ports(manifest, instances=3)
     expected_port = plan.port_for("tools-api", 2)
-    assert expected_port == 15201  # ordinal 1, world 2 — NOT the same as world 0's 15001.
+    assert (
+        expected_port == 15201
+    )  # ordinal 1, world 2 — NOT the same as world 0's 15001.
     dialed: list[tuple[str, int]] = []
 
     def fake_tcp_probe(host: str, port: int, *, timeout: float = 0.75) -> bool:
@@ -1526,34 +2021,50 @@ def test_started_check_port_variant_dials_the_world_specific_formula_port(
 
     monkeypatch.setattr(pr, "_tcp_probe", fake_tcp_probe)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), expected_port, 2)
-    pr.wait_for_dependency(manifest, "tools-api", world_index=2, port_plan=plan, spawned=spawned)
+    pr.wait_for_dependency(
+        manifest, "tools-api", world_index=2, port_plan=plan, spawned=spawned
+    )
     assert dialed == [("localhost", expected_port)]
 
 
 def test_started_check_port_variant_timeout_when_nothing_listens() -> None:
     manifest = _manifest(
-        lambda body: {**body, "readiness": [], "processes": [
-            body["processes"][0],
-            {
-                **body["processes"][1], "fixed_port": 1,
-                "started_check": {"port": True, "timeout_seconds": 1},
-            },
-            body["processes"][2],
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                {
+                    **body["processes"][1],
+                    "fixed_port": 1,
+                    "started_check": {"port": True, "timeout_seconds": 1},
+                },
+                body["processes"][2],
+            ],
+        }
     )
     plan = pr.plan_ports(manifest, instances=1)
     spawned = pr.SpawnedWorldProcess("tools-api", FakeHandle(), 1, 0)
     ticks = {"t": 0.0}
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.wait_for_dependency(
-            manifest, "tools-api", world_index=0, port_plan=plan, spawned=spawned,
-            clock=lambda: ticks["t"], sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
+            manifest,
+            "tools-api",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            clock=lambda: ticks["t"],
+            sleep=lambda s: ticks.__setitem__("t", ticks["t"] + s),
         )
     assert excinfo.value.code == "depends_on_timeout"
 
 
-def test_spawn_world_spawns_in_dependency_order_and_waits_between(tmp_path: Path) -> None:
-    manifest = _manifest(lambda body: {**body, "readiness": []})  # skip real readiness waits
+def test_spawn_world_spawns_in_dependency_order_and_waits_between(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        lambda body: {**body, "readiness": []}
+    )  # skip real readiness waits
     plan = pr.plan_ports(manifest, instances=2)
     credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
     spawn_order: list[str] = []
@@ -1566,14 +2077,73 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(tmp_path: Path
         return subprocess.CompletedProcess(argv, 0)
 
     context = pr.SpawnContext(
-        work_directory=tmp_path, port_plan=plan, credentials=credentials, secret_values={},
-        secret_purposes={}, runner=fake_runner, sync_run=fake_sync_run,
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+        sync_run=fake_sync_run,
     )
     result = pr.spawn_world(manifest, world_index=0, context=context)
     assert set(result.handles) == {"postgres", "tools-api", "agent"}
     # postgres has no dependency; tools-api depends on postgres; agent depends on both.
-    assert spawn_order.index("postgres") < spawn_order.index("node")  # tools-api's run_command[0]
-    assert spawn_order.index("node") < spawn_order.index("python3")  # agent's run_command[0]
+    assert spawn_order.index("postgres") < spawn_order.index(
+        "node"
+    )  # tools-api's run_command[0]
+    assert spawn_order.index("node") < spawn_order.index(
+        "python3"
+    )  # agent's run_command[0]
+
+
+def test_spawn_world_waits_for_terminal_source_started_check(tmp_path: Path) -> None:
+    """A terminal control process has no dependent edge to wait on its started_check."""
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "readiness": [],
+            "processes": [
+                body["processes"][0],
+                body["processes"][1],
+                {
+                    **body["processes"][2],
+                    "started_check": {
+                        "log_marker": "registered worker",
+                        "timeout_seconds": 5,
+                    },
+                },
+            ],
+        }
+    )
+    plan = pr.plan_ports(manifest, instances=1)
+    credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
+    marker_reads = {"count": 0}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        handle = FakeHandle("registered worker\n" if argv[0] == "python3" else "")
+        if argv[0] == "python3":
+            original = handle.captured_output
+
+            def captured_output() -> str:
+                marker_reads["count"] += 1
+                return original()
+
+            handle.captured_output = captured_output
+        return handle
+
+    context = pr.SpawnContext(
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+        sync_run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0),
+    )
+
+    pr.spawn_world(manifest, world_index=0, context=context)
+
+    assert marker_reads["count"] == 1
 
 
 def test_spawn_world_reuses_job_shared_handles_across_worlds(tmp_path: Path) -> None:
@@ -1590,16 +2160,29 @@ def test_spawn_world_reuses_job_shared_handles_across_worlds(tmp_path: Path) -> 
         return subprocess.CompletedProcess(argv, 0)
 
     context = pr.SpawnContext(
-        work_directory=tmp_path, port_plan=plan, credentials=credentials, secret_values={},
-        secret_purposes={}, runner=fake_runner, sync_run=fake_sync_run,
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+        sync_run=fake_sync_run,
     )
     world0 = pr.spawn_world(manifest, world_index=0, context=context)
-    shared = {name: handle for name, handle in world0.handles.items() if plan.is_job_shared(name)}
+    shared = {
+        name: handle
+        for name, handle in world0.handles.items()
+        if plan.is_job_shared(name)
+    }
     assert set(shared) == {"postgres"}
     spawned_argv0s.clear()
-    world1 = pr.spawn_world(manifest, world_index=1, context=context, shared_handles=shared)
+    world1 = pr.spawn_world(
+        manifest, world_index=1, context=context, shared_handles=shared
+    )
     assert "postgres" not in spawned_argv0s  # not respawned for world 1
-    assert world1.handles["postgres"] is shared["postgres"]  # the very same handle, reused
+    assert (
+        world1.handles["postgres"] is shared["postgres"]
+    )  # the very same handle, reused
 
 
 # --- §4.3 healthy() ------------------------------------------------------------------------------
@@ -1608,18 +2191,24 @@ def test_spawn_world_reuses_job_shared_handles_across_worlds(tmp_path: Path) -> 
 def test_healthy_dispatches_to_the_probe_for_each_declared_readiness_entry() -> None:
     manifest = _manifest()  # one readiness entry, for `tools`
     runtime = pr.EnvironmentRuntime(
-        runtime_id="r1", world_index=0, bundle_digest="sha256:" + "0" * 64,
+        runtime_id="r1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
         state=pr.RuntimeState.PREPARING,
         endpoints={
             "tools": pr.RuntimeEndpoint(
-                capability="tools", protocol="http", address="http://localhost:15001",
+                capability="tools",
+                protocol="http",
+                address="http://localhost:15001",
                 configuration_name="TOOLS_API_URL",
             ),
         },
     )
     seen: list[tuple[str, int, str | None]] = []
 
-    def fake_prober(*, protocol, host, port, path, user=None, password=None, dbname=None):
+    def fake_prober(
+        *, protocol, host, port, path, user=None, password=None, dbname=None
+    ):
         seen.append((host, port, path))
         return True
 
@@ -1630,43 +2219,68 @@ def test_healthy_dispatches_to_the_probe_for_each_declared_readiness_entry() -> 
 def test_healthy_is_false_when_a_declared_probe_fails() -> None:
     manifest = _manifest()
     runtime = pr.EnvironmentRuntime(
-        runtime_id="r1", world_index=0, bundle_digest="sha256:" + "0" * 64,
+        runtime_id="r1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
         state=pr.RuntimeState.PREPARING,
         endpoints={
             "tools": pr.RuntimeEndpoint(
-                capability="tools", protocol="http", address="http://localhost:15001",
+                capability="tools",
+                protocol="http",
+                address="http://localhost:15001",
                 configuration_name="TOOLS_API_URL",
             ),
         },
     )
-    assert pr.probe_runtime_health(manifest, runtime, prober=lambda **kwargs: False) is False
+    assert (
+        pr.probe_runtime_health(manifest, runtime, prober=lambda **kwargs: False)
+        is False
+    )
 
 
 def test_healthy_is_false_when_a_declared_probes_capability_has_no_endpoint() -> None:
     manifest = _manifest()
     runtime = pr.EnvironmentRuntime(
-        runtime_id="r1", world_index=0, bundle_digest="sha256:" + "0" * 64,
-        state=pr.RuntimeState.PREPARING, endpoints={},
+        runtime_id="r1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
+        state=pr.RuntimeState.PREPARING,
+        endpoints={},
     )
-    assert pr.probe_runtime_health(manifest, runtime, prober=lambda **kwargs: True) is False
+    assert (
+        pr.probe_runtime_health(manifest, runtime, prober=lambda **kwargs: True)
+        is False
+    )
 
 
-def test_probe_runtime_health_parses_postgres_credentials_out_of_the_endpoint_address() -> None:
+def test_probe_runtime_health_parses_postgres_credentials_out_of_the_endpoint_address() -> (
+    None
+):
     """F9, p5-round1-review: `probe_runtime_health` only ever sees `EnvironmentRuntime`, not the
     job's credential map — the rendered
     `postgresql://harness:<pw>@localhost:<port>/w<N>` address already carries everything a real
     probe needs, so it is parsed back out rather than threaded separately."""
     manifest = _manifest(
-        lambda body: {**body, "readiness": [
-            {"capability": "database", "timeout_seconds": 5, "interval_seconds": 0.1},
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    "capability": "database",
+                    "timeout_seconds": 5,
+                    "interval_seconds": 0.1,
+                },
+            ],
+        }
     )
     runtime = pr.EnvironmentRuntime(
-        runtime_id="r1", world_index=0, bundle_digest="sha256:" + "0" * 64,
+        runtime_id="r1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
         state=pr.RuntimeState.PREPARING,
         endpoints={
             "database": pr.RuntimeEndpoint(
-                capability="database", protocol="postgres",
+                capability="database",
+                protocol="postgres",
                 address="postgresql://harness:s3cr3t@localhost:14000/w0",
                 configuration_name="DATABASE_URL",
             ),
@@ -1674,7 +2288,9 @@ def test_probe_runtime_health_parses_postgres_credentials_out_of_the_endpoint_ad
     )
     seen: dict[str, Any] = {}
 
-    def fake_prober(*, protocol, host, port, path, user=None, password=None, dbname=None):
+    def fake_prober(
+        *, protocol, host, port, path, user=None, password=None, dbname=None
+    ):
         seen.update(user=user, password=password, dbname=dbname)
         return True
 
@@ -1699,37 +2315,59 @@ def test_healthy_transitions_follow_section_3_and_never_promote() -> None:
     manifest = _manifest()
     endpoints = {
         "tools": pr.RuntimeEndpoint(
-            capability="tools", protocol="http", address="http://localhost:15001",
+            capability="tools",
+            protocol="http",
+            address="http://localhost:15001",
             configuration_name="TOOLS_API_URL",
         ),
     }
 
     def make(state: pr.RuntimeState) -> pr.EnvironmentRuntime:
         return pr.EnvironmentRuntime(
-            runtime_id="r1", world_index=0, bundle_digest="sha256:" + "0" * 64,
-            state=state, endpoints=endpoints,
+            runtime_id="r1",
+            world_index=0,
+            bundle_digest="sha256:" + "0" * 64,
+            state=state,
+            endpoints=endpoints,
         )
 
     preparing = make(pr.RuntimeState.PREPARING)
-    assert asyncio.run(_run_healthy(manifest, preparing, prober=lambda **kwargs: True)) is True
+    assert (
+        asyncio.run(_run_healthy(manifest, preparing, prober=lambda **kwargs: True))
+        is True
+    )
     assert preparing.state is pr.RuntimeState.READY  # preparing + healthy -> ready
 
     still_ready = make(pr.RuntimeState.READY)
-    assert asyncio.run(_run_healthy(manifest, still_ready, prober=lambda **kwargs: True)) is True
+    assert (
+        asyncio.run(_run_healthy(manifest, still_ready, prober=lambda **kwargs: True))
+        is True
+    )
     assert still_ready.state is pr.RuntimeState.READY  # ready stays ready
 
     demoted = make(pr.RuntimeState.READY)
-    assert asyncio.run(_run_healthy(manifest, demoted, prober=lambda **kwargs: False)) is False
-    assert demoted.state is pr.RuntimeState.UNHEALTHY  # ready + unhealthy probe -> demote
+    assert (
+        asyncio.run(_run_healthy(manifest, demoted, prober=lambda **kwargs: False))
+        is False
+    )
+    assert (
+        demoted.state is pr.RuntimeState.UNHEALTHY
+    )  # ready + unhealthy probe -> demote
 
     stays_unhealthy = make(pr.RuntimeState.UNHEALTHY)
-    ok = asyncio.run(_run_healthy(manifest, stays_unhealthy, prober=lambda **kwargs: True))
+    ok = asyncio.run(
+        _run_healthy(manifest, stays_unhealthy, prober=lambda **kwargs: True)
+    )
     assert ok is True  # the PROBE passed...
-    assert stays_unhealthy.state is pr.RuntimeState.UNHEALTHY  # ...but state is NOT promoted
+    assert (
+        stays_unhealthy.state is pr.RuntimeState.UNHEALTHY
+    )  # ...but state is NOT promoted
 
     stays_stopped = make(pr.RuntimeState.STOPPED)
     asyncio.run(_run_healthy(manifest, stays_stopped, prober=lambda **kwargs: True))
-    assert stays_stopped.state is pr.RuntimeState.STOPPED  # only provision()/close() clear this
+    assert (
+        stays_stopped.state is pr.RuntimeState.STOPPED
+    )  # only provision()/close() clear this
 
 
 # --- default probers: real postgres/http exercise, no fakes --------------------------------------
@@ -1752,17 +2390,26 @@ def test_default_capability_prober_falls_back_to_tcp_when_psycopg_is_absent(
     server.listen(1)
     port = server.getsockname()[1]
     try:
-        assert pr.default_capability_prober(
-            protocol=CapabilityProtocol.POSTGRES, host="localhost", port=port, path=None
-        ) is True
+        assert (
+            pr.default_capability_prober(
+                protocol=CapabilityProtocol.POSTGRES,
+                host="localhost",
+                port=port,
+                path=None,
+            )
+            is True
+        )
     finally:
         server.close()
 
 
 def test_default_capability_prober_tcp_probe_is_false_when_nothing_listens() -> None:
-    assert pr.default_capability_prober(
-        protocol=CapabilityProtocol.TCP, host="localhost", port=1, path=None
-    ) is False
+    assert (
+        pr.default_capability_prober(
+            protocol=CapabilityProtocol.TCP, host="localhost", port=1, path=None
+        )
+        is False
+    )
 
 
 def test_probe_postgres_runs_a_real_select_1_when_credentials_are_supplied(
@@ -1792,9 +2439,12 @@ def test_probe_postgres_runs_a_real_select_1_when_credentials_are_supplied(
     fake_module.OperationalError = type("OperationalError", (Exception,), {})
     monkeypatch.setitem(sys.modules, "psycopg", fake_module)
 
-    assert pr._probe_postgres(
-        "localhost", 14000, user="harness", password="pw", dbname="w0"
-    ) is True
+    assert (
+        pr._probe_postgres(
+            "localhost", 14000, user="harness", password="pw", dbname="w0"
+        )
+        is True
+    )
     assert executed == ["SELECT 1"]
 
 
@@ -1818,9 +2468,12 @@ def test_probe_postgres_treats_a_starting_up_server_as_not_ready(
     fake_module.connect = lambda **kwargs: FakeConnection()
     monkeypatch.setitem(sys.modules, "psycopg", fake_module)
 
-    assert pr._probe_postgres(
-        "localhost", 14000, user="harness", password="pw", dbname="w0"
-    ) is False
+    assert (
+        pr._probe_postgres(
+            "localhost", 14000, user="harness", password="pw", dbname="w0"
+        )
+        is False
+    )
 
 
 def test_probe_postgres_falls_back_to_tcp_when_credentials_are_not_supplied(
@@ -1870,18 +2523,27 @@ def test_probe_http_against_a_real_server_reports_2xx_as_ready() -> None:
     thread.start()
     try:
         port = server.server_address[1]
-        assert pr.default_capability_prober(
-            protocol=CapabilityProtocol.HTTP, host="localhost", port=port, path="/health"
-        ) is True
+        assert (
+            pr.default_capability_prober(
+                protocol=CapabilityProtocol.HTTP,
+                host="localhost",
+                port=port,
+                path="/health",
+            )
+            is True
+        )
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
 def test_probe_http_reports_not_ready_when_nothing_listens() -> None:
-    assert pr.default_capability_prober(
-        protocol=CapabilityProtocol.HTTP, host="localhost", port=1, path="/health"
-    ) is False
+    assert (
+        pr.default_capability_prober(
+            protocol=CapabilityProtocol.HTTP, host="localhost", port=1, path="/health"
+        )
+        is False
+    )
 
 
 # =================================================================================================
@@ -1945,7 +2607,10 @@ class SqlSpy:
     """
 
     def __init__(
-        self, *, answers: dict[str, list[tuple[Any, ...]]] | None = None, canary_leaks: bool = False,
+        self,
+        *,
+        answers: dict[str, list[tuple[Any, ...]]] | None = None,
+        canary_leaks: bool = False,
         seeded_tables: dict[str, set[str]] | None = None,
     ) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -1959,7 +2624,14 @@ class SqlSpy:
         self.seeded_tables = seeded_tables or {}
 
     def __call__(
-        self, *, host: str, port: int, user: str, password: str, dbname: str, statement: str,
+        self,
+        *,
+        host: str,
+        port: int,
+        user: str,
+        password: str,
+        dbname: str,
+        statement: str,
         read_only: bool = False,
     ) -> list[tuple[Any, ...]]:
         self.calls.append((dbname, statement))
@@ -1975,7 +2647,9 @@ class SqlSpy:
             for sub_statement in body.split(";"):
                 sub = sub_statement.strip()
                 if sub and not sub.upper().startswith(("SELECT", "WITH")):
-                    raise RuntimeError(f"cannot execute {sub!r} in a read-only transaction")
+                    raise RuntimeError(
+                        f"cannot execute {sub!r} in a read-only transaction"
+                    )
         if body in self.answers:
             return self.answers[body]
         if body == "SELECT 1":
@@ -2018,17 +2692,32 @@ def _postgres_creds(m: EnvironmentBundleV2) -> dict[str, pr.EngineCredentials]:
 
 
 def _spawn_context(
-    manifest: EnvironmentBundleV2, *, instances: int = 2, bundle_dir: Path, sql_runner: Any = None,
-    redis_runner: Any = None, rabbitmq_inspector: Any = None, rabbitmq_declare: Any = None,
-    rabbitmq_delete: Any = None, rabbitmq_import: Any = None, runner: Any = None,
-    sync_run: Any = None, prober: Any = None, work_directory: Path,
+    manifest: EnvironmentBundleV2,
+    *,
+    instances: int = 2,
+    bundle_dir: Path,
+    sql_runner: Any = None,
+    redis_runner: Any = None,
+    rabbitmq_inspector: Any = None,
+    rabbitmq_declare: Any = None,
+    rabbitmq_delete: Any = None,
+    rabbitmq_import: Any = None,
+    runner: Any = None,
+    sync_run: Any = None,
+    prober: Any = None,
+    work_directory: Path,
 ) -> pr.SpawnContext:
     port_plan = pr.plan_ports(manifest, instances=instances)
     credentials = _postgres_creds(manifest)
     return pr.SpawnContext(
-        work_directory=work_directory, port_plan=port_plan, credentials=credentials,
-        secret_values={}, secret_purposes={}, runner=runner or (lambda *a, **k: FakeHandle()),
-        sync_run=sync_run or _fake_sync_run, sql_runner=sql_runner or SqlSpy(),
+        work_directory=work_directory,
+        port_plan=port_plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=runner or (lambda *a, **k: FakeHandle()),
+        sync_run=sync_run or _fake_sync_run,
+        sql_runner=sql_runner or SqlSpy(),
         redis_runner=redis_runner or (lambda **kwargs: None),
         rabbitmq_inspector=rabbitmq_inspector or (lambda **kwargs: 0),
         # m8, p6-review-r1: `SpawnContext`'s real defaults for these two now make an actual HTTP
@@ -2056,19 +2745,42 @@ def _spawn_context(
 
 
 def test_postgres_seed_argv_shape() -> None:
-    argv = pr.postgres_seed_argv(port=14000, dbname="alk_baseline_postgres", user="harness", file=Path("db/schema.sql"))
+    argv = pr.postgres_seed_argv(
+        port=14000,
+        dbname="alk_baseline_postgres",
+        user="harness",
+        file=Path("db/schema.sql"),
+    )
     assert argv == [
-        "psql", "-h", "localhost", "-p", "14000", "-U", "harness", "-d", "alk_baseline_postgres",
-        "-v", "ON_ERROR_STOP=1", "-f", "db/schema.sql",
+        "psql",
+        "-h",
+        "localhost",
+        "-p",
+        "14000",
+        "-U",
+        "harness",
+        "-d",
+        "alk_baseline_postgres",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "db/schema.sql",
     ]
 
 
 def test_redis_seed_argv_has_no_file_flag_stdin_carries_the_commands() -> None:
-    assert pr.redis_seed_argv(port=15003) == ["redis-cli", "-h", "localhost", "-p", "15003"]
+    assert pr.redis_seed_argv(port=15003) == [
+        "redis-cli",
+        "-h",
+        "localhost",
+        "-p",
+        "15003",
+    ]
 
 
 def test_default_rabbitmq_definitions_importer_posts_the_file_to_the_definitions_endpoint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """N17, p6-review-r2: `rabbitmqadmin import` is dropped entirely — seeding now POSTs the raw
     definitions file straight to the management API's own `/api/definitions` endpoint, the same
@@ -2094,7 +2806,10 @@ def test_default_rabbitmq_definitions_importer_posts_the_file_to_the_definitions
 
     monkeypatch.setattr(pr.urllib.request, "urlopen", fake_urlopen)
     pr.default_rabbitmq_definitions_importer(
-        host="localhost", port=14002, credentials=creds, file=definitions_file,
+        host="localhost",
+        port=14002,
+        credentials=creds,
+        file=definitions_file,
     )
     assert len(requests) == 1
     assert requests[0].full_url == "http://localhost:24002/api/definitions"
@@ -2102,35 +2817,58 @@ def test_default_rabbitmq_definitions_importer_posts_the_file_to_the_definitions
     assert requests[0].get_header("Authorization") is not None
 
 
-def test_apply_store_seed_runs_migrations_then_seed_files_in_listed_order(tmp_path: Path) -> None:
+def test_apply_store_seed_runs_migrations_then_seed_files_in_listed_order(
+    tmp_path: Path,
+) -> None:
     calls: list[Any] = []
-    store = pr.StoreEntry.model_validate({
-        "capability": "database", "migrations": ["db/001.sql", "db/002.sql"],
-        "seed_files": ["db/seed_a.sql", "db/seed_b.sql"],
-        "baseline": {"strategy": "template_database", "inputs_digest": "sha256:" + "a" * 64},
-        "sentinel": {"query": "SELECT 1", "expected": "1"},
-    })
+    store = pr.StoreEntry.model_validate(
+        {
+            "capability": "database",
+            "migrations": ["db/001.sql", "db/002.sql"],
+            "seed_files": ["db/seed_a.sql", "db/seed_b.sql"],
+            "baseline": {
+                "strategy": "template_database",
+                "inputs_digest": "sha256:" + "a" * 64,
+            },
+            "sentinel": {"query": "SELECT 1", "expected": "1"},
+        }
+    )
     creds = pr.EngineCredentials(username="harness", password="pw")
     pr.apply_store_seed(
-        store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=14000, dbname="x",
-        credentials=creds, process_name="postgres", sync_run=_recording_sync_run(calls),
+        store,
+        engine=pr.ManagedEngine.POSTGRES,
+        bundle_dir=tmp_path,
+        port=14000,
+        dbname="x",
+        credentials=creds,
+        process_name="postgres",
+        sync_run=_recording_sync_run(calls),
     )
     files_in_order = [argv[argv.index("-f") + 1] for argv, _ in calls]
     assert files_in_order == [
-        str(tmp_path / "db/001.sql"), str(tmp_path / "db/002.sql"),
-        str(tmp_path / "db/seed_a.sql"), str(tmp_path / "db/seed_b.sql"),
+        str(tmp_path / "db/001.sql"),
+        str(tmp_path / "db/002.sql"),
+        str(tmp_path / "db/seed_a.sql"),
+        str(tmp_path / "db/seed_b.sql"),
     ]
 
 
-def test_apply_seed_file_postgres_env_keeps_path_and_adds_pgpassword(tmp_path: Path) -> None:
+def test_apply_seed_file_postgres_env_keeps_path_and_adds_pgpassword(
+    tmp_path: Path,
+) -> None:
     """A real bug caught by manual exercise before this test existed: `env=` REPLACES a child's
     environment, not extends it — passing bare `{"PGPASSWORD": ...}` would drop `PATH` and make
     `psql` unfindable outside `subprocess`'s narrow POSIX fallback."""
     calls: list[Any] = []
     creds = pr.EngineCredentials(username="harness", password="s3cr3t")
     pr.apply_seed_file(
-        pr.ManagedEngine.POSTGRES, tmp_path / "db/schema.sql", port=14000, dbname="x",
-        credentials=creds, process_name="postgres", sync_run=_recording_sync_run(calls),
+        pr.ManagedEngine.POSTGRES,
+        tmp_path / "db/schema.sql",
+        port=14000,
+        dbname="x",
+        credentials=creds,
+        process_name="postgres",
+        sync_run=_recording_sync_run(calls),
     )
     _, kwargs = calls[0]
     assert kwargs["env"]["PGPASSWORD"] == "s3cr3t"
@@ -2143,8 +2881,13 @@ def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> 
     seed_file.write_text("SET greeting hi\n")
     calls: list[Any] = []
     pr.apply_seed_file(
-        pr.ManagedEngine.REDIS, seed_file, port=15003, dbname="", credentials=None,
-        process_name="cache", sync_run=_recording_sync_run(calls),
+        pr.ManagedEngine.REDIS,
+        seed_file,
+        port=15003,
+        dbname="",
+        credentials=None,
+        process_name="cache",
+        sync_run=_recording_sync_run(calls),
     )
     argv, kwargs = calls[0]
     assert argv == ["redis-cli", "-h", "localhost", "-p", "15003"]
@@ -2158,8 +2901,13 @@ def test_apply_seed_file_raises_seed_failed_on_nonzero_exit(tmp_path: Path) -> N
     creds = pr.EngineCredentials(username="harness", password="pw")
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.apply_seed_file(
-            pr.ManagedEngine.POSTGRES, tmp_path / "db/broken.sql", port=14000, dbname="x",
-            credentials=creds, process_name="postgres", sync_run=failing_run,
+            pr.ManagedEngine.POSTGRES,
+            tmp_path / "db/broken.sql",
+            port=14000,
+            dbname="x",
+            credentials=creds,
+            process_name="postgres",
+            sync_run=failing_run,
         )
     assert excinfo.value.code == "seed_failed"
     assert excinfo.value.stage == "seed"
@@ -2179,8 +2927,13 @@ def test_apply_seed_file_rabbitmq_import_failure_is_seed_failed(tmp_path: Path) 
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.apply_seed_file(
-            pr.ManagedEngine.RABBITMQ, tmp_path / "mq" / "defs.json", port=14002, dbname="",
-            credentials=creds, process_name="mq", sync_run=_fake_sync_run,
+            pr.ManagedEngine.RABBITMQ,
+            tmp_path / "mq" / "defs.json",
+            port=14002,
+            dbname="",
+            credentials=creds,
+            process_name="mq",
+            sync_run=_fake_sync_run,
             rabbitmq_import=failing_import,
         )
     assert excinfo.value.code == "seed_failed"
@@ -2193,15 +2946,27 @@ def test_check_sentinel_postgres_pass_and_fail() -> None:
     store = _manifest().seed.stores[0]  # {query: "SELECT 1", expected: "1"}
     creds = pr.EngineCredentials(username="harness", password="pw")
     passing = pr.check_sentinel(
-        store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
-        credentials=creds, sql_runner=lambda **kwargs: _pg_spy_row(1),
-        redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+        store,
+        engine=pr.ManagedEngine.POSTGRES,
+        host="localhost",
+        port=14000,
+        dbname="w0",
+        credentials=creds,
+        sql_runner=lambda **kwargs: _pg_spy_row(1),
+        redis_runner=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 0,
     )
     assert passing is True
     failing = pr.check_sentinel(
-        store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
-        credentials=creds, sql_runner=lambda **kwargs: _pg_spy_row(0),
-        redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+        store,
+        engine=pr.ManagedEngine.POSTGRES,
+        host="localhost",
+        port=14000,
+        dbname="w0",
+        credentials=creds,
+        sql_runner=lambda **kwargs: _pg_spy_row(0),
+        redis_runner=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 0,
     )
     assert failing is False
 
@@ -2220,9 +2985,15 @@ def test_check_sentinel_passes_read_only_true_to_the_sql_runner() -> None:
         return _pg_spy_row(1)
 
     pr.check_sentinel(
-        store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
-        credentials=creds, sql_runner=recording_sql_runner,
-        redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+        store,
+        engine=pr.ManagedEngine.POSTGRES,
+        host="localhost",
+        port=14000,
+        dbname="w0",
+        credentials=creds,
+        sql_runner=recording_sql_runner,
+        redis_runner=lambda **kwargs: None,
+        rabbitmq_inspector=lambda **kwargs: 0,
     )
     assert seen["read_only"] is True
 
@@ -2236,21 +3007,35 @@ def test_a_sentinel_query_attempting_a_write_fails(tmp_path: Path) -> None:
     typed `store_statement_failed`, not silently succeed.
     """
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0],
-            "sentinel": {
-                "query": "SELECT 1; DROP TABLE riders", "expected": "1",
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "sentinel": {
+                            "query": "SELECT 1; DROP TABLE riders",
+                            "expected": "1",
+                        },
+                    }
+                ]
             },
-        }]}}
+        }
     )
     store = manifest.seed.stores[0]
     creds = pr.EngineCredentials(username="harness", password="pw")
     sql_spy = SqlSpy()
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.check_sentinel(
-            store, engine=pr.ManagedEngine.POSTGRES, host="localhost", port=14000, dbname="w0",
-            credentials=creds, sql_runner=sql_spy,
-            redis_runner=lambda **kwargs: None, rabbitmq_inspector=lambda **kwargs: 0,
+            store,
+            engine=pr.ManagedEngine.POSTGRES,
+            host="localhost",
+            port=14000,
+            dbname="w0",
+            credentials=creds,
+            sql_runner=sql_spy,
+            redis_runner=lambda **kwargs: None,
+            rabbitmq_inspector=lambda **kwargs: 0,
         )
     assert excinfo.value.code == "store_statement_failed"
 
@@ -2261,13 +3046,18 @@ def test_call_redis_driver_exception_is_store_statement_failed() -> None:
     exception there is the harness's own statement seam, §2f `store_statement_failed`
     (`infrastructure`, retryable), never `seed_failed` (`environment`, NOT retried). Swapped, a
     transient redis blip during a sentinel check would never retry."""
+
     def failing_redis_runner(*, host: str, port: int, command: Any) -> Any:
         raise RuntimeError("connection reset")
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr._call_redis(
-            failing_redis_runner, stage="conformance", process_name="cache",
-            host="localhost", port=15003, command=["GET", "x"],
+            failing_redis_runner,
+            stage="conformance",
+            process_name="cache",
+            host="localhost",
+            port=15003,
+            command=["GET", "x"],
         )
     assert excinfo.value.code == "store_statement_failed"
 
@@ -2278,14 +3068,20 @@ def test_call_rabbitmq_driver_exception_is_store_statement_failed() -> None:
     §2f `store_statement_failed` (`infrastructure`, retryable), never `seed_failed`
     (`environment`, NOT retried). Swapped, a transient rabbitmq blip during a sentinel check would
     never retry."""
+
     def failing_inspector(*, host: str, port: int, credentials: Any, queue: str) -> int:
         raise RuntimeError("connection reset")
 
     creds = pr.EngineCredentials(username="harness", password="pw")
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr._call_rabbitmq(
-            failing_inspector, stage="conformance", process_name="mq",
-            host="localhost", port=14002, credentials=creds, queue="canary",
+            failing_inspector,
+            stage="conformance",
+            process_name="mq",
+            host="localhost",
+            port=14002,
+            credentials=creds,
+            queue="canary",
         )
     assert excinfo.value.code == "store_statement_failed"
 
@@ -2294,12 +3090,16 @@ def test_call_rabbitmq_action_driver_exception_is_store_statement_failed() -> No
     """`_call_rabbitmq_action` wraps the write-side canary declare/publish call — same B5 typing
     as `_call_rabbitmq`, against a store that has already passed readiness. A driver exception
     there is also §2f `store_statement_failed`, never `seed_failed`."""
+
     def failing_action(**kwargs: Any) -> None:
         raise RuntimeError("connection reset")
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr._call_rabbitmq_action(
-            failing_action, stage="conformance", process_name="mq", action="declare",
+            failing_action,
+            stage="conformance",
+            process_name="mq",
+            action="declare",
         )
     assert excinfo.value.code == "store_statement_failed"
 
@@ -2318,49 +3118,88 @@ def test_measure_postgres_row_counts_passes_read_only_true(tmp_path: Path) -> No
 
     creds = pr.EngineCredentials(username="harness", password="pw")
     counts = pr._measure_postgres_row_counts(
-        host="localhost", port=14000, credentials=creds, dbname="w0",
-        sql_runner=recording_sql_runner, process_name="postgres",
+        host="localhost",
+        port=14000,
+        credentials=creds,
+        dbname="w0",
+        sql_runner=recording_sql_runner,
+        process_name="postgres",
     )
     assert counts == {"riders": 3}
     assert seen == [True, True]  # both the table listing AND the COUNT(*) itself.
 
 
 def test_check_sentinel_redis_pass_and_fail() -> None:
-    store = pr.StoreEntry.model_validate({
-        "capability": "cache", "migrations": [], "seed_files": [],
-        "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-        "sentinel": {"key": "greeting", "expected": "hi"},
-    })
+    store = pr.StoreEntry.model_validate(
+        {
+            "capability": "cache",
+            "migrations": [],
+            "seed_files": [],
+            "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
+            "sentinel": {"key": "greeting", "expected": "hi"},
+        }
+    )
     passing = pr.check_sentinel(
-        store, engine=pr.ManagedEngine.REDIS, host="localhost", port=15003, dbname=None,
-        credentials=None, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: b"hi",
+        store,
+        engine=pr.ManagedEngine.REDIS,
+        host="localhost",
+        port=15003,
+        dbname=None,
+        credentials=None,
+        sql_runner=lambda **kwargs: [],
+        redis_runner=lambda **kwargs: b"hi",
         rabbitmq_inspector=lambda **kwargs: 0,
     )
     assert passing is True
     failing = pr.check_sentinel(
-        store, engine=pr.ManagedEngine.REDIS, host="localhost", port=15003, dbname=None,
-        credentials=None, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: None,
+        store,
+        engine=pr.ManagedEngine.REDIS,
+        host="localhost",
+        port=15003,
+        dbname=None,
+        credentials=None,
+        sql_runner=lambda **kwargs: [],
+        redis_runner=lambda **kwargs: None,
         rabbitmq_inspector=lambda **kwargs: 0,
     )
     assert failing is False
 
 
 def test_check_sentinel_rabbitmq_pass_and_fail() -> None:
-    store = pr.StoreEntry.model_validate({
-        "capability": "queue", "migrations": [], "seed_files": [],
-        "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "c" * 64},
-        "sentinel": {"queue": "jobs", "expected_depth": 5},
-    })
+    store = pr.StoreEntry.model_validate(
+        {
+            "capability": "queue",
+            "migrations": [],
+            "seed_files": [],
+            "baseline": {
+                "strategy": "datadir_copy",
+                "inputs_digest": "sha256:" + "c" * 64,
+            },
+            "sentinel": {"queue": "jobs", "expected_depth": 5},
+        }
+    )
     creds = pr.EngineCredentials(username="harness", password="pw")
     passing = pr.check_sentinel(
-        store, engine=pr.ManagedEngine.RABBITMQ, host="localhost", port=15003, dbname=None,
-        credentials=creds, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: None,
+        store,
+        engine=pr.ManagedEngine.RABBITMQ,
+        host="localhost",
+        port=15003,
+        dbname=None,
+        credentials=creds,
+        sql_runner=lambda **kwargs: [],
+        redis_runner=lambda **kwargs: None,
         rabbitmq_inspector=lambda **kwargs: 5,
     )
     assert passing is True
     failing = pr.check_sentinel(
-        store, engine=pr.ManagedEngine.RABBITMQ, host="localhost", port=15003, dbname=None,
-        credentials=creds, sql_runner=lambda **kwargs: [], redis_runner=lambda **kwargs: None,
+        store,
+        engine=pr.ManagedEngine.RABBITMQ,
+        host="localhost",
+        port=15003,
+        dbname=None,
+        credentials=creds,
+        sql_runner=lambda **kwargs: [],
+        redis_runner=lambda **kwargs: None,
         rabbitmq_inspector=lambda **kwargs: 0,
     )
     assert failing is False
@@ -2372,15 +3211,21 @@ def test_check_sentinel_rabbitmq_pass_and_fail() -> None:
 def test_freeze_baseline_requires_bundle_dir() -> None:
     manifest = _manifest()
     ctx = pr.SpawnContext(
-        work_directory=Path("/x"), port_plan=pr.plan_ports(manifest, instances=1),
-        credentials={}, secret_values={}, secret_purposes={}, bundle_dir=None,
+        work_directory=Path("/x"),
+        port_plan=pr.plan_ports(manifest, instances=1),
+        credentials={},
+        secret_values={},
+        secret_purposes={},
+        bundle_dir=None,
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
     assert excinfo.value.code == "internal_invariant_violated"
 
 
-def test_freeze_baseline_waits_for_readiness_before_the_first_statement(tmp_path: Path) -> None:
+def test_freeze_baseline_waits_for_readiness_before_the_first_statement(
+    tmp_path: Path,
+) -> None:
     """t1, p6-review-r1: B4's fix is structurally UNOBSERVABLE with a prober that always answers
     `True` on the first call (`_spawn_context`'s own fast-pass default) — this pins that the wait
     is REAL. A prober that fails twice before succeeding must be polled through all of them; the
@@ -2388,10 +3233,17 @@ def test_freeze_baseline_waits_for_readiness_before_the_first_statement(tmp_path
     between polls stays in the low milliseconds rather than the 30s/0.25s fallback default.
     """
     manifest = _manifest(
-        lambda body: {**body, "readiness": [
-            *body["readiness"],
-            {"capability": "database", "timeout_seconds": 5, "interval_seconds": 0.01},
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [
+                *body["readiness"],
+                {
+                    "capability": "database",
+                    "timeout_seconds": 5,
+                    "interval_seconds": 0.01,
+                },
+            ],
+        }
     )
     probe_calls: list[dict[str, Any]] = []
     remaining_failures = [2]
@@ -2404,27 +3256,44 @@ def test_freeze_baseline_waits_for_readiness_before_the_first_statement(tmp_path
         return True
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, prober=flaky_prober, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        prober=flaky_prober,
+        work_directory=tmp_path,
     )
     pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
     # 2 failures + the passing call — proves `_wait_for_store_ready` actually looped rather than
     # accepting the first `False` as good enough, or skipping the probe entirely.
     assert len(probe_calls) >= 3
     assert remaining_failures[0] == 0
-    assert all(call["protocol"] is pr.CapabilityProtocol.POSTGRES for call in probe_calls)
+    assert all(
+        call["protocol"] is pr.CapabilityProtocol.POSTGRES for call in probe_calls
+    )
 
 
-def test_freeze_baseline_readiness_timeout_is_a_typed_depends_on_timeout(tmp_path: Path) -> None:
+def test_freeze_baseline_readiness_timeout_is_a_typed_depends_on_timeout(
+    tmp_path: Path,
+) -> None:
     """B4, p6-review-r1: a store that never becomes ready must fail typed (`depends_on_timeout`,
     §2f — `infrastructure`, retryable), not hang forever or let the next statement run anyway."""
     manifest = _manifest(
-        lambda body: {**body, "readiness": [
-            *body["readiness"],
-            {"capability": "database", "timeout_seconds": 0.05, "interval_seconds": 0.01},
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [
+                *body["readiness"],
+                {
+                    "capability": "database",
+                    "timeout_seconds": 0.05,
+                    "interval_seconds": 0.01,
+                },
+            ],
+        }
     )
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, prober=lambda **kwargs: False, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        prober=lambda **kwargs: False,
+        work_directory=tmp_path,
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
@@ -2435,10 +3304,18 @@ def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
     tmp_path: Path,
 ) -> None:
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0], "migrations": ["db/schema.sql"],
-            "seed_files": ["db/seed.sql"],
-        }]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "migrations": ["db/schema.sql"],
+                        "seed_files": ["db/seed.sql"],
+                    }
+                ]
+            },
+        }
     )
     # `seeded_tables` tells the spy what `CREATE DATABASE "alk_baseline_postgres"` should start
     # with — simulating "the seed already landed," since the fake `sync_run` for `psql -f ...`
@@ -2447,22 +3324,31 @@ def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
     sql_spy.row_data[("alk_baseline_postgres", "riders")] = 3
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, sync_run=_fake_sync_run,
+        manifest,
+        bundle_dir=tmp_path,
+        sql_runner=sql_spy,
+        sync_run=_fake_sync_run,
         work_directory=tmp_path,
     )
     result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
 
-    assert "postgres" in result.job_shared_handles  # stays running — job-shared for the job.
+    assert (
+        "postgres" in result.job_shared_handles
+    )  # stays running — job-shared for the job.
     record = result.build_output.stores[0]
     assert record.strategy is pr.BaselineStrategy.TEMPLATE_DATABASE
     assert record.baseline_reference == "alk_baseline_postgres"
     assert record.row_counts == {"riders": 3}
 
     statements = [statement for _, statement in sql_spy.calls]
-    assert any(s.startswith("CREATE DATABASE") and "TEMPLATE" not in s for s in statements)
+    assert any(
+        s.startswith("CREATE DATABASE") and "TEMPLATE" not in s for s in statements
+    )
     # migrations/seed_files apply via `sync_run`, not `sql_runner` — nothing to find in `statements`
     # for them; asserting the CREATE precedes the ALTER is what is left to check here.
-    create_index = next(i for i, s in enumerate(statements) if s.startswith("CREATE DATABASE"))
+    create_index = next(
+        i for i, s in enumerate(statements) if s.startswith("CREATE DATABASE")
+    )
     alter_index = next(i for i, s in enumerate(statements) if "IS_TEMPLATE" in s)
     assert create_index < alter_index
     assert statements[alter_index] == (
@@ -2470,37 +3356,59 @@ def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
     )
 
 
-def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(tmp_path: Path) -> None:
+def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(
+    tmp_path: Path,
+) -> None:
     """t4 / B2, p6-review-r1: migration/seed files are customer-authored content applied through
     `psql -f`, which honors backslash meta-commands (`\\!`, `\\copy ... program`) — must run under
     the store's declared `svc-data` identity, never the provisioner's own uid, the same privilege
     drop every other untrusted-content execution path in this module already gets
     (`build_commands`, the managed-engine daemon itself)."""
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0], "migrations": ["db/schema.sql"], "seed_files": [],
-        }]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "migrations": ["db/schema.sql"],
+                        "seed_files": [],
+                    }
+                ]
+            },
+        }
     )
     (tmp_path / "db").mkdir()
     (tmp_path / "db" / "schema.sql").write_text("-- schema\n")
     seed_calls: list[Any] = []
 
-    def recording_sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    def recording_sync_run(
+        argv: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess:
         seed_calls.append((argv, kwargs))
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, sync_run=recording_sync_run, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        sync_run=recording_sync_run,
+        work_directory=tmp_path,
     )
     from dataclasses import replace as dc_replace
+
     ctx = dc_replace(
-        ctx, user_resolver=_fake_user_resolver({"svc-data": (4444, 5555)}),
-        chown=lambda path, uid, gid: None,  # a fake uid needs no real os.chown to prove the point.
+        ctx,
+        user_resolver=_fake_user_resolver({"svc-data": (4444, 5555)}),
+        chown=lambda path, uid, gid: (
+            None
+        ),  # a fake uid needs no real os.chown to prove the point.
     )
 
     pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
 
-    psql_calls = [(argv, kwargs) for argv, kwargs in seed_calls if argv and argv[0] == "psql"]
+    psql_calls = [
+        (argv, kwargs) for argv, kwargs in seed_calls if argv and argv[0] == "psql"
+    ]
     assert psql_calls, "expected a psql -f seed invocation"
     _, kwargs = psql_calls[0]
     assert kwargs.get("user") == 4444
@@ -2511,26 +3419,43 @@ def test_freeze_baseline_datadir_copy_terminates_the_bootstrap_and_snapshots_the
     tmp_path: Path,
 ) -> None:
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0],
-            "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
-        }]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "baseline": {
+                            "strategy": "datadir_copy",
+                            "inputs_digest": "sha256:" + "a" * 64,
+                        },
+                    }
+                ]
+            },
+        }
     )
     handles: list[FakeHandle] = []
 
-    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+    def runner(
+        argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None
+    ):
         handle = FakeHandle()
         handles.append(handle)
         return handle
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, runner=runner, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        runner=runner,
+        work_directory=tmp_path,
     )
     result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
 
     assert result.job_shared_handles == {}  # datadir_copy is never job-shared.
     assert len(handles) == 1
-    assert handles[0].terminated is True  # the bootstrap instance is stopped after the copy.
+    assert (
+        handles[0].terminated is True
+    )  # the bootstrap instance is stopped after the copy.
     record = result.build_output.stores[0]
     assert record.strategy is pr.BaselineStrategy.DATADIR_COPY
     assert Path(record.baseline_reference) == tmp_path / "managed" / "postgres.baseline"
@@ -2544,20 +3469,44 @@ def test_freeze_baseline_datadir_copy_redis_issues_save_before_terminating(
     an explicit synchronous `SAVE` immediately before terminating, or the copied data dir every
     world clones/resets from is an empty baseline."""
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "cache", "migrations": [], "seed_files": [],
-             "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "greeting", "expected": "hi"}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": [],
+                        "baseline": {
+                            "strategy": "datadir_copy",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "greeting", "expected": "hi"},
+                    },
+                ]
+            },
+        }
     )
     events: list[str] = []
 
@@ -2566,7 +3515,9 @@ def test_freeze_baseline_datadir_copy_redis_issues_save_before_terminating(
             events.append("TERMINATE")
             super().terminate()
 
-    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+    def runner(
+        argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None
+    ):
         return RecordingHandle()
 
     def redis_runner(*, host: str, port: int, command: Any) -> Any:
@@ -2574,7 +3525,10 @@ def test_freeze_baseline_datadir_copy_redis_issues_save_before_terminating(
         return "hi" if command[0] == "GET" else None
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, runner=runner, redis_runner=redis_runner,
+        manifest,
+        bundle_dir=tmp_path,
+        runner=runner,
+        redis_runner=redis_runner,
         work_directory=tmp_path,
     )
     pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
@@ -2586,24 +3540,50 @@ def test_freeze_baseline_datadir_copy_redis_issues_save_before_terminating(
 
 def test_freeze_baseline_empty_strategy_is_a_no_op_capture(tmp_path: Path) -> None:
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
-             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "greeting", "expected": "hi"}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": ["cache/seed.txt"],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "greeting", "expected": "hi"},
+                    },
+                ]
+            },
+        }
     )
     spawned_names: list[str] = []
 
-    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+    def runner(
+        argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None
+    ):
         return FakeHandle()
 
     def sync_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
@@ -2611,47 +3591,71 @@ def test_freeze_baseline_empty_strategy_is_a_no_op_capture(tmp_path: Path) -> No
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, runner=runner, sync_run=sync_run, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        runner=runner,
+        sync_run=sync_run,
+        work_directory=tmp_path,
     )
     result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
-    cache_record = next(r for r in result.build_output.stores if r.process_name == "cache")
+    cache_record = next(
+        r for r in result.build_output.stores if r.process_name == "cache"
+    )
     assert cache_record.strategy is pr.BaselineStrategy.EMPTY
     assert cache_record.baseline_reference == ""
     assert cache_record.row_counts == {}
-    assert "redis-cli" not in spawned_names  # nothing seeded at freeze time for `empty`.
+    assert (
+        "redis-cli" not in spawned_names
+    )  # nothing seeded at freeze time for `empty`.
     assert "cache" not in result.job_shared_handles
 
 
 def test_write_build_output_shape(tmp_path: Path) -> None:
     build_output = pr.BuildOutput(
         bundle_digest="sha256:" + "0" * 64,
-        stores=[pr.StoreBaselineRecord(
-            capability="database", process_name="postgres", engine=pr.ManagedEngine.POSTGRES,
-            strategy=pr.BaselineStrategy.TEMPLATE_DATABASE, inputs_digest="sha256:" + "a" * 64,
-            baseline_reference="alk_baseline_postgres", row_counts={"riders": 3},
-        )],
-        conformance=True, conformance_reason=None,
+        stores=[
+            pr.StoreBaselineRecord(
+                capability="database",
+                process_name="postgres",
+                engine=pr.ManagedEngine.POSTGRES,
+                strategy=pr.BaselineStrategy.TEMPLATE_DATABASE,
+                inputs_digest="sha256:" + "a" * 64,
+                baseline_reference="alk_baseline_postgres",
+                row_counts={"riders": 3},
+            )
+        ],
+        conformance=True,
+        conformance_reason=None,
     )
     target = pr.write_build_output(tmp_path, build_output)
     assert target == tmp_path / "artifacts" / "build.json"
     payload = json.loads(target.read_text())
     assert payload["bundle_digest"] == build_output.bundle_digest
     assert payload["conformance"] is True
-    assert payload["stores"] == [{
-        "capability": "database", "process_name": "postgres", "engine": "postgres",
-        "strategy": "template_database", "inputs_digest": "sha256:" + "a" * 64,
-        "baseline_reference": "alk_baseline_postgres", "row_counts": {"riders": 3},
-    }]
+    assert payload["stores"] == [
+        {
+            "capability": "database",
+            "process_name": "postgres",
+            "engine": "postgres",
+            "strategy": "template_database",
+            "inputs_digest": "sha256:" + "a" * 64,
+            "baseline_reference": "alk_baseline_postgres",
+            "row_counts": {"riders": 3},
+        }
+    ]
 
 
 # --- §4.2 world clone + reset ----------------------------------------------------------------------
 
 
 def _frozen_template_database(
-    manifest: EnvironmentBundleV2, tmp_path: Path,
+    manifest: EnvironmentBundleV2,
+    tmp_path: Path,
 ) -> tuple[pr.FreezeResult, pr.SpawnContext, SqlSpy]:
     sql_spy = SqlSpy()
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
     result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
     sql_spy.calls.clear()
     return result, ctx, sql_spy
@@ -2664,11 +3668,17 @@ def test_world_clone_template_database_issues_terminate_drop_create_template(
     freeze_result, ctx, sql_spy = _frozen_template_database(manifest, tmp_path)
 
     result = pr._clone_or_reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
     assert set(result.handles) == {"postgres", "tools-api", "agent"}
-    assert result.handles["postgres"] is freeze_result.job_shared_handles["postgres"]  # reused.
+    assert (
+        result.handles["postgres"] is freeze_result.job_shared_handles["postgres"]
+    )  # reused.
 
     statements = [statement for _, statement in sql_spy.calls]
     assert statements == [
@@ -2679,16 +3689,32 @@ def test_world_clone_template_database_issues_terminate_drop_create_template(
     ]
 
 
-def test_world_clone_datadir_copy_copies_the_baseline_then_renames_to_wn(tmp_path: Path) -> None:
+def test_world_clone_datadir_copy_copies_the_baseline_then_renames_to_wn(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0],
-            "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
-        }]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "baseline": {
+                            "strategy": "datadir_copy",
+                            "inputs_digest": "sha256:" + "a" * 64,
+                        },
+                    }
+                ]
+            },
+        }
     )
     sql_spy = SqlSpy()
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     baseline_dir = Path(freeze_result.build_output.stores[0].baseline_reference)
     assert baseline_dir.is_dir()
     sql_spy.calls.clear()
@@ -2701,14 +3727,22 @@ def test_world_clone_datadir_copy_copies_the_baseline_then_renames_to_wn(tmp_pat
         real_copy(src, dst)
 
     ctx2 = _spawn_context(
-        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        sql_runner=sql_spy,
+        work_directory=tmp_path,
     )
     from dataclasses import replace as dc_replace
+
     ctx2 = dc_replace(ctx2, copy=recording_copy)
 
     result = pr._clone_or_reset_world(
-        manifest, 0, context=ctx2, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        0,
+        context=ctx2,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
     assert copy_calls == [(baseline_dir, tmp_path / "worlds" / "w0" / "postgres")]
     statements = [statement for _, statement in sql_spy.calls]
@@ -2718,20 +3752,44 @@ def test_world_clone_datadir_copy_copies_the_baseline_then_renames_to_wn(tmp_pat
 
 def test_world_clone_empty_strategy_reseeds_on_every_clone(tmp_path: Path) -> None:
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
-             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "greeting", "expected": "hi"}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": ["cache/seed.txt"],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "greeting", "expected": "hi"},
+                    },
+                ]
+            },
+        }
     )
     (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cache" / "seed.txt").write_text("SET greeting hi\n")
@@ -2742,16 +3800,29 @@ def test_world_clone_empty_strategy_reseeds_on_every_clone(tmp_path: Path) -> No
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, sync_run=sync_run, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        sync_run=sync_run,
+        work_directory=tmp_path,
     )
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
-    assert not any("redis-cli" in argv for argv in seed_calls)  # nothing at freeze time.
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
+    assert not any(
+        "redis-cli" in argv for argv in seed_calls
+    )  # nothing at freeze time.
 
     pr._clone_or_reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
-    assert any("redis-cli" in argv for argv in seed_calls)  # (re)established at clone time.
+    assert any(
+        "redis-cli" in argv for argv in seed_calls
+    )  # (re)established at clone time.
 
 
 def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
@@ -2761,20 +3832,44 @@ def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
     branch) is a SEPARATE call site from `freeze_baseline`'s own seed application — both must
     drop privilege, not just the one exercised by the freeze-time test above."""
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
-             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "greeting", "expected": "hi"}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": ["cache/seed.txt"],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "greeting", "expected": "hi"},
+                    },
+                ]
+            },
+        }
     )
     (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cache" / "seed.txt").write_text("SET greeting hi\n")
@@ -2785,18 +3880,31 @@ def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, sync_run=sync_run, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        sync_run=sync_run,
+        work_directory=tmp_path,
     )
     from dataclasses import replace as dc_replace
+
     ctx = dc_replace(
-        ctx, user_resolver=_fake_user_resolver({"svc-data": (6666, 7777)}),
-        chown=lambda path, uid, gid: None,  # a fake uid needs no real os.chown to prove the point.
+        ctx,
+        user_resolver=_fake_user_resolver({"svc-data": (6666, 7777)}),
+        chown=lambda path, uid, gid: (
+            None
+        ),  # a fake uid needs no real os.chown to prove the point.
     )
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
 
     pr._clone_or_reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
     redis_calls = [(argv, kwargs) for argv, kwargs in seed_calls if "redis-cli" in argv]
     assert redis_calls
@@ -2805,37 +3913,70 @@ def test_world_clone_empty_strategy_reseed_runs_under_the_stores_declared_user(
     assert kwargs.get("group") == 7777
 
 
-def test_world_clone_empty_strategy_requires_bundle_dir_to_reseed(tmp_path: Path) -> None:
+def test_world_clone_empty_strategy_requires_bundle_dir_to_reseed(
+    tmp_path: Path,
+) -> None:
     """Mirrors `freeze_baseline`'s own `bundle_dir` guard: an empty-strategy store re-seeded on
     every clone must fail typed if the context somehow carries no bundle directory, never silently
     resolve `seed_files` against the wrong (cwd) directory."""
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
-             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "greeting", "expected": "hi"}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": ["cache/seed.txt"],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "greeting", "expected": "hi"},
+                    },
+                ]
+            },
+        }
     )
     (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cache" / "seed.txt").write_text("SET greeting hi\n")
     ctx = _spawn_context(manifest, bundle_dir=tmp_path, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
 
     from dataclasses import replace as dc_replace
+
     ctx_no_bundle_dir = dc_replace(ctx, bundle_dir=None)
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr._clone_or_reset_world(
-            manifest, 0, context=ctx_no_bundle_dir, baseline=freeze_result.build_output,
-            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+            manifest,
+            0,
+            context=ctx_no_bundle_dir,
+            baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles,
+            existing_handles={},
         )
     assert excinfo.value.code == "internal_invariant_violated"
 
@@ -2844,39 +3985,67 @@ def test_reset_world_terminates_only_per_world_handles(tmp_path: Path) -> None:
     manifest = _manifest()
     freeze_result, ctx, sql_spy = _frozen_template_database(manifest, tmp_path)
     world0 = pr._clone_or_reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
     old_tools_api = world0.handles["tools-api"]
     old_agent = world0.handles["agent"]
     shared_postgres = world0.handles["postgres"]
 
     handles, healthy = pr.reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles=world0.handles,
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles=world0.handles,
     )
     assert old_tools_api.handle.terminated is True
     assert old_agent.handle.terminated is True
-    assert shared_postgres.handle.terminated is False  # job-shared — stays up across a reset.
-    assert healthy is True  # SqlSpy answers `SELECT 1` -> 1 by default (no `answers` override).
+    assert (
+        shared_postgres.handle.terminated is False
+    )  # job-shared — stays up across a reset.
+    assert (
+        healthy is True
+    )  # SqlSpy answers `SELECT 1` -> 1 by default (no `answers` override).
 
 
-def test_reset_world_sentinel_failure_reports_unhealthy_without_raising(tmp_path: Path) -> None:
+def test_reset_world_sentinel_failure_reports_unhealthy_without_raising(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
-    sql_spy = SqlSpy()  # passes at freeze time (default "SELECT 1" -> 1) — m3's own freeze-time
+    sql_spy = (
+        SqlSpy()
+    )  # passes at freeze time (default "SELECT 1" -> 1) — m3's own freeze-time
     # sentinel check must NOT be what fails this test; only `reset_world`'s is under test here.
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     world0 = pr._clone_or_reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
     # Corrupted AFTER the (passing) freeze-time check, simulating something breaking the world's
     # own state before its reset — never matches the sentinel's "1" from here on.
     sql_spy.answers["SELECT 1"] = [(0,)]
     handles, healthy = pr.reset_world(
-        manifest, 0, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles=world0.handles,
+        manifest,
+        0,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles=world0.handles,
     )
     assert healthy is False  # §4.2: a sentinel failure is reported, never raised.
 
@@ -2886,48 +4055,104 @@ def test_reset_world_sentinel_failure_reports_unhealthy_without_raising(tmp_path
 
 def test_first_canary_store_prefers_postgres_over_redis_and_rabbitmq() -> None:
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            {"capability": "cache", "migrations": [], "seed_files": [],
-             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "k", "expected": "v"}},
-            body["seed"]["stores"][0],
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": [],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "k", "expected": "v"},
+                    },
+                    body["seed"]["stores"][0],
+                ]
+            },
+        }
     )
     store = pr._first_canary_store(manifest)
     assert store is not None
-    assert store.capability == "database"  # postgres, even though redis is listed first.
+    assert (
+        store.capability == "database"
+    )  # postgres, even though redis is listed first.
 
 
 def test_first_canary_store_is_none_with_no_seed_block() -> None:
-    manifest = _manifest(lambda body: {**body, "runtime": {**body["runtime"], "kind": "external"},
-                                        "processes": [], "seed": None})
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "runtime": {**body["runtime"], "kind": "external"},
+            "processes": [],
+            "seed": None,
+        }
+    )
     assert pr._first_canary_store(manifest) is None
 
 
 def _manifest_with_rabbitmq_store() -> EnvironmentBundleV2:
     return _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "queue", "kind": "managed", "engine": "rabbitmq", "version": "3.13",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "queue": {"protocol": "amqp", "service": "queue", "configuration_name": "QUEUE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "queue", "migrations": [], "seed_files": [],
-             "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "d" * 64},
-             "sentinel": {"queue": "jobs", "expected_depth": 0}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "queue",
+                    "kind": "managed",
+                    "engine": "rabbitmq",
+                    "version": "3.13",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "queue": {
+                    "protocol": "amqp",
+                    "service": "queue",
+                    "configuration_name": "QUEUE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "queue",
+                        "migrations": [],
+                        "seed_files": [],
+                        "baseline": {
+                            "strategy": "datadir_copy",
+                            "inputs_digest": "sha256:" + "d" * 64,
+                        },
+                        "sentinel": {"queue": "jobs", "expected_depth": 0},
+                    },
+                ]
+            },
+        }
     )
 
 
@@ -2962,32 +4187,46 @@ def test_run_canary_probe_rabbitmq_declares_publishes_and_inspects_without_delet
         return 0  # world 1 never saw the canary — real isolation.
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, work_directory=tmp_path,
-        rabbitmq_declare=rabbitmq_declare, rabbitmq_delete=rabbitmq_delete,
+        manifest,
+        bundle_dir=tmp_path,
+        work_directory=tmp_path,
+        rabbitmq_declare=rabbitmq_declare,
+        rabbitmq_delete=rabbitmq_delete,
         rabbitmq_inspector=rabbitmq_inspector,
     )
-    result = pr._run_canary_probe(manifest, store, pr.ManagedEngine.RABBITMQ, context=ctx)
+    result = pr._run_canary_probe(
+        manifest, store, pr.ManagedEngine.RABBITMQ, context=ctx
+    )
     assert result is True
     assert len(declare_calls) == 1
     assert declare_calls[0]["queue"] == "_alk_conformance"
-    assert delete_calls == []  # N15: cleanup deferred to the subsequent reset, not done here.
+    assert (
+        delete_calls == []
+    )  # N15: cleanup deferred to the subsequent reset, not done here.
     port0 = ctx.port_plan.port_for("queue", 0)
     port1 = ctx.port_plan.port_for("queue", 1)
     assert declare_calls[0]["port"] == port0  # declared in world 0.
     assert inspected_ports == [port1]  # inspected in world 1.
 
 
-def test_run_canary_probe_rabbitmq_fails_when_the_queue_leaks_to_world_1(tmp_path: Path) -> None:
+def test_run_canary_probe_rabbitmq_fails_when_the_queue_leaks_to_world_1(
+    tmp_path: Path,
+) -> None:
     """m8: a leaked canary (world 1's inspector reports a message that should not be there) must
     fail the probe, proving the check is not vacuous in the other direction either."""
     manifest = _manifest_with_rabbitmq_store()
     store = manifest.seed.stores[1]
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, work_directory=tmp_path,
-        rabbitmq_declare=lambda **kwargs: None, rabbitmq_delete=lambda **kwargs: None,
+        manifest,
+        bundle_dir=tmp_path,
+        work_directory=tmp_path,
+        rabbitmq_declare=lambda **kwargs: None,
+        rabbitmq_delete=lambda **kwargs: None,
         rabbitmq_inspector=lambda **kwargs: 1,  # world 1 sees a message: a real leak.
     )
-    result = pr._run_canary_probe(manifest, store, pr.ManagedEngine.RABBITMQ, context=ctx)
+    result = pr._run_canary_probe(
+        manifest, store, pr.ManagedEngine.RABBITMQ, context=ctx
+    )
     assert result is False
 
 
@@ -3005,56 +4244,99 @@ def test_default_rabbitmq_queue_inspector_treats_404_as_zero_depth(
     monkeypatch.setattr(pr.urllib.request, "urlopen", fake_urlopen)
     creds = pr.EngineCredentials(username="harness", password="pw")
     depth = pr.default_rabbitmq_queue_inspector(
-        host="localhost", port=15003, credentials=creds, queue="_alk_conformance",
+        host="localhost",
+        port=15003,
+        credentials=creds,
+        queue="_alk_conformance",
     )
     assert depth == 0
 
 
-def test_conformance_gate_passes_when_worlds_are_really_isolated(tmp_path: Path) -> None:
+def test_conformance_gate_passes_when_worlds_are_really_isolated(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
-    sql_spy = SqlSpy()  # `canary_leaks=False` — the default; a real isolation bug would leak.
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    sql_spy = (
+        SqlSpy()
+    )  # `canary_leaks=False` — the default; a real isolation bug would leak.
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     world_handles = {
         index: pr._clone_or_reset_world(
-            manifest, index, context=ctx, baseline=freeze_result.build_output,
-            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+            manifest,
+            index,
+            context=ctx,
+            baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles,
+            existing_handles={},
         ).handles
         for index in (0, 1)
     }
     passed, reason = pr.run_conformance_gate(
-        manifest, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+        manifest,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        world_handles=world_handles,
     )
     assert (passed, reason) == (True, None)
 
 
-def test_conformance_gate_fails_and_never_raises_when_isolation_is_broken(tmp_path: Path) -> None:
+def test_conformance_gate_fails_and_never_raises_when_isolation_is_broken(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     sql_spy = SqlSpy(canary_leaks=True)  # simulates a real cross-world isolation bug.
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     world_handles = {
         index: pr._clone_or_reset_world(
-            manifest, index, context=ctx, baseline=freeze_result.build_output,
-            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+            manifest,
+            index,
+            context=ctx,
+            baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles,
+            existing_handles={},
         ).handles
         for index in (0, 1)
     }
     passed, reason = pr.run_conformance_gate(
-        manifest, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+        manifest,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        world_handles=world_handles,
     )
     assert (passed, reason) == (False, "conformance_gate_failed")
 
 
-def test_conformance_gate_is_vacuously_true_with_no_canary_store(tmp_path: Path) -> None:
-    manifest = _manifest(lambda body: {**body, "runtime": {**body["runtime"], "kind": "external"},
-                                        "processes": [], "seed": None})
+def test_conformance_gate_is_vacuously_true_with_no_canary_store(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "runtime": {**body["runtime"], "kind": "external"},
+            "processes": [],
+            "seed": None,
+        }
+    )
     ctx = _spawn_context(manifest, bundle_dir=tmp_path, work_directory=tmp_path)
     build_output = pr.BuildOutput(bundle_digest=manifest.digest, stores=[])
     passed, reason = pr.run_conformance_gate(
-        manifest, context=ctx, baseline=build_output, job_shared_handles={}, world_handles={},
+        manifest,
+        context=ctx,
+        baseline=build_output,
+        job_shared_handles={},
+        world_handles={},
     )
     assert (passed, reason) == (True, None)
 
@@ -3076,12 +4358,17 @@ class _StickyCanarySqlSpy(SqlSpy):
         if statement.startswith("CREATE TABLE") and "_alk_conformance" in statement:
             self._sticky_dbname = kwargs["dbname"]
         rows = super().__call__(**kwargs)
-        if statement.startswith("SELECT to_regclass") and kwargs["dbname"] == self._sticky_dbname:
+        if (
+            statement.startswith("SELECT to_regclass")
+            and kwargs["dbname"] == self._sticky_dbname
+        ):
             return [(True,)]
         return rows
 
 
-def test_conformance_gate_fails_when_reset_leaves_the_canary_behind(tmp_path: Path) -> None:
+def test_conformance_gate_fails_when_reset_leaves_the_canary_behind(
+    tmp_path: Path,
+) -> None:
     """A reset that (for whatever reason) fails to actually clear the reserved
     `_alk_conformance` object must fail the gate via `_verify_canary_absent` — this is the
     project's own named CRITICAL calibration example, "vacuous canary pass" (severity-grading.md).
@@ -3089,18 +4376,29 @@ def test_conformance_gate_fails_when_reset_leaves_the_canary_behind(tmp_path: Pa
     check catches it."""
     manifest = _manifest()
     sql_spy = _StickyCanarySqlSpy()
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     world_handles = {
         index: pr._clone_or_reset_world(
-            manifest, index, context=ctx, baseline=freeze_result.build_output,
-            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+            manifest,
+            index,
+            context=ctx,
+            baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles,
+            existing_handles={},
         ).handles
         for index in (0, 1)
     }
     passed, reason = pr.run_conformance_gate(
-        manifest, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+        manifest,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        world_handles=world_handles,
     )
     assert (passed, reason) == (False, "conformance_gate_failed")
 
@@ -3113,7 +4411,10 @@ class _BadResetSentinelSqlSpy(SqlSpy):
     escalate via `sentinel_ok`, distinct from (and reached before) the canary-absence check."""
 
     def __call__(self, **kwargs: Any) -> list[tuple[Any, ...]]:
-        if kwargs["statement"].strip() == "SELECT 1" and kwargs["dbname"] in ("w0", "w1"):
+        if kwargs["statement"].strip() == "SELECT 1" and kwargs["dbname"] in (
+            "w0",
+            "w1",
+        ):
             return [(0,)]
         return super().__call__(**kwargs)
 
@@ -3126,18 +4427,29 @@ def test_conformance_gate_fails_when_a_worlds_own_sentinel_fails_after_reset(
     parallelism, not be silently overridden by an otherwise-clean canary-absence check."""
     manifest = _manifest()
     sql_spy = _BadResetSentinelSqlSpy()
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     world_handles = {
         index: pr._clone_or_reset_world(
-            manifest, index, context=ctx, baseline=freeze_result.build_output,
-            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+            manifest,
+            index,
+            context=ctx,
+            baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles,
+            existing_handles={},
         ).handles
         for index in (0, 1)
     }
     passed, reason = pr.run_conformance_gate(
-        manifest, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+        manifest,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        world_handles=world_handles,
     )
     assert (passed, reason) == (False, "conformance_gate_failed")
 
@@ -3147,9 +4459,12 @@ def test_conformance_gate_fails_when_a_worlds_own_sentinel_fails_after_reset(
 
 def _sql_spy_provider(**overrides: Any) -> pr.ProcessRuntimeProvider:
     kwargs: dict[str, Any] = dict(
-        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run, sql_runner=SqlSpy(),
+        runner=lambda *a, **k: FakeHandle(),
+        sync_run=_fake_sync_run,
+        sql_runner=SqlSpy(),
         prober=_recording_prober(),  # N2, p6-review-r2: see `_spawn_context`'s own comment.
-        rabbitmq_declare=lambda **kwargs: None, rabbitmq_delete=lambda **kwargs: None,
+        rabbitmq_declare=lambda **kwargs: None,
+        rabbitmq_delete=lambda **kwargs: None,
         rabbitmq_import=lambda **kwargs: None,
     )
     kwargs.update(overrides)
@@ -3171,10 +4486,16 @@ def test_provision_reconciles_to_exactly_w_ready_worlds(tmp_path: Path) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     assert [runtime.world_index for runtime in runtimes] == [0, 1, 2]
     assert len({runtime.runtime_id for runtime in runtimes}) == 3  # never duplicated.
     # t3, p6-review-r1: §4.1 says `provision` "reconciles to exactly `instances` READY worlds" —
@@ -3201,17 +4522,24 @@ def test_provision_fixed_port_at_w1_records_no_degrade(tmp_path: Path) -> None:
         lambda body: {
             **body,
             "processes": [
-                body["processes"][0], {**body["processes"][1], "fixed_port": 8081},
+                body["processes"][0],
+                {**body["processes"][1], "fixed_port": 8081},
                 body["processes"][2],
             ],
         }
     )
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert [runtime.world_index for runtime in runtimes] == [0]
     build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build_output["requested_parallelism"] == 1
@@ -3226,17 +4554,24 @@ def test_provision_fixed_port_above_w1_records_degrade(tmp_path: Path) -> None:
         lambda body: {
             **body,
             "processes": [
-                body["processes"][0], {**body["processes"][1], "fixed_port": 8081},
+                body["processes"][0],
+                {**body["processes"][1], "fixed_port": 8081},
                 body["processes"][2],
             ],
         }
     )
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     assert [runtime.world_index for runtime in runtimes] == [0]
     build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build_output["requested_parallelism"] == 3
@@ -3254,9 +4589,18 @@ def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -
     RECORDED `-f` argument, not merely that the fake `sync_run` returned success (which it always
     does regardless of the path)."""
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0], "migrations": ["db/schema.sql"], "seed_files": [],
-        }]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "migrations": ["db/schema.sql"],
+                        "seed_files": [],
+                    }
+                ]
+            },
+        }
     )
     source, bundle_dir = _provision_dirs(tmp_path)
     (bundle_dir / "db").mkdir(parents=True)
@@ -3264,12 +4608,19 @@ def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -
 
     calls: list[Any] = []
     provider = _sql_spy_provider(
-        sync_run=_recording_sync_run(calls), secrets_path=tmp_path / "secrets.json",
+        sync_run=_recording_sync_run(calls),
+        secrets_path=tmp_path / "secrets.json",
     )
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     seed_calls = [argv for argv, _ in calls if argv and argv[0] == "psql"]
     assert seed_calls, "expected a psql -f seed invocation"
     applied_file = seed_calls[0][seed_calls[0].index("-f") + 1]
@@ -3290,20 +4641,44 @@ def test_provision_empty_strategy_first_clone_reads_seed_files_from_bundle_dir_n
     with different content — asserting content, not just presence, is what actually proves the
     code read from `bundle_dir` rather than merely finding a same-named file wherever it looked."""
     manifest = _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "cache", "kind": "managed", "engine": "redis", "version": "7",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "cache": {"protocol": "redis", "service": "cache", "configuration_name": "CACHE_URL"},
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "cache", "migrations": [], "seed_files": ["cache/seed.txt"],
-             "baseline": {"strategy": "empty", "inputs_digest": "sha256:" + "b" * 64},
-             "sentinel": {"key": "greeting", "expected": "hi"}},
-        ]}}
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "cache",
+                    "kind": "managed",
+                    "engine": "redis",
+                    "version": "7",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "cache": {
+                    "protocol": "redis",
+                    "service": "cache",
+                    "configuration_name": "CACHE_URL",
+                },
+            },
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "cache",
+                        "migrations": [],
+                        "seed_files": ["cache/seed.txt"],
+                        "baseline": {
+                            "strategy": "empty",
+                            "inputs_digest": "sha256:" + "b" * 64,
+                        },
+                        "sentinel": {"key": "greeting", "expected": "hi"},
+                    },
+                ]
+            },
+        }
     )
     source, bundle_dir = _provision_dirs(tmp_path)
     (bundle_dir / "cache").mkdir(parents=True)
@@ -3313,14 +4688,25 @@ def test_provision_empty_strategy_first_clone_reads_seed_files_from_bundle_dir_n
 
     calls: list[Any] = []
     provider = _sql_spy_provider(
-        sync_run=_recording_sync_run(calls), secrets_path=tmp_path / "secrets.json",
+        sync_run=_recording_sync_run(calls),
+        secrets_path=tmp_path / "secrets.json",
     )
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
-    redis_calls = [(argv, kwargs) for argv, kwargs in calls if argv and "redis-cli" in argv]
-    assert redis_calls, "expected a redis-cli seed invocation from the empty-strategy RESET path"
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    redis_calls = [
+        (argv, kwargs) for argv, kwargs in calls if argv and "redis-cli" in argv
+    ]
+    assert redis_calls, (
+        "expected a redis-cli seed invocation from the empty-strategy RESET path"
+    )
     assert redis_calls[0][1]["input"] == "SET greeting hi\n"
 
 
@@ -3333,18 +4719,34 @@ def test_provision_is_idempotent_for_the_same_job_identity(tmp_path: Path) -> No
         spawn_count[0] += 1
         return FakeHandle()
 
-    provider = _sql_spy_provider(runner=counting_runner, secrets_path=tmp_path / "secrets.json")
-    first = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    provider = _sql_spy_provider(
+        runner=counting_runner, secrets_path=tmp_path / "secrets.json"
+    )
+    first = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     count_after_first = spawn_count[0]
-    second = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    second = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     assert [r.runtime_id for r in first] == [r.runtime_id for r in second]
-    assert spawn_count[0] == count_after_first  # nothing re-spawned; every world already `ready`.
+    assert (
+        spawn_count[0] == count_after_first
+    )  # nothing re-spawned; every world already `ready`.
 
 
 def test_provision_hosted_mode_require_declared_user_true_fails_typed_when_unresolvable(
@@ -3359,13 +4761,20 @@ def test_provision_hosted_mode_require_declared_user_true_fails_typed_when_unres
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
-        user_resolver=lambda name: None, secrets_path=tmp_path / "secrets.json",
+        user_resolver=lambda name: None,
+        secrets_path=tmp_path / "secrets.json",
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(provider.provision(
-            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-            require_declared_user=True,
-        ))
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=True,
+            )
+        )
     assert excinfo.value.code == "spawn_failed"
 
 
@@ -3376,12 +4785,19 @@ def test_provision_require_declared_user_defaults_to_true(tmp_path: Path) -> Non
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
-        user_resolver=lambda name: None, secrets_path=tmp_path / "secrets.json",
+        user_resolver=lambda name: None,
+        secrets_path=tmp_path / "secrets.json",
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(provider.provision(
-            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        ))
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+            )
+        )
     assert excinfo.value.code == "spawn_failed"
 
 
@@ -3394,24 +4810,39 @@ def test_provision_conformance_degrade_persists_across_a_later_reconcile_call(
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
-        sql_runner=SqlSpy(canary_leaks=True), secrets_path=tmp_path / "secrets.json",
+        sql_runner=SqlSpy(canary_leaks=True),
+        secrets_path=tmp_path / "secrets.json",
     )
-    first = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    first = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     assert [r.world_index for r in first] == [0]
-    second = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    second = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     assert [r.world_index for r in second] == [0]
     assert first[0].runtime_id == second[0].runtime_id
     build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build_output["degrade_reason"] == "conformance_gate_failed"  # m1
 
 
-def test_provision_reconcile_at_w1_after_gate_failure_records_no_degrade(tmp_path: Path) -> None:
+def test_provision_reconcile_at_w1_after_gate_failure_records_no_degrade(
+    tmp_path: Path,
+) -> None:
     """A sick-world recovery re-call can legitimately pass a smaller `instances` than the job's
     original request (the module's own comment above the reconcile branch). The sticky
     conformance-degrade branch does not know the current call's `requested` — at `instances=1`,
@@ -3421,20 +4852,33 @@ def test_provision_reconcile_at_w1_after_gate_failure_records_no_degrade(tmp_pat
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
-        sql_runner=SqlSpy(canary_leaks=True), secrets_path=tmp_path / "secrets.json",
+        sql_runner=SqlSpy(canary_leaks=True),
+        secrets_path=tmp_path / "secrets.json",
     )
-    first = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=3,
-        require_declared_user=False,
-    ))
+    first = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
     assert [r.world_index for r in first] == [0]
     build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build_output["degrade_reason"] == "conformance_gate_failed"
 
-    second = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    second = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert [r.world_index for r in second] == [0]
     build_output = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build_output["requested_parallelism"] == 1
@@ -3442,7 +4886,9 @@ def test_provision_reconcile_at_w1_after_gate_failure_records_no_degrade(tmp_pat
     assert build_output["degrade_reason"] is None
 
 
-def test_provision_tears_down_before_rebuilding_on_a_bundle_digest_change(tmp_path: Path) -> None:
+def test_provision_tears_down_before_rebuilding_on_a_bundle_digest_change(
+    tmp_path: Path,
+) -> None:
     """M6, p6-review-r1: a bundle-digest change (a re-sealed bundle mid-attempt) used to reassign
     this instance's own identity straight over the PREVIOUS job's still-running processes and
     still-allocated ports — §4.1's "never duplicates" broken in the one case this branch exists
@@ -3453,18 +4899,34 @@ def test_provision_tears_down_before_rebuilding_on_a_bundle_digest_change(tmp_pa
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
 
-    first = asyncio.run(provider.provision(
-        manifest_a, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
-    old_world_handles = [h for world in provider._world_handles.values() for h in world.values()]
+    first = asyncio.run(
+        provider.provision(
+            manifest_a,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    old_world_handles = [
+        h for world in provider._world_handles.values() for h in world.values()
+    ]
     old_shared_handles = list(provider._job_shared_handles.values())
-    assert old_world_handles or old_shared_handles  # something is actually running to tear down.
+    assert (
+        old_world_handles or old_shared_handles
+    )  # something is actually running to tear down.
 
-    second = asyncio.run(provider.provision(
-        manifest_b, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    second = asyncio.run(
+        provider.provision(
+            manifest_b,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert all(h.handle.terminated for h in old_world_handles)
     assert all(h.handle.terminated for h in old_shared_handles)
     assert second[0].bundle_digest == manifest_b.digest
@@ -3475,21 +4937,35 @@ def test_provision_recovers_a_sick_world_via_re_call(tmp_path: Path) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    first = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    first = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     runtime = first[0]
     old_agent_handle = provider._world_handles[0]["agent"]
-    old_runtime_id = runtime.runtime_id  # N1, p6-review-r2: snapshotted BEFORE mutation — after
+    old_runtime_id = (
+        runtime.runtime_id
+    )  # N1, p6-review-r2: snapshotted BEFORE mutation — after
     # N1, `second[0]` and `runtime` are the SAME object, so comparing `second[0].runtime_id !=
     # runtime.runtime_id` post-rebuild would compare an attribute against itself.
     runtime.state = pr.RuntimeState.UNHEALTHY
 
-    second = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    second = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert second[0] is runtime  # N1: mutated in place, never replaced.
     assert second[0].runtime_id != old_runtime_id  # rebuilt, not left unhealthy.
     # t3, p6-review-r1: `provision()` now promotes a freshly-(re)built world out of `PREPARING`
@@ -3503,10 +4979,16 @@ def test_reset_transitions_ready_or_unhealthy_per_sentinel(tmp_path: Path) -> No
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     runtime = runtimes[0]
     asyncio.run(provider.reset(runtime, work_directory=tmp_path))
     assert runtime.state is pr.RuntimeState.READY
@@ -3530,38 +5012,66 @@ def test_ensure_world_mutates_the_same_environment_runtime_object_across_rebuild
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    first = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    first = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     held = first[0]
     old_runtime_id = held.runtime_id
-    held.state = pr.RuntimeState.UNHEALTHY  # simulate the scheduler demoting it (§4.5b).
+    held.state = (
+        pr.RuntimeState.UNHEALTHY
+    )  # simulate the scheduler demoting it (§4.5b).
 
-    second = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    second = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert second[0] is held  # the SAME object — never replaced.
     assert held.runtime_id != old_runtime_id  # rebuilt: a fresh identity...
-    assert held.state is pr.RuntimeState.READY  # ...and promoted — both visible through `held`.
+    assert (
+        held.state is pr.RuntimeState.READY
+    )  # ...and promoted — both visible through `held`.
 
     asyncio.run(provider.reset(held, work_directory=tmp_path))
     assert provider._runtimes[0] is held  # reset() writes through the SAME object too.
     assert held.state is pr.RuntimeState.READY
 
 
-def test_close_is_idempotent_and_removes_secrets_and_data_directories(tmp_path: Path) -> None:
+def test_close_is_idempotent_and_removes_secrets_and_data_directories(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     secrets_path = tmp_path / "run-secrets.json"
     secrets_path.write_text("{}")
     provider = _sql_spy_provider(secrets_path=secrets_path)
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
-        require_declared_user=False,
-    ))
-    handles = [handle for world in provider._world_handles.values() for handle in world.values()]
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
+    handles = [
+        handle
+        for world in provider._world_handles.values()
+        for handle in world.values()
+    ]
     assert handles  # something is actually running before close().
     # B3, p6-review-r1: the secrets file is gone the moment `provision()` loaded it — long before
     # `close()` ever runs (t5). `close()`'s own unlink is the "if still present" backstop only.
@@ -3576,10 +5086,14 @@ def test_close_is_idempotent_and_removes_secrets_and_data_directories(tmp_path: 
     for runtime in runtimes:
         assert runtime.state is pr.RuntimeState.STOPPED
 
-    asyncio.run(provider.close(work_directory=tmp_path))  # must not raise the second time.
+    asyncio.run(
+        provider.close(work_directory=tmp_path)
+    )  # must not raise the second time.
 
 
-def test_close_removes_a_secrets_file_left_behind_by_a_failed_load(tmp_path: Path) -> None:
+def test_close_removes_a_secrets_file_left_behind_by_a_failed_load(
+    tmp_path: Path,
+) -> None:
     """`_load_and_delete_secrets` only unlinks `secrets.json` AFTER `json.loads` succeeds — a
     malformed file raises `secrets/spawn_failed` with the file still on disk. Every OTHER test
     that reaches `close()` does so via a successful load, where the file is already gone by the
@@ -3593,10 +5107,16 @@ def test_close_removes_a_secrets_file_left_behind_by_a_failed_load(tmp_path: Pat
     provider = _sql_spy_provider(secrets_path=secrets_path)
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(provider.provision(
-            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-            require_declared_user=False,
-        ))
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
     assert excinfo.value.code == "spawn_failed"
     assert secrets_path.exists()  # the failed load raised before its own unlink ran.
 
@@ -3628,13 +5148,23 @@ def test_secrets_are_loaded_and_the_file_is_gone_before_the_first_process_spawns
         existed_at_first_spawn.append(secrets_path.exists())
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    provider = _sql_spy_provider(runner=runner, sync_run=sync_run, secrets_path=secrets_path)
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    provider = _sql_spy_provider(
+        runner=runner, sync_run=sync_run, secrets_path=secrets_path
+    )
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert existed_at_first_spawn, "expected at least one spawn/sync_run call"
-    assert not any(existed_at_first_spawn), "secrets.json must be gone before the FIRST spawn"
+    assert not any(existed_at_first_spawn), (
+        "secrets.json must be gone before the FIRST spawn"
+    )
     assert not secrets_path.exists()
 
 
@@ -3653,20 +5183,31 @@ def test_secrets_are_re_injected_from_memory_on_reset(tmp_path: Path) -> None:
         return FakeHandle()
 
     provider = _sql_spy_provider(
-        runner=runner, secrets_path=secrets_path,
+        runner=runner,
+        secrets_path=secrets_path,
         # N10, p6-review-r2: no `/work/job.json` exists in this fixture's `tmp_path` — the
         # constructor override stands in for it, the same way a local/test lane would.
         secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
     )
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
-    assert not secrets_path.exists()  # gone after the first provision() — nothing left to re-read.
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    assert (
+        not secrets_path.exists()
+    )  # gone after the first provision() — nothing left to re-read.
 
     envs_by_argv0.clear()
     asyncio.run(provider.reset(runtimes[0], work_directory=tmp_path))
-    agent_envs = [env for argv, env in envs_by_argv0.items() if argv == ("python3", "agent.py")]
+    agent_envs = [
+        env for argv, env in envs_by_argv0.items() if argv == ("python3", "agent.py")
+    ]
     assert agent_envs, "expected the agent process to be respawned by reset()"
     assert agent_envs[0].get("LIVEKIT_API_KEY") == "abc123"
 
@@ -3687,16 +5228,27 @@ def test_secret_injection_end_to_end_through_provision(tmp_path: Path) -> None:
         return FakeHandle()
 
     provider = _sql_spy_provider(
-        runner=runner, secrets_path=secrets_path,
+        runner=runner,
+        secrets_path=secrets_path,
         secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},  # N10, p6-review-r2.
     )
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
-    agent_env = envs_by_argv0[("python3", "agent.py")]  # claims `target_provider` in `_manifest()`.
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    agent_env = envs_by_argv0[
+        ("python3", "agent.py")
+    ]  # claims `target_provider` in `_manifest()`.
     assert agent_env.get("LIVEKIT_API_KEY") == "abc123"
-    tools_env = envs_by_argv0[("node", "server.js")]  # claims no purpose in `_manifest()`.
+    tools_env = envs_by_argv0[
+        ("node", "server.js")
+    ]  # claims no purpose in `_manifest()`.
     assert "LIVEKIT_API_KEY" not in tools_env
 
 
@@ -3704,7 +5256,8 @@ def test_secret_injection_end_to_end_through_provision(tmp_path: Path) -> None:
 
 
 def test_secrets_with_no_matching_job_purpose_are_dropped_and_logged(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """N10, p6-review-r2: every alias used to be relabelled `target_provider` unconditionally,
     which silently defeats `select_process_secrets`'s own `SOURCE_CHECKOUT` exclusion (F13) the
@@ -3714,7 +5267,9 @@ def test_secrets_with_no_matching_job_purpose_are_dropped_and_logged(
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     secrets_path = tmp_path / "secrets.json"
-    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "abc123", "UNCLAIMED_ALIAS": "xyz"}))
+    secrets_path.write_text(
+        json.dumps({"LIVEKIT_API_KEY": "abc123", "UNCLAIMED_ALIAS": "xyz"})
+    )
     envs_by_argv0: dict[tuple[str, ...], dict[str, str]] = {}
 
     def runner(argv, *, cwd, env, log_path, user=None, group=None):
@@ -3722,37 +5277,61 @@ def test_secrets_with_no_matching_job_purpose_are_dropped_and_logged(
         return FakeHandle()
 
     provider = _sql_spy_provider(
-        runner=runner, secrets_path=secrets_path,
-        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},  # UNCLAIMED_ALIAS has no entry.
+        runner=runner,
+        secrets_path=secrets_path,
+        secret_purpose_map={
+            "LIVEKIT_API_KEY": "target_provider"
+        },  # UNCLAIMED_ALIAS has no entry.
     )
     with caplog.at_level("WARNING", logger="fi.alk.harness.process_runtime"):
-        asyncio.run(provider.provision(
-            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-            require_declared_user=False,
-        ))
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
     agent_env = envs_by_argv0[("python3", "agent.py")]
-    assert agent_env.get("LIVEKIT_API_KEY") == "abc123"  # the matched alias still lands.
-    assert "UNCLAIMED_ALIAS" not in agent_env  # the unmatched one is never injected anywhere.
+    assert (
+        agent_env.get("LIVEKIT_API_KEY") == "abc123"
+    )  # the matched alias still lands.
+    assert (
+        "UNCLAIMED_ALIAS" not in agent_env
+    )  # the unmatched one is never injected anywhere.
     assert any("UNCLAIMED_ALIAS" in record.message for record in caplog.records)
 
 
-def test_read_job_secret_purposes_reads_agent_secret_refs_from_job_json(tmp_path: Path) -> None:
+def test_read_job_secret_purposes_reads_agent_secret_refs_from_job_json(
+    tmp_path: Path,
+) -> None:
     """N10, p6-review-r2: the REAL hosted-path source — `/work/job.json`'s own `agent.secret_refs`
     (§1: `{alias: {manager, key, version, purpose}}`) — not just the constructor override."""
-    (tmp_path / "job.json").write_text(json.dumps({
-        "agent": {"secret_refs": {
-            "LIVEKIT_API_KEY": {
-                "manager": "platform-vault", "key": "k", "version": None,
-                "purpose": "target_provider",
-            },
-        }},
-    }))
+    (tmp_path / "job.json").write_text(
+        json.dumps(
+            {
+                "agent": {
+                    "secret_refs": {
+                        "LIVEKIT_API_KEY": {
+                            "manager": "platform-vault",
+                            "key": "k",
+                            "version": None,
+                            "purpose": "target_provider",
+                        },
+                    }
+                },
+            }
+        )
+    )
     purposes = pr._read_job_secret_purposes(tmp_path)
     assert purposes == {"LIVEKIT_API_KEY": "target_provider"}
 
 
 def test_read_job_secret_purposes_absent_file_returns_empty_and_logs(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level("WARNING", logger="fi.alk.harness.process_runtime"):
         purposes = pr._read_job_secret_purposes(tmp_path)
@@ -3772,7 +5351,9 @@ def test_load_and_delete_secrets_malformed_job_json_is_typed_not_attribute_error
     assert excinfo.value.code == "spawn_failed"
 
 
-def test_load_and_delete_secrets_malformed_secrets_json_is_typed(tmp_path: Path) -> None:
+def test_load_and_delete_secrets_malformed_secrets_json_is_typed(
+    tmp_path: Path,
+) -> None:
     secrets_path = tmp_path / "secrets.json"
     secrets_path.write_text("not valid json{{{")
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
@@ -3783,17 +5364,28 @@ def test_load_and_delete_secrets_malformed_secrets_json_is_typed(tmp_path: Path)
 # --- N2, p6-review-r2 (BLOCKER): promote-path polling ---------------------------------------------
 
 
-def _manifest_with_fast_readiness_poll(*, timeout_seconds: float = 0.3) -> EnvironmentBundleV2:
+def _manifest_with_fast_readiness_poll(
+    *, timeout_seconds: float = 0.3
+) -> EnvironmentBundleV2:
     """A tiny declared readiness timeout/interval so the poll tests below run in milliseconds, not
     up to `_DEFAULT_STORE_READY_TIMEOUT_SECONDS`'s 30s floor."""
     return _manifest(
-        lambda body: {**body, "readiness": [
-            {**body["readiness"][0], "timeout_seconds": timeout_seconds, "interval_seconds": 0.01},
-        ]}
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    **body["readiness"][0],
+                    "timeout_seconds": timeout_seconds,
+                    "interval_seconds": 0.01,
+                },
+            ],
+        }
     )
 
 
-def _recording_selective_prober(*, protocol: CapabilityProtocol, fail_times: int) -> Any:
+def _recording_selective_prober(
+    *, protocol: CapabilityProtocol, fail_times: int
+) -> Any:
     """Like `_recording_prober`, but only ever fails for calls matching `protocol` — every other
     protocol passes immediately. Isolates which call site actually needed to retry, since a bare
     `_recording_prober` shared across the whole `SpawnContext` would also be consumed by `_wait_
@@ -3833,12 +5425,20 @@ def test_provision_promotion_polls_the_declared_probe_rather_than_sampling_once(
     source, bundle_dir = _provision_dirs(tmp_path)
     prober = _recording_selective_prober(protocol=CapabilityProtocol.HTTP, fail_times=2)
     provider = _sql_spy_provider(prober=prober, secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert runtimes[0].state is pr.RuntimeState.READY
-    http_calls = [c for c in prober.calls if c.get("protocol") is CapabilityProtocol.HTTP]
+    http_calls = [
+        c for c in prober.calls if c.get("protocol") is CapabilityProtocol.HTTP
+    ]
     assert len(http_calls) >= 3  # 2 failures + the passing call.
 
 
@@ -3856,21 +5456,31 @@ def test_reset_promotion_polls_the_declared_probe_rather_than_sampling_once(
     manifest = _manifest_with_terminal_readiness(timeout_seconds=0.3)
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     runtime = runtimes[0]
     flaky = _recording_selective_prober(protocol=CapabilityProtocol.HTTP, fail_times=2)
     provider._context = dc_replace(provider._context, prober=flaky)
 
     asyncio.run(provider.reset(runtime, work_directory=tmp_path))
     assert runtime.state is pr.RuntimeState.READY
-    http_calls = [c for c in flaky.calls if c.get("protocol") is CapabilityProtocol.HTTP]
+    http_calls = [
+        c for c in flaky.calls if c.get("protocol") is CapabilityProtocol.HTTP
+    ]
     assert len(http_calls) >= 3
 
 
-def _manifest_with_terminal_readiness(*, timeout_seconds: float = 0.05) -> EnvironmentBundleV2:
+def _manifest_with_terminal_readiness(
+    *, timeout_seconds: float = 0.05
+) -> EnvironmentBundleV2:
     """§2a's own documented shape: a readiness-bearing capability backed by the DAG's TERMINAL
     process (`agent` — nothing in `_manifest()`'s topology ever names it in a `depends_on`).
     `wait_for_dependency` never checks it during build; only `probe_runtime_health`'s promote-time
@@ -3878,13 +5488,25 @@ def _manifest_with_terminal_readiness(*, timeout_seconds: float = 0.05) -> Envir
     own depends_on wait (from `agent`) has nothing to poll and returns immediately — build must
     succeed regardless of what the promote-time prober does."""
     return _manifest(
-        lambda body: {**body, "readiness": [
-            {"capability": "control", "path": "/health", "timeout_seconds": timeout_seconds,
-             "interval_seconds": 0.01},
-        ], "capabilities": {
-            **body["capabilities"],
-            "control": {"protocol": "http", "service": "agent", "configuration_name": None},
-        }}
+        lambda body: {
+            **body,
+            "readiness": [
+                {
+                    "capability": "control",
+                    "path": "/health",
+                    "timeout_seconds": timeout_seconds,
+                    "interval_seconds": 0.01,
+                },
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "control": {
+                    "protocol": "http",
+                    "service": "agent",
+                    "configuration_name": None,
+                },
+            },
+        }
     )
 
 
@@ -3902,12 +5524,19 @@ def test_provision_promotion_exhausts_the_poll_and_returns_unhealthy_never_raise
         return kwargs.get("protocol") is not CapabilityProtocol.HTTP
 
     provider = _sql_spy_provider(
-        prober=always_fails_http, secrets_path=tmp_path / "secrets.json",
+        prober=always_fails_http,
+        secrets_path=tmp_path / "secrets.json",
     )
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert runtimes[0].state is pr.RuntimeState.UNHEALTHY
 
 
@@ -3935,20 +5564,37 @@ def test_provision_failed_first_freeze_resets_identity_so_a_retry_retries_the_bu
         return real_spy(**kwargs)
 
     provider = _sql_spy_provider(
-        sql_runner=flaky_sql_runner, secrets_path=tmp_path / "secrets.json",
+        sql_runner=flaky_sql_runner,
+        secrets_path=tmp_path / "secrets.json",
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(provider.provision(
-            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-            require_declared_user=False,
-        ))
-    assert excinfo.value.code == "store_statement_failed"  # the REAL cause, not a bogus invariant.
-    assert provider._manifest is None  # identity reset, not left claiming a half-built job.
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
+    assert (
+        excinfo.value.code == "store_statement_failed"
+    )  # the REAL cause, not a bogus invariant.
+    assert (
+        provider._manifest is None
+    )  # identity reset, not left claiming a half-built job.
 
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     assert runtimes[0].state is pr.RuntimeState.READY
 
 
@@ -3957,23 +5603,44 @@ def test_provision_failed_first_freeze_resets_identity_so_a_retry_retries_the_bu
 
 def _manifest_with_two_postgres_stores() -> EnvironmentBundleV2:
     return _manifest(
-        lambda body: {**body, "processes": [
-            body["processes"][0],
-            {"name": "postgres2", "kind": "managed", "engine": "postgres", "version": "16",
-             "user": "svc-data", "depends_on": []},
-            *body["processes"][1:],
-        ], "capabilities": {
-            **body["capabilities"],
-            "database2": {
-                "protocol": "postgres", "service": "postgres2",
-                "configuration_name": "DATABASE2_URL",
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {
+                    "name": "postgres2",
+                    "kind": "managed",
+                    "engine": "postgres",
+                    "version": "16",
+                    "user": "svc-data",
+                    "depends_on": [],
+                },
+                *body["processes"][1:],
+            ],
+            "capabilities": {
+                **body["capabilities"],
+                "database2": {
+                    "protocol": "postgres",
+                    "service": "postgres2",
+                    "configuration_name": "DATABASE2_URL",
+                },
             },
-        }, "seed": {"stores": [
-            body["seed"]["stores"][0],
-            {"capability": "database2", "migrations": [], "seed_files": [],
-             "baseline": {"strategy": "template_database", "inputs_digest": "sha256:" + "e" * 64},
-             "sentinel": {"query": "SELECT 1", "expected": "1"}},
-        ]}}
+            "seed": {
+                "stores": [
+                    body["seed"]["stores"][0],
+                    {
+                        "capability": "database2",
+                        "migrations": [],
+                        "seed_files": [],
+                        "baseline": {
+                            "strategy": "template_database",
+                            "inputs_digest": "sha256:" + "e" * 64,
+                        },
+                        "sentinel": {"query": "SELECT 1", "expected": "1"},
+                    },
+                ]
+            },
+        }
     )
 
 
@@ -3991,12 +5658,18 @@ def test_freeze_baseline_terminates_an_earlier_stores_handle_on_a_later_stores_f
 
     def flaky_sql_runner(**kwargs: Any) -> list[tuple[Any, ...]]:
         statement = kwargs["statement"]
-        if statement.startswith("CREATE DATABASE") and "alk_baseline_postgres2" in statement:
+        if (
+            statement.startswith("CREATE DATABASE")
+            and "alk_baseline_postgres2" in statement
+        ):
             raise RuntimeError("simulated store-2 seed failure")
         return real_spy(**kwargs)
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, sql_runner=flaky_sql_runner, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        sql_runner=flaky_sql_runner,
+        work_directory=tmp_path,
     )
     handles: list[Any] = []
     original_runner = ctx.runner
@@ -4030,13 +5703,20 @@ def test_ensure_world_publishes_partial_handles_so_close_can_terminate_them(
         return kwargs.get("protocol") is not CapabilityProtocol.HTTP
 
     provider = _sql_spy_provider(
-        prober=failing_http_prober, secrets_path=tmp_path / "secrets.json",
+        prober=failing_http_prober,
+        secrets_path=tmp_path / "secrets.json",
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(provider.provision(
-            manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-            require_declared_user=False,
-        ))
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
     assert excinfo.value.code == "depends_on_timeout"
     tools_handle = provider._world_handles[0]["tools-api"]
     assert tools_handle.handle.terminated is False  # not yet — close() has not run.
@@ -4048,7 +5728,9 @@ def test_ensure_world_publishes_partial_handles_so_close_can_terminate_them(
 # --- N9, p6-review-r2 (MAJOR): filesystem failures must not escape untyped -----------------------
 
 
-def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(tmp_path: Path) -> None:
+def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(
+    tmp_path: Path,
+) -> None:
     """N9, p6-review-r2: §4.6 — filesystem failures during provisioning are `infrastructure`.
     mkdir/chmod/chown for a (re)spawned engine's own data directory used to raise bare, giving
     `provision()`'s caller nothing to map."""
@@ -4061,8 +5743,12 @@ def test_spawn_managed_process_data_dir_setup_failure_is_typed_spawn_failed(tmp_
 
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.spawn_managed_process(
-            postgres, port=14000, data_dir=tmp_path / "pg", credentials=creds,
-            runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+            postgres,
+            port=14000,
+            data_dir=tmp_path / "pg",
+            credentials=creds,
+            runner=lambda *a, **k: FakeHandle(),
+            sync_run=_fake_sync_run,
             user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
             chown=failing_chown,
         )
@@ -4078,18 +5764,36 @@ def test_run_conformance_gate_never_raises_on_a_filesystem_fault_during_reset(
     store`'s own `datadir_copy` work), and a filesystem fault there must still degrade the gate,
     never crash the job."""
     manifest = _manifest(
-        lambda body: {**body, "seed": {"stores": [{
-            **body["seed"]["stores"][0],
-            "baseline": {"strategy": "datadir_copy", "inputs_digest": "sha256:" + "a" * 64},
-        }]}}
+        lambda body: {
+            **body,
+            "seed": {
+                "stores": [
+                    {
+                        **body["seed"]["stores"][0],
+                        "baseline": {
+                            "strategy": "datadir_copy",
+                            "inputs_digest": "sha256:" + "a" * 64,
+                        },
+                    }
+                ]
+            },
+        }
     )
     sql_spy = SqlSpy()
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, sql_runner=sql_spy, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     world_handles = {
         index: pr._clone_or_reset_world(
-            manifest, index, context=ctx, baseline=freeze_result.build_output,
-            job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+            manifest,
+            index,
+            context=ctx,
+            baseline=freeze_result.build_output,
+            job_shared_handles=freeze_result.job_shared_handles,
+            existing_handles={},
         ).handles
         for index in (0, 1)
     }
@@ -4099,8 +5803,11 @@ def test_run_conformance_gate_never_raises_on_a_filesystem_fault_during_reset(
 
     broken_ctx = dc_replace(ctx, copy=failing_copy)
     passed, reason = pr.run_conformance_gate(
-        manifest, context=broken_ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, world_handles=world_handles,
+        manifest,
+        context=broken_ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        world_handles=world_handles,
     )
     assert (passed, reason) == (False, "conformance_gate_failed")
 
@@ -4109,10 +5816,16 @@ def test_run_conformance_gate_never_raises_on_a_filesystem_fault_during_reset(
 
 
 def _rabbitmq_process() -> Any:
-    return pr.ManagedProcess.model_validate({
-        "name": "queue", "kind": "managed", "engine": "rabbitmq", "version": "3.13",
-        "user": "svc-data", "depends_on": [],
-    })
+    return pr.ManagedProcess.model_validate(
+        {
+            "name": "queue",
+            "kind": "managed",
+            "engine": "rabbitmq",
+            "version": "3.13",
+            "user": "svc-data",
+            "depends_on": [],
+        }
+    )
 
 
 def test_spawn_managed_process_rabbitmq_conf_carries_credentials(
@@ -4127,15 +5840,21 @@ def test_spawn_managed_process_rabbitmq_conf_carries_credentials(
     creds = pr.EngineCredentials(username="harness", password="s3cr3t")
     data_dir = tmp_path / "queue"
     pr.spawn_managed_process(
-        _rabbitmq_process(), port=15003, data_dir=data_dir, credentials=creds,
-        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+        _rabbitmq_process(),
+        port=15003,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=lambda *a, **k: FakeHandle(),
+        sync_run=_fake_sync_run,
     )
     conf_path = data_dir / "rabbitmq.conf"
     conf_text = conf_path.read_text(encoding="utf-8")
     assert "default_user = harness" in conf_text
     assert "default_pass = s3cr3t" in conf_text
     assert "loopback_users" not in conf_text
-    assert (conf_path.stat().st_mode & 0o777) == 0o600  # carries the password in cleartext.
+    assert (
+        conf_path.stat().st_mode & 0o777
+    ) == 0o600  # carries the password in cleartext.
 
 
 def test_spawn_managed_process_rabbitmq_config_file_env_matches_the_on_disk_filename_exactly(
@@ -4154,8 +5873,12 @@ def test_spawn_managed_process_rabbitmq_config_file_env_matches_the_on_disk_file
         return FakeHandle()
 
     pr.spawn_managed_process(
-        _rabbitmq_process(), port=15003, data_dir=data_dir, credentials=creds,
-        runner=recording_runner, sync_run=_fake_sync_run,
+        _rabbitmq_process(),
+        port=15003,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=recording_runner,
+        sync_run=_fake_sync_run,
     )
     conf_path = data_dir / "rabbitmq.conf"
     assert captured_env["RABBITMQ_CONFIG_FILE"] == str(conf_path)
@@ -4174,8 +5897,12 @@ def test_spawn_managed_process_rabbitmq_conf_overwrites_a_datadir_copy_style_pre
     (data_dir / "rabbitmq.conf").write_text("stale content from a copied baseline\n")
     creds = pr.EngineCredentials(username="harness", password="fresh-pw")
     pr.spawn_managed_process(
-        _rabbitmq_process(), port=15003, data_dir=data_dir, credentials=creds,
-        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+        _rabbitmq_process(),
+        port=15003,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=lambda *a, **k: FakeHandle(),
+        sync_run=_fake_sync_run,
     )
     conf_text = (data_dir / "rabbitmq.conf").read_text(encoding="utf-8")
     assert "fresh-pw" in conf_text
@@ -4194,9 +5921,13 @@ def test_rabbitmq_daemon_env_mnesia_dir_is_node_name_free(tmp_path: Path) -> Non
     creds = pr.EngineCredentials(username="harness", password="pw")
     env = pr.rabbitmq_daemon_env(data_dir=tmp_path, port=15003, credentials=creds)
     assert env["RABBITMQ_MNESIA_DIR"] == str(tmp_path / "mnesia")
-    assert "15003" not in env["RABBITMQ_MNESIA_DIR"]  # not derived from the port/node name.
+    assert (
+        "15003" not in env["RABBITMQ_MNESIA_DIR"]
+    )  # not derived from the port/node name.
     for key in ("RABBITMQ_MNESIA_DIR", "RABBITMQ_MNESIA_BASE", "RABBITMQ_LOG_BASE"):
-        assert Path(env[key]).is_relative_to(tmp_path), f"{key} escapes data_dir: {env[key]}"
+        assert Path(env[key]).is_relative_to(tmp_path), (
+            f"{key} escapes data_dir: {env[key]}"
+        )
 
 
 def test_rabbitmq_daemon_env_names_the_same_relative_mnesia_path_in_every_world(
@@ -4210,18 +5941,28 @@ def test_rabbitmq_daemon_env_names_the_same_relative_mnesia_path_in_every_world(
     manifest = _manifest_with_rabbitmq_store()
     envs: list[dict[str, str]] = []
 
-    def runner(argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None):
+    def runner(
+        argv: list[str], *, cwd: Path, env: dict, log_path: Path, user=None, group=None
+    ):
         envs.append(env)
         return FakeHandle()
 
-    ctx = _spawn_context(manifest, bundle_dir=tmp_path, runner=runner, work_directory=tmp_path)
-    freeze_result = pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
+    ctx = _spawn_context(
+        manifest, bundle_dir=tmp_path, runner=runner, work_directory=tmp_path
+    )
+    freeze_result = pr.freeze_baseline(
+        manifest, bundle_digest=manifest.digest, context=ctx
+    )
     bootstrap_env = next(e for e in envs if "RABBITMQ_MNESIA_DIR" in e)
 
     envs.clear()
     pr._clone_or_reset_world(
-        manifest, 1, context=ctx, baseline=freeze_result.build_output,
-        job_shared_handles=freeze_result.job_shared_handles, existing_handles={},
+        manifest,
+        1,
+        context=ctx,
+        baseline=freeze_result.build_output,
+        job_shared_handles=freeze_result.job_shared_handles,
+        existing_handles={},
     )
     world1_env = next(e for e in envs if "RABBITMQ_MNESIA_DIR" in e)
 
@@ -4253,7 +5994,10 @@ def test_wait_for_store_ready_probes_both_amqp_and_management_listeners_for_rabb
         return True
 
     ctx = _spawn_context(
-        manifest, bundle_dir=tmp_path, prober=recording_prober, work_directory=tmp_path,
+        manifest,
+        bundle_dir=tmp_path,
+        prober=recording_prober,
+        work_directory=tmp_path,
     )
     port = ctx.port_plan.port_for("queue", 0)
     pr._wait_for_store_ready(manifest, process, port=port, context=ctx)
@@ -4262,7 +6006,9 @@ def test_wait_for_store_ready_probes_both_amqp_and_management_listeners_for_rabb
     assert (pr.CapabilityProtocol.AMQP, port) in seen
     management_port = pr._rabbitmq_management_port(port)
     assert (CapabilityProtocol.HTTP, management_port) in seen
-    http_paths = [path for protocol, _, path in probed if protocol is CapabilityProtocol.HTTP]
+    http_paths = [
+        path for protocol, _, path in probed if protocol is CapabilityProtocol.HTTP
+    ]
     assert "/api/overview" in http_paths
 
 
@@ -4283,13 +6029,23 @@ def test_reset_respawns_a_dead_job_shared_engine_and_reseals_every_tracked_world
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     sql_spy = SqlSpy()
-    provider = _sql_spy_provider(sql_runner=sql_spy, secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
-        require_declared_user=False,
-    ))
+    provider = _sql_spy_provider(
+        sql_runner=sql_spy, secrets_path=tmp_path / "secrets.json"
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
     old_shared = provider._job_shared_handles["postgres"]
-    old_shared.handle.terminated = True  # simulate the shared postgres dying (e.g. OOM-killed).
+    old_shared.handle.terminated = (
+        True  # simulate the shared postgres dying (e.g. OOM-killed).
+    )
     sql_spy.calls.clear()
 
     asyncio.run(provider.reset(runtimes[0], work_directory=tmp_path))
@@ -4298,19 +6054,29 @@ def test_reset_respawns_a_dead_job_shared_engine_and_reseals_every_tracked_world
     assert new_shared is not old_shared  # respawned, not silently reused dead.
     statements = [statement for _, statement in sql_spy.calls]
     assert 'CREATE DATABASE "w0" TEMPLATE "alk_baseline_postgres"' in statements
-    assert 'CREATE DATABASE "w1" TEMPLATE "alk_baseline_postgres"' in statements  # never the
+    assert (
+        'CREATE DATABASE "w1" TEMPLATE "alk_baseline_postgres"' in statements
+    )  # never the
     # `reset()` TARGET — only reachable via the respawn's own reseal-every-tracked-world loop.
     assert runtimes[0].state is pr.RuntimeState.READY
 
 
-def test_dead_job_shared_engine_respawn_failure_is_typed_naming_the_engine(tmp_path: Path) -> None:
+def test_dead_job_shared_engine_respawn_failure_is_typed_naming_the_engine(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     old_shared = provider._job_shared_handles["postgres"]
     old_shared.handle.terminated = True
 
@@ -4341,7 +6107,9 @@ def test_close_terminates_in_reverse_topological_order(tmp_path: Path) -> None:
         handle = FakeHandle()
         name = Path(cwd).name
 
-        def recording_terminate(_name: str = name, _handle: FakeHandle = handle) -> None:
+        def recording_terminate(
+            _name: str = name, _handle: FakeHandle = handle
+        ) -> None:
             terminate_order.append(_name)
             _handle.terminated = True
 
@@ -4349,13 +6117,21 @@ def test_close_terminates_in_reverse_topological_order(tmp_path: Path) -> None:
         return handle
 
     provider = _sql_spy_provider(runner=runner, secrets_path=tmp_path / "secrets.json")
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     terminate_order.clear()
     asyncio.run(provider.close(work_directory=tmp_path))
-    per_world_order = [name for name in terminate_order if name in ("tools-api", "agent")]
+    per_world_order = [
+        name for name in terminate_order if name in ("tools-api", "agent")
+    ]
     assert per_world_order == ["agent", "tools-api"]
 
 
@@ -4368,7 +6144,9 @@ def test_close_prefers_sigint_over_sigterm_for_postgres(tmp_path: Path) -> None:
         handle = FakeHandle()
         name = Path(cwd).name
 
-        def recording_interrupt(_name: str = name, _handle: FakeHandle = handle) -> None:
+        def recording_interrupt(
+            _name: str = name, _handle: FakeHandle = handle
+        ) -> None:
             interrupted.append(_name)
             _handle.interrupted = True
             _handle.terminated = True
@@ -4377,15 +6155,25 @@ def test_close_prefers_sigint_over_sigterm_for_postgres(tmp_path: Path) -> None:
         return handle
 
     provider = _sql_spy_provider(runner=runner, secrets_path=tmp_path / "secrets.json")
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     asyncio.run(provider.close(work_directory=tmp_path))
-    assert "postgres" in interrupted  # SIGINT (fast shutdown), never SIGTERM, for postgres.
+    assert (
+        "postgres" in interrupted
+    )  # SIGINT (fast shutdown), never SIGTERM, for postgres.
 
 
-def test_terminate_and_wait_escalates_to_kill_when_the_process_ignores_terminate() -> None:
+def test_terminate_and_wait_escalates_to_kill_when_the_process_ignores_terminate() -> (
+    None
+):
     """N13, p6-review-r2: `FakeHandle.wait` used to report the fake as exited the instant
     `terminate()` was called, so no test ever reached the `kill()` branch — M7's escalation half
     had zero coverage. A handle that ignores `terminate()`/`interrupt()` entirely (`wait()` only
@@ -4403,7 +6191,9 @@ def test_terminate_and_wait_escalates_to_kill_when_the_process_ignores_terminate
             return ""
 
         def terminate(self) -> None:
-            self.terminated = True  # acknowledges the signal but does NOT actually exit.
+            self.terminated = (
+                True  # acknowledges the signal but does NOT actually exit.
+            )
 
         def interrupt(self) -> None:
             self.terminated = True
@@ -4449,13 +6239,17 @@ def test_terminate_and_wait_logs_when_the_process_survives_even_kill(
 
     with caplog.at_level("WARNING", logger="fi.alk.harness.process_runtime"):
         pr._terminate_and_wait(UnkillableHandle(), timeout=0.01)
-    assert any("did not exit even after kill" in record.message for record in caplog.records)
+    assert any(
+        "did not exit even after kill" in record.message for record in caplog.records
+    )
 
 
 # --- N14, p6-review-r2 (MINOR): chmod before chown -------------------------------------------------
 
 
-def test_spawn_managed_process_chmods_before_chowning_the_data_dir(tmp_path: Path) -> None:
+def test_spawn_managed_process_chmods_before_chowning_the_data_dir(
+    tmp_path: Path,
+) -> None:
     """N14, p6-review-r2: `chmod` after `chown` cannot succeed once ownership has moved — `svc-
     control` still owns `data_dir` at chmod time and it is free; after chown, a non-root `svc-
     control` that can chown but not re-chmod a path it no longer owns would raise
@@ -4471,8 +6265,12 @@ def test_spawn_managed_process_chmods_before_chowning_the_data_dir(tmp_path: Pat
             mode_at_chown_time.append(data_dir.stat().st_mode & 0o777)
 
     pr.spawn_managed_process(
-        postgres, port=14000, data_dir=data_dir, credentials=creds,
-        runner=lambda *a, **k: FakeHandle(), sync_run=_fake_sync_run,
+        postgres,
+        port=14000,
+        data_dir=data_dir,
+        credentials=creds,
+        runner=lambda *a, **k: FakeHandle(),
+        sync_run=_fake_sync_run,
         user_resolver=_fake_user_resolver({"svc-data": (2222, 3333)}),
         chown=recording_chown,
     )
@@ -4482,18 +6280,28 @@ def test_spawn_managed_process_chmods_before_chowning_the_data_dir(tmp_path: Pat
 # --- N16, p6-review-r2 (MINOR): terminate backends before dropping a world's shared logical DB ----
 
 
-def test_drop_world_shared_databases_terminates_backends_before_dropping(tmp_path: Path) -> None:
+def test_drop_world_shared_databases_terminates_backends_before_dropping(
+    tmp_path: Path,
+) -> None:
     """N16, p6-review-r2: mirrors `_reset_template_database`'s own sibling call — a lingering
     backend connection on the world's logical DB otherwise blocks this DROP exactly the way it
     would block a reuse-time one, silently re-opening the space leak m4 closed."""
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     sql_spy = SqlSpy()
-    provider = _sql_spy_provider(sql_runner=sql_spy, secrets_path=tmp_path / "secrets.json")
-    asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
-        require_declared_user=False,
-    ))
+    provider = _sql_spy_provider(
+        sql_runner=sql_spy, secrets_path=tmp_path / "secrets.json"
+    )
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
     sql_spy.calls.clear()
     provider._drop_world_shared_databases(1)
     statements = [statement for _, statement in sql_spy.calls]
@@ -4505,17 +6313,25 @@ def test_drop_world_shared_databases_terminates_backends_before_dropping(tmp_pat
 # --- healthy() port method (task 2c) ---------------------------------------------------------------
 
 
-def test_provider_healthy_port_never_promotes_from_preparing_or_unhealthy(tmp_path: Path) -> None:
+def test_provider_healthy_port_never_promotes_from_preparing_or_unhealthy(
+    tmp_path: Path,
+) -> None:
     """Task 2c / p6-review-r2: unlike the module-level `healthy()`, the PORT method must never
     promote from ANY state — not even `preparing`, which only `provision()`'s own poll (N2)
     promotes out of."""
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     runtime = runtimes[0]
 
     runtime.state = pr.RuntimeState.PREPARING
@@ -4535,10 +6351,16 @@ def test_provider_healthy_port_demotes_ready_to_unhealthy_on_a_failing_probe(
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     runtime = runtimes[0]
     assert runtime.state is pr.RuntimeState.READY
 
@@ -4556,22 +6378,32 @@ def test_provider_healthy_port_demotes_both_the_providers_record_and_the_callers
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=1,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
     runtime = runtimes[0]
     provider._prober = lambda **kwargs: False
     asyncio.run(provider.healthy(runtime, work_directory=tmp_path))
     assert runtime.state is pr.RuntimeState.UNHEALTHY
     assert provider._runtimes[0].state is pr.RuntimeState.UNHEALTHY
-    assert provider._runtimes[0] is runtime  # N1: one object per world for the provider's life.
+    assert (
+        provider._runtimes[0] is runtime
+    )  # N1: one object per world for the provider's life.
 
 
 def test_provider_healthy_port_raises_typed_before_provision(tmp_path: Path) -> None:
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
     fake_runtime = pr.EnvironmentRuntime(
-        runtime_id="x", world_index=0, bundle_digest="sha256:" + "0" * 64,
+        runtime_id="x",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
         state=pr.RuntimeState.PREPARING,
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
@@ -4582,7 +6414,9 @@ def test_provider_healthy_port_raises_typed_before_provision(tmp_path: Path) -> 
 # --- voice dispatch identity on runtime metadata ---------------------------------------------
 
 
-def test_spawn_source_process_carries_rendered_dispatch_agent_name(tmp_path: Path) -> None:
+def test_spawn_source_process_carries_rendered_dispatch_agent_name(
+    tmp_path: Path,
+) -> None:
     """The dial identity exists only in the rendered per-world env; the handle must carry the
     RESOLVED value (world index substituted), and carry None when the process declares none."""
     build_dir = tmp_path / "build" / "svc"
@@ -4594,16 +6428,26 @@ def test_spawn_source_process_carries_rendered_dispatch_agent_name(tmp_path: Pat
 
     with_name = pr.spawn_source_process(
         _source_process(environment={"LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}"}),
-        build_dir=build_dir, world_dir=tmp_path / "worlds" / "w2" / "svc", world_index=2,
-        port_plan=plan, configuration_addresses={}, secret_values={}, secret_purposes={},
+        build_dir=build_dir,
+        world_dir=tmp_path / "worlds" / "w2" / "svc",
+        world_index=2,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
         runner=fake_runner,
     )
     assert with_name.dispatch_agent_name == "agent-w2"
 
     without = pr.spawn_source_process(
         _source_process(environment={}),
-        build_dir=build_dir, world_dir=tmp_path / "worlds" / "w0" / "svc", world_index=0,
-        port_plan=plan, configuration_addresses={}, secret_values={}, secret_purposes={},
+        build_dir=build_dir,
+        world_dir=tmp_path / "worlds" / "w0" / "svc",
+        world_index=0,
+        port_plan=plan,
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
         runner=fake_runner,
     )
     assert without.dispatch_agent_name is None
@@ -4618,7 +6462,10 @@ def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
 
     def handle(name: str | None) -> pr.SpawnedWorldProcess:
         return pr.SpawnedWorldProcess(
-            process_name="p", handle=FakeHandle(), port=1, world_index=0,
+            process_name="p",
+            handle=FakeHandle(),
+            port=1,
+            world_index=0,
             dispatch_agent_name=name,
         )
 
@@ -4627,17 +6474,21 @@ def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
     assert pr._dispatch_metadata({"a": handle("agent-w0")}) == {
         "livekit_agent_name": "agent-w0"
     }
-    assert pr._dispatch_metadata({"a": handle("agent-w0"), "b": handle("agent-w0")}) == {
-        "livekit_agent_name": "agent-w0"
-    }
+    assert pr._dispatch_metadata(
+        {"a": handle("agent-w0"), "b": handle("agent-w0")}
+    ) == {"livekit_agent_name": "agent-w0"}
     with caplog.at_level("WARNING"):
-        assert pr._dispatch_metadata(
-            {"a": handle("agent-w0"), "b": handle("other")}
-        ) == {}
-    assert any("distinct LIVEKIT_AGENT_NAME" in record.message for record in caplog.records)
+        assert (
+            pr._dispatch_metadata({"a": handle("agent-w0"), "b": handle("other")}) == {}
+        )
+    assert any(
+        "distinct LIVEKIT_AGENT_NAME" in record.message for record in caplog.records
+    )
 
 
-def test_provision_surfaces_dispatch_identity_on_runtime_metadata(tmp_path: Path) -> None:
+def test_provision_surfaces_dispatch_identity_on_runtime_metadata(
+    tmp_path: Path,
+) -> None:
     """End to end through provision(): a bundle whose agent process declares LIVEKIT_AGENT_NAME
     lands the per-world RESOLVED value on runtime.metadata, which is exactly where the call
     runner reads its dial identity."""
@@ -4651,10 +6502,16 @@ def test_provision_surfaces_dispatch_identity_on_runtime_metadata(tmp_path: Path
     manifest = _manifest(add_dispatch_env)
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json")
-    runtimes = asyncio.run(provider.provision(
-        manifest, source=source, bundle_dir=bundle_dir, work_directory=tmp_path, instances=2,
-        require_declared_user=False,
-    ))
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
     assert [runtime.metadata for runtime in runtimes] == [
         {"livekit_agent_name": "agent-w0"},
         {"livekit_agent_name": "agent-w1"},

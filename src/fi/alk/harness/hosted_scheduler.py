@@ -1714,9 +1714,18 @@ class HostedScheduler:
                 pending = _PendingRetryReceipt(
                     world_index=world_index, attempt=attempt, outcome=outcome
                 )
+                # A retry normally moves to another world.  With an effective one-world pool,
+                # excluding the only world makes the promised retry impossible: lease() raises
+                # NoWorldsAvailable even though release() has returned a healthy runtime and the
+                # next lease will reset it.  Reuse is safe for non-unhealthy failures because the
+                # lease path always resets the world before attempt 2.  An unhealthy world is
+                # still demoted and therefore cannot be leased until reconciliation replaces it.
+                retry_exclude = tried | {world_index}
+                if self._pool.effective_size == 1:
+                    retry_exclude = frozenset()
                 try:
                     next_leased = await self._lease_or_abandon(
-                        exclude=tried | {world_index}, abort_holder=abort_holder
+                        exclude=retry_exclude, abort_holder=abort_holder
                     )
                 except NoWorldsAvailable as exc:
                     # M8: this scenario already ran and produced a real attempt-1 failure — losing

@@ -96,20 +96,29 @@ _ENGINE_CATALOG_VERSION: dict[ManagedEngine, str] = {
 # the same statement (N7, p4-round2-review).
 _RESERVED_NAME = "_alk_conformance"
 _RESERVED_NAME_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])" + re.escape(_RESERVED_NAME) + r"(?![A-Za-z0-9_])", re.IGNORECASE
+    r"(?<![A-Za-z0-9_])" + re.escape(_RESERVED_NAME) + r"(?![A-Za-z0-9_])",
+    re.IGNORECASE,
 )
 _SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
 _SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 # §2b closed placeholder vocabulary.
 _PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
-_FIXED_PLACEHOLDERS = {"WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
+_FIXED_PLACEHOLDERS = {"JOB_ID", "WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
 _NAMED_PLACEHOLDER = re.compile(r"^(PORT|HOST)_(.+)$")
 
 # §2a: Dockerfile-style install lines requiring root privileges have no process-copy equivalent —
 # the provisioner never runs as root and never will (§0's guest is unprivileged throughout).
 _ROOT_BUILD_COMMANDS = {
-    "apt-get", "apt", "apt-cache", "dpkg", "yum", "dnf", "apk", "pacman", "sudo",
+    "apt-get",
+    "apt",
+    "apt-cache",
+    "dpkg",
+    "yum",
+    "dnf",
+    "apk",
+    "pacman",
+    "sudo",
 }
 
 _MAX_PROCESSES = 100
@@ -177,7 +186,9 @@ def preflight_bundle(
         # the `in` check below instead of the ValueError this docstring promises (N8, p4-round2-
         # review).
         if not isinstance(purpose, str) or purpose not in _SECRET_PURPOSE_VALUES:
-            raise ValueError(f"secret_refs[{alias!r}] = {purpose!r} is not a SecretPurpose value")
+            raise ValueError(
+                f"secret_refs[{alias!r}] = {purpose!r} is not a SecretPurpose value"
+            )
 
     if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
         # §2a: "a hosted job with kind: compose fails preflight" — not one of §2e's seven numbered
@@ -186,7 +197,9 @@ def preflight_bundle(
         # own files (its document, e.g.) carry no obligation to be exhaustively listed in files[]
         # the way a hosted bundle's do — checking file-listing first mis-reported that case as
         # bundle_file_unlisted instead of compose_not_hosted (N1, p4-round2-review).
-        raise PreflightError("compose_not_hosted", "kind: compose is not a legal hosted runtime")
+        raise PreflightError(
+            "compose_not_hosted", "kind: compose is not a legal hosted runtime"
+        )
 
     files = _verify_digest(bundle_dir, manifest)  # 1
     walked_files = _verify_path_safety(bundle_dir, files)  # 2
@@ -211,13 +224,17 @@ def preflight_bundle(
 # --- item 1: digest verification -------------------------------------------------------------
 
 
-def _verify_digest(bundle_dir: Path, manifest: EnvironmentBundleV2) -> list[BundleFileV2]:
+def _verify_digest(
+    bundle_dir: Path, manifest: EnvironmentBundleV2
+) -> list[BundleFileV2]:
     root = bundle_dir.resolve()
     try:
         raw = json.loads((root / BUNDLE_V2_MANIFEST).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PreflightError("bundle_manifest_invalid", str(exc)) from exc
-    on_disk_schema_version = raw.get("schema_version") if isinstance(raw, dict) else None
+    on_disk_schema_version = (
+        raw.get("schema_version") if isinstance(raw, dict) else None
+    )
     if on_disk_schema_version != BUNDLE_V2_SCHEMA_VERSION:
         # §2e item 1 opens with "schema_version is …bundle.v2" — checked here, at item 1,
         # rather than left to surface three items late through item 4's re-validation fallback
@@ -238,7 +255,8 @@ def _verify_digest(bundle_dir: Path, manifest: EnvironmentBundleV2) -> list[Bund
     recomputed = seal_bundle_v2(manifest)
     if recomputed != manifest.digest:
         raise PreflightError(
-            "bundle_digest_mismatch", f"expected {manifest.digest}, computed {recomputed}"
+            "bundle_digest_mismatch",
+            f"expected {manifest.digest}, computed {recomputed}",
         )
     return manifest.files
 
@@ -270,7 +288,9 @@ def _verify_path_safety(bundle_dir: Path, files: list[BundleFileV2]) -> list[Pat
     walked: list[Path] = []
     for entry in root.rglob("*"):
         if entry.is_symlink():
-            raise PreflightError("bundle_symlink_forbidden", str(entry.relative_to(root)))
+            raise PreflightError(
+                "bundle_symlink_forbidden", str(entry.relative_to(root))
+            )
         if entry == manifest_path:
             continue
         if entry.is_dir():
@@ -299,8 +319,13 @@ def _scan_bundle_files_for_secrets(bundle_dir: Path, walked_files: list[Path]) -
     for path in walked_files:
         relative = path.relative_to(root).as_posix()
         posix_path = PurePosixPath(relative)
-        if posix_path.name in _SECRET_FILES or posix_path.suffix.lower() in _SECRET_SUFFIXES:
-            raise PreflightError("secret_in_bundle", f"{relative}: forbidden secret-shaped file")
+        if (
+            posix_path.name in _SECRET_FILES
+            or posix_path.suffix.lower() in _SECRET_SUFFIXES
+        ):
+            raise PreflightError(
+                "secret_in_bundle", f"{relative}: forbidden secret-shaped file"
+            )
         with path.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
@@ -327,7 +352,8 @@ def _verify_unknown_fields(bundle_dir: Path, manifest: EnvironmentBundleV2) -> N
         # that leaves it valid (a changed `run_command`, a flipped `user`) unless the two dumps are
         # actually compared (F12, p4-round1-review).
         raise PreflightError(
-            "bundle_manifest_drifted", "manifest.json on disk no longer matches manifest argument"
+            "bundle_manifest_drifted",
+            "manifest.json on disk no longer matches manifest argument",
         )
 
 
@@ -430,15 +456,19 @@ def _verify_no_root_build_commands(manifest: EnvironmentBundleV2) -> None:
         for step in process.build_commands:
             if step[0] in _ROOT_BUILD_COMMANDS or "sudo" in step:
                 raise PreflightError(
-                    "build_requires_root", f"{process.name}: build step {step!r} requires root"
+                    "build_requires_root",
+                    f"{process.name}: build step {step!r} requires root",
                 )
 
 
-def _verify_secret_purposes(manifest: EnvironmentBundleV2, secret_refs: dict[str, str]) -> None:
+def _verify_secret_purposes(
+    manifest: EnvironmentBundleV2, secret_refs: dict[str, str]
+) -> None:
     """§2b: both directions, scoped to `target_provider` only — `source_checkout` and any other
     gateway-only purpose never crosses into the guest (§0 step 3) and has nothing to claim here."""
     ref_has_target_provider = any(
-        purpose == SecretPurpose.TARGET_PROVIDER.value for purpose in secret_refs.values()
+        purpose == SecretPurpose.TARGET_PROVIDER.value
+        for purpose in secret_refs.values()
     )
     process_claims_target_provider = any(
         SecretPurpose.TARGET_PROVIDER in process.secret_purposes
@@ -447,12 +477,14 @@ def _verify_secret_purposes(manifest: EnvironmentBundleV2, secret_refs: dict[str
     )
     if ref_has_target_provider and not process_claims_target_provider:
         raise PreflightError(
-            "secret_unclaimed", "a target_provider secret ref is not listed by any process"
+            "secret_unclaimed",
+            "a target_provider secret ref is not listed by any process",
         )
     if process_claims_target_provider and not ref_has_target_provider:
         raise PreflightError(
-            "secret_missing", "a process lists secret_purposes: target_provider but the job "
-            "supplies no such ref"
+            "secret_missing",
+            "a process lists secret_purposes: target_provider but the job "
+            "supplies no such ref",
         )
 
 
@@ -474,7 +506,7 @@ def _verify_depends_on(manifest: EnvironmentBundleV2) -> None:
         stack.append(name)
         for dep in graph[name]:
             if state[dep] == in_progress:
-                cycle = stack[stack.index(dep):] + [dep]
+                cycle = stack[stack.index(dep) :] + [dep]
                 raise PreflightError("depends_on_cycle", " -> ".join(cycle))
             if state[dep] == unvisited:
                 visit(dep, stack)
@@ -518,7 +550,9 @@ def _verify_fixed_port_not_reserved(manifest: EnvironmentBundleV2) -> None:
 
 
 def _verify_seed_missing(manifest: EnvironmentBundleV2) -> None:
-    covered = {store.capability for store in (manifest.seed.stores if manifest.seed else [])}
+    covered = {
+        store.capability for store in (manifest.seed.stores if manifest.seed else [])
+    }
     missing = sorted(
         slug
         for slug, capability in manifest.capabilities.items()
@@ -587,7 +621,9 @@ def _verify_seed_files_on_disk_and_listed(
     for store in manifest.seed.stores:
         for relative_path in (*store.migrations, *store.seed_files):
             if not (root / relative_path).is_file():
-                raise PreflightError("seed_file_missing", f"{relative_path} does not exist on disk")
+                raise PreflightError(
+                    "seed_file_missing", f"{relative_path} does not exist on disk"
+                )
             if relative_path not in listed:
                 raise PreflightError(
                     "seed_file_unlisted", f"{relative_path} is not listed in files[]"
@@ -625,7 +661,8 @@ def _verify_no_sql_store(manifest: EnvironmentBundleV2) -> None:
         for capability in manifest.capabilities.values()
     ):
         raise PreflightError(
-            "no_sql_store", "kind: process requires at least one postgres-protocol capability"
+            "no_sql_store",
+            "kind: process requires at least one postgres-protocol capability",
         )
 
 

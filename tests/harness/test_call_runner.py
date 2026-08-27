@@ -493,6 +493,7 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
     # take this string as the full on-the-wire room name.
     assert livekit_runtime["room_name"].startswith("harness-job-abcd-a1-k1-s1")
     assert livekit_runtime["url"] == "wss://custom.livekit.cloud/"
+    assert spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
 
 
 def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(

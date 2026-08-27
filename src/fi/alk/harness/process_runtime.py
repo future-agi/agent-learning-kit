@@ -372,6 +372,7 @@ def render_template(
     value: str,
     *,
     process_name: str,
+    job_id: str = "local",
     world_index: int,
     world_dir: Path,
     port_plan: PortPlan,
@@ -385,6 +386,8 @@ def render_template(
 
     def resolve(match: re.Match[str]) -> str:
         token = match.group(1)
+        if token == "JOB_ID":
+            return job_id
         if token == "WORLD_INDEX":
             return str(world_index)
         if token == "WORLD_DIR":
@@ -420,6 +423,7 @@ def render_template(
 def render_environment(
     process: SourceProcess,
     *,
+    job_id: str = "local",
     world_index: int,
     world_dir: Path,
     port_plan: PortPlan,
@@ -431,6 +435,7 @@ def render_environment(
         key: render_template(
             value,
             process_name=process.name,
+            job_id=job_id,
             world_index=world_index,
             world_dir=world_dir,
             port_plan=port_plan,
@@ -477,6 +482,8 @@ def select_process_secrets(
 # `os.environ` wholesale — nothing here exports a secret today, but the entrypoint that will
 # (a bearer token, a `FUTUREAGI_*` marker) is exactly the next thing wired on top of this module.
 _INHERITED_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "TZ", "TMPDIR")
+_GOOGLE_ADC_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+_GOOGLE_ADC_PATH_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
 
 
 def _allowlisted_ambient_env(source: dict[str, str]) -> dict[str, str]:
@@ -485,6 +492,90 @@ def _allowlisted_ambient_env(source: dict[str, str]) -> dict[str, str]:
     }
     env.update({key: value for key, value in source.items() if key.startswith("LC_")})
     return env
+
+
+def _materialize_process_secret_files(
+    process: SourceProcess,
+    *,
+    injected: dict[str, str],
+    world_dir: Path,
+    resolved_user: "pwd.struct_passwd | None",
+    chown: Callable[[Path, int, int], None],
+) -> dict[str, str]:
+    """Turn file-shaped target credentials into process-local files.
+
+    Bundle V2 executes plain processes, so a Compose mount such as
+    ``/etc/vertex/creds.json`` cannot survive translation as a usable path.  The platform sends
+    the uploaded service-account document under ``GOOGLE_APPLICATION_CREDENTIALS_JSON``.  Write
+    it into this process's private per-world directory, replace the stale container path with the
+    real path, and do not expose the raw JSON in the child environment.
+    """
+    raw = injected.get(_GOOGLE_ADC_JSON_ALIAS)
+    if not raw:
+        return injected
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON is not valid JSON",
+            process=process.name,
+            domain=FailureDomain.AGENT,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON must contain an object",
+            process=process.name,
+            domain=FailureDomain.AGENT,
+        )
+
+    secret_dir = world_dir / ".secrets"
+    # A world is spawned again after every reset.  Its scratch tree deliberately survives until
+    # the reset code has restored the stores, so the private credential directory from the
+    # previous spawn is expected to exist here.  Reuse that directory, but never follow a path a
+    # customer process replaced with a symlink (the old process has been terminated before this
+    # point).  The credential itself is recreated with O_EXCL below so a stale file or symlink
+    # cannot be followed.
+    if secret_dir.is_symlink():
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            f"{secret_dir} must not be a symlink",
+            process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    secret_dir.mkdir(mode=0o700, exist_ok=True)
+    if not secret_dir.is_dir():
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            f"{secret_dir} is not a directory",
+            process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    secret_dir.chmod(0o700)
+    credential_path = secret_dir / "google-application-credentials.json"
+    credential_path.unlink(missing_ok=True)
+    fd = os.open(
+        credential_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.write(fd, raw.encode("utf-8"))
+    finally:
+        os.close(fd)
+    if resolved_user is not None:
+        chown(secret_dir, resolved_user.pw_uid, resolved_user.pw_gid)
+        chown(credential_path, resolved_user.pw_uid, resolved_user.pw_gid)
+
+    result = dict(injected)
+    result.pop(_GOOGLE_ADC_JSON_ALIAS, None)
+    result[_GOOGLE_ADC_PATH_ALIAS] = str(credential_path)
+    return result
 
 
 def _base_process_env(
@@ -1412,6 +1503,7 @@ def spawn_source_process(
     build_dir: Path,
     world_dir: Path,
     world_index: int,
+    job_id: str = "local",
     port_plan: PortPlan,
     configuration_addresses: dict[str, str],
     secret_values: dict[str, str],
@@ -1452,6 +1544,7 @@ def spawn_source_process(
         ) from exc
     rendered = render_environment(
         process,
+        job_id=job_id,
         world_index=world_index,
         world_dir=world_dir,
         port_plan=port_plan,
@@ -1459,6 +1552,13 @@ def spawn_source_process(
     )
     injected = select_process_secrets(
         process, secret_values=secret_values, secret_purposes=secret_purposes
+    )
+    injected = _materialize_process_secret_files(
+        process,
+        injected=injected,
+        world_dir=world_dir,
+        resolved_user=resolved_user,
+        chown=chown,
     )
     env = _base_process_env(
         build_dir, {**(process.build_environment or {}), **rendered, **injected}
@@ -2492,6 +2592,9 @@ class SpawnContext:
     credentials: dict[str, EngineCredentials]
     secret_values: dict[str, str]
     secret_purposes: dict[str, str]
+    # A dedicated Daytona sandbox can still share one LiveKit project with other jobs. Carry the
+    # stable job identity into placeholder rendering so each worker gets a unique dispatch name.
+    job_id: str = "local"
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
@@ -2594,6 +2697,7 @@ def spawn_world(
                         context.work_directory, world_index, name
                     ),
                     world_index=world_index,
+                    job_id=context.job_id,
                     port_plan=context.port_plan,
                     configuration_addresses=configuration_addresses,
                     secret_values=context.secret_values,
@@ -2604,6 +2708,27 @@ def spawn_world(
                     chown=context.chown,
                 )
             handles[name] = handle
+
+        # A terminal process has no dependent to trigger the edge-based wait above.  That is
+        # common for a voice control service: the LiveKit worker opens its local HTTP port and
+        # only then registers for dispatch, while nothing else in the process DAG depends on it.
+        # Honour its declared started_check before publishing the world as usable; otherwise a
+        # reset can dispatch the next call into the small boot window and LiveKit leaves the
+        # explicit dispatch unassigned.  Rechecking non-terminal source processes is cheap (their
+        # readiness already passed while starting a dependent) and keeps this rule uniform.
+        for name in _topological_order(manifest):
+            process = processes_by_name[name]
+            if not isinstance(process, SourceProcess) or process.started_check is None:
+                continue
+            wait_for_dependency(
+                manifest,
+                name,
+                world_index=world_index,
+                port_plan=context.port_plan,
+                spawned=handles[name],
+                credentials=context.credentials,
+                prober=context.prober,
+            )
     except BaseException as exc:
         # N4, p6-review-r2 (MAJOR): a `depends_on_timeout`/`spawn_failed` partway through this
         # world's own process list used to drop every ALREADY-spawned process of the SAME world on
@@ -4011,6 +4136,26 @@ def run_conformance_gate(
 # --- §0.3/§4 rule 1 secrets lifetime (B3, p6-review-r1) ---------------------------------------
 
 
+def _read_job_id(work_directory: Path) -> str:
+    """Return the stable job identifier used by explicitly declared ``{{JOB_ID}}`` templates.
+
+    Hosted execution guarantees ``/work/job.json``. Local tests and direct SDK process-runtime
+    use may omit it, so they receive a deterministic local-lane value rather than failing for a
+    field needed only to isolate shared external dispatch namespaces.
+    """
+    path = work_directory / "job.json"
+    if not path.is_file():
+        return "local"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "local"
+    if not isinstance(raw, dict):
+        return "local"
+    value = str(raw.get("job_id") or "").strip()
+    return value or "local"
+
+
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     """§0.2/§4.1: `/work/job.json` is the provisioner's own configuration source — `agent.
     secret_refs` (§1: `{alias: {manager, key, version, purpose}}`) is where each alias's REAL
@@ -4305,6 +4450,7 @@ class ProcessRuntimeProvider:
                 credentials=credentials,
                 secret_values=self._secret_values,
                 secret_purposes=self._secret_purposes,
+                job_id=_read_job_id(work_directory),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -4560,11 +4706,15 @@ class ProcessRuntimeProvider:
         control = self._manifest.runtime.control_service
         process = next((p for p in self._manifest.processes if p.name == control), None)
         env = dict(getattr(process, "environment", {}) or {})
-        world_dir = world_scratch_dir(self._context.work_directory, world_index, control)
+        world_dir = world_scratch_dir(
+            self._context.work_directory, world_index, control
+        )
 
         def _fill(value: str) -> str:
-            return value.replace("{{WORLD_INDEX}}", str(world_index)).replace(
-                "{{WORLD_DIR}}", str(world_dir)
+            return (
+                value.replace("{{JOB_ID}}", self._context.job_id)
+                .replace("{{WORLD_INDEX}}", str(world_index))
+                .replace("{{WORLD_DIR}}", str(world_dir))
             )
 
         metadata: dict[str, str] = {}

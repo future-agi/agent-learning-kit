@@ -659,17 +659,40 @@ def contract_tools(destination: Path) -> Any:
                 if not isinstance(fields, dict):
                     continue
                 for field, specification in fields.items():
-                    words = str(specification).replace("(", " ").replace(")", " ").split()
+                    words = (
+                        str(specification).replace("(", " ").replace(")", " ").split()
+                    )
                     try:
                         marker = next(
-                            index for index, word in enumerate(words) if word.upper() == "FK"
+                            index
+                            for index, word in enumerate(words)
+                            if word.upper() == "FK"
                         )
                     except StopIteration:
                         continue
                     if marker + 1 >= len(words):
                         continue
-                    target = words[marker + 1].strip("`'\".,:;")
-                    target_key = str(field).rsplit("_", 1)[-1]
+                    target_reference = words[marker + 1].strip("`'\".,:;")
+                    if "." in target_reference:
+                        target, target_key = target_reference.rsplit(".", 1)
+                    else:
+                        target = target_reference
+                        inferred_key = str(field).rsplit("_", 1)[-1]
+                        target_fields = data_schema.get(target)
+                        if (
+                            isinstance(target_fields, dict)
+                            and inferred_key in target_fields
+                        ):
+                            target_key = inferred_key
+                        elif (
+                            isinstance(target_fields, dict)
+                            and str(field) in target_fields
+                        ):
+                            # A same-named key such as payment_methods.rider_id ->
+                            # users.rider_id must not be shortened blindly to users.id.
+                            target_key = str(field)
+                        else:
+                            target_key = inferred_key
                     target_values = {
                         row.get(target_key)
                         for row in rows_for(target)
