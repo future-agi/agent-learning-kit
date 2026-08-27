@@ -108,4 +108,14 @@ def resolve(name: str | None = None) -> HarnessBackend:
         )
     if asked not in _LIVE:
         _LIVE[asked] = _LOADERS[asked]()
-    return _LIVE[asked]
+    backend = _LIVE[asked]
+    # A named model that this backend cannot reach is a configuration mistake, and it is only
+    # visible here. Left to run, the provider rejects the model mid-stage and the failure reads
+    # as the harness having nothing to say rather than as the wrong pairing.
+    wanted = os.environ.get("ALK_HARNESS_MODEL", "").strip()
+    if wanted and not backend.can_drive(wanted):
+        raise ValueError(
+            f"harness backend {backend.name!r} cannot drive model {wanted!r}; "
+            f"its default is {backend.default_model!r}"
+        )
+    return backend

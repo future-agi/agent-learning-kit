@@ -253,6 +253,7 @@ class VertexGeminiSession:
         tokens_in = 0
         tokens_out = 0
         models: set[str] = set()
+        settled = False
         while turns < max(self._spec.max_turns, 1):
             turns += 1
             try:
@@ -311,6 +312,7 @@ class VertexGeminiSession:
             yield ModelReply(parts=parts, model=self._model)
             self._history.append(candidate.content)
             if not calls:
+                settled = True
                 break
             responses = []
             for call in calls:
@@ -322,8 +324,12 @@ class VertexGeminiSession:
                     )
                 )
             self._history.append(types.Content(role="user", parts=responses))
+        # Falling out of the loop means the budget ran out mid-conversation, which is not
+        # the same as the model having finished. Reported as success it reads as a stage
+        # that did its work, and a half-written suite comes back green.
         yield StageDone(
-            outcome="success",
+            outcome="success" if settled else "max_turns",
+            is_error=not settled,
             turns=turns,
             cost_usd=self._cost(tokens_in, tokens_out),
             session_id=self.session_id,
