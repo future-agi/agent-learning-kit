@@ -74,9 +74,11 @@ def open_stage(
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     spec = SessionSpec(
+        # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(
-            f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
+            f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
+            f"\n\n{load_skill(SKILL)}"
             + (
                 f"\n\nWrite {wanted} scenarios."
                 if not kept
@@ -369,9 +371,13 @@ async def _write_slice(
     # A slice writer never saves the suite; withholding the tool structurally means no backend
     # has to be told to deny it.
     sliced = SessionSpec(
+        # The agent and its world come first, the method second. Grounding evidence read
+        # before the instructions that operate on it is followed more closely than the
+        # same evidence buried between the instructions and the task.
         system_prompt=(
-            f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
+            f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
+            f"\n\n{load_skill(SKILL)}"
             f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
         servers={
