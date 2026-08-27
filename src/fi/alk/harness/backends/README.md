@@ -5,7 +5,7 @@ that feeds tool results back until the model stops. A backend is whoever runs th
 
 ```
 ALK_HARNESS=claude          # default; Claude Code loop, exactly the pre-seam behaviour
-ALK_HARNESS=vertex-gemini   # our own loop on google-genai against Vertex (location=global)
+ALK_HARNESS=vertex-gemini   # Google's ADK against Vertex (location=global)
 ALK_HARNESS_MODEL=...       # optional; unset means the backend's own default
 ALK_VERTEX_LOCATION=...     # vertex-gemini only; defaults to global (Gemini 3.x lives there)
 ```
@@ -34,8 +34,10 @@ Backends load lazily, so one backend's SDK is never imported because a different
 
 ## What the Gemini backend supplies itself
 
-Claude Code ships Read/Glob/Grep and an operator-question tool; a bare model loop has none of
-that. `files.py` implements the read-only file tools once for any backend that needs them.
-AskUserQuestion is deliberately not declared on the Gemini backend yet: unattended runs never
-call it, and declaring a tool the backend cannot answer would cost the model a turn finding
-that out.
+The ADK owns the loop, tool execution, and session history; the backend only adapts a
+``ToolSpec`` through ADK's ``BaseTool`` extension point and translates its event stream into
+the neutral replies. Claude Code ships Read/Glob/Grep and an operator-question tool; ADK has
+no coding-CLI file tools, so `files.py` implements the read-only file tools once for any
+backend that needs them. AskUserQuestion is deliberately not declared on the Gemini backend
+yet: unattended runs never call it, and declaring a tool the backend cannot answer would cost
+the model a turn finding that out.

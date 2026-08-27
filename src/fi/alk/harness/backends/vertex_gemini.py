@@ -1,9 +1,10 @@
-"""A harness backend that runs stages on Gemini through Vertex AI.
+"""A harness backend that runs stages on Gemini through Vertex AI, on Google's ADK.
 
-This backend owns its loop: it declares the stage's tools as Gemini function declarations,
-feeds every tool result back, and stops when the model stops calling or the turn budget runs
-out. Gating is structural rather than hooked: a tool that was not granted is never declared,
-so the model cannot spend a turn discovering a denial.
+The Agent Development Kit is Google's counterpart to the Claude Agent SDK: it owns the agentic
+loop, executes tools, and holds session history, the way this harness expects a backend to. We
+adapt at the same seam as the Claude backend and nothing more: a ``ToolSpec`` becomes an ADK
+tool through ADK's own extension point (``BaseTool`` with an explicit declaration), and ADK's
+event stream is translated into the neutral reply vocabulary. The loop itself is not ours.
 
 The Gemini 3.x models this exists for are served from the ``global`` endpoint only, which is
 why ``ALK_VERTEX_LOCATION`` defaults to ``global`` rather than to a region. Regional Vertex
@@ -29,7 +30,6 @@ from .base import (
     SessionOpened,
     SessionSpec,
     StageDone,
-    ToolHandler,
     ToolReturned,
     ToolSpec,
     qualified,
@@ -163,169 +163,182 @@ def _location() -> str:
     return os.environ.get("ALK_VERTEX_LOCATION", "global").strip() or "global"
 
 
-def _flattened(result: dict[str, Any]) -> str:
-    content = result.get("content")
+def _flattened(result: Any) -> str:
+    content = result.get("content") if isinstance(result, dict) else None
     if isinstance(content, list):
         return "\n".join(
             part.get("text", "") for part in content if isinstance(part, dict)
         )
-    return content if isinstance(content, str) else str(content)
+    return content if isinstance(content, str) else str(result)
+
+
+def _spec_tool(name: str, spec: ToolSpec) -> Any:
+    """A ToolSpec as an ADK tool, through ADK's own extension point.
+
+    ``BaseTool`` with an explicit ``_get_declaration`` is how ADK says a tool whose contract
+    is defined elsewhere should be wrapped; the handler runs unchanged and ADK owns calling
+    it, retrying the turn, and feeding the result back.
+    """
+    from google.adk.tools import BaseTool
+    from google.genai import types
+
+    class SpecTool(BaseTool):
+        def __init__(self) -> None:
+            super().__init__(name=name, description=spec.description)
+
+        def _get_declaration(self) -> Any:
+            return types.FunctionDeclaration(
+                name=name,
+                description=spec.description,
+                parameters=_json_schema(spec.input_schema),
+            )
+
+        async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> Any:
+            return await spec.handler(args)
+
+    return SpecTool()
 
 
 class VertexGeminiSession:
-    """One conversation with Gemini, holding its own history across turns."""
+    """One ADK-run conversation with Gemini; ADK holds the history across turns."""
 
     def __init__(self, spec: SessionSpec, model: str) -> None:
         self._spec = spec
         self._model = model
-        self._client: Any = None
-        self._history: list[Any] = []
-        self._handlers: dict[str, ToolHandler] = {}
-        self._declarations: list[Any] = []
+        self._runner: Any = None
         self._pending: str | None = None
         self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
 
-    def _tools(self) -> list[ToolSpec]:
+    def _tools(self) -> list[Any]:
         # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
         # this backend cannot answer would cost the model a turn finding that out.
+        offered: list[Any] = []
         wanted = {name for name in self._spec.builtins if name in FILE_TOOLS}
-        if not wanted:
-            return []
-        return [spec for spec in file_tools(self._spec.cwd) if spec.name in wanted]
+        offered.extend(
+            _spec_tool(spec.name, spec)
+            for spec in file_tools(self._spec.cwd)
+            if spec.name in wanted
+        )
+        for server_name, server in self._spec.servers.items():
+            offered.extend(
+                _spec_tool(qualified(server_name, spec.name), spec)
+                for spec in server.tools
+            )
+        return offered
 
     async def start(self) -> None:
-        from google import genai
+        from google.adk.agents import LlmAgent
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
-        self._client = genai.Client(
-            vertexai=True, project=_project(), location=_location()
+        # ADK builds its Vertex client from the environment, the same way the Claude backend
+        # passes provider env through its options.
+        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+        os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
+        os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
+        # static_instruction, not instruction: the skills are full of literal JSON braces,
+        # and ADK templates {placeholders} in `instruction` from session state. Static
+        # content is sent verbatim and is what ADK context-caches.
+        agent = LlmAgent(
+            name=self.session_id.replace("-", "_"),
+            model=self._model,
+            static_instruction=types.Content(
+                role="user", parts=[types.Part(text=self._spec.system_prompt)]
+            ),
+            tools=self._tools(),
         )
-        declarations = []
-        for spec in self._tools():
-            declarations.append(
-                types.FunctionDeclaration(
-                    name=spec.name,
-                    description=spec.description,
-                    parameters=_json_schema(spec.input_schema),
-                )
-            )
-            self._handlers[spec.name] = spec.handler
-        for server_name, server in self._spec.servers.items():
-            for spec in server.tools:
-                name = qualified(server_name, spec.name)
-                declarations.append(
-                    types.FunctionDeclaration(
-                        name=name,
-                        description=spec.description,
-                        parameters=_json_schema(spec.input_schema),
-                    )
-                )
-                self._handlers[name] = spec.handler
-        self._declarations = declarations
+        sessions = InMemorySessionService()
+        await sessions.create_session(
+            app_name="alk-harness", user_id="stage", session_id=self.session_id
+        )
+        self._runner = Runner(
+            agent=agent, app_name="alk-harness", session_service=sessions
+        )
 
     async def stop(self) -> None:
-        self._client = None
+        if self._runner is not None:
+            await self._runner.close()
+            self._runner = None
 
     async def send(self, message: str) -> None:
-        if self._client is None:
+        if self._runner is None:
             raise RuntimeError("session is not open")
         self._pending = message
 
     async def replies(self) -> AsyncIterator[Any]:
+        from google.adk.agents.run_config import RunConfig
         from google.genai import types
 
-        if self._client is None or self._pending is None:
+        if self._runner is None or self._pending is None:
             raise RuntimeError("nothing to reply to; send a message first")
         yield SessionOpened(session_id=self.session_id)
-        self._history.append(
-            types.Content(role="user", parts=[types.Part(text=self._pending)])
+        message = types.Content(
+            role="user", parts=[types.Part(text=self._pending)]
         )
         self._pending = None
-        config = types.GenerateContentConfig(
-            system_instruction=self._spec.system_prompt,
-            tools=(
-                [types.Tool(function_declarations=self._declarations)]
-                if self._declarations
-                else None
-            ),
-        )
         turns = 0
         tokens_in = 0
         tokens_out = 0
-        models: set[str] = set()
         settled = False
-        while turns < max(self._spec.max_turns, 1):
-            turns += 1
-            try:
-                response = await self._client.aio.models.generate_content(
-                    model=self._model, contents=self._history, config=config
-                )
-            except Exception as exc:
-                yield StageDone(
-                    outcome="failed",
-                    turns=turns,
-                    cost_usd=self._cost(tokens_in, tokens_out),
-                    session_id=self.session_id,
-                    models=models or {self._model},
-                    is_error=True,
-                    api_error_status=getattr(exc, "code", None),
-                    errors=[str(exc)[:400]],
-                )
-                return
-            usage = getattr(response, "usage_metadata", None)
-            if usage is not None:
-                tokens_in += usage.prompt_token_count or 0
-                tokens_out += usage.candidates_token_count or 0
-            models.add(getattr(response, "model_version", None) or self._model)
-            candidate = (response.candidates or [None])[0]
-            if candidate is None or candidate.content is None:
-                yield StageDone(
-                    outcome="failed",
-                    turns=turns,
-                    cost_usd=self._cost(tokens_in, tokens_out),
-                    session_id=self.session_id,
-                    models=models,
-                    is_error=True,
-                    errors=[
-                        f"the model returned no content (finish reason: "
-                        f"{getattr(candidate, 'finish_reason', 'unknown')})"
-                    ],
-                )
-                return
-            parts: list[Any] = []
-            calls: list[Any] = []
-            for part in candidate.content.parts or []:
-                if getattr(part, "text", None):
-                    parts.append(Say(text=part.text))
-                if getattr(part, "function_call", None):
-                    identity = (
-                        getattr(part.function_call, "id", None)
-                        or f"call-{uuid.uuid4().hex[:8]}"
-                    )
-                    call = Call(
-                        id=identity,
-                        name=part.function_call.name or "",
-                        arguments=dict(part.function_call.args or {}),
-                    )
-                    parts.append(call)
-                    calls.append(call)
-            yield ModelReply(parts=parts, model=self._model)
-            self._history.append(candidate.content)
-            if not calls:
-                settled = True
-                break
-            responses = []
-            for call in calls:
-                outcome = await self._execute(call)
-                yield outcome
-                responses.append(
-                    types.Part.from_function_response(
-                        name=call.name, response={"result": outcome.text}
-                    )
-                )
-            self._history.append(types.Content(role="user", parts=responses))
-        # Falling out of the loop means the budget ran out mid-conversation, which is not
-        # the same as the model having finished. Reported as success it reads as a stage
+        try:
+            async for event in self._runner.run_async(
+                user_id="stage",
+                session_id=self.session_id,
+                new_message=message,
+                run_config=RunConfig(max_llm_calls=max(self._spec.max_turns, 1)),
+            ):
+                usage = getattr(event, "usage_metadata", None)
+                if usage is not None:
+                    tokens_in += usage.prompt_token_count or 0
+                    tokens_out += usage.candidates_token_count or 0
+                parts: list[Any] = []
+                returned: list[ToolReturned] = []
+                for part in (event.content.parts if event.content else []) or []:
+                    if getattr(part, "text", None):
+                        parts.append(Say(text=part.text))
+                    if getattr(part, "function_call", None):
+                        parts.append(
+                            Call(
+                                id=getattr(part.function_call, "id", None)
+                                or f"call-{uuid.uuid4().hex[:8]}",
+                                name=part.function_call.name or "",
+                                arguments=dict(part.function_call.args or {}),
+                            )
+                        )
+                    if getattr(part, "function_response", None):
+                        response = part.function_response.response
+                        returned.append(
+                            ToolReturned(
+                                id=getattr(part.function_response, "id", None) or "",
+                                text=_flattened(response),
+                                is_error=bool(
+                                    isinstance(response, dict)
+                                    and response.get("is_error")
+                                ),
+                            )
+                        )
+                if parts:
+                    turns += 1
+                    yield ModelReply(parts=parts, model=self._model)
+                for outcome in returned:
+                    yield outcome
+                if event.is_final_response():
+                    settled = True
+        except Exception as exc:
+            yield StageDone(
+                outcome="failed",
+                turns=turns,
+                cost_usd=self._cost(tokens_in, tokens_out),
+                session_id=self.session_id,
+                models={self._model},
+                is_error=True,
+                api_error_status=getattr(exc, "code", None),
+                errors=[str(exc)[:400]],
+            )
+            return
+        # A stream that ends without a final response ran out of its call budget, which is
+        # not the same as the model having finished. Reported as success it reads as a stage
         # that did its work, and a half-written suite comes back green.
         yield StageDone(
             outcome="success" if settled else "max_turns",
@@ -333,31 +346,12 @@ class VertexGeminiSession:
             turns=turns,
             cost_usd=self._cost(tokens_in, tokens_out),
             session_id=self.session_id,
-            models=models,
-        )
-
-    async def _execute(self, call: Call) -> ToolReturned:
-        handler = self._handlers.get(call.name)
-        if handler is None:
-            return ToolReturned(
-                id=call.id,
-                text=(
-                    f"{call.name} is not part of this stage. You have "
-                    f"{', '.join(sorted(self._handlers)) or 'no other tools'}, and everything "
-                    "you produce goes through those, because those are what check it."
-                ),
-                is_error=True,
-            )
-        try:
-            result = await handler(call.arguments)
-        except Exception as exc:
-            return ToolReturned(
-                id=call.id, text=f"{call.name} crashed: {exc}", is_error=True
-            )
-        return ToolReturned(
-            id=call.id,
-            text=_flattened(result if isinstance(result, dict) else {}),
-            is_error=bool(isinstance(result, dict) and result.get("is_error")),
+            models={self._model},
+            errors=(
+                []
+                if settled
+                else [f"the stage spent its whole budget of {self._spec.max_turns} calls"]
+            ),
         )
 
     def _cost(self, tokens_in: int, tokens_out: int) -> float | None:
