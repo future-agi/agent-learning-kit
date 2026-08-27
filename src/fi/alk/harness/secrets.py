@@ -103,8 +103,15 @@ def worker_environment(
         # falls back to the default backend and hands it a model it cannot drive.
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
+        "ALK_HARNESS_THINKING",
         "ALK_JUDGE_MODEL",
         "ALK_USER_MODEL",
+        # Backend-specific configuration. A hosted run pinned to a region falls back to
+        # global without this, which is a quiet change of provider endpoint.
+        "ALK_VERTEX_LOCATION",
+        # The simulated caller's voice. Without it every persona shares one voice and the run
+        # stops exercising voice variation, which it reports as a log line rather than a failure.
+        "CARTESIA_API_KEY",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",
@@ -123,6 +130,9 @@ def worker_environment(
     reserved = {
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
+        "ALK_HARNESS_THINKING",
+        "ALK_VERTEX_LOCATION",
+        "CARTESIA_API_KEY",
         "ANTHROPIC_MODEL",
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "CLAUDE_CODE_USE_VERTEX",
