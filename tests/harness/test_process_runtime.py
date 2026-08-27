@@ -1576,6 +1576,48 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(tmp_path: Path
     assert spawn_order.index("node") < spawn_order.index("python3")  # agent's run_command[0]
 
 
+def test_spawn_world_waits_for_terminal_source_process_started_check(
+    tmp_path: Path,
+) -> None:
+    def terminal_check(body: dict[str, Any]) -> dict[str, Any]:
+        body["readiness"] = []
+        body["processes"][2]["started_check"] = {
+            "log_marker": "registered worker",
+            "timeout_seconds": 5,
+        }
+        return body
+
+    manifest = _manifest(terminal_check)
+    plan = pr.plan_ports(manifest, instances=1)
+    credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
+    marker_reads = 0
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        handle = FakeHandle("registered worker\n" if argv[0] == "python3" else "")
+        if argv[0] == "python3":
+            original = handle.captured_output
+
+            def captured_output() -> str:
+                nonlocal marker_reads
+                marker_reads += 1
+                return original()
+
+            handle.captured_output = captured_output
+        return handle
+
+    context = pr.SpawnContext(
+        work_directory=tmp_path,
+        port_plan=plan,
+        credentials=credentials,
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+        sync_run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0),
+    )
+    pr.spawn_world(manifest, world_index=0, context=context)
+    assert marker_reads >= 1
+
+
 def test_spawn_world_reuses_job_shared_handles_across_worlds(tmp_path: Path) -> None:
     manifest = _manifest(lambda body: {**body, "readiness": []})
     plan = pr.plan_ports(manifest, instances=2)

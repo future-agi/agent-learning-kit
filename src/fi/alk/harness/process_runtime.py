@@ -2534,13 +2534,15 @@ def spawn_world(
     context: SpawnContext,
     shared_handles: dict[str, SpawnedWorldProcess] | None = None,
 ) -> WorldSpawnResult:
-    """Spawns every process for ONE world, in `depends_on` dependency order, waiting on each
-    dependency's readiness before starting its dependent (§2b). `shared_handles` carries
-    already-running job-shared managed engines (from an earlier world's call) so they are reused,
-    never respawned, for `world_index > 0` — the caller is expected to thread the same dict
-    through every `spawn_world` call for one job. Source process build trees must already exist
-    (via `build_process_tree`, called once per process before any world is spawned) — this
-    function only creates per-world scratch directories, never a build tree.
+    """Spawns every process for ONE world in dependency order, waiting for each dependency and
+    every spawned source process's own readiness/started check (§2b). The latter matters for a
+    terminal control process: no dependent exists to wait on it, but the world must not become
+    READY before that process actually registers. `shared_handles` carries already-running
+    job-shared managed engines (from an earlier world's call) so they are reused, never respawned,
+    for `world_index > 0` — the caller is expected to thread the same dict through every
+    `spawn_world` call for one job. Source process build trees must already exist (via
+    `build_process_tree`, called once per process before any world is spawned) — this function only
+    creates per-world scratch directories, never a build tree.
     """
     endpoints = build_endpoints(
         manifest,
@@ -2604,6 +2606,16 @@ def spawn_world(
                     chown=context.chown,
                 )
             handles[name] = handle
+            if isinstance(process, SourceProcess) and process.started_check is not None:
+                wait_for_dependency(
+                    manifest,
+                    name,
+                    world_index=world_index,
+                    port_plan=context.port_plan,
+                    spawned=handle,
+                    credentials=context.credentials,
+                    prober=context.prober,
+                )
     except BaseException as exc:
         # N4, p6-review-r2 (MAJOR): a `depends_on_timeout`/`spawn_failed` partway through this
         # world's own process list used to drop every ALREADY-spawned process of the SAME world on

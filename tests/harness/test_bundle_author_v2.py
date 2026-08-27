@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -181,6 +182,48 @@ def test_bundle_limits_authoring_scenarios_to_requested_count(tmp_path: Path) ->
         output=output,
     )
     assert [path.name for path in (output / "scenarios").iterdir()] == ["one"]
+
+
+def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute(
+            "CREATE TABLE payment_methods ("
+            "id TEXT PRIMARY KEY, is_valid BOOLEAN, is_expired BOOLEAN, "
+            "attempts INTEGER, score REAL)"
+        )
+        database.execute(
+            "INSERT INTO payment_methods VALUES (?, ?, ?, ?, ?)",
+            ("pm-1", True, False, 3, 0.75),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert (
+        'CREATE TABLE IF NOT EXISTS "payment_methods" '
+        '("id" text PRIMARY KEY, "is_valid" boolean, "is_expired" boolean, '
+        '"attempts" bigint, "score" double precision);'
+        in seed_sql
+    )
+    assert (
+        'INSERT INTO "payment_methods" '
+        '("id", "is_valid", "is_expired", "attempts", "score") '
+        "VALUES ('pm-1', TRUE, FALSE, 3, 0.75);"
+        in seed_sql
+    )
 
 
 def test_bundle_combines_schema_with_frozen_store_rows(tmp_path: Path) -> None:
