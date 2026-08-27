@@ -42,7 +42,11 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from .job import FailureDomain, HarnessStage
-from .outbound import HostedAttemptSupersededError, HostedChannelFailedError, HostedFencedError
+from .outbound import (
+    HostedAttemptSupersededError,
+    HostedChannelFailedError,
+    HostedFencedError,
+)
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
@@ -83,7 +87,9 @@ class ReadOnlyWorld(Protocol):
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
-    def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> dict[str, Any]: ...
+    def put(
+        self, collection: str, record: dict[str, Any], *, key: str = ""
+    ) -> dict[str, Any]: ...
 
     def change(
         self, collection: str, key: str, changes: dict[str, Any], *, by: str = ""
@@ -102,7 +108,9 @@ class World(Protocol):
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
-    def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> dict[str, Any]: ...
+    def put(
+        self, collection: str, record: dict[str, Any], *, key: str = ""
+    ) -> dict[str, Any]: ...
 
     def change(
         self, collection: str, key: str, changes: dict[str, Any], *, by: str = ""
@@ -126,7 +134,9 @@ class WorldFactory(Protocol):
     `RuntimeProvider` Protocol never exposes. Injected instead of guessed.
     """
 
-    async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> World: ...
+    async def create(
+        self, runtime: EnvironmentRuntime, *, rng: random.Random
+    ) -> World: ...
 
 
 # --- the provisioner surface this module actually drives -------------------------------------
@@ -156,9 +166,13 @@ class WorldProvisioner(Protocol):
         instances: int = 1,
     ) -> list[EnvironmentRuntime]: ...
 
-    async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None: ...
+    async def reset(
+        self, runtime: EnvironmentRuntime, *, work_directory: Path
+    ) -> None: ...
 
-    async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool: ...
+    async def healthy(
+        self, runtime: EnvironmentRuntime, *, work_directory: Path
+    ) -> bool: ...
 
     async def close(self, *, work_directory: Path) -> None: ...
 
@@ -168,14 +182,18 @@ class WorldProvisioner(Protocol):
 
 class SubGoal(Protocol):
     name: str
-    judged: str  # `sub_goals[].judged` per outbound-channels.md: boolean is `judged != ""`.
+    judged: (
+        str  # `sub_goals[].judged` per outbound-channels.md: boolean is `judged != ""`.
+    )
 
     def check(self, world: ReadOnlyWorld, calls: Sequence[Call]) -> object: ...
 
 
 class Scenario(Protocol):
     scenario_key: str
-    scenario_id: str  # platform id from pre-allocation (outbound-channels.md Channel 2 "Join").
+    scenario_id: (
+        str  # platform id from pre-allocation (outbound-channels.md Channel 2 "Join").
+    )
     sub_goals: Sequence[SubGoal]
 
     def setup(self, world: World) -> object: ...
@@ -208,7 +226,37 @@ class CallAborted(RuntimeError):
 
 
 class CallRunner(Protocol):
-    async def run(self, scenario: Scenario, runtime: EnvironmentRuntime) -> CallOutcome: ...
+    async def run(
+        self,
+        scenario: Scenario,
+        runtime: EnvironmentRuntime,
+        *,
+        world: World | None = None,
+    ) -> CallOutcome: ...
+
+
+async def _run_call(
+    runner: CallRunner,
+    scenario: Scenario,
+    runtime: EnvironmentRuntime,
+    world: World,
+) -> CallOutcome:
+    """Pass the world to text runners while preserving older two-argument integrations.
+
+    Voice runners do not execute response-carried tools themselves. Hosted HTTP chat runners do,
+    and must execute them against the exact leased world that setup/checks observe. The signature
+    probe keeps the settled injected-runner seam source compatible for downstream callers while
+    allowing that missing context to cross the boundary.
+    """
+    run = runner.run
+    parameters = inspect.signature(run).parameters.values()
+    accepts_world = any(
+        parameter.name == "world" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    if accepts_world:
+        return await run(scenario, runtime, world=world)
+    return await run(scenario, runtime)
 
 
 # --- receipts (outbound-channels.md Channel 2; envelope fields — job_id/attempt_id/digest/etc —
@@ -325,7 +373,8 @@ _RETRYABLE_CODES = frozenset({"evidence_missing"})
 
 
 def _resolve_2f_domain(
-    code: str | None, domain: FailureDomain | None,
+    code: str | None,
+    domain: FailureDomain | None,
 ) -> tuple[str, FailureDomain] | None:
     """v1.15 §2f: pair a code with its resolved domain. `domain` should be the value CARRIED by a
     typed provisioner error (`ProcessRuntimeError.domain`); `None` here falls back to the closed
@@ -339,7 +388,9 @@ def _resolve_2f_domain(
         return code, domain
     logger.warning(
         "process_runtime error %r crossed the §4 seam with no carried domain; using the §2f "
-        "fallback map (%s)", code, SECTION_2F_DOMAIN[code].value,
+        "fallback map (%s)",
+        code,
+        SECTION_2F_DOMAIN[code].value,
     )
     return code, SECTION_2F_DOMAIN[code]
 
@@ -383,14 +434,17 @@ READY_TIMEOUT_SECONDS = 15.0
 CHECK_TIMEOUT_SECONDS = 60.0
 
 _MESSAGE_LIMIT = 2000  # matches the Call.result/error truncation convention (world-handle-interface.md).
-_CAUSE_LIMIT = 200  # outbound-channels.md Channel 1: `world_unhealthy.cause` free text <=200.
+_CAUSE_LIMIT = (
+    200  # outbound-channels.md Channel 1: `world_unhealthy.cause` free text <=200.
+)
 _USERINFO_PATTERN = re.compile(r"://[^@/]+@")
 
 
 def _is_retryable(code: str) -> bool:
-    return _CODE_DOMAIN[code] in (FailureDomain.ENVIRONMENT, FailureDomain.INFRASTRUCTURE) or (
-        code in _RETRYABLE_CODES
-    )
+    return _CODE_DOMAIN[code] in (
+        FailureDomain.ENVIRONMENT,
+        FailureDomain.INFRASTRUCTURE,
+    ) or (code in _RETRYABLE_CODES)
 
 
 def _truncate(text: str, limit: int = _MESSAGE_LIMIT) -> str:
@@ -549,7 +603,12 @@ async def _invoke(
         raise _PhaseWorldGone(phase, exc) from exc
     except WorldStateTooLarge as exc:
         raise _PhaseStateTooLarge(phase, exc) from exc
-    except (WorldReadOnly, WorldReservedName, WorldQueryRejected, WorldUsageError) as exc:
+    except (
+        WorldReadOnly,
+        WorldReservedName,
+        WorldQueryRejected,
+        WorldUsageError,
+    ) as exc:
         raise _PhaseMisuse(phase, exc) from exc
     except WorldError as exc:
         # m5: catches any WorldError subclass not special-cased above (world/errors.py's own
@@ -561,8 +620,16 @@ async def _invoke(
         raise _PhaseCrashed(phase, exc) from exc
 
 
-_CRASH_CODE_BY_PHASE = {"setup": "setup_crashed", "ready": "ready_broken", "check": "check_broken"}
-_TIMEOUT_CODE_BY_PHASE = {"setup": "setup_timeout", "ready": "ready_timeout", "check": "check_timeout"}
+_CRASH_CODE_BY_PHASE = {
+    "setup": "setup_crashed",
+    "ready": "ready_broken",
+    "check": "check_broken",
+}
+_TIMEOUT_CODE_BY_PHASE = {
+    "setup": "setup_timeout",
+    "ready": "ready_timeout",
+    "check": "check_timeout",
+}
 
 
 @dataclass(frozen=True)
@@ -579,7 +646,9 @@ async def _run_phase(
     executor: ThreadPoolExecutor,
 ) -> _PhaseResult:
     try:
-        value = await _invoke(fn, *args, timeout=timeout, phase=phase, executor=executor)
+        value = await _invoke(
+            fn, *args, timeout=timeout, phase=phase, executor=executor
+        )
         return _PhaseResult(value, None)
     except _PhaseNeverStarted:
         # R1: not the phase's fault and not the world's — the scheduler's own thread pool
@@ -588,11 +657,15 @@ async def _run_phase(
         return _PhaseResult(
             None,
             _failure(
-                "driver_crashed", f"{phase} never started before its budget elapsed (thread pool saturated)"
+                "driver_crashed",
+                f"{phase} never started before its budget elapsed (thread pool saturated)",
             ),
         )
     except _PhaseTimeout:
-        return _PhaseResult(None, _failure(_TIMEOUT_CODE_BY_PHASE[phase], f"{phase} exceeded its budget"))
+        return _PhaseResult(
+            None,
+            _failure(_TIMEOUT_CODE_BY_PHASE[phase], f"{phase} exceeded its budget"),
+        )
     except _PhaseWorldGone as exc:
         return _PhaseResult(None, _failure("world_unavailable", str(exc.cause)))
     except _PhaseMisuse as exc:
@@ -601,7 +674,10 @@ async def _run_phase(
         return _PhaseResult(None, _failure("state_too_large", str(exc.cause)))
     except _PhaseCrashed as exc:
         return _PhaseResult(
-            None, _failure(_CRASH_CODE_BY_PHASE[phase], f"{type(exc.cause).__name__}: {exc.cause}")
+            None,
+            _failure(
+                _CRASH_CODE_BY_PHASE[phase], f"{type(exc.cause).__name__}: {exc.cause}"
+            ),
         )
 
 
@@ -674,7 +750,9 @@ class WorldPool:
         self._available: set[int] = set()
         self._leased: set[int] = set()
         self._down: set[int] = set()
-        self._fresh: set[int] = set()  # m9: provisioned/recovered but never yet leased/reset
+        self._fresh: set[int] = (
+            set()
+        )  # m9: provisioned/recovered but never yet leased/reset
         self._effective_size = 0  # R2: the achieved world count `start()` settled on
         # The §2f (code, domain) pair (or `None`) behind the most recent demotion/reconcile-failure
         # for a down world index -- read by `lease()`'s exhaustion check to decide whether a
@@ -682,7 +760,9 @@ class WorldPool:
         # `domain` is the CARRIED value off the typed error (v1.15), captured once here rather than
         # re-derived later from the code alone.
         self._down_codes: dict[int, tuple[str, FailureDomain] | None] = {}
-        self._fenced: BaseException | None = None  # latched by mark_fenced(), never cleared
+        self._fenced: BaseException | None = (
+            None  # latched by mark_fenced(), never cleared
+        )
 
         # m1: `asyncio.Condition` (not a manual `Event` + `clear()`) — waiting and notifying share
         # one lock, so there is no window between releasing a lock and clearing a flag for a
@@ -692,9 +772,13 @@ class WorldPool:
         self._reconcile_task: asyncio.Task[None] | None = None
         self._reconcile_pending = False
         self._started = False
-        self._closing = False  # R4: set at the top of close() -- lets an in-flight reconcile bail
+        self._closing = (
+            False  # R4: set at the top of close() -- lets an in-flight reconcile bail
+        )
         # between attempts instead of burning close()'s wait budget on a pool being torn down.
-        self._closed = False  # Set once close() STARTS -- latches provision()/lease() out for
+        self._closed = (
+            False  # Set once close() STARTS -- latches provision()/lease() out for
+        )
         # good immediately, independent of whether teardown itself has finished.
         self._teardown_task: asyncio.Task[None] | None = None  # the shared, retry-safe
         # teardown -- see close()'s own comment for why idempotency lives here now, not on
@@ -784,12 +868,17 @@ class WorldPool:
             await self._state_lock.wait()
             return
         try:
-            await asyncio.wait_for(self._state_lock.wait(), timeout=_LEASE_POLL_INTERVAL_SECONDS)
+            await asyncio.wait_for(
+                self._state_lock.wait(), timeout=_LEASE_POLL_INTERVAL_SECONDS
+            )
         except asyncio.TimeoutError:
             pass  # `Condition.wait()` reacquires the lock before propagating even on timeout.
 
     async def lease(
-        self, *, exclude: frozenset[int] = frozenset(), abandon: Callable[[], bool] | None = None
+        self,
+        *,
+        exclude: frozenset[int] = frozenset(),
+        abandon: Callable[[], bool] | None = None,
     ) -> tuple[int, EnvironmentRuntime] | None:
         """Returns `None` if `abandon()` reports true while this call was queued (B5) — the caller
         never received a world, so there is nothing to release."""
@@ -864,7 +953,9 @@ class WorldPool:
                     probed_runtime = runtime
                     if runtime is not None:
                         try:
-                            await self._provisioner.reset(runtime, work_directory=self._work_directory)
+                            await self._provisioner.reset(
+                                runtime, work_directory=self._work_directory
+                            )
                         except Exception as exc:  # noqa: BLE001 - B3: must never leak out of lease()
                             reset_exc = exc
 
@@ -876,7 +967,9 @@ class WorldPool:
                 # so it goes under `_provider_lock` like reset/provision/close.
                 async with self._provider_lock:
                     if self._closed:
-                        raise NoWorldsAvailable("world pool is closed", reason="closed")  # same re-check as above
+                        raise NoWorldsAvailable(
+                            "world pool is closed", reason="closed"
+                        )  # same re-check as above
                     runtime = self._runtimes.get(world_index)
                     probed_runtime = runtime
                     if runtime is not None:
@@ -921,7 +1014,9 @@ class WorldPool:
                 code = reset_exc.code if is_typed else None
                 domain = reset_exc.domain if is_typed else None
 
-            await self.mark_unhealthy(world_index, cause=cause, code=code, domain=domain)
+            await self.mark_unhealthy(
+                world_index, cause=cause, code=code, domain=domain
+            )
             # loop again — this index is now excluded via `_down`, no explicit retry bookkeeping.
 
     async def release(self, world_index: int) -> None:
@@ -972,8 +1067,12 @@ class WorldPool:
         # place `world_unhealthy` needs to be emitted from for all four call sites to get it.
         if self._outbound is not None:
             try:
-                await self._outbound.world_unhealthy(world_index=world_index, cause=_sanitize_cause(cause))
-            except _FATAL_OUTBOUND as exc:  # a fence stops the run -- never best-effort.
+                await self._outbound.world_unhealthy(
+                    world_index=world_index, cause=_sanitize_cause(cause)
+                )
+            except (
+                _FATAL_OUTBOUND
+            ) as exc:  # a fence stops the run -- never best-effort.
                 self.mark_fenced(exc)
             except Exception as exc:  # noqa: BLE001 - B3: outbound failures are never fatal.
                 await self._log(f"world_unhealthy emit failed: {exc}")
@@ -1037,7 +1136,8 @@ class WorldPool:
             # construction across everything it did not just recover.
             is_typed = isinstance(last_exc, ProcessRuntimeError)
             code_and_domain = _resolve_2f_domain(
-                last_exc.code if is_typed else None, last_exc.domain if is_typed else None,
+                last_exc.code if is_typed else None,
+                last_exc.domain if is_typed else None,
             )
             # R8: every success path below ends in `notify_all()` — this give-up path must too,
             # or a `lease()` blocked in `_wait_bounded(poll=False)` (the `abandon is None` case)
@@ -1071,7 +1171,9 @@ class WorldPool:
         async with self._provider_lock:
             for runtime in runtimes:
                 try:
-                    healthy_by_index[runtime.world_index] = await self._provisioner.healthy(
+                    healthy_by_index[
+                        runtime.world_index
+                    ] = await self._provisioner.healthy(
                         runtime, work_directory=self._work_directory
                     )
                     healthy_codes[runtime.world_index] = None
@@ -1079,7 +1181,8 @@ class WorldPool:
                     healthy_by_index[runtime.world_index] = False
                     is_typed = isinstance(exc, ProcessRuntimeError)
                     healthy_codes[runtime.world_index] = _resolve_2f_domain(
-                        exc.code if is_typed else None, exc.domain if is_typed else None,
+                        exc.code if is_typed else None,
+                        exc.domain if is_typed else None,
                     )
 
         achieved = {runtime.world_index for runtime in runtimes}
@@ -1089,7 +1192,9 @@ class WorldPool:
                 if healthy_by_index.get(runtime.world_index, False):
                     was_down = runtime.world_index in self._down
                     self._down.discard(runtime.world_index)
-                    self._down_codes.pop(runtime.world_index, None)  # recovered -- stale now
+                    self._down_codes.pop(
+                        runtime.world_index, None
+                    )  # recovered -- stale now
                     if runtime.world_index not in self._leased:
                         self._available.add(runtime.world_index)
                         if was_down and runtime.state is RuntimeState.READY:
@@ -1097,7 +1202,9 @@ class WorldPool:
                 elif runtime.world_index in self._down:
                     # Still down after a successful re-provision -- this probe's own result
                     # replaces whatever an earlier demotion left, never a leftover from before it.
-                    self._down_codes[runtime.world_index] = healthy_codes.get(runtime.world_index)
+                    self._down_codes[runtime.world_index] = healthy_codes.get(
+                        runtime.world_index
+                    )
             # `provision` reconciles to exactly `instances` worlds (a conformance-gate degrade can
             # shrink `achieved` below what this pool started with) — anything no longer returned
             # is gone, not merely unhealthy.
@@ -1225,7 +1332,9 @@ def _unjudged(sub_goals: Sequence[SubGoal]) -> tuple[SubGoalResult, ...]:
     )
 
 
-_LEAK_HEADROOM = 10  # R1: spine §1's hosted `scenario_count` admission range is 1..10 -- the most
+_LEAK_HEADROOM = (
+    10  # R1: spine §1's hosted `scenario_count` admission range is 1..10 -- the most
+)
 # phase threads that can ever be simultaneously abandoned (leaked) in one job.
 
 
@@ -1234,7 +1343,10 @@ def _abort_from_no_worlds(exc: NoWorldsAvailable) -> ReceiptFailure:
     # otherwise this is the generic exhaustion abort.
     if exc.code is not None and exc.domain is not None:
         return ReceiptFailure(
-            domain=exc.domain.value, stage=HarnessStage.RUNNING.value, code=exc.code, message=_truncate(str(exc))
+            domain=exc.domain.value,
+            stage=HarnessStage.RUNNING.value,
+            code=exc.code,
+            message=_truncate(str(exc)),
         )
     return _failure("world_pool_exhausted", str(exc))
 
@@ -1304,7 +1416,9 @@ class HostedScheduler:
             # widen for whatever `scenarios` actually holds, or an over-cap job's overflow
             # scenarios find the executor saturated and report `driver_crashed` for a phase that
             # was queued, not run.
-            max_workers=max(self._pool.effective_size + _LEAK_HEADROOM, len(scenarios) + 1),
+            max_workers=max(
+                self._pool.effective_size + _LEAK_HEADROOM, len(scenarios) + 1
+            ),
             thread_name_prefix="hosted-scenario",
         )
         try:
@@ -1313,7 +1427,11 @@ class HostedScheduler:
                 # `self._pool.fenced` is the same stop-path as `abort_holder`/`cancel_requested`
                 # -- once any outbound call has hit a 401/403 or an exhausted channel, no further
                 # scenario may even start.
-                if abort_holder[0] is not None or self._pool.fenced is not None or self._cancel_requested():
+                if (
+                    abort_holder[0] is not None
+                    or self._pool.fenced is not None
+                    or self._cancel_requested()
+                ):
                     return
                 context = _ScenarioContext()
                 try:
@@ -1333,7 +1451,10 @@ class HostedScheduler:
                     # scenario's receipt — `gather(return_exceptions=True)` below is the second
                     # half of that guarantee.
                     results[index] = await self._driver_crashed_receipt(
-                        scenario, exc, world_index=context.world_index, scenario_attempt=context.attempt,
+                        scenario,
+                        exc,
+                        world_index=context.world_index,
+                        scenario_attempt=context.attempt,
                         call=context.call,
                     )
 
@@ -1352,7 +1473,11 @@ class HostedScheduler:
                     # is the caller's job, done AFTER its own terminal event.
                     receipt = _skipped_receipt(scenario)
                 receipts.append(receipt)
-            return RunResult(receipts=tuple(receipts), aborted=abort_holder[0], fenced=self._pool.fenced)
+            return RunResult(
+                receipts=tuple(receipts),
+                aborted=abort_holder[0],
+                fenced=self._pool.fenced,
+            )
         finally:
             # R1: never block `run()` on abandoned threads — `shutdown(wait=True)` would hang
             # this coroutine exactly like the bug this fixes. Queued-but-unstarted work is
@@ -1391,7 +1516,9 @@ class HostedScheduler:
             raise
         except Exception as exc:  # noqa: BLE001
             try:
-                await self._outbound.log(level="error", message=f"outbound.{what} failed: {exc}")
+                await self._outbound.log(
+                    level="error", message=f"outbound.{what} failed: {exc}"
+                )
             except _FATAL_OUTBOUND as log_exc:
                 self._pool.mark_fenced(log_exc)
                 raise
@@ -1453,7 +1580,11 @@ class HostedScheduler:
         def _abandon() -> bool:
             # A scenario already queued in `lease()` must also abandon once fenced -- the
             # worker-top check alone only stops scenarios that had not started yet.
-            return abort_holder[0] is not None or self._pool.fenced is not None or self._cancel_requested()
+            return (
+                abort_holder[0] is not None
+                or self._pool.fenced is not None
+                or self._cancel_requested()
+            )
 
         return await self._pool.lease(exclude=exclude, abandon=_abandon)
 
@@ -1472,14 +1603,20 @@ class HostedScheduler:
         if pre_leased is not None:
             world_index, runtime = pre_leased
         else:
-            leased = await self._lease_or_abandon(exclude=tried, abort_holder=abort_holder)
+            leased = await self._lease_or_abandon(
+                exclude=tried, abort_holder=abort_holder
+            )
             if leased is None:
                 return None  # B5: cancelled/aborted while queued — never got a world
             world_index, runtime = leased
 
-        context.world_index = world_index  # R7: the real values for a driver_crashed receipt
+        context.world_index = (
+            world_index  # R7: the real values for a driver_crashed receipt
+        )
         context.attempt = attempt
-        context.call = None  # this attempt has not made its own call yet -- must not still
+        context.call = (
+            None  # this attempt has not made its own call yet -- must not still
+        )
         # carry a previous attempt's summary on the shared context object into this one's receipt.
 
         # B5: re-check immediately after `lease()` returns — a cancel/abort landing while this
@@ -1493,7 +1630,9 @@ class HostedScheduler:
                 return await self._emit_pending_retry_receipt(scenario, pending_retry)
             return None
 
-        world_resolved = False  # B3: the leased world must be released/discarded exactly once
+        world_resolved = (
+            False  # B3: the leased world must be released/discarded exactly once
+        )
         try:
             if pending_retry is not None:
                 # Emitted here, immediately before attempt 2's own `scenario_started`, so this
@@ -1536,14 +1675,21 @@ class HostedScheduler:
                 )
             else:
                 outcome = await self._execute(
-                    scenario, world, runtime, world_index, attempt=attempt, context=context
+                    scenario,
+                    world,
+                    runtime,
+                    world_index,
+                    attempt=attempt,
+                    context=context,
                 )
 
             if isinstance(outcome, _Retry):
                 # R6: `mark_unhealthy()` itself emits `world_unhealthy` now (every demotion path
                 # goes through it) — no separate emit needed here.
                 if outcome.mark_unhealthy:
-                    await self._pool.mark_unhealthy(world_index, cause=outcome.failure.message)
+                    await self._pool.mark_unhealthy(
+                        world_index, cause=outcome.failure.message
+                    )
                 else:
                     await self._pool.release(world_index)
                 world_resolved = True
@@ -1565,7 +1711,9 @@ class HostedScheduler:
 
                 # R3: attempt 1's outcome, carried forward so either exit below that never gets to
                 # start attempt 2 can still report it instead of losing it to skipped-synthesis.
-                pending = _PendingRetryReceipt(world_index=world_index, attempt=attempt, outcome=outcome)
+                pending = _PendingRetryReceipt(
+                    world_index=world_index, attempt=attempt, outcome=outcome
+                )
                 try:
                     next_leased = await self._lease_or_abandon(
                         exclude=tried | {world_index}, abort_holder=abort_holder
@@ -1598,8 +1746,13 @@ class HostedScheduler:
             # exception/overrun code means the world is half-applied and must be discarded rather
             # than handed to the next scenario; `ready_not_ready` is a clean verdict and keeps
             # `release()`.
-            if outcome.failure is not None and outcome.failure.code in _DISCARD_ON_ERROR_CODES:
-                await self._pool.mark_unhealthy(world_index, cause=outcome.failure.message)
+            if (
+                outcome.failure is not None
+                and outcome.failure.code in _DISCARD_ON_ERROR_CODES
+            ):
+                await self._pool.mark_unhealthy(
+                    world_index, cause=outcome.failure.message
+                )
             else:
                 await self._pool.release(world_index)
             world_resolved = True
@@ -1621,7 +1774,8 @@ class HostedScheduler:
                     # state unknown, and world-handle-interface.md's own exception rule is
                     # "discarded and re-provisioned, never reused."
                     await self._pool.mark_unhealthy(
-                        world_index, cause="scenario driver crashed while holding this world"
+                        world_index,
+                        cause="scenario driver crashed while holding this world",
                     )
 
     async def _execute(
@@ -1635,66 +1789,121 @@ class HostedScheduler:
         context: "_ScenarioContext",
     ) -> "ResultReceipt | _Retry":
         setup = await _run_phase(
-            scenario.setup, world, timeout=SETUP_TIMEOUT_SECONDS, phase="setup", executor=self._executor
+            scenario.setup,
+            world,
+            timeout=SETUP_TIMEOUT_SECONDS,
+            phase="setup",
+            executor=self._executor,
         )
         if setup.failure is not None:
-            return self._fault(scenario, world_index, attempt, setup.failure, sub_goals=_unjudged(scenario.sub_goals))
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                setup.failure,
+                sub_goals=_unjudged(scenario.sub_goals),
+            )
 
         read_only = world.read_only()
         ready = await _run_phase(
-            scenario.ready, read_only, timeout=READY_TIMEOUT_SECONDS, phase="ready", executor=self._executor
+            scenario.ready,
+            read_only,
+            timeout=READY_TIMEOUT_SECONDS,
+            phase="ready",
+            executor=self._executor,
         )
         if ready.failure is not None:
-            return self._fault(scenario, world_index, attempt, ready.failure, sub_goals=_unjudged(scenario.sub_goals))
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                ready.failure,
+                sub_goals=_unjudged(scenario.sub_goals),
+            )
         verdict = _classify_ready(ready.value)
         if verdict.broken:
             return self._fault(
-                scenario, world_index, attempt, _failure("ready_broken", f"ready() returned {ready.value!r}"),
+                scenario,
+                world_index,
+                attempt,
+                _failure("ready_broken", f"ready() returned {ready.value!r}"),
                 sub_goals=_unjudged(scenario.sub_goals),
             )
         if not verdict.held:
             return self._fault(
-                scenario, world_index, attempt, _failure("ready_not_ready", verdict.reason or ""),
+                scenario,
+                world_index,
+                attempt,
+                _failure("ready_not_ready", verdict.reason or ""),
                 sub_goals=_unjudged(scenario.sub_goals),
             )
 
         try:
-            call_outcome = await self._call_runner.run(scenario, runtime)
+            call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
         except WorldUnavailable as exc:
-            return _Retry(_failure("world_unavailable", str(exc)), sub_goals=_unjudged(scenario.sub_goals), call=None, mark_unhealthy=True)
+            return _Retry(
+                _failure("world_unavailable", str(exc)),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=None,
+                mark_unhealthy=True,
+            )
         except CallAborted as exc:
             call = self._call_summary(exc.partial)
             return self._fault(
-                scenario, world_index, attempt, _failure("call_failed", str(exc)),
-                sub_goals=_unjudged(scenario.sub_goals), call=call,
+                scenario,
+                world_index,
+                attempt,
+                _failure("call_failed", str(exc)),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=call,
             )
         except Exception as exc:  # noqa: BLE001
             # B3: the call runner crashing outright (not a `CallAborted` it chose to raise) is the
             # same world-handle-interface.md v3.3 row — "the simulated-call machinery crashed" —
             # just with no partial evidence to report.
             return self._fault(
-                scenario, world_index, attempt, _failure("call_failed", f"{type(exc).__name__}: {exc}"),
-                sub_goals=_unjudged(scenario.sub_goals), call=None,
+                scenario,
+                world_index,
+                attempt,
+                _failure("call_failed", f"{type(exc).__name__}: {exc}"),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=None,
             )
 
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
-        calls = list(call_outcome.calls)  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
+        calls = list(
+            call_outcome.calls
+        )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
         if not calls:
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
             # guarantee": "An empty list is never handed to checks").
-            failure = _failure("evidence_missing", "no tool calls were captured for this scenario's call")
-            return _Retry(failure, sub_goals=_unjudged(scenario.sub_goals), call=self._call_summary(call_outcome), mark_unhealthy=False)
+            failure = _failure(
+                "evidence_missing",
+                "no tool calls were captured for this scenario's call",
+            )
+            return _Retry(
+                failure,
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=self._call_summary(call_outcome),
+                mark_unhealthy=False,
+            )
 
         if not scenario.sub_goals:
             # m7: `all(())` is vacuously True — a scenario declaring zero sub-goals must not read
             # as a silent pass.
             return self._fault(
-                scenario, world_index, attempt,
-                _failure("check_broken", "scenario declared zero sub_goals — a vacuous pass is forbidden"),
-                sub_goals=(), call=self._call_summary(call_outcome),
+                scenario,
+                world_index,
+                attempt,
+                _failure(
+                    "check_broken",
+                    "scenario declared zero sub_goals — a vacuous pass is forbidden",
+                ),
+                sub_goals=(),
+                call=self._call_summary(call_outcome),
             )
 
         sub_goal_results: list[SubGoalResult] = []
@@ -1702,33 +1911,70 @@ class HostedScheduler:
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
             if broken_failure is not None:
-                sub_goal_results.append(SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != ""))
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=None, reason=None, judged=goal.judged != ""
+                    )
+                )
                 continue
             outcome = await _run_phase(
-                goal.check, check_handle, calls, timeout=CHECK_TIMEOUT_SECONDS, phase="check", executor=self._executor
+                goal.check,
+                check_handle,
+                calls,
+                timeout=CHECK_TIMEOUT_SECONDS,
+                phase="check",
+                executor=self._executor,
             )
             if outcome.failure is not None:
                 if outcome.failure.code == "world_unavailable":
                     return _Retry(
-                        outcome.failure, sub_goals=tuple(sub_goal_results) + _unjudged([goal]) + _unjudged(scenario.sub_goals[len(sub_goal_results) + 1 :]),
-                        call=self._call_summary(call_outcome), mark_unhealthy=True,
+                        outcome.failure,
+                        sub_goals=tuple(sub_goal_results)
+                        + _unjudged([goal])
+                        + _unjudged(scenario.sub_goals[len(sub_goal_results) + 1 :]),
+                        call=self._call_summary(call_outcome),
+                        mark_unhealthy=True,
                     )
                 broken_failure = outcome.failure
-                sub_goal_results.append(SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != ""))
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=None, reason=None, judged=goal.judged != ""
+                    )
+                )
                 continue
             verdict = _classify_check(outcome.value)
             if verdict.broken:
-                broken_failure = _failure("check_broken", f"{goal.name}: check() returned {outcome.value!r}")
-                sub_goal_results.append(SubGoalResult(name=goal.name, held=None, reason=None, judged=goal.judged != ""))
+                broken_failure = _failure(
+                    "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
+                )
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=None, reason=None, judged=goal.judged != ""
+                    )
+                )
                 continue
-            sub_goal_results.append(SubGoalResult(name=goal.name, held=verdict.held, reason=verdict.reason, judged=goal.judged != ""))
+            sub_goal_results.append(
+                SubGoalResult(
+                    name=goal.name,
+                    held=verdict.held,
+                    reason=verdict.reason,
+                    judged=goal.judged != "",
+                )
+            )
 
         if broken_failure is not None:
             return self._fault(
-                scenario, world_index, attempt, broken_failure, sub_goals=tuple(sub_goal_results), call=self._call_summary(call_outcome),
+                scenario,
+                world_index,
+                attempt,
+                broken_failure,
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
             )
 
-        status = "passed" if all(result.held for result in sub_goal_results) else "failed"
+        status = (
+            "passed" if all(result.held for result in sub_goal_results) else "failed"
+        )
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
@@ -1767,7 +2013,12 @@ class HostedScheduler:
     ) -> "ResultReceipt | _Retry":
         should_retry = _is_retryable(failure.code) if retry is None else retry
         if should_retry:
-            return _Retry(failure, sub_goals=sub_goals, call=call, mark_unhealthy=failure.code == "world_unavailable")
+            return _Retry(
+                failure,
+                sub_goals=sub_goals,
+                call=call,
+                mark_unhealthy=failure.code == "world_unavailable",
+            )
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,

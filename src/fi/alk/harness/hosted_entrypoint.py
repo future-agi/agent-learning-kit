@@ -63,7 +63,11 @@ from .process_runtime import (
     ProcessRuntimeProvider,
     RuntimeEndpoint,
 )
-from .scenario_source import BundleScenarioSource, ScenarioDocumentInvalid, bundle_has_scenarios
+from .scenario_source import (
+    BundleScenarioSource,
+    ScenarioDocumentInvalid,
+    bundle_has_scenarios,
+)
 from .world.errors import WorldStoreless
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
@@ -84,8 +88,12 @@ logger = logging.getLogger(__name__)
 # no channel to report a terminal FAILED event through.
 EXIT_OK = 0
 EXIT_FENCED = 3
-EXIT_TERMINAL_UNDELIVERED = 4  # terminal reached but not provably flushed on the final drain.
-EXIT_BOOT_FAILURE = 1  # capabilities.json could not be loaded -- no channel, no event (v1.3 table).
+EXIT_TERMINAL_UNDELIVERED = (
+    4  # terminal reached but not provably flushed on the final drain.
+)
+EXIT_BOOT_FAILURE = (
+    1  # capabilities.json could not be loaded -- no channel, no event (v1.3 table).
+)
 EXIT_CRASHED = 2  # an uncaught failure before any terminal stage was reached.
 
 # Cancellation signal (spine §0 step 7 / outbound-channels.md "Cancellation signal"). The task
@@ -104,7 +112,9 @@ CANCEL_SIGNAL_PATH = "/run/futureagi/cancel.json"
 # `BundleSource` injection so a later change can point it at wherever the real authoring stage ends
 # up writing without touching this file's orchestration.
 DEFAULT_BUNDLE_DIR_NAME = "bundle"
-EVENTS_SPOOL_DIR_NAME = "outbound-spool"  # must not live under work_directory/"artifacts".
+EVENTS_SPOOL_DIR_NAME = (
+    "outbound-spool"  # must not live under work_directory/"artifacts".
+)
 
 SECRETS_PATH = Path("/run/futureagi/secrets.json")
 
@@ -211,25 +221,62 @@ class BundleSource(Protocol):
 # shipping an unlisted code across the outbound seam.
 _SECTION_2E_CODES = frozenset(
     {
-        "compose_not_hosted", "engine_unsupported", "no_sql_store", "seed_missing",
-        "seed_strategy_unsupported", "sentinel_shape_mismatch", "store_protocol_unsupported",
-        "capability_engine_mismatch", "store_service_not_managed", "reserved_name",
-        "unknown_placeholder", "unknown_field", "secret_in_bundle", "secret_unclaimed",
-        "secret_missing", "build_requires_root", "user_assignment_invalid",
-        "configuration_name_duplicate", "configuration_name_required",
-        "configuration_name_reserved", "sentinel_shape_invalid", "capability_unresolved",
-        "service_unresolved", "control_service_unresolved", "process_name_duplicate",
-        "inputs_digest_mismatch", "bundle_schema_unsupported", "bundle_manifest_invalid",
-        "bundle_manifest_drifted", "bundle_digest_mismatch", "bundle_digest_invalid",
-        "inputs_digest_invalid", "file_sha256_invalid", "source_digest_invalid",
-        "bundle_file_missing", "bundle_file_changed", "bundle_file_unlisted",
-        "bundle_symlink_forbidden", "bundle_path_unsafe", "depends_on_unresolved",
-        "depends_on_cycle", "seed_file_missing", "seed_file_unlisted", "process_count_exceeded",
-        "parallelism_out_of_range", "evidence_seam_required", "processes_required",
-        "processes_and_seed_forbidden", "document_only_for_compose",
-        "compose_runtime_requires_document", "build_command_step_empty",
-        "started_check_requires_exactly_one_of_port_or_log_marker", "resolved_secret_forbidden",
-        "capability_slug_invalid", "process_name_invalid", "fixed_port_reserved",
+        "compose_not_hosted",
+        "engine_unsupported",
+        "no_sql_store",
+        "seed_missing",
+        "seed_strategy_unsupported",
+        "sentinel_shape_mismatch",
+        "store_protocol_unsupported",
+        "capability_engine_mismatch",
+        "store_service_not_managed",
+        "reserved_name",
+        "unknown_placeholder",
+        "unknown_field",
+        "secret_in_bundle",
+        "secret_unclaimed",
+        "secret_missing",
+        "build_requires_root",
+        "user_assignment_invalid",
+        "configuration_name_duplicate",
+        "configuration_name_required",
+        "configuration_name_reserved",
+        "sentinel_shape_invalid",
+        "capability_unresolved",
+        "service_unresolved",
+        "control_service_unresolved",
+        "process_name_duplicate",
+        "inputs_digest_mismatch",
+        "bundle_schema_unsupported",
+        "bundle_manifest_invalid",
+        "bundle_manifest_drifted",
+        "bundle_digest_mismatch",
+        "bundle_digest_invalid",
+        "inputs_digest_invalid",
+        "file_sha256_invalid",
+        "source_digest_invalid",
+        "bundle_file_missing",
+        "bundle_file_changed",
+        "bundle_file_unlisted",
+        "bundle_symlink_forbidden",
+        "bundle_path_unsafe",
+        "depends_on_unresolved",
+        "depends_on_cycle",
+        "seed_file_missing",
+        "seed_file_unlisted",
+        "process_count_exceeded",
+        "parallelism_out_of_range",
+        "evidence_seam_required",
+        "processes_required",
+        "processes_and_seed_forbidden",
+        "document_only_for_compose",
+        "compose_runtime_requires_document",
+        "build_command_step_empty",
+        "started_check_requires_exactly_one_of_port_or_log_marker",
+        "resolved_secret_forbidden",
+        "capability_slug_invalid",
+        "process_name_invalid",
+        "fixed_port_reserved",
     }
 )
 
@@ -255,7 +302,9 @@ class DefaultBundleSource:
         try:
             manifest = load_bundle_v2(bundle_dir)
         except BundleV2Error as exc:
-            raise BundleUnavailableError(_bundle_unavailable_code(exc.args[0]), str(exc)) from exc
+            raise BundleUnavailableError(
+                _bundle_unavailable_code(exc.args[0]), str(exc)
+            ) from exc
         return manifest, bundle_dir
 
 
@@ -330,7 +379,9 @@ def _process_runtime_error_domain(exc: ProcessRuntimeError) -> FailureDomain:
     if exc.code in SECTION_2F_DOMAIN:
         logger.warning(
             "process_runtime error %r crossed the §4 seam with no carried domain; using the §2f "
-            "fallback map (%s)", exc.code, SECTION_2F_DOMAIN[exc.code].value,
+            "fallback map (%s)",
+            exc.code,
+            SECTION_2F_DOMAIN[exc.code].value,
         )
         return SECTION_2F_DOMAIN[exc.code]
     return FailureDomain.INFRASTRUCTURE  # internal_* etc. -- the honest default
@@ -366,7 +417,9 @@ def load_build_output(work_directory: Path) -> dict[str, Any]:
         raise WorldFactoryError(f"build.json unreadable at {path}: {exc}") from exc
 
 
-def row_counts_for_capability(build_output: dict[str, Any], capability: str) -> dict[str, int]:
+def row_counts_for_capability(
+    build_output: dict[str, Any], capability: str
+) -> dict[str, int]:
     for store in build_output.get("stores", []):
         if store.get("capability") == capability:
             counts = store.get("row_counts") or {}
@@ -465,8 +518,14 @@ class CallRunnerNotWired(RuntimeError):
 
 
 class NotWiredCallRunner:
-    async def run(self, scenario: Scenario, runtime: EnvironmentRuntime) -> CallOutcome:
-        del scenario, runtime
+    async def run(
+        self,
+        scenario: Scenario,
+        runtime: EnvironmentRuntime,
+        *,
+        world: World | None = None,
+    ) -> CallOutcome:
+        del scenario, runtime, world
         raise CallRunnerNotWired(
             "no CallRunner wired -- the live voice-simulation call runner is a separate track"
         )
@@ -484,9 +543,16 @@ def _default_build_call_runner(
     incomplete-but-present config as a typed `call_failed`/infrastructure retry --
     `capability_unavailable` stays unreachable from this seam (would require a scheduler edit;
     the contract itself calls it "a follow-up, not shipped with this text")."""
-    if context.job.agent.connector != _LIVEKIT_CONNECTOR:
-        return NotWiredCallRunner()
-    return CallRunnerImpl(adapter, context)
+    if context.job.agent.connector == _LIVEKIT_CONNECTOR:
+        return CallRunnerImpl(adapter, context)
+    # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
+    # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
+    # NotWired path and is deliberately not inferred as repository chat.
+    if (context.bundle_dir / "contract.json").is_file():
+        from .chat_call_runner import HostedChatCallRunner
+
+        return HostedChatCallRunner(adapter, context)
+    return NotWiredCallRunner()
 
 
 # =================================================================================================
@@ -499,7 +565,9 @@ def _default_build_call_runner(
 class ScenarioPreallocationError(RuntimeError):
     def __init__(self, error: ob.ChannelError | None) -> None:
         self.error = error
-        super().__init__("scenario pre-allocation failed" if error is None else error.message)
+        super().__init__(
+            "scenario pre-allocation failed" if error is None else error.message
+        )
 
 
 class ScenariosClient:
@@ -541,10 +609,14 @@ class ScenariosClient:
         self._provision_path = provision_path
         self._begin_path = begin_path
 
-    def provision(self, payload: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+    def provision(
+        self, payload: dict[str, Any], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         return self._post(self._provision_path, payload, deadline=deadline)
 
-    def begin(self, payload: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+    def begin(
+        self, payload: dict[str, Any], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         return self._post(self._begin_path, payload, deadline=deadline)
 
     def _post(
@@ -555,7 +627,10 @@ class ScenariosClient:
 
         def perform(_attempt: int) -> ob.TransportResponse:
             return self._transport.request(
-                "POST", url, headers=self._capabilities.auth_headers(), json_body=payload
+                "POST",
+                url,
+                headers=self._capabilities.auth_headers(),
+                json_body=payload,
             )
 
         try:
@@ -611,16 +686,22 @@ def _cap_failure_message(message: str) -> str:
 _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]] = {
     ArtifactLevel.METADATA_ONLY: frozenset(
         {
-            ob.ArtifactKind.RECORDING_COMBINED, ob.ArtifactKind.RECORDING_STEREO,
-            ob.ArtifactKind.RECORDING_CUSTOMER, ob.ArtifactKind.RECORDING_ASSISTANT,
-            ob.ArtifactKind.TRACE, ob.ArtifactKind.TOOL_TRACE, ob.ArtifactKind.TRANSCRIPT,
+            ob.ArtifactKind.RECORDING_COMBINED,
+            ob.ArtifactKind.RECORDING_STEREO,
+            ob.ArtifactKind.RECORDING_CUSTOMER,
+            ob.ArtifactKind.RECORDING_ASSISTANT,
+            ob.ArtifactKind.TRACE,
+            ob.ArtifactKind.TOOL_TRACE,
+            ob.ArtifactKind.TRANSCRIPT,
             ob.ArtifactKind.OTHER,
         }
     ),
     ArtifactLevel.TRACES: frozenset(
         {
-            ob.ArtifactKind.RECORDING_COMBINED, ob.ArtifactKind.RECORDING_STEREO,
-            ob.ArtifactKind.RECORDING_CUSTOMER, ob.ArtifactKind.RECORDING_ASSISTANT,
+            ob.ArtifactKind.RECORDING_COMBINED,
+            ob.ArtifactKind.RECORDING_STEREO,
+            ob.ArtifactKind.RECORDING_CUSTOMER,
+            ob.ArtifactKind.RECORDING_ASSISTANT,
             ob.ArtifactKind.OTHER,
         }
     ),
@@ -670,7 +751,9 @@ class OutboundAdapter:
         # `build_event_record` redact `log.message`/`world_unhealthy.cause`/
         # `baseline_frozen.baseline_ref`/`terminal.failure.{code,message}` for every event this
         # adapter emits -- binding it here, alongside identity, gives Channel 1 full redaction coverage.
-        self._event_builder = capabilities.event_builder(extra_secret_values=extra_secret_values)
+        self._event_builder = capabilities.event_builder(
+            extra_secret_values=extra_secret_values
+        )
         self._stage_started = False
         self._current_stage = HarnessStage.QUEUED
         self._uploaded_digests: set[str] = set()
@@ -682,7 +765,10 @@ class OutboundAdapter:
         self._terminal_sequence: int | None = None
         self._terminal_rejected = False
         self._scenario_counts: dict[str, int] = {
-            "passed": 0, "failed": 0, "errored": 0, "skipped": 0,
+            "passed": 0,
+            "failed": 0,
+            "errored": 0,
+            "skipped": 0,
         }
         self._fenced_error: Exception | None = None
         self._channel_failed_error: Exception | None = None
@@ -699,7 +785,9 @@ class OutboundAdapter:
         # `recording_headroom_bytes` stays 0 -- this adapter has no visibility into how many
         # scenarios are still to run (or how large their recordings will be) at construction time,
         # unlike the scheduler; sizing it here would be a guess dressed up as enforcement.
-        self._budget_tracker = ob.ArtifactBudgetTracker(self._artifacts_policy.max_artifact_bytes)
+        self._budget_tracker = ob.ArtifactBudgetTracker(
+            self._artifacts_policy.max_artifact_bytes
+        )
         # `would_admit` (check) and `record` (reserve) must run as one atomic step -- two
         # concurrent scenarios at W>1 racing the same remaining budget could otherwise both pass
         # the check against a snapshot neither has updated yet.
@@ -719,7 +807,9 @@ class OutboundAdapter:
         the terminal was ALSO undelivered is moot."""
         if self._terminal_sequence is None or self.is_fenced:
             return False
-        return self._terminal_rejected or self._spool.watermark() < self._terminal_sequence
+        return (
+            self._terminal_rejected or self._spool.watermark() < self._terminal_sequence
+        )
 
     @property
     def scenario_counts(self) -> dict[str, int]:
@@ -751,7 +841,9 @@ class OutboundAdapter:
         try:
             self._channel_state.check()
         except (
-            ob.HostedFencedError, ob.HostedChannelFailedError, ob.HostedAttemptSupersededError,
+            ob.HostedFencedError,
+            ob.HostedChannelFailedError,
+            ob.HostedAttemptSupersededError,
         ) as exc:
             self._record_channel_error(exc)
             return None
@@ -765,7 +857,11 @@ class OutboundAdapter:
     # -- events -------------------------------------------------------------------------------
 
     def _emit_event(
-        self, *, stage: HarnessStage, type_: ob.OutboundEventType, payload: dict[str, Any]
+        self,
+        *,
+        stage: HarnessStage,
+        type_: ob.OutboundEventType,
+        payload: dict[str, Any],
     ) -> None:
         if self.is_fenced:
             return  # "stop emitting" -- no event of any type once fenced.
@@ -778,12 +874,18 @@ class OutboundAdapter:
             # SAME flush that carries the terminal -- diagnostic-quality only, since the rejected
             # bytes are still recoverable as a `log`-kind artifact.
             logger.warning(
-                "outbound event dropped after terminal: type=%s stage=%s", type_.value, stage.value
+                "outbound event dropped after terminal: type=%s stage=%s",
+                type_.value,
+                stage.value,
             )
             return
         event_id = f"event_{uuid.uuid4().hex}"
         record = self._event_builder(
-            event_id=event_id, emitted_at=self._clock(), stage=stage, type=type_, payload=payload,
+            event_id=event_id,
+            emitted_at=self._clock(),
+            stage=stage,
+            type=type_,
+            payload=payload,
         )
         spooled = self._spool.append(record)
         if type_ is ob.OutboundEventType.TERMINAL:
@@ -791,17 +893,25 @@ class OutboundAdapter:
         self._current_stage = stage
 
     async def _aemit_event(
-        self, *, stage: HarnessStage, type_: ob.OutboundEventType, payload: dict[str, Any]
+        self,
+        *,
+        stage: HarnessStage,
+        type_: ob.OutboundEventType,
+        payload: dict[str, Any],
     ) -> None:
         # the spool append fsyncs the file AND its directory -- routed off the event loop so
         # it never stalls every other concurrently-running scenario at W>1.
-        await asyncio.to_thread(self._emit_event, stage=stage, type_=type_, payload=payload)
+        await asyncio.to_thread(
+            self._emit_event, stage=stage, type_=type_, payload=payload
+        )
 
     def stage_changed(self, to: HarnessStage) -> None:
         frm = self._current_stage.value if self._stage_started else None
         self._stage_started = True
         self._emit_event(
-            stage=to, type_=ob.OutboundEventType.STAGE_CHANGED, payload={"from": frm, "to": to.value},
+            stage=to,
+            type_=ob.OutboundEventType.STAGE_CHANGED,
+            payload={"from": frm, "to": to.value},
         )
 
     def baseline_frozen(self, *, inputs_digest: str, baseline_ref: str) -> None:
@@ -811,14 +921,18 @@ class OutboundAdapter:
             payload={"inputs_digest": inputs_digest, "baseline_ref": baseline_ref},
         )
 
-    def parallelism_degraded(self, *, requested: int, effective: int, reason: str) -> None:
+    def parallelism_degraded(
+        self, *, requested: int, effective: int, reason: str
+    ) -> None:
         self._emit_event(
             stage=HarnessStage.VALIDATING_ENVIRONMENT,
             type_=ob.OutboundEventType.PARALLELISM_DEGRADED,
             payload={"requested": requested, "effective": effective, "reason": reason},
         )
 
-    def flush_events(self, *, deadline: float | None = None) -> ob.EventsFlushResult | None:
+    def flush_events(
+        self, *, deadline: float | None = None
+    ) -> ob.EventsFlushResult | None:
         return self._guarded(lambda: self._events.flush(deadline=deadline))
 
     async def aflush_events(self, *, deadline: float | None = None) -> None:
@@ -829,12 +943,15 @@ class OutboundAdapter:
         if result is None or not result.rejected:
             return
         if self._terminal_sequence is not None and any(
-            entry.get("sequence") == self._terminal_sequence for entry in result.rejected
+            entry.get("sequence") == self._terminal_sequence
+            for entry in result.rejected
         ):
             # A permanent-item rejection is never retried -- the spool physically drops the record,
             # so no later flush can ever redeliver it.
             self._terminal_rejected = True
-        dropped_by_sequence = {record.sequence: record for record in result.dropped_records}
+        dropped_by_sequence = {
+            record.sequence: record for record in result.dropped_records
+        }
         for entry in result.rejected:
             sequence = entry.get("sequence")
             await self.log(
@@ -854,17 +971,26 @@ class OutboundAdapter:
         self, *, scenario_key: str, world_index: int, scenario_attempt: int
     ) -> None:
         await self._aemit_event(
-            stage=HarnessStage.RUNNING, type_=ob.OutboundEventType.SCENARIO_STARTED,
+            stage=HarnessStage.RUNNING,
+            type_=ob.OutboundEventType.SCENARIO_STARTED,
             payload={
-                "scenario_key": scenario_key, "world_index": world_index,
+                "scenario_key": scenario_key,
+                "world_index": world_index,
                 "scenario_attempt": scenario_attempt,
             },
         )
 
-    async def scenario_retried(self, *, scenario_key: str, from_world: int, to_world: int) -> None:
+    async def scenario_retried(
+        self, *, scenario_key: str, from_world: int, to_world: int
+    ) -> None:
         await self._aemit_event(
-            stage=HarnessStage.RUNNING, type_=ob.OutboundEventType.SCENARIO_RETRIED,
-            payload={"scenario_key": scenario_key, "from_world": from_world, "to_world": to_world},
+            stage=HarnessStage.RUNNING,
+            type_=ob.OutboundEventType.SCENARIO_RETRIED,
+            payload={
+                "scenario_key": scenario_key,
+                "from_world": from_world,
+                "to_world": to_world,
+            },
         )
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
@@ -875,13 +1001,15 @@ class OutboundAdapter:
         if len(redacted) > 200:
             redacted = redacted[:200]
         await self._aemit_event(
-            stage=HarnessStage.RUNNING, type_=ob.OutboundEventType.WORLD_UNHEALTHY,
+            stage=HarnessStage.RUNNING,
+            type_=ob.OutboundEventType.WORLD_UNHEALTHY,
             payload={"world_index": world_index, "cause": redacted},
         )
 
     async def log(self, *, level: str, message: str) -> None:
         await self._aemit_event(
-            stage=self._current_stage, type_=ob.OutboundEventType.LOG,
+            stage=self._current_stage,
+            type_=ob.OutboundEventType.LOG,
             payload={"level": level, "message": message},
         )
 
@@ -890,7 +1018,9 @@ class OutboundAdapter:
             return
         # counted only once a push is actually attempted -- counting before this point would
         # include receipts that were never pushed (and the counts feed the terminal payload).
-        self._scenario_counts[receipt.status] = self._scenario_counts.get(receipt.status, 0) + 1
+        self._scenario_counts[receipt.status] = (
+            self._scenario_counts.get(receipt.status, 0) + 1
+        )
         call: dict[str, Any] | None = None
         if receipt.call is not None and receipt.call.started_at is not None:
             transcript_artifact = receipt.call.transcript_artifact
@@ -984,7 +1114,9 @@ class OutboundAdapter:
             failure=failure,
             extra_secret_values=self._extra_secret_values,
         )
-        push_result = await asyncio.to_thread(self._guarded, lambda: self._results.push(wire))
+        push_result = await asyncio.to_thread(
+            self._guarded, lambda: self._results.push(wire)
+        )
         if push_result is not None and push_result.error is not None:
             # The contract's own obligation for a permanent rejection (e.g. 409 receipt_conflict,
             # 422 artifact_unknown): "the platform keeps the first; guest logs, no retry." `push()`
@@ -1018,7 +1150,9 @@ class OutboundAdapter:
             return None
         # guest-side level admission + budget, both BEFORE the transport is ever touched
         # ("the guest enforces it first").
-        forbidden = _ARTIFACT_LEVEL_FORBIDDEN_KINDS.get(self._artifacts_policy.level, frozenset())
+        forbidden = _ARTIFACT_LEVEL_FORBIDDEN_KINDS.get(
+            self._artifacts_policy.level, frozenset()
+        )
         if kind in forbidden:
             await self.log(
                 level="error",
@@ -1051,21 +1185,31 @@ class OutboundAdapter:
             ),
         )
         if result is None or result.error is not None:
-            code = result.error.code if result is not None and result.error is not None else "fenced"
-            await self.log(level="error", message=f"artifact upload failed ({kind.value}): {code}")
+            code = (
+                result.error.code
+                if result is not None and result.error is not None
+                else "fenced"
+            )
+            await self.log(
+                level="error", message=f"artifact upload failed ({kind.value}): {code}"
+            )
             return None
         self._uploaded_digests.add(digest)
         self._manifest_entries.append(
             {
-                "artifact_id": f"sha256:{digest}", "kind": kind.value, "size": len(data),
+                "artifact_id": f"sha256:{digest}",
+                "kind": kind.value,
+                "size": len(data),
                 "scenario_key": scenario_key,
             }
         )
         return f"sha256:{digest}"
 
-    async def push_manifest(self, *, complete: bool, deadline: float | None = None) -> None:
+    async def push_manifest(
+        self, *, complete: bool, deadline: float | None = None
+    ) -> bool:
         if self.is_fenced:
-            return
+            return False
         wire = ob.build_artifact_manifest(
             job_id=self._capabilities.job_id,
             attempt_id=self._capabilities.attempt_id,
@@ -1073,9 +1217,21 @@ class OutboundAdapter:
             entries=list(self._manifest_entries),
             complete=complete,
         )
-        await asyncio.to_thread(
-            self._guarded, lambda: self._artifacts.push_manifest(wire, deadline=deadline)
+        result = await asyncio.to_thread(
+            self._guarded,
+            lambda: self._artifacts.push_manifest(wire, deadline=deadline),
         )
+        if result is None:
+            return False
+        if not result.delivered:
+            error = result.error
+            logger.error(
+                "artifact manifest delivery failed: code=%s message=%s",
+                error.code if error is not None else "unknown",
+                error.message if error is not None else "no response",
+            )
+            return False
+        return True
 
     # -- terminal (exactly one terminal event, last emitted) --------------------------------
 
@@ -1094,7 +1250,9 @@ class OutboundAdapter:
         if failure is not None and isinstance(failure.get("message"), str):
             # redact BEFORE truncating -- the inverse order can cut a secret in half at the 4KB
             # boundary, and exact-substring redaction can no longer find the surviving fragment.
-            redacted = ob.redact_outbound_text(failure["message"], self._extra_secret_values)
+            redacted = ob.redact_outbound_text(
+                failure["message"], self._extra_secret_values
+            )
             failure = {**failure, "message": _cap_failure_message(redacted)}
         # the latch is set AFTER a successful append (below), not before -- a raise inside
         # `_emit_event` (an oversized payload, an invalid `failure.domain`) must not permanently
@@ -1258,12 +1416,15 @@ def _evaluation_wire(evaluation: Any) -> dict[str, Any]:
             # `MetricEvaluation.score: float` coerces `1` -> `1.0`; `build_result_receipt`
             # digests the RAW dict before that coercion, so an int here would digest-mismatch
             # against the model's own re-derivation and silently drop the receipt.
-            "name": evaluation.name, "kind": "metric",
+            "name": evaluation.name,
+            "kind": "metric",
             "score": float(evaluation.score) if evaluation.score is not None else None,
             "reason": evaluation.reason,
         }
     return {
-        "name": evaluation.name, "kind": "checkpoint", "passed": evaluation.passed,
+        "name": evaluation.name,
+        "kind": "checkpoint",
+        "passed": evaluation.passed,
         "reason": evaluation.reason,
     }
 
@@ -1338,7 +1499,9 @@ class HostedEntrypointDeps:
     )
     bundle_source: BundleSource = field(default_factory=DefaultBundleSource)
     scenario_source: ScenarioSource = field(default_factory=NotWiredScenarioSource)
-    build_transport: Callable[[], ob.Transport] = field(default=lambda: ob.RequestsTransport())
+    build_transport: Callable[[], ob.Transport] = field(
+        default=lambda: ob.RequestsTransport()
+    )
     # Daytona forces the sandbox to a fixed non-root user (svc-control) and ignores os_user
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
@@ -1354,10 +1517,16 @@ class HostedEntrypointDeps:
     # `CallRunnerContext` carries everything else `CallRunnerImpl` needs (job, bundle_dir,
     # evidence_seam, the target_provider secret map, attempt_number) that the bare
     # `CallRunner.run(scenario, runtime)` protocol has no room for.
-    build_call_runner: Callable[["OutboundAdapter", CallRunnerContext], CallRunner] = field(
-        default=lambda adapter, context: _default_build_call_runner(adapter, context)
+    build_call_runner: Callable[["OutboundAdapter", CallRunnerContext], CallRunner] = (
+        field(
+            default=lambda adapter, context: _default_build_call_runner(
+                adapter, context
+            )
+        )
     )
-    build_world_factory: Callable[[Path], WorldFactory] = field(default=ProcessWorldFactory)
+    build_world_factory: Callable[[Path], WorldFactory] = field(
+        default=ProcessWorldFactory
+    )
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     cancel_path: Path = field(default_factory=lambda: Path(CANCEL_SIGNAL_PATH))
@@ -1381,7 +1550,10 @@ class HostedEntrypointDeps:
         channel_state: ob.ChannelState,
     ) -> ScenariosClient:
         return ScenariosClient(
-            capabilities, transport, channel_state=channel_state, **self.scenarios_client_kwargs
+            capabilities,
+            transport,
+            channel_state=channel_state,
+            **self.scenarios_client_kwargs,
         )
 
     def peek_secret_values(self) -> tuple[str, ...]:
@@ -1456,7 +1628,11 @@ def _validate_scenarios(scenarios: Sequence[Any]) -> str | None:
 
 
 async def run_job(
-    job_path: Path, source: Path, output: Path, *, deps: HostedEntrypointDeps | None = None
+    job_path: Path,
+    source: Path,
+    output: Path,
+    *,
+    deps: HostedEntrypointDeps | None = None,
 ) -> int:
     """The guest's whole `main()` body. Returns the process exit code (§0.6) — `main()` below is
     the only caller that turns this into `SystemExit`, so tests can call this directly and assert
@@ -1477,7 +1653,11 @@ async def run_job(
     retry_policy = deps.retry_policy()
     events_spool = deps.build_events_spool(work_directory)
     events_client = ob.EventsClient(
-        capabilities, events_spool, transport, retry_policy=retry_policy, channel_state=channel_state
+        capabilities,
+        events_spool,
+        transport,
+        retry_policy=retry_policy,
+        channel_state=channel_state,
     )
     results_client = ob.ResultsClient(
         capabilities, transport, retry_policy=retry_policy, channel_state=channel_state
@@ -1485,7 +1665,9 @@ async def run_job(
     artifacts_client = ob.ArtifactsClient(
         capabilities, transport, retry_policy=retry_policy, channel_state=channel_state
     )
-    scenarios_client = deps.build_scenarios_client(capabilities, transport, channel_state)
+    scenarios_client = deps.build_scenarios_client(
+        capabilities, transport, channel_state
+    )
 
     adapter = OutboundAdapter(
         capabilities,
@@ -1529,12 +1711,16 @@ async def run_job(
                 "pool.close() did not finish within the remaining flush window (%.1fs); "
                 "WorldPool already latches itself closed on entry to close(), so the top-level "
                 "finally's own pool.close() call cannot retry the teardown -- the provisioner may "
-                "be left not fully torn down until close()'s latch ordering changes", timeout,
+                "be left not fully torn down until close()'s latch ordering changes",
+                timeout,
             )
 
     async def _finish(
-        stage: HarnessStage, *, reason: ob.TerminalReason | None = None,
-        failure: dict[str, Any] | None = None, complete: bool,
+        stage: HarnessStage,
+        *,
+        reason: ob.TerminalReason | None = None,
+        failure: dict[str, Any] | None = None,
+        complete: bool,
         scheduler_result: tuple[HostedScheduler, RunResult] | None = None,
     ) -> int:
         """Terminal event -> drain -> bounded close, in that order, for every path that
@@ -1574,7 +1760,9 @@ async def run_job(
                         # `pool.close()`: past the deadline, stop trying and fall through to close.
                         remaining = adapter.deadline()
                         timeout = (
-                            None if remaining is None else max(0.0, remaining - time.monotonic())
+                            None
+                            if remaining is None
+                            else max(0.0, remaining - time.monotonic())
                         )
                         try:
                             await asyncio.wait_for(
@@ -1623,20 +1811,28 @@ async def run_job(
         return EXIT_OK
 
     async def _canceled(
-        *, scheduler_result: tuple[HostedScheduler, RunResult] | None = None,
+        *,
+        scheduler_result: tuple[HostedScheduler, RunResult] | None = None,
     ) -> int:
         return await _finish(
-            HarnessStage.CANCELED, reason=cancel_state.reason(), complete=False,
+            HarnessStage.CANCELED,
+            reason=cancel_state.reason(),
+            complete=False,
             scheduler_result=scheduler_result,
         )
 
-    async def _fail(*, domain: FailureDomain, fail_stage: HarnessStage, code: str, message: str) -> int:
+    async def _fail(
+        *, domain: FailureDomain, fail_stage: HarnessStage, code: str, message: str
+    ) -> int:
         # routed through `_finish` -- terminal event first, pool close (bounded) after, for
         # every pre-run failure branch too, not just the post-run ones `_finish` already covered.
         return await _finish(
             HarnessStage.FAILED,
             failure={
-                "domain": domain.value, "stage": fail_stage.value, "code": code, "message": message,
+                "domain": domain.value,
+                "stage": fail_stage.value,
+                "code": code,
+                "message": message,
             },
             complete=True,
         )
@@ -1653,7 +1849,9 @@ async def run_job(
             return EXIT_CRASHED
 
         if job.seed is None:
-            logger.warning("job.seed is null; spine §1 guarantees a concrete integer -- using 0")
+            logger.warning(
+                "job.seed is null; spine §1 guarantees a concrete integer -- using 0"
+            )
         job_seed = job.seed if job.seed is not None else 0
         parallelism = resolve_parallelism(job)
         secret_purposes = job_secret_purposes(job)
@@ -1663,8 +1861,12 @@ async def run_job(
         # point, same constraint `deps.peek_secret_values()` already satisfies for redaction,
         # above at adapter construction. Alias-preserving so `CallRunnerImpl` can pick e.g.
         # `LIVEKIT_API_KEY` out of the map by name.
-        target_provider_secret_values = deps.peek_target_provider_secret_values(secret_purposes)
-        adapter.configure_artifacts(job.artifacts)  # level table + budget, now that job.json is known.
+        target_provider_secret_values = deps.peek_target_provider_secret_values(
+            secret_purposes
+        )
+        adapter.configure_artifacts(
+            job.artifacts
+        )  # level table + budget, now that job.json is known.
 
         adapter.stage_changed(HarnessStage.VALIDATING_ENVIRONMENT)
         await adapter.aflush_events()
@@ -1672,12 +1874,17 @@ async def run_job(
         # Bundle authoring is not this module's (see the class docstrings above) -- injected.
         try:
             manifest, bundle_dir = await asyncio.to_thread(
-                deps.bundle_source.load, job, source=source, work_directory=work_directory
+                deps.bundle_source.load,
+                job,
+                source=source,
+                work_directory=work_directory,
             )
         except BundleUnavailableError as exc:
             return await _fail(
-                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
-                code=exc.code, message=exc.message,
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                code=exc.code,
+                message=exc.message,
             )
 
         # 2. Preflight -- BEFORE any provision (§2e). `parallelism` is the RAW requested value
@@ -1685,13 +1892,18 @@ async def run_job(
         # §2e.7, rather than being silently laundered into a valid one.
         try:
             await asyncio.to_thread(
-                preflight_bundle, bundle_dir, manifest, parallelism=parallelism,
+                preflight_bundle,
+                bundle_dir,
+                manifest,
+                parallelism=parallelism,
                 secret_refs=secret_purposes,
             )
         except PreflightError as exc:
             return await _fail(
-                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
-                code=exc.code, message=exc.message,
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                code=exc.code,
+                message=exc.message,
             )
 
         # cancel/fence check at the post-preflight stage boundary.
@@ -1705,8 +1917,13 @@ async def run_job(
         # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
         provider = deps.build_provider()
         pool = WorldPool(
-            provider, bundle=manifest, source=source, bundle_dir=bundle_dir,
-            work_directory=work_directory, instances=parallelism, outbound=adapter,
+            provider,
+            bundle=manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work_directory,
+            instances=parallelism,
+            outbound=adapter,
         )
         try:
             await pool.start()
@@ -1720,8 +1937,10 @@ async def run_job(
             # `_fail` closes the pool itself now, AFTER the terminal event (via `_finish`) --
             # closing here first was the same close-before-terminal inversion that the terminal -> drain -> close ordering fixes elsewhere.
             return await _fail(
-                domain=FailureDomain.PLATFORM_SYNC, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
-                code="scenario_preallocation_failed", message=str(exc),
+                domain=FailureDomain.PLATFORM_SYNC,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code="scenario_preallocation_failed",
+                message=str(exc),
             )
         except ProcessRuntimeError as exc:
             # §2f's own CARRIED domain (never the flattened `infrastructure`/"provision_failed"
@@ -1732,15 +1951,18 @@ async def run_job(
             return await _fail(
                 domain=_process_runtime_error_domain(exc),
                 fail_stage=HarnessStage.BUILDING_ENVIRONMENT,
-                code=_section_2f_code(exc.code), message=str(exc),
+                code=_section_2f_code(exc.code),
+                message=str(exc),
             )
         except Exception as exc:  # noqa: BLE001 - genuinely untyped -> infrastructure is the honest default
             if adapter.is_fenced:
                 await _bounded_close()
                 return EXIT_FENCED
             return await _fail(
-                domain=FailureDomain.INFRASTRUCTURE, fail_stage=HarnessStage.BUILDING_ENVIRONMENT,
-                code=_section_2f_code("provision_failed"), message=f"provision_failed: {exc}",
+                domain=FailureDomain.INFRASTRUCTURE,
+                fail_stage=HarnessStage.BUILDING_ENVIRONMENT,
+                code=_section_2f_code("provision_failed"),
+                message=f"provision_failed: {exc}",
             )
 
         # baseline_frozen + parallelism_degraded from build.json. The whole
@@ -1760,14 +1982,18 @@ async def run_job(
                     )
             degrade_reason = build_output.get("degrade_reason")
             if degrade_reason:
-                requested = int(build_output.get("requested_parallelism") or parallelism)
+                requested = int(
+                    build_output.get("requested_parallelism") or parallelism
+                )
                 effective = int(build_output.get("effective_parallelism") or 1)
                 # `ParallelismDegradedPayload` requires `1 <= effective < requested` --
                 # `fixed_port` is recorded at `instances == 1` too (provider-side gap), where
                 # `effective == requested == 1` is not representable as a degrade at all.
                 if effective < requested:
                     adapter.parallelism_degraded(
-                        requested=requested, effective=effective, reason=str(degrade_reason)
+                        requested=requested,
+                        effective=effective,
+                        reason=str(degrade_reason),
                     )
                     degrade_emitted = True
                 else:
@@ -1780,7 +2006,8 @@ async def run_job(
                     )
         except Exception as exc:  # noqa: BLE001 - malformed build.json must never crash a live run
             await adapter.log(
-                level="warning", message=f"build.json degrade/baseline block malformed: {exc}",
+                level="warning",
+                message=f"build.json degrade/baseline block malformed: {exc}",
             )
         # `pool.effective_size` is the ground truth for how many worlds actually exist --
         # if it's short of what was requested and build.json's own `degrade_reason` didn't already
@@ -1813,11 +2040,17 @@ async def run_job(
         # typed `ScenarioSourceNotWired` failure below -- no regression for a job whose scenarios
         # are not generated yet.
         scenario_source = deps.scenario_source
-        if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(bundle_dir):
+        if isinstance(scenario_source, NotWiredScenarioSource) and bundle_has_scenarios(
+            bundle_dir
+        ):
             scenario_source = BundleScenarioSource()
         try:
             scenarios = await scenario_source.build(
-                job, manifest, scenarios_client, pool=pool, world_factory=world_factory,
+                job,
+                manifest,
+                scenarios_client,
+                pool=pool,
+                world_factory=world_factory,
                 bundle_dir=bundle_dir,
             )
         except (ob.HostedFencedError, ob.HostedAttemptSupersededError):
@@ -1832,16 +2065,20 @@ async def run_job(
             # never deliver. `_finish` detects exactly this (the terminal's own spool sequence never
             # gets acked) and reports it honestly rather than claiming a flush that cannot happen.
             return await _fail(
-                domain=FailureDomain.PLATFORM_SYNC, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
-                code="scenario_preallocation_failed", message=str(exc),
+                domain=FailureDomain.PLATFORM_SYNC,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code="scenario_preallocation_failed",
+                message=str(exc),
             )
         except (ScenarioSourceNotWired, ScenarioPreallocationError) as exc:
             if adapter.is_fenced:
                 await _bounded_close()
                 return EXIT_FENCED
             return await _fail(
-                domain=FailureDomain.PLATFORM_SYNC, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
-                code="scenario_preallocation_failed", message=str(exc),
+                domain=FailureDomain.PLATFORM_SYNC,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code="scenario_preallocation_failed",
+                message=str(exc),
             )
         except ScenarioDocumentInvalid as exc:
             # A scenario document that will not even compile is a generation-stage content defect
@@ -1852,8 +2089,10 @@ async def run_job(
                 await _bounded_close()
                 return EXIT_FENCED
             return await _fail(
-                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
-                code=_SCENARIO_ENTRY_INVALID_CODE, message=str(exc),
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=_SCENARIO_ENTRY_INVALID_CODE,
+                message=str(exc),
             )
 
         # Defense against a malformed scenario entry (K1) reaching the scheduler, which reads
@@ -1865,8 +2104,10 @@ async def run_job(
                 await _bounded_close()
                 return EXIT_FENCED
             return await _fail(
-                domain=FailureDomain.ENVIRONMENT, fail_stage=HarnessStage.VALIDATING_SCENARIOS,
-                code=_SCENARIO_ENTRY_INVALID_CODE, message=scenario_defect,
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_SCENARIOS,
+                code=_SCENARIO_ENTRY_INVALID_CODE,
+                message=scenario_defect,
             )
 
         # cancel/fence check at the post-pre-allocation stage boundary.
@@ -1886,8 +2127,12 @@ async def run_job(
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(
-            pool=pool, world_factory=world_factory, call_runner=call_runner, outbound=adapter,
-            job_seed=job_seed, cancel_requested=cancel_requested,
+            pool=pool,
+            world_factory=world_factory,
+            call_runner=call_runner,
+            outbound=adapter,
+            job_seed=job_seed,
+            cancel_requested=cancel_requested,
         )
         result: RunResult = await scheduler.run(scenarios)
 
@@ -1903,23 +2148,30 @@ async def run_job(
             return await _finish(
                 HarnessStage.FAILED,
                 failure={
-                    "domain": result.aborted.domain, "stage": HarnessStage.RUNNING.value,
-                    "code": result.aborted.code, "message": result.aborted.message,
+                    "domain": result.aborted.domain,
+                    "stage": HarnessStage.RUNNING.value,
+                    "code": result.aborted.code,
+                    "message": result.aborted.message,
                 },
                 # An aborted run's manifest is still COMPLETE -- nothing further
                 # will ever upload -- and the platform accepts an incomplete
                 # manifest only from a canceled attempt; sending false here made
                 # every aborted run unackable and let the gateway overwrite the
-                # real abort failure with terminal_delivery_incomplete.
+                # real abort failure with terminal_delivery_incomplete. "complete"
+                # is an evidence-delivery property, not a success flag.
                 complete=True,
                 scheduler_result=(scheduler, result),
             )
         # `complete: false` is reserved for the canceled lane alone.
-        return await _finish(HarnessStage.COMPLETED, complete=True, scheduler_result=(scheduler, result))
+        return await _finish(
+            HarnessStage.COMPLETED, complete=True, scheduler_result=(scheduler, result)
+        )
     finally:
         if pool is not None:
             try:
-                await pool.close()  # idempotent backstop for any path above that missed one.
+                await (
+                    pool.close()
+                )  # idempotent backstop for any path above that missed one.
             except Exception:  # noqa: BLE001 - a finally must never mask the real exit path
                 logger.exception("pool.close() failed in the run_job finally backstop")
         restore_sigterm()
@@ -1935,7 +2187,9 @@ async def run_job(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="alk-harness-worker")
     parser.add_argument("job", type=Path, help="typed HarnessJob JSON (/work/job.json)")
-    parser.add_argument("--source", required=True, type=Path, help="/work/source checkout root")
+    parser.add_argument(
+        "--source", required=True, type=Path, help="/work/source checkout root"
+    )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
     return asyncio.run(run_job(args.job, args.source, args.output))

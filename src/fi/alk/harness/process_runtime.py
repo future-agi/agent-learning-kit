@@ -182,18 +182,23 @@ def _job_shared_process_names(manifest: EnvironmentBundleV2) -> frozenset[str]:
     `template_database` at all (`bundle_v2._ENGINE_STRATEGIES`), so this can never mark a redis
     or rabbitmq process job-shared.
     """
-    service_by_capability = {slug: cap.service for slug, cap in manifest.capabilities.items()}
+    service_by_capability = {
+        slug: cap.service for slug, cap in manifest.capabilities.items()
+    }
     strategies_by_service: dict[str, set[BaselineStrategy]] = {}
     if manifest.seed is not None:
         for store in manifest.seed.stores:
             service = service_by_capability.get(store.capability)
             if service is not None:
-                strategies_by_service.setdefault(service, set()).add(store.baseline.strategy)
+                strategies_by_service.setdefault(service, set()).add(
+                    store.baseline.strategy
+                )
     return frozenset(
         process.name
         for process in manifest.processes
         if isinstance(process, ManagedProcess)
-        and BaselineStrategy.TEMPLATE_DATABASE in strategies_by_service.get(process.name, set())
+        and BaselineStrategy.TEMPLATE_DATABASE
+        in strategies_by_service.get(process.name, set())
     )
 
 
@@ -287,7 +292,8 @@ def render_capability_address(
             # credentials` always produces one for every postgres/rabbitmq `ManagedProcess`), not
             # a bundle defect, so it is `internal_`-prefixed, not a §2f code.
             raise ProcessRuntimeError(
-                "render", "internal_missing_credentials",
+                "render",
+                "internal_missing_credentials",
                 "postgres capability requires generated credentials but none were supplied",
             )
         auth = f"{credentials.username}:{credentials.password}"
@@ -295,7 +301,8 @@ def render_capability_address(
     if protocol is CapabilityProtocol.AMQP:
         if credentials is None:
             raise ProcessRuntimeError(
-                "render", "internal_missing_credentials",
+                "render",
+                "internal_missing_credentials",
                 "amqp capability requires generated credentials but none were supplied",
             )
         return f"amqp://{credentials.username}:{credentials.password}@{host}:{port}/"
@@ -309,7 +316,8 @@ def render_capability_address(
     # `{{CONFIGURATION_NAME}}` value, which is not a working address for any of those protocols;
     # failing loudly beats handing out an address that cannot work.
     raise ProcessRuntimeError(
-        "render", "unsupported_capability_protocol",
+        "render",
+        "unsupported_capability_protocol",
         f"{protocol.value} has no defined address shape at this seam",
         domain=FailureDomain.ENVIRONMENT,
     )
@@ -433,7 +441,10 @@ def render_environment(
 
 
 def select_process_secrets(
-    process: SourceProcess, *, secret_values: dict[str, str], secret_purposes: dict[str, str]
+    process: SourceProcess,
+    *,
+    secret_values: dict[str, str],
+    secret_purposes: dict[str, str],
 ) -> dict[str, str]:
     """§2b: "the provisioner injects every alias whose ref's `purpose` is listed [in
     `secret_purposes`], under the **alias** as the env-var name." `secret_purposes` maps each
@@ -469,13 +480,18 @@ _INHERITED_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "TZ", "TMPDIR")
 
 
 def _allowlisted_ambient_env(source: dict[str, str]) -> dict[str, str]:
-    env = {key: value for key, value in source.items() if key in _INHERITED_ENV_ALLOWLIST}
+    env = {
+        key: value for key, value in source.items() if key in _INHERITED_ENV_ALLOWLIST
+    }
     env.update({key: value for key, value in source.items() if key.startswith("LC_")})
     return env
 
 
 def _base_process_env(
-    build_dir: Path, extra: dict[str, str] | None = None, *, base: dict[str, str] | None = None
+    build_dir: Path,
+    extra: dict[str, str] | None = None,
+    *,
+    base: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """§2b: `build_environment` "merged" env, plus the provisioner's own unconditional PATH
     prepend — applied last so it always wins even if `extra` (or the ambient environment) sets
@@ -484,7 +500,10 @@ def _base_process_env(
     env = dict(base if base is not None else _allowlisted_ambient_env(os.environ))
     if extra:
         env.update(extra)
-    prepend = [str(build_dir / ".venv" / "bin"), str(build_dir / "node_modules" / ".bin")]
+    prepend = [
+        str(build_dir / ".venv" / "bin"),
+        str(build_dir / "node_modules" / ".bin"),
+    ]
     # F14, p5-round1-review: `filter(None, ...)` — an unset/empty `PATH` would otherwise leave a
     # trailing `:`, and POSIX `execvp` reads an empty PATH element as "current directory." cwd for
     # both build and run is the customer's own build tree, so that would let a repo shipping an
@@ -549,14 +568,17 @@ def _resolve_process_user(
     if resolved is None:
         if require:
             raise ProcessRuntimeError(
-                stage, "spawn_failed",
+                stage,
+                "spawn_failed",
                 f"{user.value!r} has no passwd entry; the hosted snapshot must guarantee it",
-                process=process_name, domain=domain,
+                process=process_name,
+                domain=domain,
             )
         logger.warning(
             "process %s declares user=%s but it is not resolvable on this host; running "
             "unprivileged (local test lane fallback, not the hosted path)",
-            process_name, user.value,
+            process_name,
+            user.value,
         )
     return resolved
 
@@ -567,7 +589,9 @@ def _default_chown(path: Path, uid: int, gid: int) -> None:
     os.chown(path, uid, gid, follow_symlinks=False)
 
 
-def _chown_tree(root: Path, *, uid: int, gid: int, chown: Callable[[Path, int, int], None]) -> None:
+def _chown_tree(
+    root: Path, *, uid: int, gid: int, chown: Callable[[Path, int, int], None]
+) -> None:
     chown(root, uid, gid)
     for dirpath, dirnames, filenames in os.walk(root):
         for name in (*dirnames, *filenames):
@@ -589,14 +613,17 @@ def _ensure_within(path: Path, root: Path, *, process_name: str, stage: str) -> 
     resolved_root = root.resolve()
     if not resolved.is_relative_to(resolved_root):
         raise ProcessRuntimeError(
-            stage, "process_name_invalid",
+            stage,
+            "process_name_invalid",
             f"{process_name!r} resolves to {resolved}, which escapes {resolved_root}",
             process=process_name,
         )
     return path
 
 
-def _reject_escaping_symlinks(tree_root: Path, allowed_root: Path, *, process_name: str) -> None:
+def _reject_escaping_symlinks(
+    tree_root: Path, allowed_root: Path, *, process_name: str
+) -> None:
     """F2, p5-round1-review: §2e item 2's symlink rejection is scoped to the bundle's OWN files —
     nothing scans `/work/source` for a symlink pointing outside it, since the bundle "does NOT
     embed the repository source" (§2 preamble). Left unchecked, a repo can ship
@@ -613,10 +640,12 @@ def _reject_escaping_symlinks(tree_root: Path, allowed_root: Path, *, process_na
         target = entry.resolve()
         if not target.is_relative_to(allowed_root):
             raise ProcessRuntimeError(
-                "build", "source_tree_unavailable",
+                "build",
+                "source_tree_unavailable",
                 f"{entry.relative_to(tree_root)} is a symlink to {target}, which escapes "
                 "/work/source",
-                process=process_name, domain=FailureDomain.ENVIRONMENT,
+                process=process_name,
+                domain=FailureDomain.ENVIRONMENT,
             )
 
 
@@ -665,19 +694,25 @@ def build_process_tree(
         # the model layer's `_safe_relative` (no `..`, not absolute) without ever naming the
         # escape.
         raise ProcessRuntimeError(
-            "build", "source_tree_unavailable",
+            "build",
+            "source_tree_unavailable",
             f"{process.working_directory} resolves outside /work/source",
-            process=process.name, domain=FailureDomain.ENVIRONMENT,
+            process=process.name,
+            domain=FailureDomain.ENVIRONMENT,
         )
     if not resolved_source_dir.is_dir():
         # F5, p5-round1-review: named explicitly, before any copy attempt, rather than letting
         # `copytree`'s own `FileNotFoundError`/`NotADirectoryError` climb out untyped.
         raise ProcessRuntimeError(
-            "build", "source_tree_unavailable",
+            "build",
+            "source_tree_unavailable",
             f"{process.working_directory} is absent or not a directory in the checkout",
-            process=process.name, domain=FailureDomain.ENVIRONMENT,
+            process=process.name,
+            domain=FailureDomain.ENVIRONMENT,
         )
-    _reject_escaping_symlinks(resolved_source_dir, resolved_source_root, process_name=process.name)
+    _reject_escaping_symlinks(
+        resolved_source_dir, resolved_source_root, process_name=process.name
+    )
 
     if build_dir.exists():
         shutil.rmtree(build_dir)
@@ -688,8 +723,10 @@ def build_process_tree(
         # dangling symlink — every copy-phase failure is the same deterministic, non-retryable
         # fault as a missing directory, so it gets the same code.
         raise ProcessRuntimeError(
-            "build", "source_tree_unavailable",
-            f"copying {process.working_directory}: {exc}", process=process.name,
+            "build",
+            "source_tree_unavailable",
+            f"copying {process.working_directory}: {exc}",
+            process=process.name,
             domain=FailureDomain.ENVIRONMENT,
         ) from exc
 
@@ -704,11 +741,17 @@ def build_process_tree(
             pass
 
     resolved_user = _resolve_process_user(
-        process.user, resolver=user_resolver, require=require_declared_user,
-        process_name=process.name, stage="build", domain=FailureDomain.AGENT,
+        process.user,
+        resolver=user_resolver,
+        require=require_declared_user,
+        process_name=process.name,
+        stage="build",
+        domain=FailureDomain.AGENT,
     )
     if resolved_user is not None:
-        _chown_tree(build_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown)
+        _chown_tree(
+            build_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown
+        )
     spawn_uid = resolved_user.pw_uid if resolved_user is not None else None
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
 
@@ -716,8 +759,14 @@ def build_process_tree(
     for step in process.build_commands:
         try:
             result = run(
-                step, cwd=build_dir, env=env, capture_output=True, text=True,
-                timeout=build_step_timeout_seconds, user=spawn_uid, group=spawn_gid,
+                step,
+                cwd=build_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=build_step_timeout_seconds,
+                user=spawn_uid,
+                group=spawn_gid,
             )
         except subprocess.TimeoutExpired as exc:
             # F15, p5-round1-review: an install step wedged on a private registry with no DNS
@@ -725,9 +774,11 @@ def build_process_tree(
             # whole-job TTL, which arrives as SIGTERM to the entrypoint while this call is still
             # inside an uninterruptible `subprocess.run`.
             raise ProcessRuntimeError(
-                "build", "build_failed",
+                "build",
+                "build_failed",
                 f"{step!r} exceeded the {build_step_timeout_seconds}s build-step timeout",
-                process=process.name, domain=FailureDomain.AGENT,
+                process=process.name,
+                domain=FailureDomain.AGENT,
             ) from exc
         except FileNotFoundError as exc:
             if not build_dir.is_dir():
@@ -736,8 +787,10 @@ def build_process_tree(
                 # disambiguates a filesystem fault from an interpreter-availability one before the
                 # argv[0] heuristic below ever gets a say.
                 raise ProcessRuntimeError(
-                    "build", "source_tree_unavailable",
-                    f"{build_dir} vanished before {step!r} could run", process=process.name,
+                    "build",
+                    "source_tree_unavailable",
+                    f"{build_dir} vanished before {step!r} could run",
+                    process=process.name,
                     domain=FailureDomain.ENVIRONMENT,
                 ) from exc
             if _looks_like_missing_interpreter(step[0]):
@@ -745,11 +798,15 @@ def build_process_tree(
                     "build",
                     "runtime_unsupported",
                     f"{step[0]!r} is not on the snapshot's PATH; the snapshot ships python "
-                    "3.11/3.12 and node 20/22 only",
-                    process=process.name, domain=FailureDomain.ENVIRONMENT,
+                    "3.11/3.12/3.13 and node 20/22 only",
+                    process=process.name,
+                    domain=FailureDomain.ENVIRONMENT,
                 ) from exc
             raise ProcessRuntimeError(
-                "build", "build_failed", f"{step!r}: {exc}", process=process.name,
+                "build",
+                "build_failed",
+                f"{step!r}: {exc}",
+                process=process.name,
                 domain=FailureDomain.AGENT,
             ) from exc
         if result.returncode != 0:
@@ -757,8 +814,10 @@ def build_process_tree(
             raise ProcessRuntimeError(
                 "build",
                 "build_failed",
-                f"{step!r} exited {result.returncode}" + (f": {stderr}" if stderr else ""),
-                process=process.name, domain=FailureDomain.AGENT,
+                f"{step!r} exited {result.returncode}"
+                + (f": {stderr}" if stderr else ""),
+                process=process.name,
+                domain=FailureDomain.AGENT,
             )
     return build_dir
 
@@ -801,15 +860,28 @@ class SpawnedProcess(Protocol):
 
 class ProcessRunner(Protocol):
     def __call__(
-        self, argv: Sequence[str], *, cwd: Path, env: dict[str, str], log_path: Path,
-        user: int | None = None, group: int | None = None,
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        log_path: Path,
+        user: int | None = None,
+        group: int | None = None,
     ) -> SpawnedProcess: ...
 
 
 class CapabilityProber(Protocol):
     def __call__(
-        self, *, protocol: CapabilityProtocol, host: str, port: int, path: str | None,
-        user: str | None = None, password: str | None = None, dbname: str | None = None,
+        self,
+        *,
+        protocol: CapabilityProtocol,
+        host: str,
+        port: int,
+        path: str | None,
+        user: str | None = None,
+        password: str | None = None,
+        dbname: str | None = None,
     ) -> bool: ...
 
 
@@ -859,7 +931,9 @@ _RABBITMQ_TERMINATE_WAIT_SECONDS = 30.0
 
 
 def _terminate_and_wait(
-    handle: SpawnedProcess, *, timeout: float = _TERMINATE_WAIT_SECONDS,
+    handle: SpawnedProcess,
+    *,
+    timeout: float = _TERMINATE_WAIT_SECONDS,
     prefer_interrupt: bool = False,
 ) -> None:
     """M7, p6-review-r1: `terminate()` alone only sends SIGTERM — postgres treats it as a SMART
@@ -904,7 +978,9 @@ def _prefers_interrupt(manifest: EnvironmentBundleV2, process_name: str) -> bool
     redis/rabbitmq) just gets the ordinary `terminate()` path."""
     processes_by_name = {process.name: process for process in manifest.processes}
     process = processes_by_name.get(process_name)
-    return isinstance(process, ManagedProcess) and process.engine is ManagedEngine.POSTGRES
+    return (
+        isinstance(process, ManagedProcess) and process.engine is ManagedEngine.POSTGRES
+    )
 
 
 def _default_log_chown(path: Path, uid: int, gid: int) -> None:
@@ -912,8 +988,13 @@ def _default_log_chown(path: Path, uid: int, gid: int) -> None:
 
 
 def default_process_runner(
-    argv: Sequence[str], *, cwd: Path, env: dict[str, str], log_path: Path,
-    user: int | None = None, group: int | None = None,
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    log_path: Path,
+    user: int | None = None,
+    group: int | None = None,
     chown: Callable[[Path, int, int], None] = _default_log_chown,
 ) -> PopenProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -929,8 +1010,13 @@ def default_process_runner(
         # hosted deployment has both or neither; a dev-box test fakes it structurally).
         chown(log_path, user, group if group is not None else -1)
     popen = subprocess.Popen(
-        list(argv), cwd=cwd, env=env, stdout=log_file, stderr=subprocess.STDOUT,
-        user=user, group=group,
+        list(argv),
+        cwd=cwd,
+        env=env,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        user=user,
+        group=group,
     )
     return PopenProcess(popen=popen, log_path=log_path)
 
@@ -959,18 +1045,21 @@ def _dispatch_metadata(
     anything else leaves the key absent so the call runner's own typed pre-dial failure fires
     instead of a call being dialed at an arbitrarily chosen agent. Ambiguity is loud here
     because the pre-dial message cannot say WHY the key is missing."""
-    names = sorted({
-        name
-        for handle in handles.values()
-        if (name := (handle.dispatch_agent_name or "").strip())
-    })
+    names = sorted(
+        {
+            name
+            for handle in handles.values()
+            if (name := (handle.dispatch_agent_name or "").strip())
+        }
+    )
     if len(names) == 1:
         return {"livekit_agent_name": names[0]}
     if len(names) > 1:
         logger.warning(
             "world declares %d distinct LIVEKIT_AGENT_NAME values (%s); "
             "leaving dispatch identity unset",
-            len(names), ", ".join(names),
+            len(names),
+            ", ".join(names),
         )
     return {}
 
@@ -988,8 +1077,15 @@ def postgres_bootstrap_argv(
     *, data_dir: Path, credentials: EngineCredentials, pwfile: Path
 ) -> list[str]:
     return [
-        "initdb", "-D", str(data_dir), "-U", credentials.username,
-        "--pwfile", str(pwfile), "-A", "scram-sha-256",
+        "initdb",
+        "-D",
+        str(data_dir),
+        "-U",
+        credentials.username,
+        "--pwfile",
+        str(pwfile),
+        "-A",
+        "scram-sha-256",
     ]
 
 
@@ -997,13 +1093,30 @@ def postgres_daemon_argv(*, data_dir: Path, port: int) -> list[str]:
     # n1, p6-review-r1: every connection this module makes is TCP `-h localhost` (seed, sentinel,
     # canary, probes) — nothing ever dials the unix socket, so `-k ""` closes that listening
     # surface entirely instead of leaving it open at `data_dir` unused.
-    return ["postgres", "-D", str(data_dir), "-p", str(port), "-k", "", "-h", "localhost"]
+    return [
+        "postgres",
+        "-D",
+        str(data_dir),
+        "-p",
+        str(port),
+        "-k",
+        "",
+        "-h",
+        "localhost",
+    ]
 
 
 def redis_daemon_argv(*, data_dir: Path, port: int) -> list[str]:
     return [
-        "redis-server", "--port", str(port), "--dir", str(data_dir),
-        "--daemonize", "no", "--save", "",
+        "redis-server",
+        "--port",
+        str(port),
+        "--dir",
+        str(data_dir),
+        "--daemonize",
+        "no",
+        "--save",
+        "",
     ]
 
 
@@ -1107,8 +1220,12 @@ def spawn_managed_process(
     write its own data directory, which the harness (running as `svc-control`) created.
     """
     resolved_user = _resolve_process_user(
-        process.user, resolver=user_resolver, require=require_declared_user,
-        process_name=process.name, stage="spawn", domain=FailureDomain.INFRASTRUCTURE,
+        process.user,
+        resolver=user_resolver,
+        require=require_declared_user,
+        process_name=process.name,
+        stage="spawn",
+        domain=FailureDomain.INFRASTRUCTURE,
     )
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -1127,7 +1244,12 @@ def spawn_managed_process(
             # reseal) — the copy runs as the provisioner, so every file underneath stayed
             # provisioner-owned and postgres refuses to start against a data directory it does not
             # fully own.
-            _chown_tree(data_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown)
+            _chown_tree(
+                data_dir,
+                uid=resolved_user.pw_uid,
+                gid=resolved_user.pw_gid,
+                chown=chown,
+            )
     except (OSError, shutil.Error) as exc:
         # N9, p6-review-r2: §4.6 — "engine/process/filesystem failures during provisioning ->
         # infrastructure." mkdir/chmod/chown on this engine's own data directory used to raise
@@ -1135,8 +1257,11 @@ def spawn_managed_process(
         # data-dir setup can hit is the same infrastructure class B5 already typed for the store
         # seams themselves.
         raise ProcessRuntimeError(
-            "spawn", "spawn_failed", f"{process.name}: preparing {data_dir}: {exc}",
-            process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+            "spawn",
+            "spawn_failed",
+            f"{process.name}: preparing {data_dir}: {exc}",
+            process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     spawn_uid = resolved_user.pw_uid if resolved_user is not None else None
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
@@ -1145,8 +1270,11 @@ def spawn_managed_process(
     if process.engine is ManagedEngine.POSTGRES:
         if credentials is None:
             raise ProcessRuntimeError(
-                "spawn", "spawn_failed", "postgres requires generated credentials",
-                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+                "spawn",
+                "spawn_failed",
+                "postgres requires generated credentials",
+                process=process.name,
+                domain=FailureDomain.INFRASTRUCTURE,
             )
         if not (data_dir / "PG_VERSION").exists():
             pwfile = data_dir.parent / f".{process.name}.pwfile"
@@ -1168,15 +1296,20 @@ def spawn_managed_process(
                     data_dir=data_dir, credentials=credentials, pwfile=pwfile
                 )
                 result = sync_run(
-                    bootstrap_argv, capture_output=True, text=True,
-                    user=spawn_uid, group=spawn_gid,
+                    bootstrap_argv,
+                    capture_output=True,
+                    text=True,
+                    user=spawn_uid,
+                    group=spawn_gid,
                 )
                 if result.returncode != 0:
                     stderr = (result.stderr or "").strip()[:2000]
                     raise ProcessRuntimeError(
-                        "spawn", "spawn_failed",
+                        "spawn",
+                        "spawn_failed",
                         f"initdb exited {result.returncode}: {stderr}",
-                        process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+                        process=process.name,
+                        domain=FailureDomain.INFRASTRUCTURE,
                     )
             finally:
                 pwfile.unlink(missing_ok=True)
@@ -1186,8 +1319,11 @@ def spawn_managed_process(
     elif process.engine is ManagedEngine.RABBITMQ:
         if credentials is None:
             raise ProcessRuntimeError(
-                "spawn", "spawn_failed", "rabbitmq requires generated credentials",
-                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+                "spawn",
+                "spawn_failed",
+                "rabbitmq requires generated credentials",
+                process=process.name,
+                domain=FailureDomain.INFRASTRUCTURE,
             )
         # M8, p6-review-r1: written fresh on every spawn (job bootstrap AND every world's own
         # instance) — cheap, and means a `datadir_copy` restore can never carry a stale plugin/
@@ -1205,18 +1341,26 @@ def spawn_managed_process(
             # `FileExistsError` on every world after the first.
             fd = os.open(conf_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(rabbitmq_conf_text(
-                    management_port=_rabbitmq_management_port(port), credentials=credentials,
-                ))
+                handle.write(
+                    rabbitmq_conf_text(
+                        management_port=_rabbitmq_management_port(port),
+                        credentials=credentials,
+                    )
+                )
             if resolved_user is not None:
                 chown(plugins_path, resolved_user.pw_uid, resolved_user.pw_gid)
                 chown(conf_path, resolved_user.pw_uid, resolved_user.pw_gid)
         except OSError as exc:
             raise ProcessRuntimeError(
-                "spawn", "spawn_failed", f"{process.name}: writing rabbitmq config: {exc}",
-                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+                "spawn",
+                "spawn_failed",
+                f"{process.name}: writing rabbitmq config: {exc}",
+                process=process.name,
+                domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
-        env.update(rabbitmq_daemon_env(data_dir=data_dir, port=port, credentials=credentials))
+        env.update(
+            rabbitmq_daemon_env(data_dir=data_dir, port=port, credentials=credentials)
+        )
         env["RABBITMQ_ENABLED_PLUGINS_FILE"] = str(plugins_path)
         # N6, p6-review-r2: the FULL path, extension included. Modern RabbitMQ (the catalog's
         # 3.13) documents `RABBITMQ_CONFIG_FILE` carrying `.conf` itself and unambiguously accepts
@@ -1229,22 +1373,36 @@ def spawn_managed_process(
         argv = rabbitmq_daemon_argv()
     else:  # pragma: no cover - ManagedEngine is closed; unreachable past the model layer.
         raise ProcessRuntimeError(
-            "spawn", "spawn_failed", f"unknown engine {process.engine!r}", process=process.name,
+            "spawn",
+            "spawn_failed",
+            f"unknown engine {process.engine!r}",
+            process=process.name,
             domain=FailureDomain.INFRASTRUCTURE,
         )
     try:
         handle = runner(
-            argv, cwd=data_dir, env=env, log_path=data_dir / "process.log",
-            user=spawn_uid, group=spawn_gid,
+            argv,
+            cwd=data_dir,
+            env=env,
+            log_path=data_dir / "process.log",
+            user=spawn_uid,
+            group=spawn_gid,
         )
     except FileNotFoundError as exc:
         raise ProcessRuntimeError(
-            "spawn", "spawn_failed", str(exc), process=process.name,
+            "spawn",
+            "spawn_failed",
+            str(exc),
+            process=process.name,
             domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     return SpawnedWorldProcess(
-        process_name=process.name, handle=handle, port=port, world_index=None,
-        uid=spawn_uid, gid=spawn_gid,
+        process_name=process.name,
+        handle=handle,
+        port=port,
+        world_index=None,
+        uid=spawn_uid,
+        gid=spawn_gid,
     )
 
 
@@ -1271,8 +1429,12 @@ def spawn_source_process(
     DIR}}` at all, since the harness (as `svc-control`) is the one that just created it.
     """
     resolved_user = _resolve_process_user(
-        process.user, resolver=user_resolver, require=require_declared_user,
-        process_name=process.name, stage="spawn", domain=FailureDomain.AGENT,
+        process.user,
+        resolver=user_resolver,
+        require=require_declared_user,
+        process_name=process.name,
+        stage="spawn",
+        domain=FailureDomain.AGENT,
     )
     try:
         world_dir.mkdir(parents=True, exist_ok=True)
@@ -1282,8 +1444,11 @@ def spawn_source_process(
         # N9, p6-review-r2: same class as `spawn_managed_process`'s own data-dir setup boundary —
         # a permission error creating/chowning this process's `{{WORLD_DIR}}` used to raise bare.
         raise ProcessRuntimeError(
-            "spawn", "spawn_failed", f"{process.name}: preparing {world_dir}: {exc}",
-            process=process.name, domain=FailureDomain.AGENT,
+            "spawn",
+            "spawn_failed",
+            f"{process.name}: preparing {world_dir}: {exc}",
+            process=process.name,
+            domain=FailureDomain.AGENT,
         ) from exc
     rendered = render_environment(
         process,
@@ -1300,17 +1465,27 @@ def spawn_source_process(
     )
     try:
         handle = runner(
-            list(process.run_command), cwd=build_dir, env=env, log_path=world_dir / "process.log",
+            list(process.run_command),
+            cwd=build_dir,
+            env=env,
+            log_path=world_dir / "process.log",
             user=resolved_user.pw_uid if resolved_user is not None else None,
             group=resolved_user.pw_gid if resolved_user is not None else None,
         )
     except FileNotFoundError as exc:
         raise ProcessRuntimeError(
-            "spawn", "spawn_failed", str(exc), process=process.name, domain=FailureDomain.AGENT,
+            "spawn",
+            "spawn_failed",
+            str(exc),
+            process=process.name,
+            domain=FailureDomain.AGENT,
         ) from exc
     port = port_plan.port_for(process.name, world_index)
     return SpawnedWorldProcess(
-        process_name=process.name, handle=handle, port=port, world_index=world_index,
+        process_name=process.name,
+        handle=handle,
+        port=port,
+        world_index=world_index,
         uid=resolved_user.pw_uid if resolved_user is not None else None,
         gid=resolved_user.pw_gid if resolved_user is not None else None,
         dispatch_agent_name=rendered.get("LIVEKIT_AGENT_NAME") or None,
@@ -1322,15 +1497,21 @@ def spawn_source_process(
 
 def build_tree_dir(work_directory: Path, process_name: str) -> Path:
     return _ensure_within(
-        work_directory / "build" / process_name, work_directory,
-        process_name=process_name, stage="build",
+        work_directory / "build" / process_name,
+        work_directory,
+        process_name=process_name,
+        stage="build",
     )
 
 
-def world_scratch_dir(work_directory: Path, world_index: int, process_name: str) -> Path:
+def world_scratch_dir(
+    work_directory: Path, world_index: int, process_name: str
+) -> Path:
     return _ensure_within(
-        work_directory / "worlds" / f"w{world_index}" / process_name, work_directory,
-        process_name=process_name, stage="spawn",
+        work_directory / "worlds" / f"w{world_index}" / process_name,
+        work_directory,
+        process_name=process_name,
+        stage="spawn",
     )
 
 
@@ -1348,7 +1529,9 @@ def managed_engine_data_dir(
         path = work_directory / "managed" / process_name
     else:
         return world_scratch_dir(work_directory, world_index, process_name)
-    return _ensure_within(path, work_directory, process_name=process_name, stage="spawn")
+    return _ensure_within(
+        path, work_directory, process_name=process_name, stage="spawn"
+    )
 
 
 # --- §2b depends_on wait -------------------------------------------------------------------------
@@ -1368,7 +1551,9 @@ def _readiness_probes_for_process(
         for slug, capability in manifest.capabilities.items()
         if capability.service == process_name
     }
-    return [probe for probe in manifest.readiness if probe.capability in capability_slugs]
+    return [
+        probe for probe in manifest.readiness if probe.capability in capability_slugs
+    ]
 
 
 def _tcp_probe(host: str, port: int, *, timeout: float = 0.75) -> bool:
@@ -1380,8 +1565,13 @@ def _tcp_probe(host: str, port: int, *, timeout: float = 0.75) -> bool:
 
 
 def _probe_http(
-    host: str, port: int, path: str | None, *, user: str | None = None,
-    password: str | None = None, timeout: float = 1.0,
+    host: str,
+    port: int,
+    path: str | None,
+    *,
+    user: str | None = None,
+    password: str | None = None,
+    timeout: float = 1.0,
 ) -> bool:
     """N7, p6-review-r2: `user`/`password`, when both given, ride along as a Basic-auth header —
     added for the rabbitmq management listener probe (`_wait_for_store_ready`), which otherwise
@@ -1406,8 +1596,13 @@ def _probe_http(
 
 
 def _probe_postgres(
-    host: str, port: int, *, user: str | None = None, password: str | None = None,
-    dbname: str | None = None, timeout: float = 1.0,
+    host: str,
+    port: int,
+    *,
+    user: str | None = None,
+    password: str | None = None,
+    dbname: str | None = None,
+    timeout: float = 1.0,
 ) -> bool:
     """F9, p5-round1-review: previously connected as `user="postgres", dbname="postgres"` —
     neither exists, since the catalog's `initdb -U harness` creates only the `harness` role — and
@@ -1426,7 +1621,11 @@ def _probe_postgres(
         return _tcp_probe(host, port, timeout=timeout)
     try:
         connection = psycopg.connect(
-            host=host, port=port, user=user, password=password, dbname=dbname,
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            dbname=dbname,
             connect_timeout=timeout,
         )
         try:
@@ -1441,8 +1640,14 @@ def _probe_postgres(
 
 
 def default_capability_prober(
-    *, protocol: CapabilityProtocol, host: str, port: int, path: str | None,
-    user: str | None = None, password: str | None = None, dbname: str | None = None,
+    *,
+    protocol: CapabilityProtocol,
+    host: str,
+    port: int,
+    path: str | None,
+    user: str | None = None,
+    password: str | None = None,
+    dbname: str | None = None,
 ) -> bool:
     if protocol is CapabilityProtocol.POSTGRES:
         return _probe_postgres(host, port, user=user, password=password, dbname=dbname)
@@ -1519,8 +1724,13 @@ def wait_for_dependency(
                     capability, world_index=world_index, credentials=credentials
                 )
                 if not prober(
-                    protocol=capability.protocol, host="localhost", port=port, path=probe.path,
-                    user=user, password=password, dbname=dbname,
+                    protocol=capability.protocol,
+                    host="localhost",
+                    port=port,
+                    path=probe.path,
+                    user=user,
+                    password=password,
+                    dbname=dbname,
                 ):
                     return False
             return True
@@ -1536,14 +1746,17 @@ def wait_for_dependency(
                 "depends_on",
                 "depends_on_timeout",
                 f"{dependency_name}: readiness probe did not pass within {combined_timeout}s",
-                process=dependency_name, domain=FailureDomain.INFRASTRUCTURE,
+                process=dependency_name,
+                domain=FailureDomain.INFRASTRUCTURE,
             ),
         )
         return
 
     processes_by_name = {process.name: process for process in manifest.processes}
     dependency = processes_by_name[dependency_name]
-    started_check = dependency.started_check if isinstance(dependency, SourceProcess) else None
+    started_check = (
+        dependency.started_check if isinstance(dependency, SourceProcess) else None
+    )
     if started_check is None:
         return  # neither a readiness probe nor a started_check — ready immediately after spawn.
 
@@ -1573,7 +1786,8 @@ def wait_for_dependency(
             "depends_on_timeout",
             f"{dependency_name}: started_check did not pass within "
             f"{started_check.timeout_seconds}s",
-            process=dependency_name, domain=FailureDomain.INFRASTRUCTURE,
+            process=dependency_name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ),
     )
 
@@ -1611,13 +1825,26 @@ def _topological_order(manifest: EnvironmentBundleV2) -> list[str]:
 
 class SqlRunner(Protocol):
     def __call__(
-        self, *, host: str, port: int, user: str, password: str, dbname: str, statement: str,
+        self,
+        *,
+        host: str,
+        port: int,
+        user: str,
+        password: str,
+        dbname: str,
+        statement: str,
         read_only: bool = False,
     ) -> list[tuple[Any, ...]]: ...
 
 
 def default_sql_runner(
-    *, host: str, port: int, user: str, password: str, dbname: str, statement: str,
+    *,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    dbname: str,
+    statement: str,
     read_only: bool = False,
 ) -> list[tuple[Any, ...]]:
     """psycopg-backed, import-guarded like `_probe_postgres` — never exercised in this module's
@@ -1636,7 +1863,12 @@ def default_sql_runner(
     import psycopg  # type: ignore[import-not-found]
 
     with psycopg.connect(
-        host=host, port=port, user=user, password=password, dbname=dbname, autocommit=True,
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        dbname=dbname,
+        autocommit=True,
     ) as connection:
         if read_only:
             connection.execute("SET default_transaction_read_only = on")
@@ -1651,7 +1883,9 @@ class RedisCommandRunner(Protocol):
     def __call__(self, *, host: str, port: int, command: Sequence[str]) -> Any: ...
 
 
-def default_redis_command_runner(*, host: str, port: int, command: Sequence[str]) -> Any:
+def default_redis_command_runner(
+    *, host: str, port: int, command: Sequence[str]
+) -> Any:
     import redis  # type: ignore[import-not-found]
 
     client = redis.Redis(host=host, port=port)
@@ -1669,7 +1903,13 @@ class RabbitmqQueueInspector(Protocol):
 
 class RabbitmqQueueDeclarer(Protocol):
     def __call__(
-        self, *, host: str, port: int, credentials: EngineCredentials, queue: str, message: str,
+        self,
+        *,
+        host: str,
+        port: int,
+        credentials: EngineCredentials,
+        queue: str,
+        message: str,
     ) -> None: ...
 
 
@@ -1680,7 +1920,12 @@ class RabbitmqQueueDeleter(Protocol):
     rather than ripped out and re-added from scratch."""
 
     def __call__(
-        self, *, host: str, port: int, credentials: EngineCredentials, queue: str,
+        self,
+        *,
+        host: str,
+        port: int,
+        credentials: EngineCredentials,
+        queue: str,
     ) -> None: ...
 
 
@@ -1697,47 +1942,80 @@ class RabbitmqQueueDeleter(Protocol):
 
 
 def _call_sql(
-    sql_runner: SqlRunner, *, stage: str, process_name: str, host: str, port: int, user: str,
-    password: str, dbname: str, statement: str, read_only: bool = False,
+    sql_runner: SqlRunner,
+    *,
+    stage: str,
+    process_name: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    dbname: str,
+    statement: str,
+    read_only: bool = False,
 ) -> list[tuple[Any, ...]]:
     try:
         return sql_runner(
-            host=host, port=port, user=user, password=password, dbname=dbname, statement=statement,
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            dbname=dbname,
+            statement=statement,
             read_only=read_only,
         )
     except Exception as exc:
         raise ProcessRuntimeError(
-            stage, "store_statement_failed",
+            stage,
+            "store_statement_failed",
             f"{process_name}: store rejected a provisioner-issued statement: {exc}",
-            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
+            process=process_name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
 def _call_redis(
-    redis_runner: RedisCommandRunner, *, stage: str, process_name: str, host: str, port: int,
+    redis_runner: RedisCommandRunner,
+    *,
+    stage: str,
+    process_name: str,
+    host: str,
+    port: int,
     command: Sequence[str],
 ) -> Any:
     try:
         return redis_runner(host=host, port=port, command=command)
     except Exception as exc:
         raise ProcessRuntimeError(
-            stage, "store_statement_failed",
+            stage,
+            "store_statement_failed",
             f"{process_name}: store rejected a provisioner-issued command: {exc}",
-            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
+            process=process_name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
 def _call_rabbitmq(
-    rabbitmq_inspector: RabbitmqQueueInspector, *, stage: str, process_name: str, host: str,
-    port: int, credentials: EngineCredentials, queue: str,
+    rabbitmq_inspector: RabbitmqQueueInspector,
+    *,
+    stage: str,
+    process_name: str,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    queue: str,
 ) -> int:
     try:
-        return rabbitmq_inspector(host=host, port=port, credentials=credentials, queue=queue)
+        return rabbitmq_inspector(
+            host=host, port=port, credentials=credentials, queue=queue
+        )
     except Exception as exc:
         raise ProcessRuntimeError(
-            stage, "store_statement_failed",
+            stage,
+            "store_statement_failed",
             f"{process_name}: store rejected a provisioner-issued queue inspection: {exc}",
-            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
+            process=process_name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
@@ -1746,8 +2024,15 @@ _RABBITMQ_DEPTH_READ_INTERVAL_SECONDS = 0.05
 
 
 def _call_rabbitmq_with_retry(
-    rabbitmq_inspector: RabbitmqQueueInspector, *, stage: str, process_name: str, host: str,
-    port: int, credentials: EngineCredentials, queue: str, accept: Callable[[int], bool],
+    rabbitmq_inspector: RabbitmqQueueInspector,
+    *,
+    stage: str,
+    process_name: str,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    queue: str,
+    accept: Callable[[int], bool],
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """N15, p6-review-r2 (MINOR): the management API's `messages` field is fed by the node's own
@@ -1762,8 +2047,13 @@ def _call_rabbitmq_with_retry(
     depth = 0
     for attempt in range(_RABBITMQ_DEPTH_READ_ATTEMPTS):
         depth = _call_rabbitmq(
-            rabbitmq_inspector, stage=stage, process_name=process_name, host=host, port=port,
-            credentials=credentials, queue=queue,
+            rabbitmq_inspector,
+            stage=stage,
+            process_name=process_name,
+            host=host,
+            port=port,
+            credentials=credentials,
+            queue=queue,
         )
         if accept(depth):
             return depth
@@ -1773,7 +2063,12 @@ def _call_rabbitmq_with_retry(
 
 
 def _call_rabbitmq_action(
-    fn: Callable[..., None], *, stage: str, process_name: str, action: str, **kwargs: Any,
+    fn: Callable[..., None],
+    *,
+    stage: str,
+    process_name: str,
+    action: str,
+    **kwargs: Any,
 ) -> None:
     """Same B5 typing as `_call_rabbitmq`, for the write-side canary declare/publish call
     `_run_canary_probe` makes through `context.rabbitmq_declare` — the m8 canary's OWN statement
@@ -1784,9 +2079,11 @@ def _call_rabbitmq_action(
         fn(**kwargs)
     except Exception as exc:
         raise ProcessRuntimeError(
-            stage, "store_statement_failed",
+            stage,
+            "store_statement_failed",
             f"{process_name}: store rejected the provisioner's canary {action}: {exc}",
-            process=process_name, domain=FailureDomain.INFRASTRUCTURE,
+            process=process_name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
 
 
@@ -1828,7 +2125,12 @@ def default_rabbitmq_queue_inspector(
 
 
 def default_rabbitmq_queue_declare_and_publish(
-    *, host: str, port: int, credentials: EngineCredentials, queue: str, message: str,
+    *,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    queue: str,
+    message: str,
 ) -> None:
     """m8, p6-review-r1: the conformance canary previously only ever INSPECTED a rabbitmq queue —
     since nothing ever created one, world 1's "is it visible" check compared against a queue that
@@ -1840,7 +2142,9 @@ def default_rabbitmq_queue_declare_and_publish(
     management_port = _rabbitmq_management_port(port)
     auth = _rabbitmq_auth_header(credentials)
 
-    declare_url = f"http://{host}:{management_port}/api/queues/%2F/{urlquote(queue, safe='')}"
+    declare_url = (
+        f"http://{host}:{management_port}/api/queues/%2F/{urlquote(queue, safe='')}"
+    )
     declare_request = urllib.request.Request(
         declare_url,
         data=json.dumps({"durable": False, "auto_delete": True}).encode("utf-8"),
@@ -1853,13 +2157,19 @@ def default_rabbitmq_queue_declare_and_publish(
 
     # The default exchange's routing key IS the queue name — the standard way the management
     # API's own `publish` endpoint targets a specific queue without declaring a binding first.
-    publish_url = f"http://{host}:{management_port}/api/exchanges/%2F/amq.default/publish"
+    publish_url = (
+        f"http://{host}:{management_port}/api/exchanges/%2F/amq.default/publish"
+    )
     publish_request = urllib.request.Request(
         publish_url,
-        data=json.dumps({
-            "properties": {}, "routing_key": queue, "payload": message,
-            "payload_encoding": "string",
-        }).encode("utf-8"),
+        data=json.dumps(
+            {
+                "properties": {},
+                "routing_key": queue,
+                "payload": message,
+                "payload_encoding": "string",
+            }
+        ).encode("utf-8"),
         method="POST",
     )
     publish_request.add_header("Content-Type", "application/json")
@@ -1869,7 +2179,11 @@ def default_rabbitmq_queue_declare_and_publish(
 
 
 def default_rabbitmq_queue_delete(
-    *, host: str, port: int, credentials: EngineCredentials, queue: str,
+    *,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    queue: str,
 ) -> None:
     """Cleanup half of the canary (m8) — best-effort: a 404 means it is already gone (e.g. the
     world-0 reset that runs right after already wiped it, since `datadir_copy` is rabbitmq's only
@@ -1888,12 +2202,21 @@ def default_rabbitmq_queue_delete(
 
 class RabbitmqDefinitionsImporter(Protocol):
     def __call__(
-        self, *, host: str, port: int, credentials: EngineCredentials, file: Path,
+        self,
+        *,
+        host: str,
+        port: int,
+        credentials: EngineCredentials,
+        file: Path,
     ) -> None: ...
 
 
 def default_rabbitmq_definitions_importer(
-    *, host: str, port: int, credentials: EngineCredentials, file: Path,
+    *,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    file: Path,
 ) -> None:
     """N17, p6-review-r2 (MINOR): `rabbitmqadmin import <file>` used to require the
     `rabbitmqadmin` binary specifically — served BY the management plugin at runtime (fetched
@@ -1918,8 +2241,19 @@ def default_rabbitmq_definitions_importer(
 
 def postgres_seed_argv(*, port: int, dbname: str, user: str, file: Path) -> list[str]:
     return [
-        "psql", "-h", "localhost", "-p", str(port), "-U", user, "-d", dbname,
-        "-v", "ON_ERROR_STOP=1", "-f", str(file),
+        "psql",
+        "-h",
+        "localhost",
+        "-p",
+        str(port),
+        "-U",
+        user,
+        "-d",
+        dbname,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        str(file),
     ]
 
 
@@ -1966,51 +2300,73 @@ def apply_seed_file(
     if engine is ManagedEngine.POSTGRES:
         if credentials is None:
             raise ProcessRuntimeError(
-                "seed", "internal_missing_credentials",
-                "postgres requires generated credentials to seed", process=process_name,
+                "seed",
+                "internal_missing_credentials",
+                "postgres requires generated credentials to seed",
+                process=process_name,
             )
-        argv = postgres_seed_argv(port=port, dbname=dbname, user=credentials.username, file=file)
+        argv = postgres_seed_argv(
+            port=port, dbname=dbname, user=credentials.username, file=file
+        )
         # F12's own rule (§2b's closed env list), reapplied here: `env=` fully REPLACES a child's
         # environment rather than extending the caller's — passing just `{"PGPASSWORD": ...}`
         # would drop `PATH` entirely, and `psql` living anywhere outside `subprocess`'s POSIX
         # fallback path (`/bin:/usr/bin`) — a homebrew or venv install, commonly — would silently
         # fail to exec.
         env = {**_allowlisted_ambient_env(os.environ), **postgres_seed_env(credentials)}
-        result = sync_run(argv, capture_output=True, text=True, env=env, user=user, group=group)
+        result = sync_run(
+            argv, capture_output=True, text=True, env=env, user=user, group=group
+        )
     elif engine is ManagedEngine.REDIS:
         argv = redis_seed_argv(port=port)
         result = sync_run(
-            argv, capture_output=True, text=True, input=file.read_text(encoding="utf-8"),
-            user=user, group=group,
+            argv,
+            capture_output=True,
+            text=True,
+            input=file.read_text(encoding="utf-8"),
+            user=user,
+            group=group,
         )
     elif engine is ManagedEngine.RABBITMQ:
         if credentials is None:
             raise ProcessRuntimeError(
-                "seed", "internal_missing_credentials",
-                "rabbitmq requires generated credentials to seed", process=process_name,
+                "seed",
+                "internal_missing_credentials",
+                "rabbitmq requires generated credentials to seed",
+                process=process_name,
             )
         # N17, p6-review-r2: seeded over the management HTTP API directly, never through a
         # subprocess/`sync_run` — no `rabbitmqadmin` binary dependency (`user`/`group` are moot
         # here for the same reason: an HTTP call has no OS-level identity to drop).
         try:
-            rabbitmq_import(host="localhost", port=port, credentials=credentials, file=file)
+            rabbitmq_import(
+                host="localhost", port=port, credentials=credentials, file=file
+            )
         except Exception as exc:
             raise ProcessRuntimeError(
-                "seed", "seed_failed", f"{file}: {exc}", process=process_name,
+                "seed",
+                "seed_failed",
+                f"{file}: {exc}",
+                process=process_name,
                 domain=FailureDomain.ENVIRONMENT,
             ) from exc
         return
     else:  # pragma: no cover - ManagedEngine is closed; unreachable past the model layer.
         raise ProcessRuntimeError(
-            "seed", "seed_failed", f"unknown engine {engine!r}", process=process_name,
+            "seed",
+            "seed_failed",
+            f"unknown engine {engine!r}",
+            process=process_name,
             domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()[:2000]
         raise ProcessRuntimeError(
-            "seed", "seed_failed",
+            "seed",
+            "seed_failed",
             f"{file}: exited {result.returncode}" + (f": {stderr}" if stderr else ""),
-            process=process_name, domain=FailureDomain.ENVIRONMENT,
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
         )
 
 
@@ -2033,8 +2389,15 @@ def apply_store_seed(
     authored order (never sorted)."""
     for relative_path in (*store.migrations, *store.seed_files):
         apply_seed_file(
-            engine, bundle_dir / relative_path, port=port, dbname=dbname, credentials=credentials,
-            process_name=process_name, sync_run=sync_run, user=user, group=group,
+            engine,
+            bundle_dir / relative_path,
+            port=port,
+            dbname=dbname,
+            credentials=credentials,
+            process_name=process_name,
+            sync_run=sync_run,
+            user=user,
+            group=group,
             rabbitmq_import=rabbitmq_import,
         )
 
@@ -2067,26 +2430,45 @@ def check_sentinel(
         if credentials is None or dbname is None:
             return False
         rows = _call_sql(
-            sql_runner, stage=stage, process_name=process_name,
-            host=host, port=port, user=credentials.username, password=credentials.password,
-            dbname=dbname, statement=sentinel.query,  # type: ignore[arg-type]
+            sql_runner,
+            stage=stage,
+            process_name=process_name,
+            host=host,
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=sentinel.query,  # type: ignore[arg-type]
             read_only=True,  # N8, p6-review-r2: customer-authored content, §2c calls this a read.
         )
         actual = str(rows[0][0]) if rows and rows[0] else None
         return actual == sentinel.expected
     if engine is ManagedEngine.REDIS:
         value = _call_redis(
-            redis_runner, stage=stage, process_name=process_name,
-            host=host, port=port, command=["GET", sentinel.key],  # type: ignore[list-item]
+            redis_runner,
+            stage=stage,
+            process_name=process_name,
+            host=host,
+            port=port,
+            command=["GET", sentinel.key],  # type: ignore[list-item]
         )
-        actual = value.decode() if isinstance(value, bytes) else (None if value is None else str(value))
+        actual = (
+            value.decode()
+            if isinstance(value, bytes)
+            else (None if value is None else str(value))
+        )
         return actual == sentinel.expected
     if engine is ManagedEngine.RABBITMQ:
         if credentials is None:
             return False
         depth = _call_rabbitmq_with_retry(
-            rabbitmq_inspector, stage=stage, process_name=process_name,
-            host=host, port=port, credentials=credentials, queue=sentinel.queue,  # type: ignore[arg-type]
+            rabbitmq_inspector,
+            stage=stage,
+            process_name=process_name,
+            host=host,
+            port=port,
+            credentials=credentials,
+            queue=sentinel.queue,  # type: ignore[arg-type]
             accept=lambda value: value == sentinel.expected_depth,  # N15, p6-review-r2.
         )
         return depth == sentinel.expected_depth
@@ -2189,7 +2571,9 @@ def spawn_world(
                 data_dir = managed_engine_data_dir(
                     context.work_directory,
                     name,
-                    world_index=None if context.port_plan.is_job_shared(name) else world_index,
+                    world_index=None
+                    if context.port_plan.is_job_shared(name)
+                    else world_index,
                 )
                 handle = spawn_managed_process(
                     process,
@@ -2206,7 +2590,9 @@ def spawn_world(
                 handle = spawn_source_process(
                     process,
                     build_dir=build_tree_dir(context.work_directory, name),
-                    world_dir=world_scratch_dir(context.work_directory, world_index, name),
+                    world_dir=world_scratch_dir(
+                        context.work_directory, world_index, name
+                    ),
                     world_index=world_index,
                     port_plan=context.port_plan,
                     configuration_addresses=configuration_addresses,
@@ -2239,7 +2625,9 @@ def build_process_trees(
     return {
         process.name: build_process_tree(
             process,
-            source_root=source_root,
+            source_root=(
+                context.bundle_dir if process.source_origin == "bundle" else source_root
+            ),
             build_root=context.work_directory / "build",
             run=context.sync_run,
             copy=context.copy,
@@ -2261,7 +2649,9 @@ def _split_host_port(address: str) -> tuple[str, int]:
     return parsed.hostname or "localhost", parsed.port or 0
 
 
-def _postgres_credentials_from_address(address: str) -> tuple[str | None, str | None, str | None]:
+def _postgres_credentials_from_address(
+    address: str,
+) -> tuple[str | None, str | None, str | None]:
     """F9: the rendered `endpoint.address` for a postgres capability already carries the
     generated role/password/database (`postgresql://harness:<pw>@localhost:<port>/w<N>`) — parsed
     back out rather than threading `EngineCredentials` separately into `probe_runtime_health`,
@@ -2288,10 +2678,17 @@ def probe_runtime_health(
         host, port = _split_host_port(endpoint.address)
         user = password = dbname = None
         if capability.protocol is CapabilityProtocol.POSTGRES:
-            user, password, dbname = _postgres_credentials_from_address(endpoint.address)
+            user, password, dbname = _postgres_credentials_from_address(
+                endpoint.address
+            )
         if not prober(
-            protocol=capability.protocol, host=host, port=port, path=probe.path,
-            user=user, password=password, dbname=dbname,
+            protocol=capability.protocol,
+            host=host,
+            port=port,
+            path=probe.path,
+            user=user,
+            password=password,
+            dbname=dbname,
         ):
             return False
     return True
@@ -2316,7 +2713,9 @@ async def healthy(
     """
     import asyncio
 
-    is_healthy = await asyncio.to_thread(probe_runtime_health, manifest, runtime, prober=prober)
+    is_healthy = await asyncio.to_thread(
+        probe_runtime_health, manifest, runtime, prober=prober
+    )
     if not is_healthy:
         runtime.state = RuntimeState.UNHEALTHY
     elif runtime.state is RuntimeState.PREPARING:
@@ -2340,9 +2739,11 @@ def _require_credentials(
 ) -> EngineCredentials:
     if credentials is None:
         raise ProcessRuntimeError(
-            stage, _INTERNAL_MISSING_CREDENTIALS,
+            stage,
+            _INTERNAL_MISSING_CREDENTIALS,
             f"{process_name}: postgres/rabbitmq requires generated credentials but none were "
-            "supplied", process=process_name,
+            "supplied",
+            process=process_name,
         )
     return credentials
 
@@ -2374,13 +2775,20 @@ def _datadir_copy_baseline_path(work_directory: Path, process_name: str) -> Path
     baseline` copies FROM the live dir INTO this one; nesting would make that copy recurse into
     its own destination."""
     return _ensure_within(
-        work_directory / "managed" / f"{process_name}.baseline", work_directory,
-        process_name=process_name, stage="baseline",
+        work_directory / "managed" / f"{process_name}.baseline",
+        work_directory,
+        process_name=process_name,
+        stage="baseline",
     )
 
 
 def _measure_postgres_row_counts(
-    *, host: str, port: int, credentials: EngineCredentials, dbname: str, sql_runner: SqlRunner,
+    *,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    dbname: str,
+    sql_runner: SqlRunner,
     process_name: str,
 ) -> dict[str, int]:
     """Per-table row counts as the baseline stands right after seeding — `HostedWorld`'s own
@@ -2388,9 +2796,15 @@ def _measure_postgres_row_counts(
     rather than re-measured at scenario time, so the cap it enforces cannot depend on what a
     scenario already wrote to the table."""
     tables = _call_sql(
-        sql_runner, stage="baseline", process_name=process_name,
-        host=host, port=port, user=credentials.username, password=credentials.password,
-        dbname=dbname, statement="SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
+        sql_runner,
+        stage="baseline",
+        process_name=process_name,
+        host=host,
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
+        dbname=dbname,
+        statement="SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
         read_only=True,  # N8, p6-review-r2.
     )
     counts: dict[str, int] = {}
@@ -2402,9 +2816,15 @@ def _measure_postgres_row_counts(
         # protocol runs every statement in an unparameterized `execute()` call).
         safe_table = table.replace('"', '""')
         result = _call_sql(
-            sql_runner, stage="baseline", process_name=process_name,
-            host=host, port=port, user=credentials.username, password=credentials.password,
-            dbname=dbname, statement=f'SELECT COUNT(*) FROM "{safe_table}"',
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host=host,
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=f'SELECT COUNT(*) FROM "{safe_table}"',
             read_only=True,  # N8, p6-review-r2.
         )
         counts[table] = int(result[0][0]) if result and result[0] else 0
@@ -2444,10 +2864,12 @@ def _wait_for_store_ready(
     """
     probes = _readiness_probes_for_process(manifest, process.name)
     timeout = max(
-        (probe.timeout_seconds for probe in probes), default=_DEFAULT_STORE_READY_TIMEOUT_SECONDS
+        (probe.timeout_seconds for probe in probes),
+        default=_DEFAULT_STORE_READY_TIMEOUT_SECONDS,
     )
     interval = min(
-        (probe.interval_seconds for probe in probes), default=_DEFAULT_STORE_READY_INTERVAL_SECONDS
+        (probe.interval_seconds for probe in probes),
+        default=_DEFAULT_STORE_READY_INTERVAL_SECONDS,
     )
     credentials = context.credentials.get(process.name)
     user = credentials.username if credentials else None
@@ -2460,8 +2882,13 @@ def _wait_for_store_ready(
 
     def ready() -> bool:
         if not context.prober(
-            protocol=protocol, host="localhost", port=port, path=None,
-            user=user, password=password, dbname=dbname,
+            protocol=protocol,
+            host="localhost",
+            port=port,
+            path=None,
+            user=user,
+            password=password,
+            dbname=dbname,
         ):
             return False
         if process.engine is ManagedEngine.RABBITMQ:
@@ -2470,18 +2897,27 @@ def _wait_for_store_ready(
             # the same B4 race, unfixed for the one engine whose seed/sentinel/canary statements
             # all travel over the listener that was never probed. Both must answer.
             if not context.prober(
-                protocol=CapabilityProtocol.HTTP, host="localhost",
-                port=_rabbitmq_management_port(port), path="/api/overview",
-                user=user, password=password,
+                protocol=CapabilityProtocol.HTTP,
+                host="localhost",
+                port=_rabbitmq_management_port(port),
+                path="/api/overview",
+                user=user,
+                password=password,
             ):
                 return False
         return True
 
     _poll_until(
-        ready, timeout=timeout, interval=interval, clock=clock, sleep=sleep,
+        ready,
+        timeout=timeout,
+        interval=interval,
+        clock=clock,
+        sleep=sleep,
         timeout_error=lambda: ProcessRuntimeError(
-            "baseline", "depends_on_timeout",
-            f"{process.name}: did not become ready within {timeout}s", process=process.name,
+            "baseline",
+            "depends_on_timeout",
+            f"{process.name}: did not become ready within {timeout}s",
+            process=process.name,
             domain=FailureDomain.INFRASTRUCTURE,
         ),
     )
@@ -2596,7 +3032,8 @@ def write_build_output(work_directory: Path, build_output: BuildOutput) -> Path:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     target = artifacts_dir / "build.json"
     target.write_text(
-        json.dumps(build_output.to_json(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(build_output.to_json(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     return target
 
@@ -2616,7 +3053,10 @@ class FreezeResult:
 
 
 def freeze_baseline(
-    manifest: EnvironmentBundleV2, *, bundle_digest: str, context: SpawnContext,
+    manifest: EnvironmentBundleV2,
+    *,
+    bundle_digest: str,
+    context: SpawnContext,
 ) -> FreezeResult:
     """§5 step 3 / §2c: seed each managed store once, then seal it per baseline strategy — the
     FIRST seal; every later world clone/reset reuses what this produces (`_seal_world_store`).
@@ -2627,7 +3067,9 @@ def freeze_baseline(
     """
     if context.bundle_dir is None:
         raise ProcessRuntimeError(
-            "baseline", _INTERNAL_INVARIANT_VIOLATED, "SpawnContext.bundle_dir is required to seed",
+            "baseline",
+            _INTERNAL_INVARIANT_VIOLATED,
+            "SpawnContext.bundle_dir is required to seed",
         )
     store_by_process = _store_by_process_name(manifest)
     records: list[StoreBaselineRecord] = []
@@ -2639,7 +3081,9 @@ def freeze_baseline(
             store = store_by_process.get(process.name)
             if store is None:
                 continue  # §2b default: no store entry -> per-world, nothing to freeze here.
-            record, handle = _freeze_one_store(manifest, process, store, context=context)
+            record, handle = _freeze_one_store(
+                manifest, process, store, context=context
+            )
             records.append(record)
             if handle is not None:
                 job_shared_handles[process.name] = handle
@@ -2660,7 +3104,10 @@ def freeze_baseline(
 
 
 def _freeze_one_store(
-    manifest: EnvironmentBundleV2, process: ManagedProcess, store: StoreEntry, *,
+    manifest: EnvironmentBundleV2,
+    process: ManagedProcess,
+    store: StoreEntry,
+    *,
     context: SpawnContext,
 ) -> tuple[StoreBaselineRecord, SpawnedWorldProcess | None]:
     strategy = store.baseline.strategy
@@ -2669,22 +3116,36 @@ def _freeze_one_store(
         # fallback branch (re)establishes this store's declared state on every clone/reset instead.
         return (
             StoreBaselineRecord(
-                capability=store.capability, process_name=process.name, engine=process.engine,
-                strategy=strategy, inputs_digest=store.baseline.inputs_digest,
-                baseline_reference="", row_counts={},
+                capability=store.capability,
+                process_name=process.name,
+                engine=process.engine,
+                strategy=strategy,
+                inputs_digest=store.baseline.inputs_digest,
+                baseline_reference="",
+                row_counts={},
             ),
             None,
         )
 
-    port = context.port_plan.port_for(process.name, 0)  # job-shared or not, world 0's slot is
+    port = context.port_plan.port_for(
+        process.name, 0
+    )  # job-shared or not, world 0's slot is
     # this bootstrap instance's own — a job-shared engine's port never varies by world_index
     # (`PortPlan.port_for`); a `datadir_copy` engine has no real world yet to collide with.
     credentials = context.credentials.get(process.name)
-    data_dir = managed_engine_data_dir(context.work_directory, process.name, world_index=None)
+    data_dir = managed_engine_data_dir(
+        context.work_directory, process.name, world_index=None
+    )
     handle = spawn_managed_process(
-        process, port=port, data_dir=data_dir, credentials=credentials, runner=context.runner,
-        sync_run=context.sync_run, user_resolver=context.user_resolver,
-        require_declared_user=context.require_declared_user, chown=context.chown,
+        process,
+        port=port,
+        data_dir=data_dir,
+        credentials=credentials,
+        runner=context.runner,
+        sync_run=context.sync_run,
+        user_resolver=context.user_resolver,
+        require_declared_user=context.require_declared_user,
+        chown=context.chown,
     )
     try:
         # B4, p6-review-r1: the engine has just been `exec`'d — the very next thing this function
@@ -2692,7 +3153,8 @@ def _freeze_one_store(
         _wait_for_store_ready(manifest, process, port=port, context=context)
 
         baseline_dbname = (
-            _template_database_name(process.name) if process.engine is ManagedEngine.POSTGRES
+            _template_database_name(process.name)
+            if process.engine is ManagedEngine.POSTGRES
             else ""
         )
         if process.engine is ManagedEngine.POSTGRES:
@@ -2700,15 +3162,27 @@ def _freeze_one_store(
                 credentials, stage="baseline", process_name=process.name
             )
             _call_sql(
-                context.sql_runner, stage="baseline", process_name=process.name,
-                host="localhost", port=port, user=credentials.username,
+                context.sql_runner,
+                stage="baseline",
+                process_name=process.name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
                 password=credentials.password,
-                dbname="postgres", statement=f'CREATE DATABASE "{baseline_dbname}"',
+                dbname="postgres",
+                statement=f'CREATE DATABASE "{baseline_dbname}"',
             )
         apply_store_seed(
-            store, engine=process.engine, bundle_dir=context.bundle_dir, port=port,
-            dbname=baseline_dbname, credentials=credentials, process_name=process.name,
-            sync_run=context.sync_run, user=handle.uid, group=handle.gid,
+            store,
+            engine=process.engine,
+            bundle_dir=context.bundle_dir,
+            port=port,
+            dbname=baseline_dbname,
+            credentials=credentials,
+            process_name=process.name,
+            sync_run=context.sync_run,
+            user=handle.uid,
+            group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
         )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
@@ -2717,18 +3191,28 @@ def _freeze_one_store(
         # produce what its own sentinel expects, a deterministic authoring fault) rather than
         # first noticed at the scheduler's first `reset`, long after `build.json` already
         # recorded success.
-        sentinel_dbname = baseline_dbname if process.engine is ManagedEngine.POSTGRES else None
+        sentinel_dbname = (
+            baseline_dbname if process.engine is ManagedEngine.POSTGRES else None
+        )
         if not check_sentinel(
-            store, engine=process.engine, host="localhost", port=port, dbname=sentinel_dbname,
-            credentials=credentials, sql_runner=context.sql_runner,
+            store,
+            engine=process.engine,
+            host="localhost",
+            port=port,
+            dbname=sentinel_dbname,
+            credentials=credentials,
+            sql_runner=context.sql_runner,
             redis_runner=context.redis_runner,
-            rabbitmq_inspector=context.rabbitmq_inspector, process_name=process.name,
+            rabbitmq_inspector=context.rabbitmq_inspector,
+            process_name=process.name,
             stage="baseline",
         ):
             raise ProcessRuntimeError(
-                "baseline", "seed_failed",
+                "baseline",
+                "seed_failed",
                 f"{process.name}: sentinel check failed against the freshly seeded baseline",
-                process=process.name, domain=FailureDomain.ENVIRONMENT,
+                process=process.name,
+                domain=FailureDomain.ENVIRONMENT,
             )
 
         row_counts: dict[str, int] = {}
@@ -2737,14 +3221,22 @@ def _freeze_one_store(
         if strategy is BaselineStrategy.TEMPLATE_DATABASE:
             if process.engine is ManagedEngine.POSTGRES:
                 row_counts = _measure_postgres_row_counts(
-                    host="localhost", port=port, credentials=credentials, dbname=baseline_dbname,
-                    sql_runner=context.sql_runner, process_name=process.name,
+                    host="localhost",
+                    port=port,
+                    credentials=credentials,
+                    dbname=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
                 )
             # Sealed: marked a TEMPLATE and closed to new connections, so nothing can write into
             # it after this — "the sealed post-migrate+seed datastore state" (glossary, "Baseline").
             _call_sql(
-                context.sql_runner, stage="baseline", process_name=process.name,
-                host="localhost", port=port, user=credentials.username,
+                context.sql_runner,
+                stage="baseline",
+                process_name=process.name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
                 password=credentials.password,
                 dbname="postgres",
                 statement=(
@@ -2753,20 +3245,30 @@ def _freeze_one_store(
                 ),
             )
             baseline_reference = baseline_dbname
-            result_handle = handle  # stays running — job-shared for the rest of the job.
+            result_handle = (
+                handle  # stays running — job-shared for the rest of the job.
+            )
         elif strategy is BaselineStrategy.DATADIR_COPY:
             if process.engine is ManagedEngine.POSTGRES:
                 row_counts = _measure_postgres_row_counts(
-                    host="localhost", port=port, credentials=credentials, dbname=baseline_dbname,
-                    sql_runner=context.sql_runner, process_name=process.name,
+                    host="localhost",
+                    port=port,
+                    credentials=credentials,
+                    dbname=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
                 )
             if process.engine is ManagedEngine.REDIS:
                 # Q1, p6-review-r3 (MAJOR): `redis_daemon_argv` disables save points (`--save
                 # ""`), so a plain SIGTERM shutdown persists nothing — without an explicit
                 # synchronous `SAVE` first, the copied data dir below is an empty baseline.
                 _call_redis(
-                    context.redis_runner, stage="baseline", process_name=process.name,
-                    host="localhost", port=port, command=["SAVE"],
+                    context.redis_runner,
+                    stage="baseline",
+                    process_name=process.name,
+                    host="localhost",
+                    port=port,
+                    command=["SAVE"],
                 )
             # M7, p6-review-r1: waits for the engine to actually exit before the snapshot copy
             # below — a bare `terminate()` only sends SIGTERM, and postgres's smart shutdown may
@@ -2776,11 +3278,14 @@ def _freeze_one_store(
             _terminate_and_wait(
                 handle.handle,
                 timeout=(
-                    _RABBITMQ_TERMINATE_WAIT_SECONDS if process.engine is ManagedEngine.RABBITMQ
+                    _RABBITMQ_TERMINATE_WAIT_SECONDS
+                    if process.engine is ManagedEngine.RABBITMQ
                     else _TERMINATE_WAIT_SECONDS
                 ),
             )
-            baseline_dir = _datadir_copy_baseline_path(context.work_directory, process.name)
+            baseline_dir = _datadir_copy_baseline_path(
+                context.work_directory, process.name
+            )
             try:
                 if baseline_dir.exists():
                     shutil.rmtree(baseline_dir)
@@ -2790,18 +3295,24 @@ def _freeze_one_store(
                 # mapping; sealing the very first snapshot every world clones/resets from is a
                 # filesystem operation, not a store-command seam B5 already typed.
                 raise ProcessRuntimeError(
-                    "baseline", "store_statement_failed",
+                    "baseline",
+                    "store_statement_failed",
                     f"{process.name}: sealing the datadir_copy baseline: {exc}",
-                    process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+                    process=process.name,
+                    domain=FailureDomain.INFRASTRUCTURE,
                 ) from exc
             baseline_reference = str(baseline_dir)
             # `result_handle` stays `None` — every world starts its OWN engine instance from this
             # snapshot (`_seal_world_store`'s `DATADIR_COPY` branch), never this bootstrap one.
 
         record = StoreBaselineRecord(
-            capability=store.capability, process_name=process.name, engine=process.engine,
-            strategy=strategy, inputs_digest=store.baseline.inputs_digest,
-            baseline_reference=baseline_reference, row_counts=row_counts,
+            capability=store.capability,
+            process_name=process.name,
+            engine=process.engine,
+            strategy=strategy,
+            inputs_digest=store.baseline.inputs_digest,
+            baseline_reference=baseline_reference,
+            row_counts=row_counts,
         )
         return record, result_handle
     except BaseException:
@@ -2835,23 +3346,32 @@ def _seal_world_store(
     nothing new to spawn there, only its logical `wN` database changes.
     """
     port = context.port_plan.port_for(process.name, world_index)
-    data_dir = managed_engine_data_dir(context.work_directory, process.name, world_index=world_index)
+    data_dir = managed_engine_data_dir(
+        context.work_directory, process.name, world_index=world_index
+    )
     credentials = context.credentials.get(process.name)
     strategy = store.baseline.strategy if store is not None else None
 
     if strategy is BaselineStrategy.TEMPLATE_DATABASE:
         if record is None:
             raise ProcessRuntimeError(
-                "reset", _INTERNAL_INVARIANT_VIOLATED,
+                "reset",
+                _INTERNAL_INVARIANT_VIOLATED,
                 f"{process.name}: template_database has no frozen baseline record",
                 process=process.name,
             )
-        credentials = _require_credentials(credentials, stage="reset", process_name=process.name)
+        credentials = _require_credentials(
+            credentials, stage="reset", process_name=process.name
+        )
         # No spawn on this branch (the job-shared engine is already running, and already went
         # through B4's wait once at freeze/first-clone time) — nothing new to wait on here.
         _reset_template_database(
-            host="localhost", port=port, credentials=credentials, world_db=f"w{world_index}",
-            template_db=record.baseline_reference, sql_runner=context.sql_runner,
+            host="localhost",
+            port=port,
+            credentials=credentials,
+            world_db=f"w{world_index}",
+            template_db=record.baseline_reference,
+            sql_runner=context.sql_runner,
             process_name=process.name,
         )
         return None
@@ -2865,8 +3385,10 @@ def _seal_world_store(
         # definitions-export restore via `default_rabbitmq_definitions_importer`.
         if record is None:
             raise ProcessRuntimeError(
-                "reset", _INTERNAL_INVARIANT_VIOLATED,
-                f"{process.name}: datadir_copy has no frozen baseline record", process=process.name,
+                "reset",
+                _INTERNAL_INVARIANT_VIOLATED,
+                f"{process.name}: datadir_copy has no frozen baseline record",
+                process=process.name,
             )
         try:
             if data_dir.exists():
@@ -2881,20 +3403,30 @@ def _seal_world_store(
             # snapshot is itself an infrastructure operation (§4.6) — the "baseline/seal copies"
             # half of the mapping, same class `_freeze_one_store`'s own snapshot copy got.
             raise ProcessRuntimeError(
-                "reset", "store_statement_failed",
+                "reset",
+                "store_statement_failed",
                 f"{process.name}: restoring the datadir_copy baseline: {exc}",
-                process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+                process=process.name,
+                domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         new_handle = spawn_managed_process(
-            process, port=port, data_dir=data_dir, credentials=credentials, runner=context.runner,
-            sync_run=context.sync_run, user_resolver=context.user_resolver,
-            require_declared_user=context.require_declared_user, chown=context.chown,
+            process,
+            port=port,
+            data_dir=data_dir,
+            credentials=credentials,
+            runner=context.runner,
+            sync_run=context.sync_run,
+            user_resolver=context.user_resolver,
+            require_declared_user=context.require_declared_user,
+            chown=context.chown,
         )
         # B4, p6-review-r1: fresh spawn from a just-restored data directory — the next line talks
         # to it immediately.
         _wait_for_store_ready(manifest, process, port=port, context=context)
         if process.engine is ManagedEngine.POSTGRES:
-            credentials = _require_credentials(credentials, stage="reset", process_name=process.name)
+            credentials = _require_credentials(
+                credentials, stage="reset", process_name=process.name
+            )
             world_db = f"w{world_index}"
             baseline_dbname = _template_database_name(process.name)
             # §2b: "under `datadir_copy` the provisioner configures each per-world engine's
@@ -2902,9 +3434,14 @@ def _seal_world_store(
             # database still carries `_freeze_one_store`'s bootstrap name; renamed here, once per
             # world, never touching the pristine snapshot every OTHER world/reset still copies from.
             _call_sql(
-                context.sql_runner, stage="reset", process_name=process.name,
-                host="localhost", port=port, user=credentials.username,
-                password=credentials.password, dbname="postgres",
+                context.sql_runner,
+                stage="reset",
+                process_name=process.name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
+                password=credentials.password,
+                dbname="postgres",
                 statement=f'ALTER DATABASE "{baseline_dbname}" RENAME TO "{world_db}"',
             )
         return new_handle
@@ -2924,13 +3461,22 @@ def _seal_world_store(
         # N9, p6-review-r2 (MAJOR): a bare wipe-and-recreate of this process/data-dir setup, same
         # class as `spawn_managed_process`'s own boundary.
         raise ProcessRuntimeError(
-            "reset", "spawn_failed", f"{process.name}: preparing {data_dir}: {exc}",
-            process=process.name, domain=FailureDomain.INFRASTRUCTURE,
+            "reset",
+            "spawn_failed",
+            f"{process.name}: preparing {data_dir}: {exc}",
+            process=process.name,
+            domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     handle = spawn_managed_process(
-        process, port=port, data_dir=data_dir, credentials=credentials, runner=context.runner,
-        sync_run=context.sync_run, user_resolver=context.user_resolver,
-        require_declared_user=context.require_declared_user, chown=context.chown,
+        process,
+        port=port,
+        data_dir=data_dir,
+        credentials=credentials,
+        runner=context.runner,
+        sync_run=context.sync_run,
+        user_resolver=context.user_resolver,
+        require_declared_user=context.require_declared_user,
+        chown=context.chown,
     )
     # B4, p6-review-r1: fresh spawn over a wiped data directory — the CREATE DATABASE/apply_
     # store_seed below talk to it immediately.
@@ -2938,33 +3484,54 @@ def _seal_world_store(
     if store is not None and strategy is BaselineStrategy.EMPTY:
         dbname = f"w{world_index}" if process.engine is ManagedEngine.POSTGRES else ""
         if process.engine is ManagedEngine.POSTGRES:
-            credentials = _require_credentials(credentials, stage="reset", process_name=process.name)
+            credentials = _require_credentials(
+                credentials, stage="reset", process_name=process.name
+            )
             _call_sql(
-                context.sql_runner, stage="reset", process_name=process.name,
-                host="localhost", port=port, user=credentials.username,
-                password=credentials.password, dbname="postgres",
+                context.sql_runner,
+                stage="reset",
+                process_name=process.name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
+                password=credentials.password,
+                dbname="postgres",
                 statement=f'CREATE DATABASE "{dbname}"',
             )
         if context.bundle_dir is None:
             # Same invariant `freeze_baseline` guards explicitly — a silent `Path()` (cwd) fallback
             # here would resolve `seed_files` against the wrong directory instead of failing typed.
             raise ProcessRuntimeError(
-                "reset", _INTERNAL_INVARIANT_VIOLATED,
+                "reset",
+                _INTERNAL_INVARIANT_VIOLATED,
                 "SpawnContext.bundle_dir is required to re-seed an empty-strategy store",
                 process=process.name,
             )
         apply_store_seed(
-            store, engine=process.engine, bundle_dir=context.bundle_dir, port=port,
-            dbname=dbname, credentials=credentials, process_name=process.name,
-            sync_run=context.sync_run, user=handle.uid, group=handle.gid,
+            store,
+            engine=process.engine,
+            bundle_dir=context.bundle_dir,
+            port=port,
+            dbname=dbname,
+            credentials=credentials,
+            process_name=process.name,
+            sync_run=context.sync_run,
+            user=handle.uid,
+            group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
         )
     return handle
 
 
 def _reset_template_database(
-    *, host: str, port: int, credentials: EngineCredentials, world_db: str, template_db: str,
-    sql_runner: SqlRunner, process_name: str,
+    *,
+    host: str,
+    port: int,
+    credentials: EngineCredentials,
+    world_db: str,
+    template_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
 ) -> None:
     """§4.2 `template_database`: "drop + recreate the world's logical DB from the template." The
     admin connection targets `postgres` (never `world_db` itself or the template — postgres
@@ -2973,11 +3540,16 @@ def _reset_template_database(
     `source` processes is exactly what would otherwise block the `DROP`.
     """
     admin = dict(
-        host=host, port=port, user=credentials.username, password=credentials.password,
+        host=host,
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
         dbname="postgres",
     )
     _call_sql(
-        sql_runner, stage="reset", process_name=process_name,
+        sql_runner,
+        stage="reset",
+        process_name=process_name,
         **admin,
         statement=(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -2985,12 +3557,18 @@ def _reset_template_database(
         ),
     )
     _call_sql(
-        sql_runner, stage="reset", process_name=process_name,
-        **admin, statement=f'DROP DATABASE IF EXISTS "{world_db}"',
+        sql_runner,
+        stage="reset",
+        process_name=process_name,
+        **admin,
+        statement=f'DROP DATABASE IF EXISTS "{world_db}"',
     )
     _call_sql(
-        sql_runner, stage="reset", process_name=process_name,
-        **admin, statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
+        sql_runner,
+        stage="reset",
+        process_name=process_name,
+        **admin,
+        statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
     )
 
 
@@ -3021,7 +3599,8 @@ def _clone_or_reset_world(
             # this same process's data directory and rebinds its port — a bare `terminate()`
             # racing that `rmtree` is exactly `EADDRINUSE` / "remove a live server's data dir".
             _terminate_and_wait(
-                handle.handle, prefer_interrupt=_prefers_interrupt(manifest, name),
+                handle.handle,
+                prefer_interrupt=_prefers_interrupt(manifest, name),
             )
 
     store_by_process = _store_by_process_name(manifest)
@@ -3040,7 +3619,12 @@ def _clone_or_reset_world(
             store = store_by_process.get(process.name)
             record = baseline_by_process.get(process.name)
             sealed = _seal_world_store(
-                manifest, process, store, record, world_index=world_index, context=context,
+                manifest,
+                process,
+                store,
+                record,
+                world_index=world_index,
+                context=context,
             )
             if sealed is not None:
                 new_handles[process.name] = sealed
@@ -3057,11 +3641,16 @@ def _clone_or_reset_world(
 
     # `spawn_world` sets its own (more complete — it starts from `new_handles` and accumulates
     # further) `partial_handles` on a raise, so no extra wrapping is needed here for that case.
-    return spawn_world(manifest, world_index=world_index, context=context, shared_handles=new_handles)
+    return spawn_world(
+        manifest, world_index=world_index, context=context, shared_handles=new_handles
+    )
 
 
 def _check_all_sentinels(
-    manifest: EnvironmentBundleV2, world_index: int, *, context: SpawnContext,
+    manifest: EnvironmentBundleV2,
+    world_index: int,
+    *,
+    context: SpawnContext,
 ) -> bool:
     """§4.2: "after every reset the store's sentinel must pass" — every declared store, not just
     the first; a single failing sentinel fails the whole check (short-circuits nothing, so every
@@ -3077,10 +3666,17 @@ def _check_all_sentinels(
         port = context.port_plan.port_for(process.name, world_index)
         dbname = f"w{world_index}" if process.engine is ManagedEngine.POSTGRES else None
         passed = check_sentinel(
-            store, engine=process.engine, host="localhost", port=port, dbname=dbname,
-            credentials=context.credentials.get(process.name), sql_runner=context.sql_runner,
-            redis_runner=context.redis_runner, rabbitmq_inspector=context.rabbitmq_inspector,
-            process_name=process.name, stage="reset",
+            store,
+            engine=process.engine,
+            host="localhost",
+            port=port,
+            dbname=dbname,
+            credentials=context.credentials.get(process.name),
+            sql_runner=context.sql_runner,
+            redis_runner=context.redis_runner,
+            rabbitmq_inspector=context.rabbitmq_inspector,
+            process_name=process.name,
+            stage="reset",
         )
         ok = ok and passed
     return ok
@@ -3102,8 +3698,12 @@ def reset_world(
     from spawn/build) still raises — that is not what "sentinel failure" covers.
     """
     result = _clone_or_reset_world(
-        manifest, world_index, context=context, baseline=baseline,
-        job_shared_handles=job_shared_handles, existing_handles=existing_handles,
+        manifest,
+        world_index,
+        context=context,
+        baseline=baseline,
+        job_shared_handles=job_shared_handles,
+        existing_handles=existing_handles,
     )
     ok = _check_all_sentinels(manifest, world_index, context=context)
     return result.handles, ok
@@ -3111,13 +3711,17 @@ def reset_world(
 
 # --- §4 conformance gate -------------------------------------------------------------------------
 
-_CONFORMANCE_CANARY_NAME = "_alk_conformance"  # §2c reserved name; mirrors process_preflight.py's
+_CONFORMANCE_CANARY_NAME = (
+    "_alk_conformance"  # §2c reserved name; mirrors process_preflight.py's
+)
 # own `_RESERVED_NAME` and `world/handle.py`'s `CONFORMANCE_TABLE` — redeclared locally rather
 # than imported, matching the existing split of that same constant across those two modules.
 _CONFORMANCE_MARKER = "alk-conformance-canary"
 
 _CANARY_PROTOCOL_PREFERENCE = (
-    CapabilityProtocol.POSTGRES, CapabilityProtocol.REDIS, CapabilityProtocol.AMQP,
+    CapabilityProtocol.POSTGRES,
+    CapabilityProtocol.REDIS,
+    CapabilityProtocol.AMQP,
 )
 
 
@@ -3138,13 +3742,16 @@ def _first_canary_store(manifest: EnvironmentBundleV2) -> StoreEntry | None:
     return None
 
 
-def _engine_for_store(manifest: EnvironmentBundleV2, store: StoreEntry) -> ManagedEngine:
+def _engine_for_store(
+    manifest: EnvironmentBundleV2, store: StoreEntry
+) -> ManagedEngine:
     capability = manifest.capabilities[store.capability]
     processes_by_name = {process.name: process for process in manifest.processes}
     process = processes_by_name[capability.service]
     if not isinstance(process, ManagedProcess):
         raise ProcessRuntimeError(
-            "conformance", _INTERNAL_INVARIANT_VIOLATED,
+            "conformance",
+            _INTERNAL_INVARIANT_VIOLATED,
             f"{store.capability}: backing service is not a managed engine; bundle_v2's "
             "store_service_not_managed should have rejected this bundle",
         )
@@ -3152,7 +3759,11 @@ def _engine_for_store(manifest: EnvironmentBundleV2, store: StoreEntry) -> Manag
 
 
 def _run_canary_probe(
-    manifest: EnvironmentBundleV2, store: StoreEntry, engine: ManagedEngine, *, context: SpawnContext,
+    manifest: EnvironmentBundleV2,
+    store: StoreEntry,
+    engine: ManagedEngine,
+    *,
+    context: SpawnContext,
 ) -> bool:
     """Creates the reserved object in world 0, then asserts it is NOT visible in world 1 — proving
     the two worlds are really isolated from each other, not just reachable on different ports."""
@@ -3163,10 +3774,17 @@ def _run_canary_probe(
     port1 = context.port_plan.port_for(process_name, 1)
 
     if engine is ManagedEngine.POSTGRES:
-        credentials = _require_credentials(credentials, stage="conformance", process_name=process_name)
+        credentials = _require_credentials(
+            credentials, stage="conformance", process_name=process_name
+        )
         _call_sql(
-            context.sql_runner, stage="conformance", process_name=process_name,
-            host="localhost", port=port0, user=credentials.username, password=credentials.password,
+            context.sql_runner,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port0,
+            user=credentials.username,
+            password=credentials.password,
             dbname="w0",
             statement=(
                 f'CREATE TABLE "{_CONFORMANCE_CANARY_NAME}" (marker text); '
@@ -3174,21 +3792,34 @@ def _run_canary_probe(
             ),
         )
         rows = _call_sql(
-            context.sql_runner, stage="conformance", process_name=process_name,
-            host="localhost", port=port1, user=credentials.username, password=credentials.password,
-            dbname="w1", statement=f"SELECT to_regclass('{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
+            context.sql_runner,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port1,
+            user=credentials.username,
+            password=credentials.password,
+            dbname="w1",
+            statement=f"SELECT to_regclass('{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
             read_only=True,  # N8, p6-review-r2.
         )
         return not (rows and rows[0] and rows[0][0])
     if engine is ManagedEngine.REDIS:
         _call_redis(
-            context.redis_runner, stage="conformance", process_name=process_name,
-            host="localhost", port=port0,
+            context.redis_runner,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port0,
             command=["SET", _CONFORMANCE_CANARY_NAME, _CONFORMANCE_MARKER],
         )
         value = _call_redis(
-            context.redis_runner, stage="conformance", process_name=process_name,
-            host="localhost", port=port1, command=["GET", _CONFORMANCE_CANARY_NAME],
+            context.redis_runner,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port1,
+            command=["GET", _CONFORMANCE_CANARY_NAME],
         )
         return value is None
     if engine is ManagedEngine.RABBITMQ:
@@ -3198,16 +3829,28 @@ def _run_canary_probe(
         # confirming world 1's own broker never saw it is what is left to prove — m8, p6-review-
         # r1: previously only ever INSPECTED (a read), so world 1's check compared against a
         # queue that had never been created anywhere, a vacuous pass regardless of isolation.
-        credentials = _require_credentials(credentials, stage="conformance", process_name=process_name)
+        credentials = _require_credentials(
+            credentials, stage="conformance", process_name=process_name
+        )
         _call_rabbitmq_action(
-            context.rabbitmq_declare, stage="conformance", process_name=process_name,
+            context.rabbitmq_declare,
+            stage="conformance",
+            process_name=process_name,
             action="declare",
-            host="localhost", port=port0, credentials=credentials,
-            queue=_CONFORMANCE_CANARY_NAME, message=_CONFORMANCE_MARKER,
+            host="localhost",
+            port=port0,
+            credentials=credentials,
+            queue=_CONFORMANCE_CANARY_NAME,
+            message=_CONFORMANCE_MARKER,
         )
         depth = _call_rabbitmq_with_retry(
-            context.rabbitmq_inspector, stage="conformance", process_name=process_name,
-            host="localhost", port=port1, credentials=credentials, queue=_CONFORMANCE_CANARY_NAME,
+            context.rabbitmq_inspector,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port1,
+            credentials=credentials,
+            queue=_CONFORMANCE_CANARY_NAME,
             accept=lambda value: value in (0, None),
         )
         # N15, p6-review-r2 (MINOR): no explicit delete here anymore. `run_conformance_gate`'s own
@@ -3224,7 +3867,11 @@ def _run_canary_probe(
 
 
 def _verify_canary_absent(
-    manifest: EnvironmentBundleV2, store: StoreEntry, engine: ManagedEngine, *, context: SpawnContext,
+    manifest: EnvironmentBundleV2,
+    store: StoreEntry,
+    engine: ManagedEngine,
+    *,
+    context: SpawnContext,
 ) -> bool:
     """§4: "assert it is gone" — checked against world 0's OWN namespace after both worlds reset,
     defense in depth against a reset that silently failed to actually seal a fresh baseline."""
@@ -3234,25 +3881,44 @@ def _verify_canary_absent(
     port0 = context.port_plan.port_for(process_name, 0)
 
     if engine is ManagedEngine.POSTGRES:
-        credentials = _require_credentials(credentials, stage="conformance", process_name=process_name)
+        credentials = _require_credentials(
+            credentials, stage="conformance", process_name=process_name
+        )
         rows = _call_sql(
-            context.sql_runner, stage="conformance", process_name=process_name,
-            host="localhost", port=port0, user=credentials.username, password=credentials.password,
-            dbname="w0", statement=f"SELECT to_regclass('{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
+            context.sql_runner,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port0,
+            user=credentials.username,
+            password=credentials.password,
+            dbname="w0",
+            statement=f"SELECT to_regclass('{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
             read_only=True,  # N8, p6-review-r2.
         )
         return not (rows and rows[0] and rows[0][0])
     if engine is ManagedEngine.REDIS:
         value = _call_redis(
-            context.redis_runner, stage="conformance", process_name=process_name,
-            host="localhost", port=port0, command=["GET", _CONFORMANCE_CANARY_NAME],
+            context.redis_runner,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port0,
+            command=["GET", _CONFORMANCE_CANARY_NAME],
         )
         return value is None
     if engine is ManagedEngine.RABBITMQ:
-        credentials = _require_credentials(credentials, stage="conformance", process_name=process_name)
+        credentials = _require_credentials(
+            credentials, stage="conformance", process_name=process_name
+        )
         depth = _call_rabbitmq_with_retry(
-            context.rabbitmq_inspector, stage="conformance", process_name=process_name,
-            host="localhost", port=port0, credentials=credentials, queue=_CONFORMANCE_CANARY_NAME,
+            context.rabbitmq_inspector,
+            stage="conformance",
+            process_name=process_name,
+            host="localhost",
+            port=port0,
+            credentials=credentials,
+            queue=_CONFORMANCE_CANARY_NAME,
             accept=lambda value: value in (0, None),  # N15, p6-review-r2.
         )
         return depth in (0, None)
@@ -3283,7 +3949,10 @@ def run_conformance_gate(
     """
     store = _first_canary_store(manifest)
     if store is None:
-        return True, None  # §2e's own no_sql_store guarantee means this never actually happens.
+        return (
+            True,
+            None,
+        )  # §2e's own no_sql_store guarantee means this never actually happens.
     engine = _engine_for_store(manifest, store)
 
     world_index: int | None = None
@@ -3293,7 +3962,10 @@ def run_conformance_gate(
 
         for world_index in (0, 1):
             handles, sentinel_ok = reset_world(
-                manifest, world_index, context=context, baseline=baseline,
+                manifest,
+                world_index,
+                context=context,
+                baseline=baseline,
                 job_shared_handles=job_shared_handles,
                 existing_handles=world_handles.get(world_index, {}),
             )
@@ -3321,12 +3993,17 @@ def run_conformance_gate(
         if isinstance(exc, ProcessRuntimeError):
             logger.error(
                 "conformance gate raised %s/%s: %s degrading to effective parallelism 1 instead "
-                "of failing the job", exc.stage, exc.code, exc,
+                "of failing the job",
+                exc.stage,
+                exc.code,
+                exc,
             )
         else:
             logger.error(
                 "conformance gate raised %s: %s degrading to effective parallelism 1 instead of "
-                "failing the job", type(exc).__name__, exc,
+                "failing the job",
+                type(exc).__name__,
+                exc,
             )
         return False, "conformance_gate_failed"
 
@@ -3355,19 +4032,23 @@ def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
         # log explaining why.
         logger.warning(
             "secrets: %s is absent; every alias in secrets.json will be dropped (no purpose to "
-            "match) unless a secret_purpose_map was supplied", job_json_path,
+            "match) unless a secret_purpose_map was supplied",
+            job_json_path,
         )
         return {}
     try:
         raw = json.loads(job_json_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ProcessRuntimeError(
-            "secrets", "spawn_failed", f"{job_json_path}: unreadable or not valid JSON: {exc}",
+            "secrets",
+            "spawn_failed",
+            f"{job_json_path}: unreadable or not valid JSON: {exc}",
             domain=FailureDomain.INFRASTRUCTURE,
         ) from exc
     if not isinstance(raw, dict):
         raise ProcessRuntimeError(
-            "secrets", "spawn_failed",
+            "secrets",
+            "spawn_failed",
             f"{job_json_path}: expected a JSON object, got {type(raw).__name__}",
             domain=FailureDomain.INFRASTRUCTURE,
         )
@@ -3383,7 +4064,10 @@ def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
 
 
 def _load_and_delete_secrets(
-    secrets_path: Path, *, work_directory: Path, secret_purpose_map: dict[str, str] | None = None,
+    secrets_path: Path,
+    *,
+    work_directory: Path,
+    secret_purpose_map: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """§0 step 3 / §4 rule 1's lifetime rule: "the provisioner loads this file into memory at
     startup and deletes it immediately after loading, BEFORE ANY CUSTOMER PROCESS STARTS. The
@@ -3406,13 +4090,16 @@ def _load_and_delete_secrets(
             raw = json.loads(secrets_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ProcessRuntimeError(
-                "secrets", "spawn_failed", f"{secrets_path}: unreadable or not valid JSON: {exc}",
+                "secrets",
+                "spawn_failed",
+                f"{secrets_path}: unreadable or not valid JSON: {exc}",
                 domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         secrets_path.unlink(missing_ok=True)
         if not isinstance(raw, dict):
             raise ProcessRuntimeError(
-                "secrets", "spawn_failed",
+                "secrets",
+                "spawn_failed",
                 f"{secrets_path}: expected a JSON object of alias -> value, got "
                 f"{type(raw).__name__}",
                 domain=FailureDomain.INFRASTRUCTURE,
@@ -3420,14 +4107,17 @@ def _load_and_delete_secrets(
         values = {str(alias): str(value) for alias, value in raw.items()}
 
     all_purposes = (
-        dict(secret_purpose_map) if secret_purpose_map is not None
+        dict(secret_purpose_map)
+        if secret_purpose_map is not None
         else _read_job_secret_purposes(work_directory)
     )
     dropped = sorted(alias for alias in values if alias not in all_purposes)
     if dropped:
         logger.warning(
             "secrets: %d alias(es) with no matching agent.secret_refs entry will never be "
-            "injected into any process: %s", len(dropped), dropped,
+            "injected into any process: %s",
+            len(dropped),
+            dropped,
         )
     purposes = {alias: all_purposes[alias] for alias in values if alias in all_purposes}
     return values, purposes
@@ -3483,7 +4173,9 @@ class ProcessRuntimeProvider:
         rabbitmq_delete: RabbitmqQueueDeleter = default_rabbitmq_queue_delete,
         rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
         copy: Callable[[Path, Path], None] | None = None,
-        user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
+        user_resolver: Callable[
+            [str], "pwd.struct_passwd | None"
+        ] = default_user_resolver,
         chown: Callable[[Path, int, int], None] = _default_chown,
         build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
         token: Callable[[], str] | None = None,
@@ -3547,7 +4239,8 @@ class ProcessRuntimeProvider:
         source: Path,
         bundle_dir: Path,
         work_directory: Path,
-        contract: Any | None = None,  # accepted for §4 shape-compatibility; not consumed here —
+        contract: Any
+        | None = None,  # accepted for §4 shape-compatibility; not consumed here —
         # evidence-seam wiring is out of this phase's scope, same as `runtime.py`'s own providers.
         instances: int = 1,
         require_declared_user: bool | None = None,
@@ -3559,14 +4252,24 @@ class ProcessRuntimeProvider:
         if require_declared_user is None:
             require_declared_user = self._require_declared_user
         return await asyncio.to_thread(
-            self._provision_sync, bundle, source=source, bundle_dir=bundle_dir,
-            work_directory=work_directory, instances=instances,
+            self._provision_sync,
+            bundle,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=work_directory,
+            instances=instances,
             require_declared_user=require_declared_user,
         )
 
     def _provision_sync(
-        self, bundle: EnvironmentBundleV2, *, source: Path, bundle_dir: Path, work_directory: Path,
-        instances: int, require_declared_user: bool,
+        self,
+        bundle: EnvironmentBundleV2,
+        *,
+        source: Path,
+        bundle_dir: Path,
+        work_directory: Path,
+        instances: int,
+        require_declared_user: bool,
     ) -> list[EnvironmentRuntime]:
         port_plan = plan_ports(bundle, instances=instances)
         effective = port_plan.effective_instances
@@ -3587,7 +4290,8 @@ class ProcessRuntimeProvider:
                 # below ever spawn anything. N10, p6-review-r2: purposes come from `job.json`'s
                 # own `agent.secret_refs` (or the constructor override), never invented.
                 self._secret_values, self._secret_purposes = _load_and_delete_secrets(
-                    self._secrets_path, work_directory=work_directory,
+                    self._secrets_path,
+                    work_directory=work_directory,
                     secret_purpose_map=self._secret_purpose_map,
                 )
                 self._secrets_loaded = True
@@ -3596,15 +4300,25 @@ class ProcessRuntimeProvider:
             # digest mismatch forces a rebuild) — build once, seed+freeze once, gate once.
             credentials = generate_engine_credentials(bundle, token=self._token)
             context = SpawnContext(
-                work_directory=work_directory, port_plan=port_plan, credentials=credentials,
-                secret_values=self._secret_values, secret_purposes=self._secret_purposes,
-                runner=self._runner, sync_run=self._sync_run,
-                prober=self._prober, copy=self._copy, user_resolver=self._user_resolver,
-                require_declared_user=require_declared_user, chown=self._chown,
+                work_directory=work_directory,
+                port_plan=port_plan,
+                credentials=credentials,
+                secret_values=self._secret_values,
+                secret_purposes=self._secret_purposes,
+                runner=self._runner,
+                sync_run=self._sync_run,
+                prober=self._prober,
+                copy=self._copy,
+                user_resolver=self._user_resolver,
+                require_declared_user=require_declared_user,
+                chown=self._chown,
                 build_step_timeout_seconds=self._build_step_timeout_seconds,
-                sql_runner=self._sql_runner, redis_runner=self._redis_runner,
-                rabbitmq_inspector=self._rabbitmq_inspector, rabbitmq_declare=self._rabbitmq_declare,
-                rabbitmq_delete=self._rabbitmq_delete, rabbitmq_import=self._rabbitmq_import,
+                sql_runner=self._sql_runner,
+                redis_runner=self._redis_runner,
+                rabbitmq_inspector=self._rabbitmq_inspector,
+                rabbitmq_declare=self._rabbitmq_declare,
+                rabbitmq_delete=self._rabbitmq_delete,
+                rabbitmq_import=self._rabbitmq_import,
                 bundle_dir=bundle_dir,
             )
             # N3, p6-review-r2 (MAJOR): the job identity (`_manifest`/`_bundle_digest`) is
@@ -3630,7 +4344,9 @@ class ProcessRuntimeProvider:
                 self._manifest = None
                 self._bundle_digest = None
                 raise ProcessRuntimeError(
-                    "baseline", "store_statement_failed", str(exc),
+                    "baseline",
+                    "store_statement_failed",
+                    str(exc),
                     domain=FailureDomain.INFRASTRUCTURE,
                 ) from exc
             except BaseException:
@@ -3653,8 +4369,11 @@ class ProcessRuntimeProvider:
             # call actually passed, since only `port_plan`/`require_declared_user` were carried
             # forward here). The sealed baseline never re-runs regardless (§4 rule 1).
             self._context = replace(
-                self._context, port_plan=port_plan, require_declared_user=require_declared_user,
-                work_directory=work_directory, bundle_dir=bundle_dir,
+                self._context,
+                port_plan=port_plan,
+                require_declared_user=require_declared_user,
+                work_directory=work_directory,
+                bundle_dir=bundle_dir,
             )
 
         context = self._context
@@ -3665,7 +4384,8 @@ class ProcessRuntimeProvider:
             # function" precondition into an opaque `AttributeError` a few lines down instead of
             # a typed failure.
             raise ProcessRuntimeError(
-                "provision", _INTERNAL_INVARIANT_VIOLATED,
+                "provision",
+                _INTERNAL_INVARIANT_VIOLATED,
                 "context/build_output unset after the first-call/reconcile branch",
             )
 
@@ -3682,8 +4402,11 @@ class ProcessRuntimeProvider:
             self._ensure_world(0)
             self._ensure_world(1)
             passed, reason = run_conformance_gate(
-                bundle, context=context, baseline=build_output,
-                job_shared_handles=self._job_shared_handles, world_handles=self._world_handles,
+                bundle,
+                context=context,
+                baseline=build_output,
+                job_shared_handles=self._job_shared_handles,
+                world_handles=self._world_handles,
             )
             build_output.conformance = passed
             build_output.conformance_reason = reason
@@ -3727,8 +4450,12 @@ class ProcessRuntimeProvider:
                 # `depends_on` edges), so a single-shot probe here marked a bundle whose readiness-
                 # bearing process is terminal `UNHEALTHY` on every provision, regardless of how
                 # quickly it actually came up.
-                healthy_now = _poll_runtime_health(self._manifest, runtime, prober=context.prober)
-                runtime.state = RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
+                healthy_now = _poll_runtime_health(
+                    self._manifest, runtime, prober=context.prober
+                )
+                runtime.state = (
+                    RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
+                )
 
         return [self._runtimes[index] for index in range(effective)]
 
@@ -3739,15 +4466,23 @@ class ProcessRuntimeProvider:
         — the same primitive `reset_world` uses, so a sick-world replace and a first-time clone are
         one code path, not two.
         """
-        if self._manifest is None or self._context is None or self._build_output is None:
+        if (
+            self._manifest is None
+            or self._context is None
+            or self._build_output is None
+        ):
             # m6, p6-review-r1: real precondition (only ever called from within `_provision_sync`,
             # after all three are set) — typed, not a bare `assert` an `-O` run would strip.
             raise ProcessRuntimeError(
-                "provision", _INTERNAL_INVARIANT_VIOLATED,
+                "provision",
+                _INTERNAL_INVARIANT_VIOLATED,
                 "_ensure_world called before manifest/context/build_output were established",
             )
         existing = self._runtimes.get(world_index)
-        if existing is not None and existing.state in (RuntimeState.READY, RuntimeState.PREPARING):
+        if existing is not None and existing.state in (
+            RuntimeState.READY,
+            RuntimeState.PREPARING,
+        ):
             return
 
         # N11, p6-review-r2. `current_world_index`: Q7, p6-review-r3 — a respawn reseals every
@@ -3756,7 +4491,10 @@ class ProcessRuntimeProvider:
         self._ensure_job_shared_handles_alive(current_world_index=world_index)
         try:
             result = _clone_or_reset_world(
-                self._manifest, world_index, context=self._context, baseline=self._build_output,
+                self._manifest,
+                world_index,
+                context=self._context,
+                baseline=self._build_output,
                 job_shared_handles=self._job_shared_handles,
                 existing_handles=self._world_handles.get(world_index, {}),
             )
@@ -3767,7 +4505,9 @@ class ProcessRuntimeProvider:
             # raise site that DOES know its process kind already carries its own domain directly.
             partial = getattr(exc, "partial_handles", None)
             if partial is not None:
-                self._world_handles[world_index] = partial  # never orphan a live engine.
+                self._world_handles[world_index] = (
+                    partial  # never orphan a live engine.
+                )
             raise ProcessRuntimeError("spawn", "spawn_failed", str(exc)) from exc
         except BaseException as exc:
             # A raise partway through `_clone_or_reset_world`/`spawn_
@@ -3798,8 +4538,10 @@ class ProcessRuntimeProvider:
         else:
             self._runtimes[world_index] = EnvironmentRuntime(
                 runtime_id=new_runtime_id(self._bundle_digest, world_index),
-                world_index=world_index, bundle_digest=self._bundle_digest,
-                state=RuntimeState.PREPARING, endpoints=result.endpoints,
+                world_index=world_index,
+                bundle_digest=self._bundle_digest,
+                state=RuntimeState.PREPARING,
+                endpoints=result.endpoints,
                 metadata=metadata,
             )
 
@@ -3814,10 +4556,16 @@ class ProcessRuntimeProvider:
             return
         store_by_process = _store_by_process_name(self._manifest)
         for process in self._manifest.processes:
-            if not isinstance(process, ManagedProcess) or process.engine is not ManagedEngine.POSTGRES:
+            if (
+                not isinstance(process, ManagedProcess)
+                or process.engine is not ManagedEngine.POSTGRES
+            ):
                 continue
             store = store_by_process.get(process.name)
-            if store is None or store.baseline.strategy is not BaselineStrategy.TEMPLATE_DATABASE:
+            if (
+                store is None
+                or store.baseline.strategy is not BaselineStrategy.TEMPLATE_DATABASE
+            ):
                 continue
             if process.name not in self._job_shared_handles:
                 continue
@@ -3832,22 +4580,34 @@ class ProcessRuntimeProvider:
                 # closed) otherwise blocks this DROP exactly the way it would block a reuse-time
                 # one, silently re-opening the space leak m4 closed.
                 _call_sql(
-                    self._context.sql_runner, stage="teardown", process_name=process.name,
-                    host="localhost", port=port, user=credentials.username,
-                    password=credentials.password, dbname="postgres",
+                    self._context.sql_runner,
+                    stage="teardown",
+                    process_name=process.name,
+                    host="localhost",
+                    port=port,
+                    user=credentials.username,
+                    password=credentials.password,
+                    dbname="postgres",
                     statement=(
                         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                         f"WHERE datname = '{world_db}' AND pid <> pg_backend_pid()"
                     ),
                 )
                 _call_sql(
-                    self._context.sql_runner, stage="teardown", process_name=process.name,
-                    host="localhost", port=port, user=credentials.username,
-                    password=credentials.password, dbname="postgres",
+                    self._context.sql_runner,
+                    stage="teardown",
+                    process_name=process.name,
+                    host="localhost",
+                    port=port,
+                    user=credentials.username,
+                    password=credentials.password,
+                    dbname="postgres",
                     statement=f'DROP DATABASE IF EXISTS "{world_db}"',
                 )
             except ProcessRuntimeError as exc:
-                logger.warning("teardown: failed to drop %s on %s: %s", world_db, process.name, exc)
+                logger.warning(
+                    "teardown: failed to drop %s on %s: %s", world_db, process.name, exc
+                )
 
     def _teardown_world(self, world_index: int) -> None:
         handles = self._world_handles.pop(world_index, {})
@@ -3880,15 +4640,26 @@ class ProcessRuntimeProvider:
         await asyncio.to_thread(self._reset_sync, runtime)
 
     def _reset_sync(self, runtime: EnvironmentRuntime) -> None:
-        if self._manifest is None or self._context is None or self._build_output is None:
+        if (
+            self._manifest is None
+            or self._context is None
+            or self._build_output is None
+        ):
             raise ProcessRuntimeError(
-                "reset", _INTERNAL_INVARIANT_VIOLATED, "reset() called before provision()",
+                "reset",
+                _INTERNAL_INVARIANT_VIOLATED,
+                "reset() called before provision()",
             )
         world_index = runtime.world_index
-        self._ensure_job_shared_handles_alive(current_world_index=world_index)  # N11/Q7.
+        self._ensure_job_shared_handles_alive(
+            current_world_index=world_index
+        )  # N11/Q7.
         try:
             handles, sentinel_ok = reset_world(
-                self._manifest, world_index, context=self._context, baseline=self._build_output,
+                self._manifest,
+                world_index,
+                context=self._context,
+                baseline=self._build_output,
                 job_shared_handles=self._job_shared_handles,
                 existing_handles=self._world_handles.get(world_index, {}),
             )
@@ -3899,7 +4670,10 @@ class ProcessRuntimeProvider:
             if partial is not None:
                 self._world_handles[world_index] = partial
             raise ProcessRuntimeError(
-                "reset", "store_statement_failed", str(exc), domain=FailureDomain.INFRASTRUCTURE,
+                "reset",
+                "store_statement_failed",
+                str(exc),
+                domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         except BaseException as exc:
             partial = getattr(exc, "partial_handles", None)  # N4, p6-review-r2.
@@ -3929,7 +4703,9 @@ class ProcessRuntimeProvider:
         # so `spawn_world` never probes it) — the scheduler could dispatch a scenario against an
         # agent still mid-boot. N2, p6-review-r2: polls (`_poll_runtime_health`), the same helper
         # `provision()`'s own promotion uses, instead of sampling `probe_runtime_health` once.
-        healthy_now = _poll_runtime_health(self._manifest, current, prober=self._context.prober)
+        healthy_now = _poll_runtime_health(
+            self._manifest, current, prober=self._context.prober
+        )
         current.state = RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
 
     async def close(self, *, work_directory: Path) -> None:
@@ -3956,11 +4732,13 @@ class ProcessRuntimeProvider:
         for handles in self._world_handles.values():
             for name, handle in reversed(list(handles.items())):
                 if name not in self._job_shared_handles:
-                    prefer_interrupt = self._manifest is not None and _prefers_interrupt(
-                        self._manifest, name
+                    prefer_interrupt = (
+                        self._manifest is not None
+                        and _prefers_interrupt(self._manifest, name)
                     )
                     _terminate_and_wait(  # M7: real wait, not just a sent signal.
-                        handle.handle, timeout=self._close_wait_timeout_seconds,
+                        handle.handle,
+                        timeout=self._close_wait_timeout_seconds,
                         prefer_interrupt=prefer_interrupt,
                     )
         for name, handle in reversed(list(self._job_shared_handles.items())):
@@ -3968,7 +4746,8 @@ class ProcessRuntimeProvider:
                 self._manifest, name
             )
             _terminate_and_wait(
-                handle.handle, timeout=self._close_wait_timeout_seconds,
+                handle.handle,
+                timeout=self._close_wait_timeout_seconds,
                 prefer_interrupt=prefer_interrupt,
             )
         for runtime in self._runtimes.values():
@@ -3996,9 +4775,13 @@ class ProcessRuntimeProvider:
         """
         self._teardown_processes_and_directories(work_directory)
         try:
-            self._secrets_path.unlink(missing_ok=True)  # m9: no separate check-then-act .exists().
+            self._secrets_path.unlink(
+                missing_ok=True
+            )  # m9: no separate check-then-act .exists().
         except OSError:
-            logger.warning("close(): failed to unlink %s; continuing", self._secrets_path)
+            logger.warning(
+                "close(): failed to unlink %s; continuing", self._secrets_path
+            )
 
         self._manifest = None
         self._bundle_digest = None
@@ -4012,7 +4795,9 @@ class ProcessRuntimeProvider:
         self._secret_purposes = {}
         self._secrets_loaded = False
 
-    def _ensure_job_shared_handles_alive(self, *, current_world_index: int | None = None) -> None:
+    def _ensure_job_shared_handles_alive(
+        self, *, current_world_index: int | None = None
+    ) -> None:
         """N11, p6-review-r2 (MAJOR): a job-shared `template_database` engine (§2b) backs EVERY
         world at once, and nothing anywhere ever checked whether it was still running before
         reusing it (`spawn_world`'s own `if name in handles: continue`) — an OOM-killed shared
@@ -4028,11 +4813,15 @@ class ProcessRuntimeProvider:
         for name, handle in list(self._job_shared_handles.items()):
             if not handle.handle.is_running():
                 self._job_shared_handles[name] = self._respawn_dead_job_shared_engine(
-                    name, current_world_index=current_world_index,
+                    name,
+                    current_world_index=current_world_index,
                 )
 
     def _respawn_dead_job_shared_engine(
-        self, process_name: str, *, current_world_index: int | None = None,
+        self,
+        process_name: str,
+        *,
+        current_world_index: int | None = None,
     ) -> SpawnedWorldProcess:
         """Respawns from the SAME surviving data directory (never wiped — this is not a baseline
         restore; the engine's own on-disk state is exactly what every world's logical database
@@ -4042,36 +4831,52 @@ class ProcessRuntimeProvider:
         database on that one instance and must be re-verified against the template again, same as
         `_reset_template_database` already does for one world at a time.
         """
-        if self._manifest is None or self._context is None or self._build_output is None:
+        if (
+            self._manifest is None
+            or self._context is None
+            or self._build_output is None
+        ):
             raise ProcessRuntimeError(
-                "reset", _INTERNAL_INVARIANT_VIOLATED,
+                "reset",
+                _INTERNAL_INVARIANT_VIOLATED,
                 "_respawn_dead_job_shared_engine called before manifest/context/build_output "
                 "were established",
             )
-        processes_by_name = {process.name: process for process in self._manifest.processes}
+        processes_by_name = {
+            process.name: process for process in self._manifest.processes
+        }
         process = processes_by_name.get(process_name)
         if not isinstance(process, ManagedProcess):
             raise ProcessRuntimeError(
-                "reset", _INTERNAL_INVARIANT_VIOLATED,
+                "reset",
+                _INTERNAL_INVARIANT_VIOLATED,
                 f"{process_name}: job-shared handle names a process that is not a managed engine",
                 process=process_name,
             )
         context = self._context
         build_output = self._build_output
         port = context.port_plan.port_for(process_name, 0)
-        data_dir = managed_engine_data_dir(context.work_directory, process_name, world_index=None)
+        data_dir = managed_engine_data_dir(
+            context.work_directory, process_name, world_index=None
+        )
         credentials = context.credentials.get(process_name)
         try:
             new_handle = spawn_managed_process(
-                process, port=port, data_dir=data_dir, credentials=credentials,
-                runner=context.runner, sync_run=context.sync_run,
+                process,
+                port=port,
+                data_dir=data_dir,
+                credentials=credentials,
+                runner=context.runner,
+                sync_run=context.sync_run,
                 user_resolver=context.user_resolver,
-                require_declared_user=context.require_declared_user, chown=context.chown,
+                require_declared_user=context.require_declared_user,
+                chown=context.chown,
             )
             _wait_for_store_ready(self._manifest, process, port=port, context=context)
             if process.engine is ManagedEngine.POSTGRES:
                 record = next(
-                    (r for r in build_output.stores if r.process_name == process_name), None
+                    (r for r in build_output.stores if r.process_name == process_name),
+                    None,
                 )
                 if record is not None:
                     live_credentials = _require_credentials(
@@ -4079,9 +4884,13 @@ class ProcessRuntimeProvider:
                     )
                     for world_index in self._runtimes:
                         _reset_template_database(
-                            host="localhost", port=port, credentials=live_credentials,
-                            world_db=f"w{world_index}", template_db=record.baseline_reference,
-                            sql_runner=context.sql_runner, process_name=process_name,
+                            host="localhost",
+                            port=port,
+                            credentials=live_credentials,
+                            world_db=f"w{world_index}",
+                            template_db=record.baseline_reference,
+                            sql_runner=context.sql_runner,
+                            process_name=process_name,
                         )
                     # Q7, p6-review-r3: the loop above just reset EVERY tracked world's database —
                     # demote every world other than the one the caller is already reconciling so
@@ -4092,13 +4901,17 @@ class ProcessRuntimeProvider:
                             rt.state = RuntimeState.UNHEALTHY
         except (ProcessRuntimeError, OSError, shutil.Error) as exc:
             raise ProcessRuntimeError(
-                "reset", "store_statement_failed",
+                "reset",
+                "store_statement_failed",
                 f"{process_name}: job-shared engine died and could not be respawned: {exc}",
-                process=process_name, domain=FailureDomain.INFRASTRUCTURE,
+                process=process_name,
+                domain=FailureDomain.INFRASTRUCTURE,
             ) from exc
         return new_handle
 
-    async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+    async def healthy(
+        self, runtime: EnvironmentRuntime, *, work_directory: Path
+    ) -> bool:
         """v1.12 §4.3's `RuntimeProvider.healthy` port, closing the gap p6-review-r2's task 2c
         flagged: this class had `provision`/`reset`/`close` but no `healthy`, so it could not
         structurally satisfy `runtime.py`'s `RuntimeProvider` Protocol. Demote-only, unlike the
@@ -4118,11 +4931,16 @@ class ProcessRuntimeProvider:
 
         if self._manifest is None:
             raise ProcessRuntimeError(
-                "healthy", _INTERNAL_INVARIANT_VIOLATED, "healthy() called before provision()",
+                "healthy",
+                _INTERNAL_INVARIANT_VIOLATED,
+                "healthy() called before provision()",
             )
         target = self._runtimes.get(runtime.world_index, runtime)
         is_healthy = await asyncio.to_thread(
-            probe_runtime_health, self._manifest, target, prober=self._prober,
+            probe_runtime_health,
+            self._manifest,
+            target,
+            prober=self._prober,
         )
         if not is_healthy:
             target.state = RuntimeState.UNHEALTHY

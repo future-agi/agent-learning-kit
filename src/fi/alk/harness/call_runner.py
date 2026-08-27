@@ -67,7 +67,9 @@ LIVEKIT_API_KEY_ALIAS = "LIVEKIT_API_KEY"
 LIVEKIT_API_SECRET_ALIAS = "LIVEKIT_API_SECRET"
 DEEPGRAM_API_KEY_ALIAS = "DEEPGRAM_API_KEY"
 GEMINI_API_KEY_ALIAS = "GEMINI_API_KEY"
-GOOGLE_API_KEY_ALIAS = "GOOGLE_API_KEY"  # either this or GEMINI_API_KEY_ALIAS satisfies the LLM leg
+GOOGLE_API_KEY_ALIAS = (
+    "GOOGLE_API_KEY"  # either this or GEMINI_API_KEY_ALIAS satisfies the LLM leg
+)
 
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
@@ -98,7 +100,9 @@ _RESULT_TRUNCATE_CHARS = 2000
 # The real engine's zero-turn "agent joined but never spoke" failure codes (engines/livekit.py::
 # _conversation_outcome) -- see `_translate_report`'s `is_silent_agent` gate for why these two, and
 # only at zero turns, get mapped to a normal CallOutcome instead of a CallAborted.
-_SILENT_AGENT_FAILURE_CODES = frozenset({"no_conversation", "conversation_silence_timeout"})
+_SILENT_AGENT_FAILURE_CODES = frozenset(
+    {"no_conversation", "conversation_silence_timeout"}
+)
 
 
 # --- collaborator seams (named, injectable test boundaries) -----------------------------------
@@ -163,7 +167,11 @@ def _check_config(
 ) -> _MissingVoiceConfig | None:
     missing_aliases = [
         alias
-        for alias in (LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS, DEEPGRAM_API_KEY_ALIAS)
+        for alias in (
+            LIVEKIT_API_KEY_ALIAS,
+            LIVEKIT_API_SECRET_ALIAS,
+            DEEPGRAM_API_KEY_ALIAS,
+        )
         if not target_provider_secret_values.get(alias)
     ]
     if not target_provider_secret_values.get(
@@ -257,9 +265,17 @@ def _simulator_definition() -> Any:
     exactly (google/gemini LLM, deepgram STT+TTS) -- the only provider combination this runner's
     pre-dial credential check (`_check_config`) validates."""
     return simulate.SimulatorAgentDefinition(
-        llm={"provider": "google", "model": "gemini-2.5-flash-lite", "temperature": 0.35},
+        llm={
+            "provider": "google",
+            "model": "gemini-2.5-flash-lite",
+            "temperature": 0.35,
+        },
         stt={"provider": "deepgram", "model": "nova-2", "language": "en"},
-        tts={"provider": "deepgram", "model": "aura-asteria-en", "voice": "aura-asteria-en"},
+        tts={
+            "provider": "deepgram",
+            "model": "aura-asteria-en",
+            "voice": "aura-asteria-en",
+        },
         instructions=(
             "Act as the customer described by the scenario. Speak naturally and briefly. "
             "Use only the supplied facts and never invent account, address, payment, or "
@@ -296,7 +312,9 @@ def _scenario_spec(doc: Mapping[str, Any]) -> Any:
     persona_model = simulate.Persona(
         persona=persona,
         situation=doc["instruction"],
-        outcome=(doc.get("tests") or "Complete the requested task and close naturally."),
+        outcome=(
+            doc.get("tests") or "Complete the requested task and close naturally."
+        ),
         knowledge=knowledge,
         behavior_policy={
             "disclosure_policy": 0.72,
@@ -341,7 +359,9 @@ def _build_spec(
         transport={"kind": "webrtc"},
     )
     runtime_spec = simulate.LiveKitSimulatorRuntime(
-        url=livekit_url, room_name=room_name, room_mode="managed",
+        url=livekit_url,
+        room_name=room_name,
+        room_mode="managed",
     )
     return SimulationSpec(
         run_id=run_id,
@@ -350,8 +370,12 @@ def _build_spec(
             world_kind="voice_telephony",
             config={
                 "agent_definition": agent.model_dump(mode="json", exclude_none=True),
-                "livekit_runtime": runtime_spec.model_dump(mode="json", exclude_none=True),
-                "simulator": _simulator_definition().model_dump(mode="json", exclude_none=True),
+                "livekit_runtime": runtime_spec.model_dump(
+                    mode="json", exclude_none=True
+                ),
+                "simulator": _simulator_definition().model_dump(
+                    mode="json", exclude_none=True
+                ),
                 "params": params,
             },
         ),
@@ -412,7 +436,9 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
         # DSN (including the world DB password) in its own exception message; only the exception
         # TYPE is safe for a local log line.
-        logger.debug("tool_trace clear skipped (table likely absent): %s", type(exc).__name__)
+        logger.debug(
+            "tool_trace clear skipped (table likely absent): %s", type(exc).__name__
+        )
 
 
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -444,7 +470,9 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     except Exception as exc:  # noqa: BLE001 - missing table / connection failure -> no evidence, not a crash
         # WHY: same DSN-in-exception-message risk as `_clear_tool_trace_calls` above -- log only
         # the exception TYPE, never exc_info/str(exc), which can carry the world DB password.
-        logger.debug("tool_trace read failed; treating as no evidence: %s", type(exc).__name__)
+        logger.debug(
+            "tool_trace read failed; treating as no evidence: %s", type(exc).__name__
+        )
         return ()
 
     calls: list[Call] = []
@@ -468,7 +496,15 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         raw_at = record.get("at")
         at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
         calls.append(
-            Call(name=name, arguments=arguments, result=result, ok=ok, error=error, refused=not ok, at=at)
+            Call(
+                name=name,
+                arguments=arguments,
+                result=result,
+                ok=ok,
+                error=error,
+                refused=not ok,
+                at=at,
+            )
         )
     return tuple(calls)
 
@@ -513,10 +549,19 @@ class CallRunnerImpl:
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
-        self._missing_config = _check_config(context.job, context.target_provider_secret_values)
+        self._missing_config = _check_config(
+            context.job, context.target_provider_secret_values
+        )
         self._scenario_attempt_counts: dict[str, int] = {}
 
-    async def run(self, scenario: HostedScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+    async def run(
+        self,
+        scenario: HostedScenario,
+        runtime: EnvironmentRuntime,
+        *,
+        world: Any | None = None,
+    ) -> CallOutcome:
+        del world  # Voice tools cross the declared evidence seam; they are not response-carried.
         if self._missing_config is not None:
             # Pre-dial: dialing never starts, so no partial -- and never `WorldUnavailable` (that
             # code is reserved by the contract for a world-level capability mismatch, not a
@@ -531,11 +576,15 @@ class CallRunnerImpl:
             )
 
         try:
-            doc = _read_scenario_document(self._context.bundle_dir, scenario.scenario_key)
+            doc = _read_scenario_document(
+                self._context.bundle_dir, scenario.scenario_key
+            )
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
 
-        scenario_attempt = self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
+        scenario_attempt = (
+            self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
+        )
         self._scenario_attempt_counts[scenario.scenario_key] = scenario_attempt
         room_name = _room_name(
             job_id=self._context.job.job_id,
@@ -546,7 +595,9 @@ class CallRunnerImpl:
 
         raw_timeout = self._context.job.agent.config.get(CALL_TIMEOUT_CONFIG_KEY)
         call_timeout_seconds = (
-            float(raw_timeout) if isinstance(raw_timeout, (int, float)) else _DEFAULT_CALL_TIMEOUT_SECONDS
+            float(raw_timeout)
+            if isinstance(raw_timeout, (int, float))
+            else _DEFAULT_CALL_TIMEOUT_SECONDS
         )
         run_seconds = (
             call_timeout_seconds
@@ -575,7 +626,9 @@ class CallRunnerImpl:
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
         try:
-            report = await asyncio.wait_for(self._place_call(spec), timeout=outer_timeout)
+            report = await asyncio.wait_for(
+                self._place_call(spec), timeout=outer_timeout
+            )
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as exc:
@@ -592,7 +645,10 @@ class CallRunnerImpl:
 
         try:
             return await self._translate_report(
-                report, runtime=runtime, scenario_key=scenario.scenario_key, started_at=started_at
+                report,
+                runtime=runtime,
+                scenario_key=scenario.scenario_key,
+                started_at=started_at,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -626,14 +682,20 @@ class CallRunnerImpl:
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         case_started_at = (
-            case.started_at if case is not None and case.started_at is not None else started_at
+            case.started_at
+            if case is not None and case.started_at is not None
+            else started_at
         )
         ended_at = (
             case.ended_at
             if case is not None and case.ended_at is not None
             else datetime.now(timezone.utc)
         )
-        turns = len(case.result.messages) if case is not None and case.result is not None else 0
+        turns = (
+            len(case.result.messages)
+            if case is not None and case.result is not None
+            else 0
+        )
 
         transcript_artifact: str | None = None
         recording_artifacts: list[str] = []
@@ -657,7 +719,9 @@ class CallRunnerImpl:
                 if not path.is_file():
                     continue
                 artifact_id = await self._adapter.upload_artifact(
-                    path.read_bytes(), kind=kind, scenario_key=scenario_key,
+                    path.read_bytes(),
+                    kind=kind,
+                    scenario_key=scenario_key,
                 )
                 if artifact_id is not None:
                     recording_artifacts.append(artifact_id)
@@ -673,7 +737,10 @@ class CallRunnerImpl:
         )
 
         if case is None:
-            raise CallAborted("voice_call_no_test_case: SimulationReport carried no test case", partial=base)
+            raise CallAborted(
+                "voice_call_no_test_case: SimulationReport carried no test case",
+                partial=base,
+            )
 
         if case.status is TestCaseStatus.AGENT_UNAVAILABLE:
             # world-handle-interface.md: "the agent never joined" is a WORLD failure, not a
@@ -682,7 +749,11 @@ class CallRunnerImpl:
             # this status fires ONLY on a readiness-stage timeout with a session already started
             # but no target dispatched -- exactly "dispatch fails, agent never joins," never a
             # mid-call condition.
-            reason = case.failure.message if case.failure is not None else "agent_unavailable"
+            reason = (
+                case.failure.message
+                if case.failure is not None
+                else "agent_unavailable"
+            )
             raise WorldUnavailable(f"target agent never joined the room: {reason}")
 
         # A genuinely silent agent-first call (agent joined, zero conversational turns) reaches
@@ -700,8 +771,12 @@ class CallRunnerImpl:
         )
 
         if case.status is not TestCaseStatus.COMPLETED and not is_silent_agent:
-            reason = case.failure.message if case.failure is not None else case.status.value
-            raise CallAborted(f"voice_call_not_completed: {case.status.value}: {reason}", partial=base)
+            reason = (
+                case.failure.message if case.failure is not None else case.status.value
+            )
+            raise CallAborted(
+                f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
+            )
 
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator

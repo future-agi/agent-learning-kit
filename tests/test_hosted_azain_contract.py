@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from fi.alk.harness.hosted_entrypoint import _run
 from fi.alk.harness.job import (
-    FailureDomain,
-    HarnessFailure,
     HarnessJob,
-    HarnessJobStatus,
-    HarnessStage,
 )
 from fi.simulate.runtime.spec import RuntimeRequirements
 
@@ -78,64 +72,16 @@ def test_hosted_job_requires_resolved_commit():
         HarnessJob.model_validate(payload)
 
 
-@pytest.mark.anyio
-async def test_hosted_entrypoint_returns_zero_for_failed_terminal(
-    monkeypatch, tmp_path
-):
-    job = _job()
-    job_path = tmp_path / "job.json"
-    job_path.write_text(job.model_dump_json(), encoding="utf-8")
-
-    class Executor:
-        async def run(self, job, *, source, output):
-            return HarnessJobStatus(
-                job_id=job.job_id,
-                run_id=job.run_id,
-                stage=HarnessStage.FAILED,
-                updated_at=datetime.now(timezone.utc),
-                failure=HarnessFailure(
-                    domain=FailureDomain.AGENT,
-                    stage=HarnessStage.RUNNING,
-                    code="agent_failed",
-                    message="agent failed",
-                ),
-            )
-
-    monkeypatch.setattr("fi.alk.harness.hosted_entrypoint.HarnessExecutor", Executor)
-    assert await _run(job_path, tmp_path, tmp_path / "artifacts") == 0
-
-
-@pytest.mark.anyio
-async def test_hosted_entrypoint_returns_three_when_fenced(monkeypatch, tmp_path):
-    job = _job()
-    job_path = tmp_path / "job.json"
-    job_path.write_text(job.model_dump_json(), encoding="utf-8")
-
-    class Executor:
-        async def run(self, job, *, source, output):
-            return HarnessJobStatus(
-                job_id=job.job_id,
-                run_id=job.run_id,
-                stage=HarnessStage.FAILED,
-                updated_at=datetime.now(timezone.utc),
-                failure=HarnessFailure(
-                    domain=FailureDomain.PLATFORM_SYNC,
-                    stage=HarnessStage.UPLOADING_ARTIFACTS,
-                    code="attempt_superseded",
-                    message="superseded",
-                ),
-            )
-
-    monkeypatch.setattr("fi.alk.harness.hosted_entrypoint.HarnessExecutor", Executor)
-    assert await _run(job_path, tmp_path, tmp_path / "artifacts") == 3
-
-
 def test_snapshot_catalog_matches_engine_contract():
     root = Path(__file__).parents[1]
     catalog = json.loads(
         (root / "hosted-snapshot" / "catalog.json").read_text(encoding="utf-8")
     )
-    assert catalog["runtimes"] == {"python": ["3.11", "3.12"], "node": ["20", "22"]}
+    assert catalog["runtimes"] == {
+        "python": ["3.11", "3.12", "3.13"],
+        "node": ["20", "22"],
+    }
+    assert catalog["binaries"] == ["git", "ffmpeg"]
     assert {engine: data["version"] for engine, data in catalog["engines"].items()} == {
         "postgres": "16",
         "redis": "7",

@@ -79,30 +79,47 @@ def _base_manifest_body() -> dict[str, Any]:
     return {
         "schema_version": BUNDLE_V2_SCHEMA_VERSION,
         "name": "demo",
-        "runtime": {"kind": "process", "control_service": "agent", "evidence_seam": "http_tool"},
+        "runtime": {
+            "kind": "process",
+            "control_service": "agent",
+            "evidence_seam": "http_tool",
+        },
         "processes": [
             {
-                "name": "postgres", "kind": "managed", "engine": "postgres", "version": "16",
-                "user": "svc-data", "depends_on": [],
+                "name": "postgres",
+                "kind": "managed",
+                "engine": "postgres",
+                "version": "16",
+                "user": "svc-data",
+                "depends_on": [],
             },
             {
-                "name": "agent", "kind": "source", "working_directory": ".",
+                "name": "agent",
+                "kind": "source",
+                "working_directory": ".",
                 "build_commands": [["pip", "install", "-r", "requirements.txt"]],
                 "run_command": ["python", "agent.py"],
                 "environment": {
-                    "DATABASE_URL": "{{DATABASE_URL}}", "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}",
+                    "DATABASE_URL": "{{DATABASE_URL}}",
+                    "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}",
                 },
-                "secret_purposes": ["target_provider"], "user": "svc-agent", "depends_on": ["postgres"],
+                "secret_purposes": ["target_provider"],
+                "user": "svc-agent",
+                "depends_on": ["postgres"],
             },
         ],
         "capabilities": {
             "database": {
-                "protocol": "postgres", "service": "postgres", "configuration_name": "DATABASE_URL",
+                "protocol": "postgres",
+                "service": "postgres",
+                "configuration_name": "DATABASE_URL",
             },
         },
         "readiness": [],
         "provenance": {
-            "source_kind": "repository", "repository": "org/repo", "source_digest": "c" * 64,
+            "source_kind": "repository",
+            "repository": "org/repo",
+            "source_digest": "c" * 64,
         },
         "metadata": {},
     }
@@ -118,16 +135,26 @@ def _write_bundle(root: Path) -> EnvironmentBundleV2:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         files.append(
-            {"path": relative, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
         )
     body["files"] = files
     digest = compute_inputs_digest(
-        root, ["db/schema.sql"], ["db/seed.sql"], engine=ManagedEngine.POSTGRES, version="16"
+        root,
+        ["db/schema.sql"],
+        ["db/seed.sql"],
+        engine=ManagedEngine.POSTGRES,
+        version="16",
     )
     body["seed"] = {
         "stores": [
             {
-                "capability": "database", "migrations": ["db/schema.sql"], "seed_files": ["db/seed.sql"],
+                "capability": "database",
+                "migrations": ["db/schema.sql"],
+                "seed_files": ["db/seed.sql"],
                 "baseline": {"strategy": "template_database", "inputs_digest": digest},
                 "sentinel": {"query": "SELECT count(*) FROM riders", "expected": "1"},
             }
@@ -164,13 +191,19 @@ def _write_storeless_bundle(root: Path) -> EnvironmentBundleV2:
 
 
 def _job(
-    *, connector: str = "vapi", parallelism: int = 1,
+    *,
+    connector: str = "vapi",
+    parallelism: int = 1,
     artifacts: HarnessArtifactPolicy | None = None,
 ) -> HarnessJob:
     return HarnessJob(
-        job_id="job-1", run_id="run-1", execution=ExecutionMode.HOSTED,
+        job_id="job-1",
+        run_id="run-1",
+        execution=ExecutionMode.HOSTED,
         source=RepositorySource(
-            kind=SourceKind.GITHUB, repository="org/repo", visibility=SourceVisibility.PUBLIC,
+            kind=SourceKind.GITHUB,
+            repository="org/repo",
+            visibility=SourceVisibility.PUBLIC,
             commit_sha="a" * 40,
         ),
         agent=AgentConnection(
@@ -183,7 +216,11 @@ def _job(
         ),
         scenario_count=2,
         seed=1234,
-        runtime=RuntimeRequirements(parallelism=parallelism, cpu_units=max(1, parallelism), isolation=RuntimeIsolation.DEDICATED_VM),
+        runtime=RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM,
+            cpu_units=max(1, parallelism),
+            parallelism=parallelism,
+        ),
         **({"artifacts": artifacts} if artifacts is not None else {}),
     )
 
@@ -226,8 +263,12 @@ def _capabilities(*, attempt_id: str = "attempt-1") -> ob.HostedCapabilities:
 
 @dataclass
 class FakeTransport:
-    fence_after: int | None = None  # 1-based call count at which every further call 403s.
-    fence_on_url_substring: str | None = None  # once a URL matches, that call and every later one 403s.
+    fence_after: int | None = (
+        None  # 1-based call count at which every further call 403s.
+    )
+    fence_on_url_substring: str | None = (
+        None  # once a URL matches, that call and every later one 403s.
+    )
     # fences the specific events POST whose batch carries a `type: "terminal"` record --
     # `emit_terminal()`'s own spool append succeeds, so this reproduces the fence landing on the
     # network flush that delivers the terminal event, not before it.
@@ -252,7 +293,10 @@ class FakeTransport:
     ) -> ob.TransportResponse:
         del timeout
         self.calls.append({"method": method, "url": url, "headers": dict(headers)})
-        if self.fence_on_url_substring is not None and self.fence_on_url_substring in url:
+        if (
+            self.fence_on_url_substring is not None
+            and self.fence_on_url_substring in url
+        ):
             self._fenced = True
         if (
             self.fence_on_terminal_event
@@ -262,19 +306,29 @@ class FakeTransport:
             and b'"type":"terminal"' in bytes(data)
         ):
             self._fenced = True
-        if self._fenced or (self.fence_after is not None and len(self.calls) >= self.fence_after):
+        if self._fenced or (
+            self.fence_after is not None and len(self.calls) >= self.fence_after
+        ):
             return ob.TransportResponse(
                 status_code=403,
-                body={"error": "fenced", "message": "attempt superseded", "retryable": False},
+                body={
+                    "error": "fenced",
+                    "message": "attempt superseded",
+                    "retryable": False,
+                },
                 headers={},
             )
         if "/events/" in url and method == "POST":
             body_bytes = data if isinstance(data, (bytes, bytearray)) else b""
-            body = json.loads(body_bytes.decode("utf-8")) if body_bytes else {"events": []}
+            body = (
+                json.loads(body_bytes.decode("utf-8")) if body_bytes else {"events": []}
+            )
             events = body.get("events", [])
             self.event_records.extend(events)
             watermark = max((e["sequence"] for e in events), default=0)
-            return ob.TransportResponse(200, {"acked_through_sequence": watermark, "rejected": []}, {})
+            return ob.TransportResponse(
+                200, {"acked_through_sequence": watermark, "rejected": []}, {}
+            )
         if "/results/" in url and method == "POST" and json_body is not None:
             key = (json_body["job_id"], json_body["scenario_key"])
             existed = key in self.receipts
@@ -297,23 +351,38 @@ class FakeTransport:
             operation = json_body.get("operation")
             if operation == "provision":
                 keys = [p.get("scenario_key") for p in json_body.get("personas", [])]
-                scenarios = [{"scenario_key": key, "scenario_id": f"platform-{key}"} for key in keys]
+                scenarios = [
+                    {"scenario_key": key, "scenario_id": f"platform-{key}"}
+                    for key in keys
+                ]
                 return ob.TransportResponse(
-                    200, {"result": {"run_test_id": "run-test-1", "scenarios": scenarios}}, {}
+                    200,
+                    {"result": {"run_test_id": "run-test-1", "scenarios": scenarios}},
+                    {},
                 )
             if operation == "begin":
                 return ob.TransportResponse(
-                    200, {"result": {"test_execution_id": "exec-1", "scenarios": []}}, {}
+                    200,
+                    {"result": {"test_execution_id": "exec-1", "scenarios": []}},
+                    {},
                 )
             # No/unknown `operation` -- exercised by callers (e.g. `FakeScenarioSource`) that only
             # care about the call happening, never the response shape.
             return ob.TransportResponse(200, {"result": {"ok": True}}, {})
         return ob.TransportResponse(
-            404, {"error": "not_found", "message": f"unmapped route: {url}", "retryable": False}, {}
+            404,
+            {
+                "error": "not_found",
+                "message": f"unmapped route: {url}",
+                "retryable": False,
+            },
+            {},
         )
 
     def terminal_events(self) -> list[dict[str, Any]]:
-        return [record for record in self.event_records if record.get("type") == "terminal"]
+        return [
+            record for record in self.event_records if record.get("type") == "terminal"
+        ]
 
 
 # =================================================================================================
@@ -345,8 +414,11 @@ class FakeProvisioner:
         self._in_flight: list[str] = []
         self._runtimes = {
             i: EnvironmentRuntime(
-                runtime_id=f"digest:w{i}", world_index=i, bundle_digest="digest",
-                state=RuntimeState.READY, endpoints={},
+                runtime_id=f"digest:w{i}",
+                world_index=i,
+                bundle_digest="digest",
+                state=RuntimeState.READY,
+                endpoints={},
             )
             for i in range(instances)
         }
@@ -363,8 +435,14 @@ class FakeProvisioner:
             self._in_flight.remove(label)
 
     async def provision(
-        self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
-        contract: Any | None = None, instances: int = 1,
+        self,
+        bundle: Any,
+        *,
+        source: Path,
+        bundle_dir: Path,
+        work_directory: Path,
+        contract: Any | None = None,
+        instances: int = 1,
     ) -> list[EnvironmentRuntime]:
         del bundle, source, bundle_dir, work_directory, contract
         async with self._serialized("provision"):
@@ -377,7 +455,9 @@ class FakeProvisioner:
             self.reset_calls += 1
             runtime.state = RuntimeState.READY
 
-    async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+    async def healthy(
+        self, runtime: EnvironmentRuntime, *, work_directory: Path
+    ) -> bool:
         del work_directory
         # v1.12 folds `healthy` into the same non-reentrant set as provision/reset/close.
         async with self._serialized(f"healthy(w{runtime.world_index})"):
@@ -399,11 +479,15 @@ class FakeWorld:
         del table
         return {}
 
-    def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> dict[str, Any]:
+    def put(
+        self, collection: str, record: dict[str, Any], *, key: str = ""
+    ) -> dict[str, Any]:
         del collection, key
         return record
 
-    def change(self, collection: str, key: str, changes: dict[str, Any], *, by: str = "") -> int:
+    def change(
+        self, collection: str, key: str, changes: dict[str, Any], *, by: str = ""
+    ) -> int:
         del collection, key, changes, by
         return 1
 
@@ -472,24 +556,50 @@ class FakeCallRunner:
         self._cancel_reason = cancel_reason
         self._delay_seconds = delay_seconds
 
-    async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+    async def run(
+        self, scenario: FakeScenario, runtime: EnvironmentRuntime
+    ) -> CallOutcome:
         del runtime
-        if self._cancel_path is not None and scenario.scenario_key == self._cancel_on_scenario:
+        if (
+            self._cancel_path is not None
+            and scenario.scenario_key == self._cancel_on_scenario
+        ):
             self._cancel_path.write_text(
                 json.dumps({"reason": self._cancel_reason}), encoding="utf-8"
             )
         await asyncio.sleep(self._delay_seconds)
         transcript = json.dumps(
-            [{"speaker_role": "assistant", "content": f"hello from {scenario.scenario_key}"}]
+            [
+                {
+                    "speaker_role": "assistant",
+                    "content": f"hello from {scenario.scenario_key}",
+                }
+            ]
         ).encode("utf-8")
         artifact_id = await self._adapter.upload_artifact(
-            transcript, kind=ob.ArtifactKind.TRANSCRIPT, scenario_key=scenario.scenario_key
+            transcript,
+            kind=ob.ArtifactKind.TRANSCRIPT,
+            scenario_key=scenario.scenario_key,
         )
         now = _rfc3339(datetime.now(timezone.utc))
         return CallOutcome(
-            calls=(Call(name="tool", arguments={}, result="ok", ok=True, error="", refused=False, at=0.0),),
-            turns=1, started_at=now, ended_at=now, duration_ms=10,
-            transcript_artifact=artifact_id, recording_artifacts=(),
+            calls=(
+                Call(
+                    name="tool",
+                    arguments={},
+                    result="ok",
+                    ok=True,
+                    error="",
+                    refused=False,
+                    at=0.0,
+                ),
+            ),
+            turns=1,
+            started_at=now,
+            ended_at=now,
+            duration_ms=10,
+            transcript_artifact=artifact_id,
+            recording_artifacts=(),
         )
 
 
@@ -502,8 +612,14 @@ class FakeScenarioSource:
         self._scenarios = scenarios
 
     async def build(
-        self, job: HarnessJob, bundle: Any, scenarios_client: he.ScenariosClient, *, pool: Any,
-        world_factory: Any, bundle_dir: Path,
+        self,
+        job: HarnessJob,
+        bundle: Any,
+        scenarios_client: he.ScenariosClient,
+        *,
+        pool: Any,
+        world_factory: Any,
+        bundle_dir: Path,
     ) -> list[FakeScenario]:
         # `bundle_dir` (p12: the scenario-source adapter's own seam) is unused by this in-memory
         # fake -- accepted only because `run_job` now forwards it to every `ScenarioSource.build`,
@@ -516,7 +632,10 @@ class FakeScenarioSource:
         # non-empty POST bodies.
         await asyncio.to_thread(
             scenarios_client.provision,
-            {"operation": "provision", "scenario_keys": [s.scenario_key for s in self._scenarios]},
+            {
+                "operation": "provision",
+                "scenario_keys": [s.scenario_key for s in self._scenarios],
+            },
         )
         await asyncio.to_thread(
             scenarios_client.begin, {"operation": "begin", "scenario_ids": {}}
@@ -587,10 +706,13 @@ def _build_harness(
 
     capabilities = _capabilities()
     transport = FakeTransport(
-        fence_after=fence_after, fence_on_url_substring=fence_on_url_substring,
+        fence_after=fence_after,
+        fence_on_url_substring=fence_on_url_substring,
         fence_on_terminal_event=fence_on_terminal_event,
     )
-    provisioner = FakeProvisioner(instances=instances, always_unhealthy=always_unhealthy)
+    provisioner = FakeProvisioner(
+        instances=instances, always_unhealthy=always_unhealthy
+    )
 
     cancel_path = tmp / "cancel.json"
 
@@ -602,7 +724,9 @@ def _build_harness(
         holder["adapter"] = adapter
         holder["call_runner_context"] = context
         return FakeCallRunner(
-            adapter, cancel_path=cancel_path, cancel_on_scenario=cancel_on_scenario,
+            adapter,
+            cancel_path=cancel_path,
+            cancel_on_scenario=cancel_on_scenario,
             cancel_reason=cancel_reason,
         )
 
@@ -610,7 +734,9 @@ def _build_harness(
         load_capabilities=lambda: capabilities,
         bundle_source=he.DefaultBundleSource(),
         scenario_source=(
-            he.NotWiredScenarioSource() if use_default_scenario_source else FakeScenarioSource(scenarios)
+            he.NotWiredScenarioSource()
+            if use_default_scenario_source
+            else FakeScenarioSource(scenarios)
         ),
         build_transport=lambda: transport,
         build_provider=lambda: provisioner,
@@ -618,17 +744,26 @@ def _build_harness(
         build_world_factory=lambda work_directory: FakeWorldFactory(),
         cancel_path=cancel_path,
         secrets_path=tmp / "secrets.json",
-        install_sigterm_handler=lambda cancel_state: (lambda: None),
+        install_sigterm_handler=lambda cancel_state: lambda: None,
         flush_window_seconds=5.0,
     )
     return Harness(
-        tmp=tmp, work=work, source=source, output=output, job_path=job_path, transport=transport,
-        provisioner=provisioner, deps=deps, bundle_dir=bundle_dir,
+        tmp=tmp,
+        work=work,
+        source=source,
+        output=output,
+        job_path=job_path,
+        transport=transport,
+        provisioner=provisioner,
+        deps=deps,
+        bundle_dir=bundle_dir,
     )
 
 
 def _run(harness: Harness) -> int:
-    return asyncio.run(he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps))
+    return asyncio.run(
+        he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+    )
 
 
 def _build_adapter(
@@ -643,13 +778,23 @@ def _build_adapter(
     tmp = Path(tempfile.mkdtemp(prefix="p10-adapter-"))
     events_spool = ob.OutboundSpool(tmp / "spool", "events", sequenced=True)
     events_client = ob.EventsClient(
-        capabilities, events_spool, transport, retry_policy=retry_policy, channel_state=channel_state,
+        capabilities,
+        events_spool,
+        transport,
+        retry_policy=retry_policy,
+        channel_state=channel_state,
     )
     results_client = ob.ResultsClient(
-        capabilities, transport, retry_policy=retry_policy, channel_state=channel_state,
+        capabilities,
+        transport,
+        retry_policy=retry_policy,
+        channel_state=channel_state,
     )
     artifacts_client = ob.ArtifactsClient(
-        capabilities, transport, retry_policy=retry_policy, channel_state=channel_state,
+        capabilities,
+        transport,
+        retry_policy=retry_policy,
+        channel_state=channel_state,
     )
     return he.OutboundAdapter(
         capabilities,
@@ -701,20 +846,28 @@ def test_job_secret_purposes_maps_alias_to_purpose() -> None:
     assert he.job_secret_purposes(job) == {TARGET_PROVIDER_ALIAS: "target_provider"}
 
 
-def test_peek_secret_values_reads_without_deleting(tmp_path_factory: Path | None = None) -> None:
+def test_peek_secret_values_reads_without_deleting(
+    tmp_path_factory: Path | None = None,
+) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="p10-secrets-"))
     path = tmp / "secrets.json"
-    path.write_text(json.dumps({"LIVEKIT_API_KEY": "sk-super-secret"}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"LIVEKIT_API_KEY": "sk-super-secret"}), encoding="utf-8"
+    )
     values = he.peek_secret_values(path)
     assert values == ("sk-super-secret",)
-    assert path.exists()  # non-destructive read -- the provisioner still owns load-and-delete.
+    assert (
+        path.exists()
+    )  # non-destructive read -- the provisioner still owns load-and-delete.
 
 
 def test_peek_secret_values_missing_file_is_empty() -> None:
     assert he.peek_secret_values(Path("/nonexistent/does-not-exist.json")) == ()
 
 
-def test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias() -> None:
+def test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias() -> (
+    None
+):
     tmp = Path(tempfile.mkdtemp(prefix="p14-secrets-"))
     path = tmp / "secrets.json"
     path.write_text(
@@ -728,22 +881,30 @@ def test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_ali
     )
     values = he.peek_target_provider_secret_values(
         path,
-        {"LIVEKIT_API_KEY": "target_provider", "GITHUB_INSTALLATION_TOKEN": "source_checkout"},
+        {
+            "LIVEKIT_API_KEY": "target_provider",
+            "GITHUB_INSTALLATION_TOKEN": "source_checkout",
+        },
     )
     assert values == {"LIVEKIT_API_KEY": "lk-secret"}
-    assert path.exists()  # non-destructive read, same timing contract as peek_secret_values.
+    assert (
+        path.exists()
+    )  # non-destructive read, same timing contract as peek_secret_values.
 
 
 def test_peek_target_provider_secret_values_missing_file_is_empty() -> None:
     assert (
         he.peek_target_provider_secret_values(
-            Path("/nonexistent/does-not-exist.json"), {"LIVEKIT_API_KEY": "target_provider"}
+            Path("/nonexistent/does-not-exist.json"),
+            {"LIVEKIT_API_KEY": "target_provider"},
         )
         == {}
     )
 
 
-def test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry() -> None:
+def test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry() -> (
+    None
+):
     tmp = Path(tempfile.mkdtemp(prefix="p14-secrets-"))
     path = tmp / "secrets.json"
     path.write_text(json.dumps({"UNKNOWN_ALIAS": "value"}), encoding="utf-8")
@@ -769,9 +930,13 @@ def _call_runner_context(
     )
 
 
-def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector() -> None:
+def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector() -> (
+    None
+):
     # `_job()`'s own default is `connector="vapi"` -- out of this worker's mission, by design.
-    runner = he._default_build_call_runner(mock.Mock(), _call_runner_context(job=_job(connector="vapi")))
+    runner = he._default_build_call_runner(
+        mock.Mock(), _call_runner_context(job=_job(connector="vapi"))
+    )
     assert isinstance(runner, he.NotWiredCallRunner)
 
 
@@ -783,12 +948,18 @@ def test_default_build_call_runner_returns_notwired_for_retell_and_auto_too() ->
         assert isinstance(runner, he.NotWiredCallRunner)
 
 
-def test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit() -> None:
-    runner = he._default_build_call_runner(mock.Mock(), _call_runner_context(job=_job(connector="livekit")))
+def test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit() -> (
+    None
+):
+    runner = he._default_build_call_runner(
+        mock.Mock(), _call_runner_context(job=_job(connector="livekit"))
+    )
     assert isinstance(runner, he.CallRunnerImpl)
 
 
-def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam() -> None:
+def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam() -> (
+    None
+):
     """End-to-end through the real `run_job` wiring point (~line 1728): `secret_purposes =
     job_secret_purposes(job)` runs, `deps.peek_target_provider_secret_values` captures the alias
     map BEFORE `pool.start()` deletes `secrets.json`, and the resulting `CallRunnerContext` reaches
@@ -807,7 +978,9 @@ def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_eviden
             super().__init__(*args, **kwargs)
             self._secrets_path = secrets_path
 
-        async def provision(self, *args: Any, **kwargs: Any) -> list[EnvironmentRuntime]:
+        async def provision(
+            self, *args: Any, **kwargs: Any
+        ) -> list[EnvironmentRuntime]:
             runtimes = await super().provision(*args, **kwargs)
             self._secrets_path.unlink(missing_ok=True)
             return runtimes
@@ -823,7 +996,9 @@ def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_eviden
 
     captured: dict[str, he.CallRunnerContext] = {}
 
-    def build_call_runner(adapter: he.OutboundAdapter, context: he.CallRunnerContext) -> FakeCallRunner:
+    def build_call_runner(
+        adapter: he.OutboundAdapter, context: he.CallRunnerContext
+    ) -> FakeCallRunner:
         captured["context"] = context
         return FakeCallRunner(adapter, cancel_path=harness.deps.cancel_path)
 
@@ -840,7 +1015,9 @@ def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_eviden
     # The load-bearing assertion: the secrets file is genuinely gone by the time `provision()`
     # (inside `pool.start()`) returns -- if the capture had happened AFTER `pool.start()` instead
     # of before, this map would be empty, not the real alias -> value pair.
-    assert context.target_provider_secret_values == {TARGET_PROVIDER_ALIAS: "lk-secret-value"}
+    assert context.target_provider_secret_values == {
+        TARGET_PROVIDER_ALIAS: "lk-secret-value"
+    }
     assert not harness.deps.secrets_path.exists()
 
 
@@ -881,7 +1058,12 @@ def test_world_pool_serializes_concurrent_provider_calls_end_to_end() -> None:
         fake = FakeProvisioner(instances=1)
         work = Path(tempfile.mkdtemp(prefix="p10-pool-serial-"))
         pool = WorldPool(
-            fake, bundle=None, source=work, bundle_dir=work, work_directory=work, instances=1,
+            fake,
+            bundle=None,
+            source=work,
+            bundle_dir=work,
+            work_directory=work,
+            instances=1,
         )
         await asyncio.gather(pool.start(), pool._reconcile())
         # `overlaps` is populated OUT-OF-BAND by `FakeProvisioner._serialized()` -- an in-band
@@ -903,7 +1085,8 @@ def test_scenarios_client_provision_unwraps_the_result_envelope() -> None:
     client = he.ScenariosClient(capabilities, transport)
     result = client.provision(
         {
-            "operation": "provision", "name": "run-1",
+            "operation": "provision",
+            "name": "run-1",
             "personas": [{"scenario_key": "a"}, {"scenario_key": "b"}],
         }
     )
@@ -926,7 +1109,9 @@ def test_scenarios_client_provision_and_begin_hit_the_same_single_url() -> None:
     transport = FakeTransport()
     client = he.ScenariosClient(capabilities, transport)
     client.provision({"operation": "provision", "name": "run-1", "personas": []})
-    client.begin({"operation": "begin", "run_test_id": "run-test-1", "scenario_keys": []})
+    client.begin(
+        {"operation": "begin", "run_test_id": "run-test-1", "scenario_keys": []}
+    )
     urls = [call["url"] for call in transport.calls]
     assert urls == [capabilities.endpoints.scenarios, capabilities.endpoints.scenarios]
 
@@ -947,7 +1132,9 @@ def test_scenarios_client_fencing_latches_the_shared_channel_state() -> None:
     except ob.HostedFencedError:
         pass
     else:
-        raise AssertionError("channel_state should now be latched for every other channel too")
+        raise AssertionError(
+            "channel_state should now be latched for every other channel too"
+        )
 
 
 # =================================================================================================
@@ -972,16 +1159,22 @@ def test_capabilities_failure_exits_boot_failure_with_no_channel_and_no_event() 
         code = await he.run_job(job_path, source, output, deps=deps)
         assert code == he.EXIT_BOOT_FAILURE
         assert code != he.EXIT_FENCED
-        assert not (work / he.EVENTS_SPOOL_DIR_NAME).exists()  # no channel was ever built.
+        assert not (
+            work / he.EVENTS_SPOOL_DIR_NAME
+        ).exists()  # no channel was ever built.
 
     asyncio.run(scenario())
 
 
-def test_preflight_rejection_reaches_a_failed_terminal_event_before_any_provision() -> None:
+def test_preflight_rejection_reaches_a_failed_terminal_event_before_any_provision() -> (
+    None
+):
     async def scenario() -> None:
         harness = _build_harness(
             scenarios=[],
-            corrupt_bundle=lambda bundle_dir: (bundle_dir / "db" / "schema.sql").unlink(),
+            corrupt_bundle=lambda bundle_dir: (
+                bundle_dir / "db" / "schema.sql"
+            ).unlink(),
         )
         code = await he.run_job(
             harness.job_path, harness.source, harness.output, deps=harness.deps
@@ -999,13 +1192,17 @@ def test_preflight_rejection_reaches_a_failed_terminal_event_before_any_provisio
     asyncio.run(scenario())
 
 
-def test_hosted_fenced_error_stops_emitting_and_exits_3_with_no_terminal_event() -> None:
+def test_hosted_fenced_error_stops_emitting_and_exits_3_with_no_terminal_event() -> (
+    None
+):
     async def scenario() -> None:
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         # Fenced mid-attempt (during the scenario's own receipt push), well after provisioning --
         # proves both halves of the contract: nothing further is ever emitted, AND close() still
         # runs (it is unconditional after scheduler.run(), not gated on fencing).
-        harness = _build_harness(scenarios=scenarios, fence_on_url_substring="/results/")
+        harness = _build_harness(
+            scenarios=scenarios, fence_on_url_substring="/results/"
+        )
         code = await he.run_job(
             harness.job_path, harness.source, harness.output, deps=harness.deps
         )
@@ -1016,7 +1213,9 @@ def test_hosted_fenced_error_stops_emitting_and_exits_3_with_no_terminal_event()
     asyncio.run(scenario())
 
 
-def test_cancel_mid_run_synthesizes_a_skipped_receipt_for_the_unstarted_scenario() -> None:
+def test_cancel_mid_run_synthesizes_a_skipped_receipt_for_the_unstarted_scenario() -> (
+    None
+):
     async def scenario() -> None:
         order: list[str] = []
         scenarios = [
@@ -1026,27 +1225,42 @@ def test_cancel_mid_run_synthesizes_a_skipped_receipt_for_the_unstarted_scenario
 
         class OrderTrackingTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 response = super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
                 if (
-                    "/events/" in url and method == "POST"
+                    "/events/" in url
+                    and method == "POST"
                     and isinstance(data, (bytes, bytearray))
                     and b'"type":"terminal"' in bytes(data)
                 ):
                     order.append("terminal_delivered")
                 if (
-                    "/results/" in url and method == "POST"
-                    and json_body is not None and json_body.get("status") == "skipped"
+                    "/results/" in url
+                    and method == "POST"
+                    and json_body is not None
+                    and json_body.get("status") == "skipped"
                 ):
                     order.append("skipped_receipt_delivered")
                 return response
 
-        harness = _build_harness(scenarios=scenarios, cancel_on_scenario="first", instances=1)
+        harness = _build_harness(
+            scenarios=scenarios, cancel_on_scenario="first", instances=1
+        )
         transport = OrderTrackingTransport()
         harness.deps.build_transport = lambda: transport
         code = await he.run_job(
@@ -1098,7 +1312,9 @@ def test_fenced_run_result_emits_zero_skipped_receipts() -> None:
         harness = _build_harness(scenarios=scenarios, instances=1)
 
         fence_exc = ob.HostedFencedError(
-            ob.ChannelError(ob.ChannelOutcome.FENCED, None, "fence_mismatch", "attempt superseded")
+            ob.ChannelError(
+                ob.ChannelOutcome.FENCED, None, "fence_mismatch", "attempt superseded"
+            )
         )
         original_run = HostedScheduler.run
         original_emit = HostedScheduler.emit_skipped_receipts
@@ -1106,7 +1322,9 @@ def test_fenced_run_result_emits_zero_skipped_receipts() -> None:
 
         async def fenced_run(self: HostedScheduler, scns: Any) -> RunResult:
             real = await original_run(self, scns)
-            return RunResult(receipts=real.receipts, aborted=real.aborted, fenced=fence_exc)
+            return RunResult(
+                receipts=real.receipts, aborted=real.aborted, fenced=fence_exc
+            )
 
         async def counting_emit(self: HostedScheduler, result: RunResult) -> None:
             emit_calls.append(result)
@@ -1128,7 +1346,9 @@ def test_fenced_run_result_emits_zero_skipped_receipts() -> None:
     asyncio.run(scenario())
 
 
-def test_emit_skipped_receipts_failure_does_not_lose_the_terminal_or_the_exit_code() -> None:
+def test_emit_skipped_receipts_failure_does_not_lose_the_terminal_or_the_exit_code() -> (
+    None
+):
     # a failure inside the post-terminal `scheduler.emit_skipped_receipts` call must be
     # swallowed locally (matching every other best-effort post-terminal emission in this module),
     # never mask the terminal already delivered or flip the exit code.
@@ -1137,7 +1357,9 @@ def test_emit_skipped_receipts_failure_does_not_lose_the_terminal_or_the_exit_co
             FakeScenario("first", "platform-first", [FakeSubGoal("holds", True)]),
             FakeScenario("second", "platform-second", [FakeSubGoal("holds", True)]),
         ]
-        harness = _build_harness(scenarios=scenarios, cancel_on_scenario="first", instances=1)
+        harness = _build_harness(
+            scenarios=scenarios, cancel_on_scenario="first", instances=1
+        )
 
         original_emit = HostedScheduler.emit_skipped_receipts
 
@@ -1157,7 +1379,9 @@ def test_emit_skipped_receipts_failure_does_not_lose_the_terminal_or_the_exit_co
         assert len(terminals) == 1
         assert terminals[0]["payload"]["stage"] == "canceled"
         assert terminals[0]["payload"]["reason"] == "user_canceled"
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
         assert statuses.get("first") == "passed"
 
     asyncio.run(scenario())
@@ -1173,10 +1397,14 @@ def test_cancel_mid_run_with_ttl_exceeded_reports_that_reason() -> None:
             FakeScenario("second", "platform-second", [FakeSubGoal("holds", True)]),
         ]
         harness = _build_harness(
-            scenarios=scenarios, cancel_on_scenario="first", cancel_reason="ttl_exceeded",
+            scenarios=scenarios,
+            cancel_on_scenario="first",
+            cancel_reason="ttl_exceeded",
             instances=1,
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -1204,7 +1432,7 @@ def test_malformed_job_json_exits_crashed_with_no_terminal_event() -> None:
             load_capabilities=lambda: capabilities,
             build_transport=lambda: transport,
             secrets_path=tmp / "secrets.json",
-            install_sigterm_handler=lambda cancel_state: (lambda: None),
+            install_sigterm_handler=lambda cancel_state: lambda: None,
         )
         code = await he.run_job(job_path, source, output, deps=deps)
         assert code == he.EXIT_CRASHED
@@ -1221,8 +1449,12 @@ def test_world_pool_exhaustion_reaches_a_failed_terminal_world_pool_exhausted() 
     # `NoWorldsAvailable`, which `HostedScheduler.run()` turns into `RunResult.aborted`.
     async def scenario() -> None:
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
-        harness = _build_harness(scenarios=scenarios, instances=1, always_unhealthy=True)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=scenarios, instances=1, always_unhealthy=True
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -1231,6 +1463,9 @@ def test_world_pool_exhaustion_reaches_a_failed_terminal_world_pool_exhausted() 
         assert payload["failure"]["domain"] == "infrastructure"
         assert payload["failure"]["stage"] == "running"
         assert payload["failure"]["code"] == "world_pool_exhausted"
+        # Failure is not cancellation: all errored/skipped receipts and terminal artifacts were
+        # emitted, so the evidence manifest is complete even though the outcome failed.
+        assert harness.transport.manifests[-1]["complete"] is True
         assert harness.provisioner.closed is True
         # The aborted lane still finalizes like a completed one: nothing further will ever
         # upload, so the manifest must say complete AND carry the three kinds the platform
@@ -1250,8 +1485,12 @@ def test_fence_landing_on_the_final_drain_still_exits_fenced() -> None:
     # event DELIVERED, never a stale pre-drain fence check that misses it.
     async def scenario() -> None:
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
-        harness = _build_harness(scenarios=scenarios, instances=1, fence_on_terminal_event=True)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=scenarios, instances=1, fence_on_terminal_event=True
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_FENCED
         assert harness.transport.terminal_events() == []
         assert harness.provisioner.closed is True
@@ -1264,11 +1503,17 @@ def test_fence_from_scenarios_client_exits_fenced_not_crashed() -> None:
     # this must reach `run_job`'s typed handler around `scenario_source.build()`, not fall through
     # to a bare `except Exception` (exit 1, and the world pool leaked).
     async def scenario() -> None:
-        harness = _build_harness(scenarios=[], instances=1, fence_on_url_substring="/scenarios/")
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=[], instances=1, fence_on_url_substring="/scenarios/"
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_FENCED
         assert harness.transport.terminal_events() == []
-        assert harness.provisioner.closed is True  # the pool must not leak on this path either.
+        assert (
+            harness.provisioner.closed is True
+        )  # the pool must not leak on this path either.
 
     asyncio.run(scenario())
 
@@ -1279,9 +1524,13 @@ def test_scenarios_channel_uses_bearer_auth_never_api_key() -> None:
     async def scenario() -> None:
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
-        scenarios_calls = [call for call in harness.transport.calls if "/scenarios/" in call["url"]]
+        scenarios_calls = [
+            call for call in harness.transport.calls if "/scenarios/" in call["url"]
+        ]
         assert scenarios_calls, "expected at least one call against endpoints.scenarios"
         for call in scenarios_calls:
             assert call["headers"].get("Authorization", "").startswith("Bearer ")
@@ -1305,8 +1554,11 @@ def test_process_world_factory_raises_when_stores_recorded_but_no_endpoint() -> 
         )
         factory = he.ProcessWorldFactory(tmp)
         runtime = EnvironmentRuntime(
-            runtime_id="digest:w0", world_index=0, bundle_digest="digest",
-            state=RuntimeState.READY, endpoints={},
+            runtime_id="digest:w0",
+            world_index=0,
+            bundle_digest="digest",
+            state=RuntimeState.READY,
+            endpoints={},
         )
         try:
             await factory.create(runtime, rng=random.Random(0))
@@ -1345,22 +1597,30 @@ def test_process_world_factory_raises_when_build_json_has_no_matching_store() ->
         tmp = Path(tempfile.mkdtemp(prefix="p10-wf-store-"))
         (tmp / "artifacts").mkdir(parents=True, exist_ok=True)
         (tmp / "artifacts" / "build.json").write_text(
-            json.dumps({"stores": [{"capability": "other", "row_counts": {}}]}), encoding="utf-8"
+            json.dumps({"stores": [{"capability": "other", "row_counts": {}}]}),
+            encoding="utf-8",
         )
         factory = he.ProcessWorldFactory(tmp)
         endpoint = RuntimeEndpoint(
-            capability="database", protocol="postgres", address="postgresql://u:p@localhost/db",
+            capability="database",
+            protocol="postgres",
+            address="postgresql://u:p@localhost/db",
         )
         runtime = EnvironmentRuntime(
-            runtime_id="digest:w0", world_index=0, bundle_digest="digest",
-            state=RuntimeState.READY, endpoints={"database": endpoint},
+            runtime_id="digest:w0",
+            world_index=0,
+            bundle_digest="digest",
+            state=RuntimeState.READY,
+            endpoints={"database": endpoint},
         )
         try:
             await factory.create(runtime, rng=random.Random(0))
         except he.WorldFactoryError:
             pass
         else:
-            raise AssertionError("expected WorldFactoryError for a build.json with no matching store")
+            raise AssertionError(
+                "expected WorldFactoryError for a build.json with no matching store"
+            )
 
     asyncio.run(scenario())
 
@@ -1371,20 +1631,25 @@ def test_build_json_two_stores_emit_two_baseline_frozen_events() -> None:
         build_output = {
             "stores": [
                 {
-                    "capability": "database", "baseline_reference": "ref-database",
+                    "capability": "database",
+                    "baseline_reference": "ref-database",
                     "inputs_digest": "digest-database",
                 },
                 {
-                    "capability": "cache", "baseline_reference": "ref-cache",
+                    "capability": "cache",
+                    "baseline_reference": "ref-cache",
                     "inputs_digest": "digest-cache",
                 },
             ],
         }
         harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         baseline_events = [
-            record for record in harness.transport.event_records
+            record
+            for record in harness.transport.event_records
             if record.get("type") == "baseline_frozen"
         ]
         assert len(baseline_events) == 2
@@ -1398,19 +1663,27 @@ def test_build_json_degrade_payload_matches_the_recorded_values() -> None:
     # `parallelism_degraded`'s payload must mirror build.json's own requested/effective/reason values exactly.
     async def scenario() -> None:
         build_output = {
-            "requested_parallelism": 2, "effective_parallelism": 1,
+            "requested_parallelism": 2,
+            "effective_parallelism": 1,
             "degrade_reason": "conformance_gate_failed",
         }
         harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         degrade_events = [
-            record for record in harness.transport.event_records
+            record
+            for record in harness.transport.event_records
             if record.get("type") == "parallelism_degraded"
         ]
         assert len(degrade_events) == 1
         payload = degrade_events[0]["payload"]
-        assert payload == {"requested": 2, "effective": 1, "reason": "conformance_gate_failed"}
+        assert payload == {
+            "requested": 2,
+            "effective": 1,
+            "reason": "conformance_gate_failed",
+        }
 
     asyncio.run(scenario())
 
@@ -1421,28 +1694,44 @@ def test_build_json_fixed_port_at_w1_does_not_crash() -> None:
     # (`1 <= effective < requested` fails); this must degrade to a `log`, never crash the run.
     async def scenario() -> None:
         build_output = {
-            "requested_parallelism": 1, "effective_parallelism": 1, "degrade_reason": "fixed_port",
+            "requested_parallelism": 1,
+            "effective_parallelism": 1,
+            "degrade_reason": "fixed_port",
         }
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
-        harness = _build_harness(scenarios=scenarios, instances=1, build_output=build_output)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=scenarios, instances=1, build_output=build_output
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
-        assert harness.provisioner.closed is True  # the pool must not be orphaned by a crash.
+        assert (
+            harness.provisioner.closed is True
+        )  # the pool must not be orphaned by a crash.
         degrade_events = [
-            record for record in harness.transport.event_records
+            record
+            for record in harness.transport.event_records
             if record.get("type") == "parallelism_degraded"
         ]
-        assert degrade_events == []  # not representable -- a log event carries it instead.
+        assert (
+            degrade_events == []
+        )  # not representable -- a log event carries it instead.
         log_events = [
-            record for record in harness.transport.event_records if record.get("type") == "log"
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
         ]
-        assert any("fixed_port" in record["payload"]["message"] for record in log_events)
+        assert any(
+            "fixed_port" in record["payload"]["message"] for record in log_events
+        )
         # a substring shared with the pydantic error text the blanket `except Exception`
         # would ALSO produce if the `effective < requested` guard were reverted -- this is the one
         # phrase that only the guard's own `else` branch ever writes, so it is what actually tells
         # the guard apart from the catch-all swallowing a ValidationError.
         assert any(
-            "no parallelism_degraded event is representable" in record["payload"]["message"]
+            "no parallelism_degraded event is representable"
+            in record["payload"]["message"]
             for record in log_events
         )
         terminals = harness.transport.terminal_events()
@@ -1470,9 +1759,16 @@ def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> 
         assert payload["stage"] == "completed"
         assert payload["reason"] is None
         assert payload["failure"] is None
-        assert payload["scenario_counts"] == {"passed": 1, "failed": 1, "errored": 0, "skipped": 0}
+        assert payload["scenario_counts"] == {
+            "passed": 1,
+            "failed": 1,
+            "errored": 0,
+            "skipped": 0,
+        }
 
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
         assert statuses == {"passing": "passed", "failing": "failed"}
 
         # both receipts reference an already-uploaded, already-acked transcript artifact.
@@ -1499,10 +1795,12 @@ def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> 
         # single url, discriminated by the body's `operation` field (never a `/provision/`/
         # `/begin/` url suffix, which 404s against the real platform router).
         assert any(
-            body.get("operation") == "provision" for _, body in harness.transport.scenarios_calls
+            body.get("operation") == "provision"
+            for _, body in harness.transport.scenarios_calls
         )
         assert any(
-            body.get("operation") == "begin" for _, body in harness.transport.scenarios_calls
+            body.get("operation") == "begin"
+            for _, body in harness.transport.scenarios_calls
         )
 
     asyncio.run(scenario())
@@ -1521,7 +1819,9 @@ def test_pool_close_backstop_runs_even_when_scenario_source_raises_untyped() -> 
     # the `finally` with no explicit close anywhere on this path -- only the backstop can close it.
     async def scenario() -> None:
         class ExplodingScenarioSource:
-            async def build(self, job, bundle, scenarios_client, *, pool, world_factory, bundle_dir):
+            async def build(
+                self, job, bundle, scenarios_client, *, pool, world_factory, bundle_dir
+            ):
                 del job, bundle, scenarios_client, pool, world_factory, bundle_dir
                 raise MemoryError("boom")
 
@@ -1529,11 +1829,15 @@ def test_pool_close_backstop_runs_even_when_scenario_source_raises_untyped() -> 
         harness.deps.scenario_source = ExplodingScenarioSource()
         raised = False
         try:
-            await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+            await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
         except MemoryError:
             raised = True
         assert raised, "expected the untyped exception to propagate past run_job"
-        assert harness.provisioner.closed is True  # only the finally backstop could have done this
+        assert (
+            harness.provisioner.closed is True
+        )  # only the finally backstop could have done this
 
     asyncio.run(scenario())
 
@@ -1543,18 +1847,30 @@ def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -
     # managed/source split is no longer re-derived from a manifest lookup here (mutation: force
     # `_process_runtime_error_domain` back to ignoring `exc.domain` and this test catches it, since
     # the SAME code with two different carried domains would then collapse to one fallback value).
-    async def run_case(code: str, domain: FailureDomain | None, expected_domain: str) -> None:
+    async def run_case(
+        code: str, domain: FailureDomain | None, expected_domain: str
+    ) -> None:
         class RaisingProvisioner(FakeProvisioner):
             async def provision(
-                self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
-                contract: Any | None = None, instances: int = 1,
+                self,
+                bundle: Any,
+                *,
+                source: Path,
+                bundle_dir: Path,
+                work_directory: Path,
+                contract: Any | None = None,
+                instances: int = 1,
             ) -> list[EnvironmentRuntime]:
                 del bundle, source, bundle_dir, work_directory, contract, instances
-                raise ProcessRuntimeError("build", code, "synthetic failure", domain=domain)
+                raise ProcessRuntimeError(
+                    "build", code, "synthetic failure", domain=domain
+                )
 
         harness = _build_harness(scenarios=[], instances=1)
         harness.deps.build_provider = lambda: RaisingProvisioner(instances=1)
-        result = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        result = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert result == he.EXIT_OK
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -1565,15 +1881,21 @@ def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -
     # The same code, two different CARRIED domains -- proves the domain is read off the
     # exception, not re-derived from `code`/`process` (the map alone could never distinguish
     # these two cases, since both are `spawn_failed`).
-    asyncio.run(run_case("spawn_failed", FailureDomain.AGENT, "agent"))  # source, carried
-    asyncio.run(run_case("spawn_failed", FailureDomain.INFRASTRUCTURE, "infrastructure"))  # managed, carried
+    asyncio.run(
+        run_case("spawn_failed", FailureDomain.AGENT, "agent")
+    )  # source, carried
+    asyncio.run(
+        run_case("spawn_failed", FailureDomain.INFRASTRUCTURE, "infrastructure")
+    )  # managed, carried
     # No carried domain (as a raise site outside this module's control might produce) -- the
     # closed map is consulted as a fallback only.
     asyncio.run(run_case("build_failed", None, "agent"))
     asyncio.run(run_case("seed_failed", None, "environment"))
 
 
-def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerror() -> None:
+def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerror() -> (
+    None
+):
     # karthik-integration-changes.md K1: the Scenario Generation Contract's own model may not
     # carry `scenario_key` yet, and `hosted_scheduler.py` reads `scenario.scenario_key` with plain
     # attribute access -- an entry that lacks the field entirely used to raise AttributeError deep
@@ -1599,8 +1921,14 @@ def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerr
             self._scenarios = scenarios
 
         async def build(
-            self, job: Any, bundle: Any, scenarios_client: he.ScenariosClient, *, pool: Any,
-            world_factory: Any, bundle_dir: Path,
+            self,
+            job: Any,
+            bundle: Any,
+            scenarios_client: he.ScenariosClient,
+            *,
+            pool: Any,
+            world_factory: Any,
+            bundle_dir: Path,
         ) -> list[Any]:
             del job, bundle, scenarios_client, pool, world_factory, bundle_dir
             return self._scenarios
@@ -1608,7 +1936,9 @@ def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerr
     async def scenario() -> None:
         harness = _build_harness(scenarios=[], instances=1)
         harness.deps.scenario_source = RawScenarioSource([ScenarioMissingKey()])
-        result = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        result = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert result == he.EXIT_OK
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -1638,15 +1968,26 @@ def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
 
         class OrderTrackingTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 response = super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
                 if (
-                    "/events/" in url and method == "POST"
+                    "/events/" in url
+                    and method == "POST"
                     and isinstance(data, (bytes, bytearray))
                     and b'"type":"terminal"' in bytes(data)
                 ):
@@ -1669,7 +2010,7 @@ def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
             build_world_factory=lambda work_directory: FakeWorldFactory(),
             cancel_path=tmp / "cancel.json",
             secrets_path=tmp / "secrets.json",
-            install_sigterm_handler=lambda cancel_state: (lambda: None),
+            install_sigterm_handler=lambda cancel_state: lambda: None,
             flush_window_seconds=5.0,
         )
         code = await he.run_job(job_path, source, output, deps=deps)
@@ -1694,14 +2035,23 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
         tmp = Path(tempfile.mkdtemp(prefix="p10-redact-"))
         events_spool = ob.OutboundSpool(tmp / "spool", "events", sequenced=True)
         events_client = ob.EventsClient(
-            capabilities, events_spool, transport, retry_policy=retry_policy,
+            capabilities,
+            events_spool,
+            transport,
+            retry_policy=retry_policy,
             channel_state=channel_state,
         )
         results_client = ob.ResultsClient(
-            capabilities, transport, retry_policy=retry_policy, channel_state=channel_state,
+            capabilities,
+            transport,
+            retry_policy=retry_policy,
+            channel_state=channel_state,
         )
         artifacts_client = ob.ArtifactsClient(
-            capabilities, transport, retry_policy=retry_policy, channel_state=channel_state,
+            capabilities,
+            transport,
+            retry_policy=retry_policy,
+            channel_state=channel_state,
         )
         adapter = he.OutboundAdapter(
             capabilities,
@@ -1717,10 +2067,18 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
         await adapter.world_unhealthy(world_index=0, cause=f"probe failed: {secret}")
         await adapter.receipt(
             ResultReceipt(
-                scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0,
-                status="errored", sub_goals=(), evaluations=(), call=None,
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="errored",
+                sub_goals=(),
+                evaluations=(),
+                call=None,
                 failure=ReceiptFailure(
-                    domain="agent", stage="running", code="call_failed",
+                    domain="agent",
+                    stage="running",
+                    code="call_failed",
                     message=f"failed calling out with {secret}",
                 ),
             )
@@ -1728,8 +2086,10 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
         await adapter.emit_terminal(
             stage=HarnessStage.FAILED,
             failure={
-                "domain": "infrastructure", "stage": "building_environment",
-                "code": "provision_failed", "message": f"connection failed: {secret}",
+                "domain": "infrastructure",
+                "stage": "building_environment",
+                "code": "provision_failed",
+                "message": f"connection failed: {secret}",
             },
         )
         await adapter.drain(complete=True)
@@ -1753,7 +2113,9 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
     asyncio.run(scenario())
 
 
-def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the_terminal() -> None:
+def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the_terminal() -> (
+    None
+):
     # A backlog bigger
     # than one `EVENTS_MAX_BATCH` (100) previously stranded the terminal event, the highest
     # sequence, while still exiting 0. A call runner that logs 260 chatter events before returning
@@ -1764,7 +2126,9 @@ def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the
                 self._adapter = adapter
                 self._log_count = log_count
 
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> CallOutcome:
                 del runtime
                 for i in range(self._log_count):
                     await self._adapter.log(level="info", message=f"chatter {i}")
@@ -1772,28 +2136,45 @@ def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the
                 return CallOutcome(
                     calls=(
                         Call(
-                            name="tool", arguments={}, result="ok", ok=True, error="",
-                            refused=False, at=0.0,
+                            name="tool",
+                            arguments={},
+                            result="ok",
+                            ok=True,
+                            error="",
+                            refused=False,
+                            at=0.0,
                         ),
                     ),
-                    turns=1, started_at=now, ended_at=now, duration_ms=10,
-                    transcript_artifact=None, recording_artifacts=(),
+                    turns=1,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=10,
+                    transcript_artifact=None,
+                    recording_artifacts=(),
                 )
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
-        harness.deps.build_call_runner = lambda adapter, context: ChattyCallRunner(adapter, log_count=260)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness.deps.build_call_runner = lambda adapter, context: ChattyCallRunner(
+            adapter, log_count=260
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1  # must not be stranded behind the backlog
 
         chatter_logs = [
-            record for record in harness.transport.event_records
-            if record.get("type") == "log" and "chatter" in record["payload"].get("message", "")
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
+            and "chatter" in record["payload"].get("message", "")
         ]
-        assert len(chatter_logs) == 260  # the WHOLE backlog drained, not just the first batch
+        assert (
+            len(chatter_logs) == 260
+        )  # the WHOLE backlog drained, not just the first batch
 
     asyncio.run(scenario())
 
@@ -1806,24 +2187,35 @@ def test_call_aborted_with_no_ended_at_still_produces_a_receipt() -> None:
     # receipt at all despite `terminal.scenario_counts` claiming one `errored`.
     async def scenario() -> None:
         class AbortingCallRunner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> CallOutcome:
                 del runtime
                 now = _rfc3339(datetime.now(timezone.utc))
                 raise CallAborted(
                     "ran out of time before the call finished",
                     partial=CallOutcome(
-                        calls=(), turns=1, started_at=now, ended_at=None, duration_ms=10,
-                        transcript_artifact=None, recording_artifacts=(),
+                        calls=(),
+                        turns=1,
+                        started_at=now,
+                        ended_at=None,
+                        duration_ms=10,
+                        transcript_artifact=None,
+                        recording_artifacts=(),
                     ),
                 )
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
         harness.deps.build_call_runner = lambda adapter, context: AbortingCallRunner()
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
         assert statuses.get("s1") == "errored"
         receipt_body = harness.transport.receipts[("job-1", "s1")]
         assert receipt_body["call"] is not None
@@ -1849,10 +2241,13 @@ def test_metadata_only_artifact_level_refuses_transcript_upload_end_to_end() -> 
     async def scenario() -> None:
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(
-            scenarios=scenarios, instances=1,
+            scenarios=scenarios,
+            instances=1,
             artifacts=HarnessArtifactPolicy(level=ArtifactLevel.METADATA_ONLY),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         # metadata-only forbids transcripts, but the level table MANDATES the run-level
         # kinds -- so exactly build/result/log reach the transport, and nothing scenario-scoped.
@@ -1865,10 +2260,14 @@ def test_metadata_only_artifact_level_refuses_transcript_upload_end_to_end() -> 
         assert set(harness.transport.artifacts) == listed_digests  # no unlisted bytes
 
         receipt_body = harness.transport.receipts[("job-1", "s1")]
-        assert receipt_body["status"] == "passed"  # a refused upload must not error the scenario
+        assert (
+            receipt_body["status"] == "passed"
+        )  # a refused upload must not error the scenario
         assert receipt_body["call"]["transcript_artifact"] is None
 
-        log_events = [r for r in harness.transport.event_records if r.get("type") == "log"]
+        log_events = [
+            r for r in harness.transport.event_records if r.get("type") == "log"
+        ]
         assert any(
             r["payload"]["level"] == "error"
             and "kind=transcript" in r["payload"]["message"]
@@ -1888,52 +2287,75 @@ def test_traces_artifact_level_refuses_recording_upload_end_to_end() -> None:
             def __init__(self, adapter: he.OutboundAdapter) -> None:
                 self._adapter = adapter
 
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> CallOutcome:
                 del runtime
                 transcript_id = await self._adapter.upload_artifact(
-                    b"transcript-bytes", kind=ob.ArtifactKind.TRANSCRIPT,
+                    b"transcript-bytes",
+                    kind=ob.ArtifactKind.TRANSCRIPT,
                     scenario_key=scenario.scenario_key,
                 )
                 recording_id = await self._adapter.upload_artifact(
-                    b"recording-bytes", kind=ob.ArtifactKind.RECORDING_COMBINED,
+                    b"recording-bytes",
+                    kind=ob.ArtifactKind.RECORDING_COMBINED,
                     scenario_key=scenario.scenario_key,
                 )
                 now = _rfc3339(datetime.now(timezone.utc))
                 return CallOutcome(
                     calls=(
                         Call(
-                            name="tool", arguments={}, result="ok", ok=True, error="",
-                            refused=False, at=0.0,
+                            name="tool",
+                            arguments={},
+                            result="ok",
+                            ok=True,
+                            error="",
+                            refused=False,
+                            at=0.0,
                         ),
                     ),
-                    turns=1, started_at=now, ended_at=now, duration_ms=10,
+                    turns=1,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=10,
                     transcript_artifact=transcript_id,
                     recording_artifacts=(recording_id,) if recording_id else (),
                 )
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(
-            scenarios=scenarios, instances=1,
+            scenarios=scenarios,
+            instances=1,
             artifacts=HarnessArtifactPolicy(level=ArtifactLevel.TRACES),
         )
-        harness.deps.build_call_runner = lambda adapter, context: RecordingCallRunner(adapter)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness.deps.build_call_runner = lambda adapter, context: RecordingCallRunner(
+            adapter
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         receipt_body = harness.transport.receipts[("job-1", "s1")]
         assert receipt_body["status"] == "passed"
-        assert receipt_body["call"]["transcript_artifact"] is not None  # traces allows transcripts
-        assert receipt_body["call"]["recording_artifacts"] == []  # recordings refused at traces
+        assert (
+            receipt_body["call"]["transcript_artifact"] is not None
+        )  # traces allows transcripts
+        assert (
+            receipt_body["call"]["recording_artifacts"] == []
+        )  # recordings refused at traces
 
         transcript_digest = receipt_body["call"]["transcript_artifact"].split(":", 1)[1]
         assert transcript_digest in harness.transport.artifacts
         uploaded_kinds = {e["kind"] for e in harness.transport.manifests[-1]["entries"]}
         assert "recording_combined" not in uploaded_kinds  # the recording never uploaded
-        assert {"build", "result", "log"} <= uploaded_kinds
+        assert {"build", "result", "log", "transcript"} <= uploaded_kinds  # traces allows transcript
         recording_digest = hashlib.sha256(b"recording-bytes").hexdigest()
         assert recording_digest not in harness.transport.artifacts  # not even the bytes
 
-        log_events = [r for r in harness.transport.event_records if r.get("type") == "log"]
+        log_events = [
+            r for r in harness.transport.event_records if r.get("type") == "log"
+        ]
         assert any(
             r["payload"]["level"] == "error"
             and "kind=recording_combined" in r["payload"]["message"]
@@ -1944,7 +2366,9 @@ def test_traces_artifact_level_refuses_recording_upload_end_to_end() -> None:
     asyncio.run(scenario())
 
 
-def test_secrets_unlink_failure_after_the_terminal_does_not_lose_the_terminal_event() -> None:
+def test_secrets_unlink_failure_after_the_terminal_does_not_lose_the_terminal_event() -> (
+    None
+):
     # A non-writable secrets directory must not cost the terminal event -- the
     # unlink now runs AFTER `emit_terminal` and is wrapped, so an OSError there is logged, not
     # raised past `run_job`.
@@ -1954,7 +2378,9 @@ def test_secrets_unlink_failure_after_the_terminal_does_not_lose_the_terminal_ev
         guard_dir = Path(tempfile.mkdtemp(prefix="p10-ro-"))
         secrets_path = guard_dir / "secrets.json"
         secrets_path.write_text('{"A": "x"}', encoding="utf-8")
-        os.chmod(guard_dir, stat.S_IRUSR | stat.S_IXUSR)  # read-only directory -> unlink raises
+        os.chmod(
+            guard_dir, stat.S_IRUSR | stat.S_IXUSR
+        )  # read-only directory -> unlink raises
         harness.deps.secrets_path = secrets_path
         try:
             code = await he.run_job(
@@ -1978,21 +2404,36 @@ def test_events_channel_dying_on_the_final_drain_exits_terminal_undelivered() ->
     async def scenario() -> None:
         class DyingOnTerminalTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 if (
-                    method == "POST" and "/events/" in url
+                    method == "POST"
+                    and "/events/" in url
                     and isinstance(data, (bytes, bytearray))
                     and b'"type":"terminal"' in bytes(data)
                 ):
-                    self.calls.append({"method": method, "url": url, "headers": dict(headers)})
+                    self.calls.append(
+                        {"method": method, "url": url, "headers": dict(headers)}
+                    )
                     return ob.TransportResponse(
-                        500, {"error": "server_error", "message": "boom", "retryable": True}, {},
+                        500,
+                        {"error": "server_error", "message": "boom", "retryable": True},
+                        {},
                     )
                 return super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
@@ -2000,9 +2441,13 @@ def test_events_channel_dying_on_the_final_drain_exits_terminal_undelivered() ->
         transport = DyingOnTerminalTransport()
         harness.deps.build_transport = lambda: transport
         harness.deps.retry_policy = lambda: ob.RetryPolicy(
-            initial_backoff_seconds=0.0, max_backoff_seconds=0.0, max_attempts=3,
+            initial_backoff_seconds=0.0,
+            max_backoff_seconds=0.0,
+            max_attempts=3,
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_TERMINAL_UNDELIVERED
         assert transport.terminal_events() == []  # never actually reached the platform
 
@@ -2015,37 +2460,63 @@ def test_platform_rejecting_the_terminal_event_exits_terminal_undelivered() -> N
     async def scenario() -> None:
         class RejectingTerminalTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
-                if method == "POST" and "/events/" in url and isinstance(data, (bytes, bytearray)):
+                if (
+                    method == "POST"
+                    and "/events/" in url
+                    and isinstance(data, (bytes, bytearray))
+                ):
                     body = json.loads(bytes(data).decode("utf-8"))
                     events = body.get("events", [])
                     terminal = [e for e in events if e.get("type") == "terminal"]
                     if terminal:
-                        self.calls.append({"method": method, "url": url, "headers": dict(headers)})
+                        self.calls.append(
+                            {"method": method, "url": url, "headers": dict(headers)}
+                        )
                         keep = [e for e in events if e.get("type") != "terminal"]
                         self.event_records.extend(keep)
                         rejected = [
-                            {"sequence": e["sequence"], "code": "payload_invalid", "message": "nope"}
+                            {
+                                "sequence": e["sequence"],
+                                "code": "payload_invalid",
+                                "message": "nope",
+                            }
                             for e in terminal
                         ]
                         watermark = max((e["sequence"] for e in events), default=0)
                         return ob.TransportResponse(
-                            200, {"acked_through_sequence": watermark, "rejected": rejected}, {},
+                            200,
+                            {"acked_through_sequence": watermark, "rejected": rejected},
+                            {},
                         )
                 return super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
         transport = RejectingTerminalTransport()
         harness.deps.build_transport = lambda: transport
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_TERMINAL_UNDELIVERED
-        assert transport.terminal_events() == []  # rejected, never landed as a delivered record
+        assert (
+            transport.terminal_events() == []
+        )  # rejected, never landed as a delivered record
 
     asyncio.run(scenario())
 
@@ -2057,26 +2528,44 @@ def test_receipt_rejection_by_the_platform_is_logged() -> None:
     async def scenario() -> None:
         class RejectingResultsTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 if method == "POST" and "/results/" in url and json_body is not None:
-                    self.calls.append({"method": method, "url": url, "headers": dict(headers)})
+                    self.calls.append(
+                        {"method": method, "url": url, "headers": dict(headers)}
+                    )
                     return ob.TransportResponse(
                         409,
-                        {"error": "receipt_conflict", "message": "digest mismatch", "retryable": False},
+                        {
+                            "error": "receipt_conflict",
+                            "message": "digest mismatch",
+                            "retryable": False,
+                        },
                         {},
                     )
                 return super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
 
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(scenarios=scenarios, instances=1)
         transport = RejectingResultsTransport()
         harness.deps.build_transport = lambda: transport
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         log_events = [r for r in transport.event_records if r.get("type") == "log"]
@@ -2099,10 +2588,19 @@ def test_receipt_failure_message_is_capped_like_the_terminal_message() -> None:
         adapter = _build_adapter(transport)
         await adapter.receipt(
             ResultReceipt(
-                scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0,
-                status="errored", sub_goals=(), evaluations=(), call=None,
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="errored",
+                sub_goals=(),
+                evaluations=(),
+                call=None,
                 failure=ReceiptFailure(
-                    domain="agent", stage="running", code="call_failed", message="y" * 20_000,
+                    domain="agent",
+                    stage="running",
+                    code="call_failed",
+                    message="y" * 20_000,
                 ),
             )
         )
@@ -2155,9 +2653,13 @@ def test_cancel_before_provision_skips_provisioning_entirely() -> None:
         harness.deps.cancel_path.write_text(
             json.dumps({"reason": "ttl_exceeded"}), encoding="utf-8"
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
-        assert harness.provisioner.provision_calls == 0  # canceled before provisioning ever ran
+        assert (
+            harness.provisioner.provision_calls == 0
+        )  # canceled before provisioning ever ran
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
         assert terminals[0]["payload"]["stage"] == "canceled"
@@ -2197,13 +2699,22 @@ def test_receipt_nulls_an_unacked_transcript_artifact_and_logs_it() -> None:
             ended_at = "2026-01-01T00:00:01.000Z"
             duration_ms = 1000
             turns = 1
-            transcript_artifact = "sha256:" + "a" * 64  # never uploaded through this adapter
+            transcript_artifact = (
+                "sha256:" + "a" * 64
+            )  # never uploaded through this adapter
             recording_artifacts = ("sha256:" + "b" * 64,)
 
         await adapter.receipt(
             ResultReceipt(
-                scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0,
-                status="passed", sub_goals=(), evaluations=(), call=UnackedCall(), failure=None,
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="passed",
+                sub_goals=(),
+                evaluations=(),
+                call=UnackedCall(),
+                failure=None,
             )
         )
         body = transport.receipts[("job-1", "s1")]
@@ -2212,11 +2723,13 @@ def test_receipt_nulls_an_unacked_transcript_artifact_and_logs_it() -> None:
 
         log_events = [r for r in transport.event_records if r.get("type") == "log"]
         assert any(
-            r["payload"]["level"] == "error" and "un-acked transcript" in r["payload"]["message"]
+            r["payload"]["level"] == "error"
+            and "un-acked transcript" in r["payload"]["message"]
             for r in log_events
         )
         assert any(
-            r["payload"]["level"] == "error" and "un-acked recording" in r["payload"]["message"]
+            r["payload"]["level"] == "error"
+            and "un-acked recording" in r["payload"]["message"]
             for r in log_events
         )
 
@@ -2232,15 +2745,26 @@ def test_pre_run_provision_failure_emits_the_terminal_before_closing_the_pool() 
 
         class OrderTrackingTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 response = super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
                 if (
-                    "/events/" in url and method == "POST"
+                    "/events/" in url
+                    and method == "POST"
                     and isinstance(data, (bytes, bytearray))
                     and b'"type":"terminal"' in bytes(data)
                 ):
@@ -2249,11 +2773,19 @@ def test_pre_run_provision_failure_emits_the_terminal_before_closing_the_pool() 
 
         class FailingProvisioner(FakeProvisioner):
             async def provision(
-                self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
-                contract: Any | None = None, instances: int = 1,
+                self,
+                bundle: Any,
+                *,
+                source: Path,
+                bundle_dir: Path,
+                work_directory: Path,
+                contract: Any | None = None,
+                instances: int = 1,
             ) -> list[EnvironmentRuntime]:
                 del bundle, source, bundle_dir, work_directory, contract, instances
-                raise ProcessRuntimeError("build", "build_failed", "synthetic", process="agent")
+                raise ProcessRuntimeError(
+                    "build", "build_failed", "synthetic", process="agent"
+                )
 
             async def close(self, *, work_directory: Path) -> None:
                 await super().close(work_directory=work_directory)
@@ -2263,7 +2795,9 @@ def test_pre_run_provision_failure_emits_the_terminal_before_closing_the_pool() 
         transport = OrderTrackingTransport()
         harness.deps.build_transport = lambda: transport
         harness.deps.build_provider = lambda: FailingProvisioner(instances=1)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         assert order[:2] == ["terminal_delivered", "pool_closed"]
         terminals = transport.terminal_events()
@@ -2280,7 +2814,9 @@ def test_pre_run_provision_failure_emits_the_terminal_before_closing_the_pool() 
 # =================================================================================================
 
 
-def test_fence_on_the_manifest_push_still_exits_fenced_with_the_terminal_already_delivered() -> None:
+def test_fence_on_the_manifest_push_still_exits_fenced_with_the_terminal_already_delivered() -> (
+    None
+):
     # `flush_terminal` now delivers the terminal-carrying POST ahead of `drain()`, so a fence
     # on that POST is caught by the PRE-drain `is_fenced` check in `_finish`, not the post-drain
     # `if fenced: return EXIT_FENCED` line -- `test_fence_landing_on_the_final_
@@ -2293,9 +2829,13 @@ def test_fence_on_the_manifest_push_still_exits_fenced_with_the_terminal_already
     async def scenario() -> None:
         scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
         harness = _build_harness(
-            scenarios=scenarios, instances=1, fence_on_url_substring="/manifest/",
+            scenarios=scenarios,
+            instances=1,
+            fence_on_url_substring="/manifest/",
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_FENCED
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1  # delivered before the fence ever landed
@@ -2319,8 +2859,14 @@ def test_drain_alone_delivers_a_pre_run_backlog_larger_than_one_batch() -> None:
                 self._chatter_count = chatter_count
 
             async def build(
-                self, job: HarnessJob, bundle: Any, scenarios_client: he.ScenariosClient, *,
-                pool: Any, world_factory: Any, bundle_dir: Path,
+                self,
+                job: HarnessJob,
+                bundle: Any,
+                scenarios_client: he.ScenariosClient,
+                *,
+                pool: Any,
+                world_factory: Any,
+                bundle_dir: Path,
             ) -> list[FakeScenario]:
                 del job, bundle, scenarios_client, world_factory, bundle_dir
                 adapter = pool._outbound  # no adapter seam on ScenarioSource itself
@@ -2330,7 +2876,9 @@ def test_drain_alone_delivers_a_pre_run_backlog_larger_than_one_batch() -> None:
 
         harness = _build_harness(scenarios=[], instances=1)
         harness.deps.scenario_source = ChattyPreRunScenarioSource(chatter_count=260)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
@@ -2338,15 +2886,21 @@ def test_drain_alone_delivers_a_pre_run_backlog_larger_than_one_batch() -> None:
         assert terminals[0]["payload"]["stage"] == "failed"
 
         chatter_logs = [
-            record for record in harness.transport.event_records
-            if record.get("type") == "log" and "pre-run chatter" in record["payload"].get("message", "")
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
+            and "pre-run chatter" in record["payload"].get("message", "")
         ]
-        assert len(chatter_logs) == 260  # the whole backlog drained, not just the first batch
+        assert (
+            len(chatter_logs) == 260
+        )  # the whole backlog drained, not just the first batch
 
     asyncio.run(scenario())
 
 
-def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt_under_backlog() -> None:
+def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt_under_backlog() -> (
+    None
+):
     # The converse of the previous test -- on a cancel-mid-run path, `flush_terminal` is the
     # ONLY thing standing between "terminal not yet on the wire" and `emit_skipped_receipts`
     # pushing a receipt straight to `/results/` (that push is not gated on event delivery at all).
@@ -2364,29 +2918,46 @@ def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt
 
         class OrderTrackingTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 response = super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
                 if (
-                    "/events/" in url and method == "POST"
+                    "/events/" in url
+                    and method == "POST"
                     and isinstance(data, (bytes, bytearray))
                     and b'"type":"terminal"' in bytes(data)
                 ):
                     order.append("terminal_delivered")
                 if (
-                    "/results/" in url and method == "POST"
-                    and json_body is not None and json_body.get("status") == "skipped"
+                    "/results/" in url
+                    and method == "POST"
+                    and json_body is not None
+                    and json_body.get("status") == "skipped"
                 ):
                     order.append("skipped_receipt_delivered")
                 return response
 
         class ChattyCancelingCallRunner:
             def __init__(
-                self, adapter: he.OutboundAdapter, *, cancel_path: Path, cancel_on_scenario: str,
+                self,
+                adapter: he.OutboundAdapter,
+                *,
+                cancel_path: Path,
+                cancel_on_scenario: str,
                 chatter_count: int,
             ) -> None:
                 self._adapter = adapter
@@ -2394,7 +2965,9 @@ def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt
                 self._cancel_on_scenario = cancel_on_scenario
                 self._chatter_count = chatter_count
 
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> CallOutcome:
                 del runtime
                 if scenario.scenario_key == self._cancel_on_scenario:
                     for i in range(self._chatter_count):
@@ -2406,22 +2979,39 @@ def test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt
                 return CallOutcome(
                     calls=(
                         Call(
-                            name="tool", arguments={}, result="ok", ok=True, error="",
-                            refused=False, at=0.0,
+                            name="tool",
+                            arguments={},
+                            result="ok",
+                            ok=True,
+                            error="",
+                            refused=False,
+                            at=0.0,
                         ),
                     ),
-                    turns=1, started_at=now, ended_at=now, duration_ms=10,
-                    transcript_artifact=None, recording_artifacts=(),
+                    turns=1,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=10,
+                    transcript_artifact=None,
+                    recording_artifacts=(),
                 )
 
-        harness = _build_harness(scenarios=scenarios, cancel_on_scenario="first", instances=1)
+        harness = _build_harness(
+            scenarios=scenarios, cancel_on_scenario="first", instances=1
+        )
         transport = OrderTrackingTransport()
         harness.deps.build_transport = lambda: transport
-        harness.deps.build_call_runner = lambda adapter, context: ChattyCancelingCallRunner(
-            adapter, cancel_path=harness.deps.cancel_path, cancel_on_scenario="first",
-            chatter_count=260,
+        harness.deps.build_call_runner = lambda adapter, context: (
+            ChattyCancelingCallRunner(
+                adapter,
+                cancel_path=harness.deps.cancel_path,
+                cancel_on_scenario="first",
+                chatter_count=260,
+            )
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         statuses = {key[1]: body["status"] for key, body in transport.receipts.items()}
         assert statuses.get("first") == "passed"
@@ -2444,7 +3034,9 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
             FakeScenario("first", "platform-first", [FakeSubGoal("holds", True)]),
             FakeScenario("second", "platform-second", [FakeSubGoal("holds", True)]),
         ]
-        harness = _build_harness(scenarios=scenarios, cancel_on_scenario="first", instances=1)
+        harness = _build_harness(
+            scenarios=scenarios, cancel_on_scenario="first", instances=1
+        )
         harness.deps.flush_window_seconds = 0.2
 
         original_emit = HostedScheduler.emit_skipped_receipts
@@ -2463,17 +3055,27 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
             HostedScheduler.emit_skipped_receipts = original_emit
         elapsed = time.monotonic() - started
 
-        assert elapsed < 1.5, f"post-terminal wire block was not bounded: {elapsed:.2f}s"
-        assert code == he.EXIT_OK  # the terminal was already delivered before the window ran out
+        assert elapsed < 1.5, (
+            f"post-terminal wire block was not bounded: {elapsed:.2f}s"
+        )
+        assert (
+            code == he.EXIT_OK
+        )  # the terminal was already delivered before the window ran out
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
         assert terminals[0]["payload"]["stage"] == "canceled"
 
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
         assert statuses.get("first") == "passed"
-        assert "second" not in statuses  # window ran out before the skipped receipt could go
+        assert (
+            "second" not in statuses
+        )  # window ran out before the skipped receipt could go
 
-        assert harness.provisioner.closed is True  # the finally backstop still closes the pool
+        assert (
+            harness.provisioner.closed is True
+        )  # the finally backstop still closes the pool
 
     asyncio.run(scenario())
 
@@ -2494,14 +3096,21 @@ def test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window() -> 
 
 
 def _scenario_doc_files(
-    name: str, *, scenario_key: str, scenario_id: str = "", sub_goals: list[str] | None = None,
-    setup_code: str = "", checks: dict[str, str] | None = None,
+    name: str,
+    *,
+    scenario_key: str,
+    scenario_id: str = "",
+    sub_goals: list[str] | None = None,
+    setup_code: str = "",
+    checks: dict[str, str] | None = None,
 ) -> dict[str, bytes]:
     """One scenario folder's contents as {relative path: bytes} -- fed to
     `_write_bundle_with_scenario_files` below rather than written straight to disk, so every byte
     can be hashed into the manifest's `files[]` before the bundle is sealed."""
     body = {
-        "name": name, "scenario_key": scenario_key, "scenario_id": scenario_id,
+        "name": name,
+        "scenario_key": scenario_key,
+        "scenario_id": scenario_id,
         "sub_goals": sub_goals or [],
     }
     prefix = f"{SCENARIOS_DIRNAME}/{name}"
@@ -2513,29 +3122,45 @@ def _scenario_doc_files(
     return files
 
 
-def _write_bundle_with_scenario_files(root: Path, scenario_files: dict[str, bytes]) -> EnvironmentBundleV2:
+def _write_bundle_with_scenario_files(
+    root: Path, scenario_files: dict[str, bytes]
+) -> EnvironmentBundleV2:
     """`_write_bundle`, plus `scenario_files` hashed into `files[]` and the digest re-sealed over
     all of it -- otherwise every one of these trips `bundle_file_unlisted` at preflight, before
     `scenario_source.build()` is ever reached."""
     root.mkdir(parents=True, exist_ok=True)
     body = _base_manifest_body()
-    file_contents = {"db/schema.sql": SCHEMA_SQL, "db/seed.sql": SEED_SQL, **scenario_files}
+    file_contents = {
+        "db/schema.sql": SCHEMA_SQL,
+        "db/seed.sql": SEED_SQL,
+        **scenario_files,
+    }
     files: list[dict[str, Any]] = []
     for relative, content in file_contents.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         files.append(
-            {"path": relative, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
         )
     body["files"] = files
     digest = compute_inputs_digest(
-        root, ["db/schema.sql"], ["db/seed.sql"], engine=ManagedEngine.POSTGRES, version="16"
+        root,
+        ["db/schema.sql"],
+        ["db/seed.sql"],
+        engine=ManagedEngine.POSTGRES,
+        version="16",
     )
     body["seed"] = {
         "stores": [
             {
-                "capability": "database", "migrations": ["db/schema.sql"], "seed_files": ["db/seed.sql"],
+                "capability": "database",
+                "migrations": ["db/schema.sql"],
+                "seed_files": ["db/seed.sql"],
                 "baseline": {"strategy": "template_database", "inputs_digest": digest},
                 "sentinel": {"query": "SELECT count(*) FROM riders", "expected": "1"},
             }
@@ -2553,8 +3178,12 @@ def test_bundle_without_scenarios_keeps_the_notwired_regression() -> None:
     # it did before this adapter existed -- the default `NotWiredScenarioSource`'s typed failure,
     # never a crash and never a silently-empty run.
     async def scenario() -> None:
-        harness = _build_harness(scenarios=[], instances=1, use_default_scenario_source=True)
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=[], instances=1, use_default_scenario_source=True
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -2566,14 +3195,18 @@ def test_bundle_without_scenarios_keeps_the_notwired_regression() -> None:
     asyncio.run(scenario())
 
 
-def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present() -> None:
+def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present() -> (
+    None
+):
     # item 4 + 5c (end to end): the presence test flips the default over to the real
     # `BundleScenarioSource` -- no `FakeScenarioSource` involved anywhere in this test. One
     # deterministic sub_goal that genuinely holds against the fake world, so this proves a real
     # COMPLETED pass, not just that the vacuous-pass guard fired.
     async def scenario() -> None:
         harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
                 bundle_dir,
                 _scenario_doc_files(
@@ -2581,13 +3214,17 @@ def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present
                     # `test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema` just below for
                     # the (newly discovered, load-bearing) reason an EMPTY one cannot be used to
                     # prove a receipt actually arrives.
-                    "passing", scenario_key="passing", scenario_id="platform-passing",
+                    "passing",
+                    scenario_key="passing",
+                    scenario_id="platform-passing",
                     sub_goals=["holds"],
                     checks={"holds": "def check(world, calls):\n    return None\n"},
                 ),
             ),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
@@ -2599,13 +3236,19 @@ def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present
         # terminal last: the terminal record is the final event this run ever pushed.
         assert harness.transport.event_records[-1].get("type") == "terminal"
 
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
-        assert statuses == {"passing": "passed"}  # the real scheduler actually ran it, and it held
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
+        assert statuses == {
+            "passing": "passed"
+        }  # the real scheduler actually ran it, and it held
 
     asyncio.run(scenario())
 
 
-def test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_validation() -> None:
+def test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_validation() -> (
+    None
+):
     # Mutation table item 2: "empty-key fixture -> typed failure", at the FULL integration level --
     # a hand-written document with an empty `scenario_key` flows verbatim through this adapter
     # (work item 3: never synthesized) into the scheduler's OWN pre-existing defense
@@ -2615,12 +3258,16 @@ def test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_vali
     # end-to-end proof that the two halves agree.
     async def scenario() -> None:
         harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
                 bundle_dir, _scenario_doc_files("s1", scenario_key="", sub_goals=[])
             ),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -2662,7 +3309,9 @@ def test_mutation_adapter_off_makes_the_e2e_test_fail() -> None:
     test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present()
 
 
-def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers() -> None:
+def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers() -> (
+    None
+):
     # p13 UPDATE of the former `test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema`
     # (p12): that test pinned a real gap -- `outbound.py`'s `ResultReceiptDraft` schema requires
     # `scenario_id` non-empty (pydantic `min_length=1`), and before this task nothing ever filled
@@ -2675,16 +3324,23 @@ def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers
     # the property this test used to pin, preserved on the path that never registers at all.
     async def scenario() -> None:
         harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
                 bundle_dir,
                 _scenario_doc_files(
-                    "passing", scenario_key="passing", scenario_id="", sub_goals=["holds"],
+                    "passing",
+                    scenario_key="passing",
+                    scenario_id="",
+                    sub_goals=["holds"],
                     checks={"holds": "def check(world, calls):\n    return None\n"},
                 ),
             ),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
@@ -2693,19 +3349,25 @@ def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers
         assert payload["stage"] == "completed"
         assert payload["scenario_counts"]["passed"] == 1
 
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
         assert statuses == {"passing": "passed"}  # the receipt DELIVERS now -- no drop.
 
-        (_, body), = [
-            (key, body) for key, body in harness.transport.receipts.items() if key[1] == "passing"
+        ((_, body),) = [
+            (key, body)
+            for key, body in harness.transport.receipts.items()
+            if key[1] == "passing"
         ]
         # `FakeTransport`'s fake platform assigns `f"platform-{scenario_key}"` -- confirms the id
         # on the wire is the PLATFORM's, not the document's own (empty) one.
         assert body["scenario_id"] == "platform-passing"
 
         error_logs = [
-            record for record in harness.transport.event_records
-            if record.get("type") == "log" and record["payload"].get("level") == "error"
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
+            and record["payload"].get("level") == "error"
             and "ResultReceiptDraft" in record["payload"].get("message", "")
         ]
         assert error_logs == []  # no drop, so no drop log either.
@@ -2713,7 +3375,9 @@ def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers
     asyncio.run(scenario())
 
 
-def test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely() -> None:
+def test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely() -> (
+    None
+):
     # Preserves the property the pre-p13 pinning test proved: a scenario that reaches the
     # scheduler with an empty `scenario_id` (never pre-allocated) still has its receipt rejected by
     # `ResultReceiptDraft`'s own schema (`min_length=1`) and DROPPED, loudly, rather than crashing
@@ -2724,30 +3388,44 @@ def test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely
     # source, same shape as a future ScenarioSource that also skips pre-allocation).
     async def scenario() -> None:
         scenarios = [FakeScenario("passing", "", [FakeSubGoal("holds", True)])]
-        harness = _build_harness(scenarios=scenarios, instances=1)  # FakeScenarioSource, as usual
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=scenarios, instances=1
+        )  # FakeScenarioSource, as usual
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
         payload = terminals[0]["payload"]
         assert payload["stage"] == "completed"  # the job itself does not fail
-        assert payload["scenario_counts"]["passed"] == 1  # ...and reports the scenario as passed...
+        assert (
+            payload["scenario_counts"]["passed"] == 1
+        )  # ...and reports the scenario as passed...
 
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
         assert statuses == {}  # ...yet no receipt for it ever reached the platform.
 
         error_logs = [
-            record for record in harness.transport.event_records
-            if record.get("type") == "log" and record["payload"].get("level") == "error"
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
+            and record["payload"].get("level") == "error"
             and "ResultReceiptDraft" in record["payload"].get("message", "")
         ]
-        assert len(error_logs) == 1  # the drop is at least loud, not silent -- but still a drop.
+        assert (
+            len(error_logs) == 1
+        )  # the drop is at least loud, not silent -- but still a drop.
 
     asyncio.run(scenario())
 
 
-def test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal() -> None:
+def test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal() -> (
+    None
+):
     # p13: a provision response that fails `_scenario_ids_by_key`'s guards (scenario_source.py --
     # here, naming NO scenario_key at all, so every submitted one is "missing") must fail the
     # whole job through the SAME typed `validating_scenarios`/`platform_sync` terminal
@@ -2757,36 +3435,59 @@ def test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal
     async def scenario() -> None:
         class MismatchedProvisionTransport(FakeTransport):
             def request(
-                self, method: str, url: str, *, headers: dict[str, str],
-                json_body: dict[str, Any] | None = None, data: bytes | Any | None = None,
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str],
+                json_body: dict[str, Any] | None = None,
+                data: bytes | Any | None = None,
                 timeout: float = 30.0,
             ) -> ob.TransportResponse:
                 if (
-                    method == "POST" and "/scenarios/" in url and json_body is not None
+                    method == "POST"
+                    and "/scenarios/" in url
+                    and json_body is not None
                     and json_body.get("operation") == "provision"
                 ):
-                    self.calls.append({"method": method, "url": url, "headers": dict(headers)})
+                    self.calls.append(
+                        {"method": method, "url": url, "headers": dict(headers)}
+                    )
                     self.scenarios_calls.append((url, json_body))
                     return ob.TransportResponse(
-                        200, {"result": {"run_test_id": "run-test-1", "scenarios": []}}, {},
+                        200,
+                        {"result": {"run_test_id": "run-test-1", "scenarios": []}},
+                        {},
                     )
                 return super().request(
-                    method, url, headers=headers, json_body=json_body, data=data, timeout=timeout,
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    data=data,
+                    timeout=timeout,
                 )
 
         harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
                 bundle_dir,
                 _scenario_doc_files(
-                    "passing", scenario_key="passing", scenario_id="", sub_goals=["holds"],
+                    "passing",
+                    scenario_key="passing",
+                    scenario_id="",
+                    sub_goals=["holds"],
                     checks={"holds": "def check(world, calls):\n    return None\n"},
                 ),
             ),
         )
         transport = MismatchedProvisionTransport()
         harness.deps.build_transport = lambda: transport
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = transport.terminal_events()
@@ -2796,9 +3497,13 @@ def test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal
         assert failure["domain"] == "platform_sync"
         assert failure["code"] == "scenario_preallocation_failed"
 
-        assert transport.receipts == {}  # the scheduler never ran -- registration failed first
+        assert (
+            transport.receipts == {}
+        )  # the scheduler never ran -- registration failed first
         # `begin` must never have been attempted -- the provision-side guard stops it first.
-        assert not any(body.get("operation") == "begin" for _, body in transport.scenarios_calls)
+        assert not any(
+            body.get("operation") == "begin" for _, body in transport.scenarios_calls
+        )
 
     asyncio.run(scenario())
 
@@ -2808,17 +3513,31 @@ def test_injected_scenario_source_always_wins_over_the_bundle_adapter() -> None:
     # injected `ScenarioSource` must be used untouched -- the presence test only ever applies to
     # the untouched default.
     async def scenario() -> None:
-        injected = [FakeScenario("from-fake", "platform-from-fake", [FakeSubGoal("holds", True)])]
+        injected = [
+            FakeScenario(
+                "from-fake", "platform-from-fake", [FakeSubGoal("holds", True)]
+            )
+        ]
         harness = _build_harness(
-            scenarios=injected, instances=1,  # FakeScenarioSource, as usual -- not the default
+            scenarios=injected,
+            instances=1,  # FakeScenarioSource, as usual -- not the default
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
-                bundle_dir, _scenario_doc_files("from-bundle", scenario_key="from-bundle", sub_goals=[])
+                bundle_dir,
+                _scenario_doc_files(
+                    "from-bundle", scenario_key="from-bundle", sub_goals=[]
+                ),
             ),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
-        statuses = {key[1]: body["status"] for key, body in harness.transport.receipts.items()}
-        assert statuses == {"from-fake": "passed"}  # the bundle's own scenario never ran
+        statuses = {
+            key[1]: body["status"] for key, body in harness.transport.receipts.items()
+        }
+        assert statuses == {
+            "from-fake": "passed"
+        }  # the bundle's own scenario never ran
 
     asyncio.run(scenario())
 
@@ -2897,22 +3616,31 @@ def test_module_level_sys_exit_zero_in_setup_is_contained_as_a_typed_failure() -
     # every byte was hashed into the manifest and §2e preflight passed.
     async def scenario() -> None:
         harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
                 bundle_dir,
                 _scenario_doc_files(
-                    "s1", scenario_key="s1", sub_goals=[], setup_code="import sys\nsys.exit(0)\n",
+                    "s1",
+                    scenario_key="s1",
+                    sub_goals=[],
+                    setup_code="import sys\nsys.exit(0)\n",
                 ),
             ),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         # The GUEST's own exit code -- EXIT_OK means "a terminal was reached and flushed", the
         # same meaning it carries for any other typed FAILED terminal, never the scenario's own
         # sys.exit(0) leaking through `run_job`'s return value.
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
-        assert len(terminals) == 1  # a terminal event WAS delivered -- not an empty event stream
+        assert (
+            len(terminals) == 1
+        )  # a terminal event WAS delivered -- not an empty event stream
         payload = terminals[0]["payload"]
         assert payload["stage"] == "failed"
         failure = payload["failure"]
@@ -2923,23 +3651,34 @@ def test_module_level_sys_exit_zero_in_setup_is_contained_as_a_typed_failure() -
     asyncio.run(scenario())
 
 
-def test_module_level_sys_exit_three_in_setup_does_not_hijack_the_guests_exit_code() -> None:
+def test_module_level_sys_exit_three_in_setup_does_not_hijack_the_guests_exit_code() -> (
+    None
+):
     # EXIT_FENCED == 3: before the fix, `sys.exit(3)` here was indistinguishable from the guest
     # itself choosing to exit fenced -- the platform would read an ordinary scenario content defect
     # as a fenced/superseded attempt instead.
     async def scenario() -> None:
         harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
             bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
                 bundle_dir,
                 _scenario_doc_files(
-                    "s1", scenario_key="s1", sub_goals=[], setup_code="import sys\nsys.exit(3)\n",
+                    "s1",
+                    scenario_key="s1",
+                    sub_goals=[],
+                    setup_code="import sys\nsys.exit(3)\n",
                 ),
             ),
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
-        assert code != he.EXIT_FENCED  # explicit: the scenario's own exit code did not leak through
+        assert (
+            code != he.EXIT_FENCED
+        )  # explicit: the scenario's own exit code did not leak through
 
         terminals = harness.transport.terminal_events()
         assert len(terminals) == 1
@@ -2959,12 +3698,20 @@ def test_non_utf8_setup_file_is_contained_as_a_typed_failure_not_an_escape() -> 
     # ever attempts to decode them.
     async def scenario() -> None:
         files = _scenario_doc_files("s1", scenario_key="s1", sub_goals=[])
-        files[f"{SCENARIOS_DIRNAME}/s1/setup.py"] = b"def setup(world):\n    return '\xff\xfe'\n"
-        harness = _build_harness(
-            scenarios=[], instances=1, use_default_scenario_source=True,
-            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(bundle_dir, files),
+        files[f"{SCENARIOS_DIRNAME}/s1/setup.py"] = (
+            b"def setup(world):\n    return '\xff\xfe'\n"
         )
-        code = await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)
+        harness = _build_harness(
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir, files
+            ),
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
         assert code == he.EXIT_OK
 
         terminals = harness.transport.terminal_events()
