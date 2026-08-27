@@ -47,5 +47,10 @@ def for_roles(override: str | None = None) -> dict[str, str]:
     return {
         "agent": os.environ.get("ALK_AGENT_MODEL", AGENT),
         "user": os.environ.get("ALK_USER_MODEL", USER),
-        "judge": os.environ.get("ALK_JUDGE_MODEL", JUDGE),
+        # The judge rides the harness backend, so left on its own default it names a model the
+        # configured backend may not be able to drive. Following the harness model keeps the
+        # pairing valid with one setting; ALK_JUDGE_MODEL still wins when a run needs it.
+        "judge": os.environ.get("ALK_JUDGE_MODEL")
+        or os.environ.get("ALK_HARNESS_MODEL")
+        or JUDGE,
     }
