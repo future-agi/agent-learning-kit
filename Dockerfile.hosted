@@ -1,6 +1,7 @@
 FROM node:20-bookworm-slim AS node20
 FROM node:22-bookworm-slim AS node22
 FROM python:3.11-slim-bookworm AS python311
+FROM python:3.13-slim-bookworm AS python313
 FROM rabbitmq:3.13.7-management AS rabbitmq313
 FROM ghcr.io/astral-sh/uv:latest AS uvbin
 
@@ -19,7 +20,15 @@ COPY --from=node20 /usr/local/bin/node /opt/node20/bin/node
 COPY --from=node20 /usr/local/lib/node_modules/npm /opt/node20/lib/node_modules/npm
 COPY --from=node22 /usr/local/bin/node /opt/node22/bin/node
 COPY --from=node22 /usr/local/lib/node_modules/npm /opt/node22/lib/node_modules/npm
-COPY --from=python311 /usr/local /opt/python311
+# Keep alternate interpreters at the prefix they were compiled for. Copying the same tree under
+# /opt makes the executable start, but every venv it creates still searches /usr/local for the
+# standard library and fails before it can import ``encodings``.
+COPY --from=python311 /usr/local/bin/python3.11 /usr/local/bin/python3.11
+COPY --from=python311 /usr/local/include/python3.11 /usr/local/include/python3.11
+COPY --from=python311 /usr/local/lib/ /usr/local/lib/
+COPY --from=python313 /usr/local/bin/python3.13 /usr/local/bin/python3.13
+COPY --from=python313 /usr/local/include/python3.13 /usr/local/include/python3.13
+COPY --from=python313 /usr/local/lib/ /usr/local/lib/
 COPY --from=rabbitmq313 /opt/rabbitmq /opt/rabbitmq
 RUN rm -f /opt/rabbitmq/etc/rabbitmq/enabled_plugins /etc/rabbitmq/enabled_plugins || true
 COPY --from=rabbitmq313 /opt/erlang /opt/erlang
@@ -31,12 +40,19 @@ RUN python3.12 -m venv /opt/alk-venv \
     && printf '#!/bin/sh\nexec /opt/node22/bin/node /opt/node22/lib/node_modules/npm/bin/npm-cli.js "$@"\n' > /usr/local/bin/npm22 \
     && ln -s /opt/node20/bin/node /usr/local/bin/node20 \
     && ln -s /opt/node22/bin/node /usr/local/bin/node22 \
-    && ln -s /opt/python311/bin/python3.11 /usr/local/bin/python3.11 \
     && ln -s /usr/lib/postgresql/16/bin/postgres /usr/local/bin/postgres \
     && ln -s /usr/lib/postgresql/16/bin/initdb /usr/local/bin/initdb \
     && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-server "$@"\n' > /usr/local/bin/rabbitmq-server \
     && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmqctl "$@"\n' > /usr/local/bin/rabbitmqctl \
     && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
+
+# Catalog entries are executable promises. Fail the snapshot build if either alternate Python
+# cannot create and execute a writable project-local venv.
+RUN python3.11 -m venv /tmp/python311-smoke \
+    && /tmp/python311-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 11)' \
+    && python3.13 -m venv /tmp/python313-smoke \
+    && /tmp/python313-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 13)' \
+    && rm -rf /tmp/python311-smoke /tmp/python313-smoke
 
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \

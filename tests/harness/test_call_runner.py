@@ -29,7 +29,11 @@ from fi.alk.harness.job import (
     SourceKind,
     SourceVisibility,
 )
-from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeEndpoint, RuntimeState
+from fi.alk.harness.process_runtime import (
+    EnvironmentRuntime,
+    RuntimeEndpoint,
+    RuntimeState,
+)
 from fi.alk.harness.world.errors import WorldUnavailable
 from fi.alk.harness.world.runtime import Call
 from fi.simulate.artifacts import ArtifactManifest
@@ -37,6 +41,7 @@ from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.report import SimulationReport, SimulationTestCaseResult
 from fi.simulate.runtime.run import RunStatus
 from fi.simulate.runtime.run import TestCaseStatus as CaseStatus
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements
 from fi.simulate.simulation.models import Persona as SimPersona
 from fi.simulate.simulation.models import TestCaseResult as SimTestCaseResult
 
@@ -59,18 +64,23 @@ _ALL_CONFIG = {cr.LIVEKIT_URL_CONFIG_KEY: "wss://example.livekit.cloud"}
 # =================================================================================================
 
 
-def _job(*, connector: str = "livekit", config: dict[str, Any] | None = None) -> HarnessJob:
+def _job(
+    *, connector: str = "livekit", config: dict[str, Any] | None = None
+) -> HarnessJob:
     return HarnessJob(
         job_id="job-abcdef12-xyz",
         run_id="run-1",
         execution=ExecutionMode.HOSTED,
         source=RepositorySource(
-            kind=SourceKind.GITHUB, repository="org/repo", visibility=SourceVisibility.PUBLIC,
+            kind=SourceKind.GITHUB,
+            repository="org/repo",
+            visibility=SourceVisibility.PUBLIC,
             commit_sha="a" * 40,
         ),
         agent=AgentConnection(connector=connector, config=config or {}),
         scenario_count=1,
         seed=1,
+        runtime=RuntimeRequirements(isolation=RuntimeIsolation.DEDICATED_VM),
     )
 
 
@@ -90,9 +100,14 @@ def _runtime(
     )
 
 
-def _postgres_endpoint(*, address: str = "postgresql://harness:pw@localhost:15001/w0") -> RuntimeEndpoint:
+def _postgres_endpoint(
+    *, address: str = "postgresql://harness:pw@localhost:15001/w0"
+) -> RuntimeEndpoint:
     return RuntimeEndpoint(
-        capability="database", protocol="postgres", address=address, configuration_name="DATABASE_URL",
+        capability="database",
+        protocol="postgres",
+        address=address,
+        configuration_name="DATABASE_URL",
     )
 
 
@@ -105,7 +120,9 @@ def _context(
     evidence_seam: EvidenceSeam | None = EvidenceSeam.HTTP_TOOL,
     attempt_number: int = 1,
 ) -> tuple[HarnessJob, cr.CallRunnerContext]:
-    job = _job(connector=connector, config=config if config is not None else dict(_ALL_CONFIG))
+    job = _job(
+        connector=connector, config=config if config is not None else dict(_ALL_CONFIG)
+    )
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir(parents=True, exist_ok=True)
     context = cr.CallRunnerContext(
@@ -113,7 +130,9 @@ def _context(
         bundle_dir=bundle_dir,
         work_directory=tmp_path / "work",
         evidence_seam=evidence_seam,
-        target_provider_secret_values=secrets if secrets is not None else dict(_ALL_SECRETS),
+        target_provider_secret_values=secrets
+        if secrets is not None
+        else dict(_ALL_SECRETS),
         attempt_number=attempt_number,
     )
     return job, context
@@ -159,7 +178,9 @@ class FakeAdapter:
     refuse_kinds: frozenset = field(default_factory=frozenset)
     uploads: list[tuple[Any, str | None, bytes]] = field(default_factory=list)
 
-    async def upload_artifact(self, data: bytes, *, kind, scenario_key=None, deadline=None) -> str | None:
+    async def upload_artifact(
+        self, data: bytes, *, kind, scenario_key=None, deadline=None
+    ) -> str | None:
         if kind in self.refuse_kinds:
             return None
         import hashlib
@@ -191,20 +212,34 @@ def _report(
     cases: list[SimulationTestCaseResult] = []
     if not no_cases:
         assert case_status is not None
-        result = SimTestCaseResult(persona=_persona(), transcript=transcript, messages=messages)
+        result = SimTestCaseResult(
+            persona=_persona(), transcript=transcript, messages=messages
+        )
         cases.append(
             SimulationTestCaseResult(
-                test_case_id="tc-1", status=case_status, persona=_persona(), result=result,
-                failure=failure, started_at=started_at, ended_at=ended_at,
+                test_case_id="tc-1",
+                status=case_status,
+                persona=_persona(),
+                result=result,
+                failure=failure,
+                started_at=started_at,
+                ended_at=ended_at,
             )
         )
     return SimulationReport(
-        run_id=run_id, spec_hash="hash", status=status, started_at=started_at, ended_at=ended_at,
-        test_cases=cases, artifacts=ArtifactManifest(run_id=run_id),
+        run_id=run_id,
+        spec_hash="hash",
+        status=status,
+        started_at=started_at,
+        ended_at=ended_at,
+        test_cases=cases,
+        artifacts=ArtifactManifest(run_id=run_id),
     )
 
 
-def _run(runner: cr.CallRunnerImpl, scenario: _FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+def _run(
+    runner: cr.CallRunnerImpl, scenario: _FakeScenario, runtime: EnvironmentRuntime
+) -> CallOutcome:
     return asyncio.run(runner.run(scenario, runtime))
 
 
@@ -238,12 +273,19 @@ def _run_expect_world_unavailable(
 
 
 def test_room_name_matches_the_pinned_deterministic_scheme() -> None:
-    name = cr._room_name(job_id="abcdef1234567890", attempt_number=2, scenario_key="cancel-order", scenario_attempt=3)
+    name = cr._room_name(
+        job_id="abcdef1234567890",
+        attempt_number=2,
+        scenario_key="cancel-order",
+        scenario_attempt=3,
+    )
     assert name == "harness-abcdef12-a2-cancel-order-s3"
 
 
 def test_room_name_uses_only_the_first_eight_chars_of_job_id() -> None:
-    short = cr._room_name(job_id="ab", attempt_number=1, scenario_key="k", scenario_attempt=1)
+    short = cr._room_name(
+        job_id="ab", attempt_number=1, scenario_key="k", scenario_attempt=1
+    )
     assert short == "harness-ab-a1-k-s1"
 
 
@@ -252,7 +294,9 @@ def test_room_name_uses_only_the_first_eight_chars_of_job_id() -> None:
 # =================================================================================================
 
 
-def test_missing_target_provider_secrets_aborts_pre_dial_without_calling_place_call(tmp_path: Path) -> None:
+def test_missing_target_provider_secrets_aborts_pre_dial_without_calling_place_call(
+    tmp_path: Path,
+) -> None:
     called = False
 
     async def place_call(spec):
@@ -262,7 +306,11 @@ def test_missing_target_provider_secrets_aborts_pre_dial_without_calling_place_c
 
     _job_obj, context = _context(tmp_path=tmp_path, secrets={})
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert exc.partial is None
     assert str(exc).startswith("voice_capability_unavailable: missing")
     assert LIVEKIT_API_KEY in str(exc)
@@ -274,11 +322,17 @@ def test_missing_llm_credential_names_the_either_or_pair(tmp_path: Path) -> None
     del secrets[GEMINI_API_KEY]
     _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
     runner = cr.CallRunnerImpl(FakeAdapter(), context)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert "GEMINI_API_KEY_or_GOOGLE_API_KEY" in str(exc)
 
 
-def test_google_api_key_alone_satisfies_the_llm_credential_check(tmp_path: Path) -> None:
+def test_google_api_key_alone_satisfies_the_llm_credential_check(
+    tmp_path: Path,
+) -> None:
     secrets = dict(_ALL_SECRETS)
     del secrets[GEMINI_API_KEY]
     secrets["GOOGLE_API_KEY"] = "g-key"
@@ -290,7 +344,11 @@ def test_google_api_key_alone_satisfies_the_llm_credential_check(tmp_path: Path)
 def test_missing_livekit_url_config_aborts_pre_dial(tmp_path: Path) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, config={})
     runner = cr.CallRunnerImpl(FakeAdapter(), context)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert "config=livekit_url" in str(exc)
 
 
@@ -316,16 +374,24 @@ def test_missing_scenario_document_aborts_pre_dial(tmp_path: Path) -> None:
     _job_obj, context = _context(tmp_path=tmp_path)
     runner = cr.CallRunnerImpl(FakeAdapter(), context)
     exc = _run_expect_abort(
-        runner, _FakeScenario("no-such-key"), _runtime(metadata={"livekit_agent_name": "agent-w0"})
+        runner,
+        _FakeScenario("no-such-key"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
     )
     assert "voice_scenario_document_unavailable" in str(exc)
 
 
-def test_scenario_document_matched_by_scenario_key_field_not_folder_name(tmp_path: Path) -> None:
+def test_scenario_document_matched_by_scenario_key_field_not_folder_name(
+    tmp_path: Path,
+) -> None:
     """scenario_source.py's own convention: `scenario_key` is a field INSIDE scenario.json, not
     necessarily the folder name -- this runner must match the same way, not assume they agree."""
     _job_obj, context = _context(tmp_path=tmp_path)
-    _write_scenario_doc(context.bundle_dir, scenario_key="the-real-key", folder_name="some-other-folder-name")
+    _write_scenario_doc(
+        context.bundle_dir,
+        scenario_key="the-real-key",
+        folder_name="some-other-folder-name",
+    )
 
     captured: dict[str, Any] = {}
 
@@ -334,7 +400,11 @@ def test_scenario_document_matched_by_scenario_key_field_not_folder_name(tmp_pat
         return _report()
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    _run(runner, _FakeScenario("the-real-key"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    _run(
+        runner,
+        _FakeScenario("the-real-key"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert captured["spec"] is not None
 
 
@@ -343,20 +413,38 @@ def test_scenario_document_matched_by_scenario_key_field_not_folder_name(tmp_pat
 # =================================================================================================
 
 
-def test_completed_call_uploads_transcript_and_returns_populated_outcome(tmp_path: Path) -> None:
-    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.HTTP_TOOL)
-    _write_scenario_doc(context.bundle_dir, scenario_key="k1", instruction="Cancel order #42.")
+def test_completed_call_uploads_transcript_and_returns_populated_outcome(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.HTTP_TOOL
+    )
+    _write_scenario_doc(
+        context.bundle_dir, scenario_key="k1", instruction="Cancel order #42."
+    )
 
     started = datetime(2026, 1, 1, tzinfo=timezone.utc)
     ended = started + timedelta(seconds=45)
-    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
 
     async def place_call(spec):
-        return _report(transcript="hi\nhello", messages=messages, started_at=started, ended_at=ended)
+        return _report(
+            transcript="hi\nhello",
+            messages=messages,
+            started_at=started,
+            ended_at=ended,
+        )
 
     adapter = FakeAdapter()
     runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
-    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
 
     assert isinstance(outcome, CallOutcome)
     assert outcome.turns == 2
@@ -367,11 +455,16 @@ def test_completed_call_uploads_transcript_and_returns_populated_outcome(tmp_pat
     assert len(adapter.uploads) == 1
 
 
-def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(tmp_path: Path) -> None:
+def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
+    tmp_path: Path,
+) -> None:
     _job_obj, context = _context(
-        tmp_path=tmp_path, config={cr.LIVEKIT_URL_CONFIG_KEY: "wss://custom.livekit.cloud"},
+        tmp_path=tmp_path,
+        config={cr.LIVEKIT_URL_CONFIG_KEY: "wss://custom.livekit.cloud"},
     )
-    _write_scenario_doc(context.bundle_dir, scenario_key="k1", instruction="Do the thing.")
+    _write_scenario_doc(
+        context.bundle_dir, scenario_key="k1", instruction="Do the thing."
+    )
 
     captured: dict[str, Any] = {}
 
@@ -380,7 +473,11 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(tmp_path: 
         return _report()
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
 
     spec = captured["spec"]
     agent_definition = spec.environment.config["agent_definition"]
@@ -395,7 +492,9 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(tmp_path: 
     assert livekit_runtime["url"] == "wss://custom.livekit.cloud/"
 
 
-def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(tmp_path: Path) -> None:
+def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(
+    tmp_path: Path,
+) -> None:
     """The scheduler retries the SAME scenario_key (e.g. after evidence_missing) -- successive
     `run()` calls for one key must get distinct room names, or a LiveKit room collision follows."""
     _job_obj, context = _context(tmp_path=tmp_path)
@@ -433,14 +532,17 @@ def test_agent_unavailable_status_raises_world_unavailable(tmp_path: Path) -> No
 
     async def place_call(spec):
         failure = SimulationFailure(
-            stage=FailureStage.READINESS, code="agent_unavailable",
+            stage=FailureStage.READINESS,
+            code="agent_unavailable",
             message="Target agent did not become ready",
         )
         return _report(case_status=CaseStatus.AGENT_UNAVAILABLE, failure=failure)
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
     exc = _run_expect_world_unavailable(
-        runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"})
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
     )
     assert "Target agent did not become ready" in str(exc)
 
@@ -452,21 +554,33 @@ def test_non_completed_status_raises_call_aborted_with_partial(tmp_path: Path) -
     ended = started + timedelta(seconds=12)
 
     async def place_call(spec):
-        failure = SimulationFailure(stage=FailureStage.RUNNING, code="case_execution_error", message="boom")
+        failure = SimulationFailure(
+            stage=FailureStage.RUNNING, code="case_execution_error", message="boom"
+        )
         return _report(
-            case_status=CaseStatus.FAILED, failure=failure, started_at=started, ended_at=ended,
-            transcript="", messages=[],
+            case_status=CaseStatus.FAILED,
+            failure=failure,
+            started_at=started,
+            ended_at=ended,
+            transcript="",
+            messages=[],
         )
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert exc.partial is not None
     assert exc.partial.duration_ms == 12_000
     assert exc.partial.calls == ()
     assert "boom" in str(exc)
 
 
-def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(tmp_path: Path) -> None:
+def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(
+    tmp_path: Path,
+) -> None:
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
 
@@ -474,13 +588,19 @@ def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(tm
         return _report(status=RunStatus.TIMED_OUT, no_cases=True)
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert exc.partial is not None
     assert exc.partial.turns == 0
     assert exc.partial.calls == ()
 
 
-def test_place_call_exception_raises_call_aborted_with_timing_partial_never_raw(tmp_path: Path) -> None:
+def test_place_call_exception_raises_call_aborted_with_timing_partial_never_raw(
+    tmp_path: Path,
+) -> None:
     """world-handle-interface.md's partial-call rule: a generic exception must never lose timing
     (the brief: "never let a raw exception escape post-dial")."""
     _job_obj, context = _context(tmp_path=tmp_path)
@@ -490,7 +610,11 @@ def test_place_call_exception_raises_call_aborted_with_timing_partial_never_raw(
         raise RuntimeError("engine exploded")
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert exc.partial is not None
     assert exc.partial.started_at is not None
     assert exc.partial.ended_at is not None
@@ -507,17 +631,26 @@ def test_translate_report_upload_failure_raises_call_aborted_with_timing_partial
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
 
     class RaisingAdapter:
-        async def upload_artifact(self, data, *, kind, scenario_key=None, deadline=None):
+        async def upload_artifact(
+            self, data, *, kind, scenario_key=None, deadline=None
+        ):
             raise RuntimeError("upload exploded")
 
     async def place_call(spec):
         return _report(
             transcript="hi",
-            messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}],
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "yo"},
+            ],
         )
 
     runner = cr.CallRunnerImpl(RaisingAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert exc.partial is not None
     assert exc.partial.started_at is not None
     assert exc.partial.ended_at is not None
@@ -538,7 +671,8 @@ def test_place_call_outer_timeout_raises_call_aborted_with_timing_partial(
     monkeypatch.setattr(cr, "_OUTER_WAIT_FOR_PAD_SECONDS", 0.01)
 
     _job_obj, context = _context(
-        tmp_path=tmp_path, config={cr.LIVEKIT_URL_CONFIG_KEY: "wss://x", cr.CALL_TIMEOUT_CONFIG_KEY: 0.01},
+        tmp_path=tmp_path,
+        config={cr.LIVEKIT_URL_CONFIG_KEY: "wss://x", cr.CALL_TIMEOUT_CONFIG_KEY: 0.01},
     )
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
 
@@ -546,13 +680,19 @@ def test_place_call_outer_timeout_raises_call_aborted_with_timing_partial(
         await asyncio.Event().wait()  # never completes on its own
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert "voice_call_runner_timeout" in str(exc)
     assert exc.partial is not None
     assert exc.partial.calls == ()
 
 
-def test_silent_agent_real_engine_shape_returns_normal_outcome_with_empty_calls(tmp_path: Path) -> None:
+def test_silent_agent_real_engine_shape_returns_normal_outcome_with_empty_calls(
+    tmp_path: Path,
+) -> None:
     """Pins the shape the real engine actually produces for a silent agent-first call
     (engines/livekit.py::_conversation_outcome): status FAILED, code "no_conversation", zero
     messages -- never a COMPLETED case with zero turns (COMPLETED requires >= min_turn_messages
@@ -564,21 +704,30 @@ def test_silent_agent_real_engine_shape_returns_normal_outcome_with_empty_calls(
 
     async def place_call(spec):
         failure = SimulationFailure(
-            stage=FailureStage.RUNNING, code="no_conversation",
+            stage=FailureStage.RUNNING,
+            code="no_conversation",
             message="No conversation turns were committed before the inactivity deadline",
             retryable=True,
         )
-        return _report(case_status=CaseStatus.FAILED, failure=failure, transcript="", messages=[])
+        return _report(
+            case_status=CaseStatus.FAILED, failure=failure, transcript="", messages=[]
+        )
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert isinstance(outcome, CallOutcome)
     assert outcome.turns == 0
     assert outcome.calls == ()
     assert outcome.transcript_artifact is None  # empty transcript -- never uploaded
 
 
-def test_silent_agent_conversation_silence_timeout_code_also_returns_normal_outcome(tmp_path: Path) -> None:
+def test_silent_agent_conversation_silence_timeout_code_also_returns_normal_outcome(
+    tmp_path: Path,
+) -> None:
     """The engine's other zero-turn silent code (the agent-first silence watchdog firing before
     any turn ever lands) must map the same way as "no_conversation" above."""
     _job_obj, context = _context(tmp_path=tmp_path)
@@ -586,13 +735,21 @@ def test_silent_agent_conversation_silence_timeout_code_also_returns_normal_outc
 
     async def place_call(spec):
         failure = SimulationFailure(
-            stage=FailureStage.RUNNING, code="conversation_silence_timeout",
-            message="Agent-first conversation stalled after it began", retryable=True,
+            stage=FailureStage.RUNNING,
+            code="conversation_silence_timeout",
+            message="Agent-first conversation stalled after it began",
+            retryable=True,
         )
-        return _report(case_status=CaseStatus.FAILED, failure=failure, transcript="", messages=[])
+        return _report(
+            case_status=CaseStatus.FAILED, failure=failure, transcript="", messages=[]
+        )
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert isinstance(outcome, CallOutcome)
     assert outcome.turns == 0
     assert outcome.calls == ()
@@ -604,19 +761,31 @@ def test_silent_agent_mapping_is_scoped_to_zero_turns_only(tmp_path: Path) -> No
     exactly like any other non-completed status."""
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
-    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
 
     async def place_call(spec):
         failure = SimulationFailure(
-            stage=FailureStage.RUNNING, code="conversation_silence_timeout",
-            message="Agent-first conversation stalled after it began", retryable=True,
+            stage=FailureStage.RUNNING,
+            code="conversation_silence_timeout",
+            message="Agent-first conversation stalled after it began",
+            retryable=True,
         )
         return _report(
-            case_status=CaseStatus.FAILED, failure=failure, transcript="hi\nhello", messages=messages,
+            case_status=CaseStatus.FAILED,
+            failure=failure,
+            transcript="hi\nhello",
+            messages=messages,
         )
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    exc = _run_expect_abort(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
     assert exc.partial is not None
     assert exc.partial.turns == 2
 
@@ -643,7 +812,13 @@ def test_find_postgres_endpoint_matches_by_protocol_not_a_fixed_slug_name() -> N
 
 
 def test_find_postgres_endpoint_returns_none_when_absent() -> None:
-    runtime = _runtime(endpoints={"queue": RuntimeEndpoint(capability="queue", protocol="amqp", address="amqp://x")})
+    runtime = _runtime(
+        endpoints={
+            "queue": RuntimeEndpoint(
+                capability="queue", protocol="amqp", address="amqp://x"
+            )
+        }
+    )
     assert cr._find_postgres_endpoint(runtime) is None
 
 
@@ -708,12 +883,30 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     calls = cr._collect_tool_trace_calls(runtime)
 
     assert calls == (
-        Call(name="lookup_order", arguments={"id": "1"}, result={"status": "shipped"}, ok=True, error="", refused=False, at=100.5),
-        Call(name="cancel_order", arguments={"id": "2"}, result=None, ok=False, error="not found", refused=True, at=101.0),
+        Call(
+            name="lookup_order",
+            arguments={"id": "1"},
+            result={"status": "shipped"},
+            ok=True,
+            error="",
+            refused=False,
+            at=100.5,
+        ),
+        Call(
+            name="cancel_order",
+            arguments={"id": "2"},
+            result=None,
+            ok=False,
+            error="not found",
+            refused=True,
+            at=101.0,
+        ),
     )
 
 
-def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(monkeypatch) -> None:
+def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(
+    monkeypatch,
+) -> None:
     """No producer exists yet (CONTRACT NOTE 2) -- a missing table / connection failure must
     degrade to `()`, never raise past this function."""
     monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
@@ -755,19 +948,24 @@ def test_tool_trace_clear_is_best_effort_and_never_raises(monkeypatch) -> None:
     cr._clear_tool_trace_calls("postgresql://x/y")  # must not raise
 
 
-def test_completed_call_with_tool_trace_seam_collects_evidence(tmp_path: Path, monkeypatch) -> None:
+def test_completed_call_with_tool_trace_seam_collects_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
     columns = ["name", "arguments", "result", "ok", "error", "at"]
     rows = [("do_thing", {}, "done", True, "", 5.0)]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
 
-    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
 
     async def place_call(spec):
         return _report()
 
     runtime = _runtime(
-        metadata={"livekit_agent_name": "agent-w0"}, endpoints={"database": _postgres_endpoint()},
+        metadata={"livekit_agent_name": "agent-w0"},
+        endpoints={"database": _postgres_endpoint()},
     )
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
     outcome = _run(runner, _FakeScenario("k1"), runtime)
@@ -780,7 +978,9 @@ def test_completed_call_with_tool_trace_seam_collects_evidence(tmp_path: Path, m
 # =================================================================================================
 
 
-def test_construction_exports_target_provider_secrets_to_environ_once(tmp_path: Path) -> None:
+def test_construction_exports_target_provider_secrets_to_environ_once(
+    tmp_path: Path,
+) -> None:
     fake_environ: dict[str, str] = {}
     _job_obj, context = _context(tmp_path=tmp_path)
     cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
@@ -790,7 +990,9 @@ def test_construction_exports_target_provider_secrets_to_environ_once(tmp_path: 
     assert fake_environ[GEMINI_API_KEY] == "gm-key"
 
 
-def test_construction_never_exports_secrets_outside_the_target_provider_map(tmp_path: Path) -> None:
+def test_construction_never_exports_secrets_outside_the_target_provider_map(
+    tmp_path: Path,
+) -> None:
     fake_environ: dict[str, str] = {}
     secrets = dict(_ALL_SECRETS)
     secrets["UNRELATED_ALIAS"] = "should-not-export"

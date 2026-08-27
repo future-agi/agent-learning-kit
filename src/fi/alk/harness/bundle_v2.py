@@ -123,7 +123,9 @@ _PROCESS_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 def _validate_process_name(name: str) -> str:
     if not _PROCESS_NAME_PATTERN.fullmatch(name):
-        raise ValueError(f"process_name_invalid: {name!r} must match ^[a-z0-9][a-z0-9_-]*$")
+        raise ValueError(
+            f"process_name_invalid: {name!r} must match ^[a-z0-9][a-z0-9_-]*$"
+        )
     return name
 
 
@@ -170,6 +172,7 @@ class SourceProcess(BaseModel):
     name: str = Field(min_length=1)
     kind: Literal[ProcessKind.SOURCE] = ProcessKind.SOURCE
     working_directory: str
+    source_origin: Literal["repository", "bundle"] = "repository"
     build_commands: list[list[str]] = Field(default_factory=list)
     run_command: list[str] = Field(min_length=1)
     environment: dict[str, str] = Field(default_factory=dict)
@@ -194,7 +197,9 @@ class SourceProcess(BaseModel):
         return self
 
 
-ProcessEntry = Annotated[Union[ManagedProcess, SourceProcess], Field(discriminator="kind")]
+ProcessEntry = Annotated[
+    Union[ManagedProcess, SourceProcess], Field(discriminator="kind")
+]
 
 
 # --- §2c seed ------------------------------------------------------------------------------
@@ -213,7 +218,9 @@ _ENGINE_STRATEGIES: dict[ManagedEngine, frozenset[BaselineStrategy]] = {
     ManagedEngine.POSTGRES: frozenset(
         {BaselineStrategy.TEMPLATE_DATABASE, BaselineStrategy.DATADIR_COPY}
     ),
-    ManagedEngine.REDIS: frozenset({BaselineStrategy.DATADIR_COPY, BaselineStrategy.EMPTY}),
+    ManagedEngine.REDIS: frozenset(
+        {BaselineStrategy.DATADIR_COPY, BaselineStrategy.EMPTY}
+    ),
     ManagedEngine.RABBITMQ: frozenset({BaselineStrategy.DATADIR_COPY}),
 }
 
@@ -258,7 +265,11 @@ class Sentinel(BaseModel):
         redis = self.key is not None and self.expected is not None
         rabbitmq = self.queue is not None and self.expected_depth is not None
         shapes = [
-            (postgres, ManagedEngine.POSTGRES, {self.key, self.queue, self.expected_depth}),
+            (
+                postgres,
+                ManagedEngine.POSTGRES,
+                {self.key, self.queue, self.expected_depth},
+            ),
             (redis, ManagedEngine.REDIS, {self.query, self.queue, self.expected_depth}),
             (rabbitmq, ManagedEngine.RABBITMQ, {self.query, self.key, self.expected}),
         ]
@@ -315,7 +326,8 @@ class CapabilityV2(BaseModel):
         # no way for the producer to spell the intended value (F8, p4-round1-review).
         name = self.configuration_name
         if name and (
-            name in _RESERVED_CONFIGURATION_NAMES or _RESERVED_CONFIGURATION_PREFIX.match(name)
+            name in _RESERVED_CONFIGURATION_NAMES
+            or _RESERVED_CONFIGURATION_PREFIX.match(name)
         ):
             raise ValueError(f"configuration_name_reserved: {name}")
         return self
@@ -414,7 +426,9 @@ class EnvironmentBundleV2(BaseModel):
                 raise ValueError(f"capability_slug_invalid: {slug}")
 
         process_names = Counter(process.name for process in self.processes)
-        duplicated_names = sorted(name for name, count in process_names.items() if count > 1)
+        duplicated_names = sorted(
+            name for name, count in process_names.items() if count > 1
+        )
         if duplicated_names:
             raise ValueError("process_name_duplicate: " + ", ".join(duplicated_names))
         known_names = set(process_names)
@@ -432,7 +446,8 @@ class EnvironmentBundleV2(BaseModel):
             }
             if service_unresolved:
                 detail = ", ".join(
-                    f"{slug}: {service}" for slug, service in sorted(service_unresolved.items())
+                    f"{slug}: {service}"
+                    for slug, service in sorted(service_unresolved.items())
                 )
                 raise ValueError(f"service_unresolved: {detail}")
 
@@ -471,11 +486,16 @@ class EnvironmentBundleV2(BaseModel):
         names_to_slugs: dict[str, list[str]] = {}
         for slug, capability in self.capabilities.items():
             if capability.configuration_name:
-                names_to_slugs.setdefault(capability.configuration_name, []).append(slug)
-        duplicated = {name: slugs for name, slugs in names_to_slugs.items() if len(slugs) > 1}
+                names_to_slugs.setdefault(capability.configuration_name, []).append(
+                    slug
+                )
+        duplicated = {
+            name: slugs for name, slugs in names_to_slugs.items() if len(slugs) > 1
+        }
         if duplicated:
             detail = ", ".join(
-                f"{name} ({', '.join(sorted(slugs))})" for name, slugs in sorted(duplicated.items())
+                f"{name} ({', '.join(sorted(slugs))})"
+                for name, slugs in sorted(duplicated.items())
             )
             raise ValueError(f"configuration_name_duplicate: {detail}")
 
@@ -555,7 +575,8 @@ class EnvironmentBundleV2(BaseModel):
             ]
             if missing_name:
                 raise ValueError(
-                    "configuration_name_required: " + ", ".join(sorted(set(missing_name)))
+                    "configuration_name_required: "
+                    + ", ".join(sorted(set(missing_name)))
                 )
 
         # v1's whole-manifest resolved-secret guard (`bundle.py`), reapplied here rather than
@@ -565,7 +586,9 @@ class EnvironmentBundleV2(BaseModel):
         # dump — its key matches the secret-field pattern (`secret_...`) but it holds purpose
         # identifiers, never values, the same reasoning v1 exempts `secret_refs` under.
         _reject_secret_values(
-            self.model_dump(exclude={"digest": True, "processes": {"__all__": {"secret_purposes"}}})
+            self.model_dump(
+                exclude={"digest": True, "processes": {"__all__": {"secret_purposes"}}}
+            )
         )
         return self
 
@@ -609,9 +632,9 @@ def compute_inputs_digest(
 
 
 def _canonical_json(value: dict[str, Any]) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def seal_bundle_v2(manifest: EnvironmentBundleV2) -> str:

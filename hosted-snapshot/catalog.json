@@ -1,10 +1,10 @@
 {
   "schema_version": "futureagi.hosted-snapshot-catalog.v1",
   "runtimes": {
-    "python": ["3.11", "3.12"],
+    "python": ["3.11", "3.12", "3.13"],
     "node": ["20", "22"]
   },
-  "binaries": ["git", "ffmpeg", "docker", "docker-compose"],
+  "binaries": ["git", "ffmpeg"],
   "engines": {
     "postgres": {
       "version": "16",
