@@ -173,6 +173,11 @@ def _job(
     parallelism: int = 1,
     artifacts: HarnessArtifactPolicy | None = None,
 ) -> HarnessJob:
+    runtime = RuntimeRequirements(
+        isolation=RuntimeIsolation.DEDICATED_VM,
+        cpu_units=max(parallelism, 1),
+    )
+    runtime = runtime.model_copy(update={"parallelism": parallelism})
     return HarnessJob(
         job_id="job-1",
         run_id="run-1",
@@ -193,11 +198,7 @@ def _job(
         ),
         scenario_count=2,
         seed=1234,
-        runtime=RuntimeRequirements(
-            isolation=RuntimeIsolation.DEDICATED_VM,
-            cpu_units=parallelism,
-            parallelism=parallelism,
-        ),
+        runtime=runtime,
         **({"artifacts": artifacts} if artifacts is not None else {}),
     )
 

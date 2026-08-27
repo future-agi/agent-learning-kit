@@ -79,8 +79,11 @@ def _job(
         ),
         agent=AgentConnection(connector=connector, config=config or {}),
         scenario_count=1,
+        runtime=RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM,
+            cpu_units=1,
+        ),
         seed=1,
-        runtime=RuntimeRequirements(isolation=RuntimeIsolation.DEDICATED_VM),
     )
 
 

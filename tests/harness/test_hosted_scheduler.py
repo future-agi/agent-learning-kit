@@ -2381,8 +2381,8 @@ def test_zero_ready_worlds_aborts_the_run_and_skips_the_rest() -> None:
         ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.aborted is not None
-        assert result.aborted.domain == "infrastructure"
-        assert result.aborted.code == "world_pool_exhausted"
+        assert result.aborted.domain == "environment"
+        assert result.aborted.code == "world_unavailable"
         statuses = {r.scenario_key: r.status for r in result.receipts}
         assert statuses["s1"] == "errored"  # M8: ran and failed -- must not read as "never ran"
         assert statuses["s2"] == "skipped"

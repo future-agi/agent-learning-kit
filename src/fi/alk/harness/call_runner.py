@@ -27,10 +27,13 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
 
 from __future__ import annotations
 
+import atexit
 import asyncio
 import json
 import logging
 import os
+import stat
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,12 +68,22 @@ logger = logging.getLogger(__name__)
 
 LIVEKIT_API_KEY_ALIAS = "LIVEKIT_API_KEY"
 LIVEKIT_API_SECRET_ALIAS = "LIVEKIT_API_SECRET"
+LIVEKIT_URL_ALIAS = "LIVEKIT_URL"
 DEEPGRAM_API_KEY_ALIAS = "DEEPGRAM_API_KEY"
 GEMINI_API_KEY_ALIAS = "GEMINI_API_KEY"
-GOOGLE_API_KEY_ALIAS = (
-    "GOOGLE_API_KEY"  # either this or GEMINI_API_KEY_ALIAS satisfies the LLM leg
-)
-
+GOOGLE_API_KEY_ALIAS = "GOOGLE_API_KEY"
+GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+GOOGLE_APPLICATION_CREDENTIALS_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
+GOOGLE_CLOUD_PROJECT_ALIAS = "GOOGLE_CLOUD_PROJECT"
+GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
+GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
+OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
+SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
+SIMULATOR_LLM_MODEL_ALIAS = "SIMULATOR_LLM_MODEL"
+SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
+SIMULATOR_STT_MODEL_ALIAS = "SIMULATOR_STT_MODEL"
+SIMULATOR_TTS_PROVIDER_ALIAS = "SIMULATOR_TTS_PROVIDER"
+SIMULATOR_TTS_MODEL_ALIAS = "SIMULATOR_TTS_MODEL"
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
@@ -165,22 +178,53 @@ class _MissingVoiceConfig:
 def _check_config(
     job: HarnessJob, target_provider_secret_values: Mapping[str, str]
 ) -> _MissingVoiceConfig | None:
+    config = job.agent.config
+    llm_provider = str(
+        config.get("simulator_llm_provider")
+        or target_provider_secret_values.get(SIMULATOR_LLM_PROVIDER_ALIAS)
+        or "google"
+    ).lower()
+    stt_provider = str(
+        config.get("simulator_stt_provider")
+        or target_provider_secret_values.get(SIMULATOR_STT_PROVIDER_ALIAS)
+        or "deepgram"
+    ).lower()
+    tts_provider = str(
+        config.get("simulator_tts_provider")
+        or target_provider_secret_values.get(SIMULATOR_TTS_PROVIDER_ALIAS)
+        or "deepgram"
+    ).lower()
+
+    required = [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS]
+    if "deepgram" in {stt_provider, tts_provider}:
+        required.append(DEEPGRAM_API_KEY_ALIAS)
     missing_aliases = [
-        alias
-        for alias in (
-            LIVEKIT_API_KEY_ALIAS,
-            LIVEKIT_API_SECRET_ALIAS,
-            DEEPGRAM_API_KEY_ALIAS,
-        )
-        if not target_provider_secret_values.get(alias)
+        alias for alias in required if not target_provider_secret_values.get(alias)
     ]
-    if not target_provider_secret_values.get(
-        GEMINI_API_KEY_ALIAS
-    ) and not target_provider_secret_values.get(GOOGLE_API_KEY_ALIAS):
-        missing_aliases.append(f"{GEMINI_API_KEY_ALIAS}_or_{GOOGLE_API_KEY_ALIAS}")
-    missing_config_keys = (
-        [] if job.agent.config.get(LIVEKIT_URL_CONFIG_KEY) else [LIVEKIT_URL_CONFIG_KEY]
+
+    if llm_provider == "google":
+        has_api_key = bool(
+            target_provider_secret_values.get(GEMINI_API_KEY_ALIAS)
+            or target_provider_secret_values.get(GOOGLE_API_KEY_ALIAS)
+        )
+        has_vertex_adc = bool(
+            target_provider_secret_values.get(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
+            and target_provider_secret_values.get(GOOGLE_CLOUD_PROJECT_ALIAS)
+        )
+        if not has_api_key and not has_vertex_adc:
+            missing_aliases.append(
+                f"{GEMINI_API_KEY_ALIAS}_or_{GOOGLE_API_KEY_ALIAS}_or_VERTEX_ADC"
+            )
+    elif llm_provider == "openai" and not target_provider_secret_values.get(
+        OPENAI_API_KEY_ALIAS
+    ):
+        missing_aliases.append(OPENAI_API_KEY_ALIAS)
+
+    has_livekit_url = bool(
+        config.get(LIVEKIT_URL_CONFIG_KEY)
+        or target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
     )
+    missing_config_keys = [] if has_livekit_url else [LIVEKIT_URL_CONFIG_KEY]
     if not missing_aliases and not missing_config_keys:
         return None
     return _MissingVoiceConfig(tuple(missing_aliases), tuple(missing_config_keys))
@@ -260,22 +304,55 @@ def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
 # come from job config / the re-read scenario document instead of HARNESS_* env vars) ---------
 
 
-def _simulator_definition() -> Any:
-    """Mirrors `sdk_voice.py::_simulator()`'s own shipped defaults
-    exactly (google/gemini LLM, deepgram STT+TTS) -- the only provider combination this runner's
-    pre-dial credential check (`_check_config`) validates."""
+def _simulator_definition(
+    config: Mapping[str, Any],
+    environ: Mapping[str, str],
+) -> Any:
+    """Build the caller from provider-neutral job configuration.
+
+    Lowercase job config wins; provider environment aliases are accepted for compatibility.
+    Defaults match the shipped voice runner, but no target-agent or domain-specific behavior is
+    encoded here.
+    """
+    llm_provider = str(
+        config.get("simulator_llm_provider")
+        or environ.get("SIMULATOR_LLM_PROVIDER")
+        or "google"
+    )
+    stt_provider = str(
+        config.get("simulator_stt_provider")
+        or environ.get("SIMULATOR_STT_PROVIDER")
+        or "deepgram"
+    )
+    tts_provider = str(
+        config.get("simulator_tts_provider")
+        or environ.get("SIMULATOR_TTS_PROVIDER")
+        or "deepgram"
+    )
+    default_models = {
+        "llm": {"google": "gemini-2.5-flash-lite", "openai": "gpt-4o-mini"},
+        "stt": {"deepgram": "nova-2", "google": "chirp_2"},
+        "tts": {"deepgram": "aura-asteria-en", "google": "en-US-Chirp3-HD-Aoede"},
+    }
+    llm_model = str(
+        config.get("simulator_llm_model")
+        or environ.get("SIMULATOR_LLM_MODEL")
+        or default_models["llm"].get(llm_provider, "")
+    )
+    stt_model = str(
+        config.get("simulator_stt_model")
+        or environ.get("SIMULATOR_STT_MODEL")
+        or default_models["stt"].get(stt_provider, "")
+    )
+    tts_model = str(
+        config.get("simulator_tts_model")
+        or environ.get("SIMULATOR_TTS_MODEL")
+        or default_models["tts"].get(tts_provider, "")
+    )
     return simulate.SimulatorAgentDefinition(
-        llm={
-            "provider": "google",
-            "model": "gemini-2.5-flash-lite",
-            "temperature": 0.35,
-        },
-        stt={"provider": "deepgram", "model": "nova-2", "language": "en"},
-        tts={
-            "provider": "deepgram",
-            "model": "aura-asteria-en",
-            "voice": "aura-asteria-en",
-        },
+        llm={"provider": llm_provider, "model": llm_model, "temperature": 0.35},
+        stt={"provider": stt_provider, "model": stt_model, "language": "en"},
+        tts={"provider": tts_provider, "model": tts_model, "voice": tts_model},
         instructions=(
             "Act as the customer described by the scenario. Speak naturally and briefly. "
             "Use only the supplied facts and never invent account, address, payment, or "
@@ -338,6 +415,8 @@ def _build_spec(
     call_timeout_seconds: float,
     run_seconds: float,
     recordings_root: Path,
+    simulator_config: Mapping[str, Any],
+    environ: Mapping[str, str],
 ) -> SimulationSpec:
     recording_dir = recordings_root / run_id / "recordings"
     params = {
@@ -370,12 +449,10 @@ def _build_spec(
             world_kind="voice_telephony",
             config={
                 "agent_definition": agent.model_dump(mode="json", exclude_none=True),
-                "livekit_runtime": runtime_spec.model_dump(
-                    mode="json", exclude_none=True
-                ),
-                "simulator": _simulator_definition().model_dump(
-                    mode="json", exclude_none=True
-                ),
+                "livekit_runtime": runtime_spec.model_dump(mode="json", exclude_none=True),
+                "simulator": _simulator_definition(
+                    simulator_config, environ
+                ).model_dump(mode="json", exclude_none=True),
                 "params": params,
             },
         ),
@@ -512,6 +589,42 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
 def _truncate(value: str, *, limit: int = _RESULT_TRUNCATE_CHARS) -> str:
     return value if len(value) <= limit else value[:limit]
 
+def _materialize_vertex_adc(
+    secret_values: Mapping[str, str],
+    work_directory: Path,
+    environ: dict[str, str],
+) -> Path | None:
+    """Materialize caller-lane Vertex credentials for Google ADC.
+
+    API-key auth needs no file. For Vertex, GOOGLE_APPLICATION_CREDENTIALS_JSON is resolved from
+    the platform vault and written mode-0600 under the job work directory; the sandbox is
+    ephemeral and the file is removed when the guest exits/deletes.
+    """
+    raw = secret_values.get(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
+    if not raw or environ.get(GOOGLE_APPLICATION_CREDENTIALS_ALIAS):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CallAborted(
+            "voice_capability_unavailable: GOOGLE_APPLICATION_CREDENTIALS_JSON is invalid"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise CallAborted(
+            "voice_capability_unavailable: GOOGLE_APPLICATION_CREDENTIALS_JSON must be an object"
+        )
+    credential_dir = work_directory / ".caller-credentials"
+    credential_dir.mkdir(parents=True, exist_ok=True)
+    fd, path_text = tempfile.mkstemp(prefix="google-", suffix=".json", dir=credential_dir)
+    path = Path(path_text)
+    try:
+        os.write(fd, raw.encode("utf-8"))
+    finally:
+        os.close(fd)
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    environ[GOOGLE_APPLICATION_CREDENTIALS_ALIAS] = str(path)
+    return path
+
 
 # --- the runner ----------------------------------------------------------------------------
 
@@ -536,23 +649,56 @@ class CallRunnerImpl:
         # fields, so there is no other way to hand them over. Exported ONCE here, at construction,
         # not per-call: the values are job-level (the same secret for every scenario/attempt on
         # this job) and W>1 means each world's CallRunner.run() executes inside this SAME guest
-        # process but against a per-world SANDBOXED agent process reached over the network -- no
-        # other in-process worker ever races this write, so one job-level export is race-free.
+        # process but against a per-world sandboxed agent process reached over the network; no
+        # other in-process worker races this job-level environment.
         target_environ = os.environ if environ is None else environ
         for alias in (
             LIVEKIT_API_KEY_ALIAS,
             LIVEKIT_API_SECRET_ALIAS,
+            LIVEKIT_URL_ALIAS,
             DEEPGRAM_API_KEY_ALIAS,
             GEMINI_API_KEY_ALIAS,
             GOOGLE_API_KEY_ALIAS,
+            GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
+            GOOGLE_CLOUD_PROJECT_ALIAS,
+            GOOGLE_CLOUD_LOCATION_ALIAS,
+            GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+            OPENAI_API_KEY_ALIAS,
+            SIMULATOR_LLM_PROVIDER_ALIAS,
+            SIMULATOR_LLM_MODEL_ALIAS,
+            SIMULATOR_STT_PROVIDER_ALIAS,
+            SIMULATOR_STT_MODEL_ALIAS,
+            SIMULATOR_TTS_PROVIDER_ALIAS,
+            SIMULATOR_TTS_MODEL_ALIAS,
         ):
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
-        self._missing_config = _check_config(
-            context.job, context.target_provider_secret_values
+        self._environ = target_environ
+        self._adc_path = _materialize_vertex_adc(
+            context.target_provider_secret_values,
+            context.work_directory,
+            target_environ,
         )
+        atexit.register(self._cleanup_credentials)
+        self._livekit_url = str(
+            context.job.agent.config.get(LIVEKIT_URL_CONFIG_KEY)
+            or context.target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+            or ""
+        )
+        self._missing_config = _check_config(context.job, context.target_provider_secret_values)
         self._scenario_attempt_counts: dict[str, int] = {}
+
+    def _cleanup_credentials(self) -> None:
+        if self._adc_path is None:
+            return
+        try:
+            self._adc_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if self._environ.get(GOOGLE_APPLICATION_CREDENTIALS_ALIAS) == str(self._adc_path):
+            self._environ.pop(GOOGLE_APPLICATION_CREDENTIALS_ALIAS, None)
+        self._adc_path = None
 
     async def run(
         self,
@@ -612,7 +758,9 @@ class CallRunnerImpl:
             room_name=room_name,
             agent_name=agent_name,
             doc=doc,
-            livekit_url=str(self._context.job.agent.config.get(LIVEKIT_URL_CONFIG_KEY)),
+            simulator_config=self._context.job.agent.config,
+            environ=self._environ,
+            livekit_url=self._livekit_url,
             call_timeout_seconds=call_timeout_seconds,
             run_seconds=run_seconds,
             recordings_root=self._context.work_directory / "voice-calls",

@@ -4528,7 +4528,13 @@ class ProcessRuntimeProvider:
         # live `EnvironmentRuntime` objects") reads as ONE object per world for the provider's
         # whole life. Minting a new object every rebuild meant `reset()`'s own state write (m5)
         # landed on an object no caller who captured an EARLIER reference would ever see again.
-        metadata = _dispatch_metadata(result.handles)
+        # Static control metadata exposes manifest-declared paths while dispatch metadata reads
+        # the effective values from the launched process.  Keep both; effective runtime values
+        # win when a declaration was rendered or overridden during provisioning.
+        metadata = {
+            **self._control_metadata(world_index),
+            **_dispatch_metadata(result.handles),
+        }
         if existing is not None:
             existing.runtime_id = new_runtime_id(self._bundle_digest, world_index)
             existing.endpoints = result.endpoints
@@ -4544,6 +4550,31 @@ class ProcessRuntimeProvider:
                 endpoints=result.endpoints,
                 metadata=metadata,
             )
+
+    def _control_metadata(self, world_index: int) -> dict[str, str]:
+        """Per-world facts the CallRunner needs, surfaced on `EnvironmentRuntime.metadata`:
+        `livekit_agent_name` (the agent's LiveKit dispatch name) and `tool_trace_path` (where the
+        agent writes its function-call trace). Both are rendered from the control service's declared
+        environment (`LIVEKIT_AGENT_NAME` / `HARNESS_TOOL_TRACE`); a bundle that does not set them
+        simply omits the key, and the CallRunner then fails typed-and-loud rather than guessing."""
+        control = self._manifest.runtime.control_service
+        process = next((p for p in self._manifest.processes if p.name == control), None)
+        env = dict(getattr(process, "environment", {}) or {})
+        world_dir = world_scratch_dir(self._context.work_directory, world_index, control)
+
+        def _fill(value: str) -> str:
+            return value.replace("{{WORLD_INDEX}}", str(world_index)).replace(
+                "{{WORLD_DIR}}", str(world_dir)
+            )
+
+        metadata: dict[str, str] = {}
+        agent_name = env.get("LIVEKIT_AGENT_NAME")
+        if agent_name:
+            metadata["livekit_agent_name"] = _fill(agent_name)
+        trace = env.get("HARNESS_TOOL_TRACE")
+        if trace:
+            metadata["tool_trace_path"] = _fill(trace)
+        return metadata
 
     def _drop_world_shared_databases(self, world_index: int) -> None:
         """m4, p6-review-r1: reconciling W down (e.g. after a conformance-gate degrade from 3 to
