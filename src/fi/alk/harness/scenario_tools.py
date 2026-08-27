@@ -297,6 +297,10 @@ def scenario_tools(
                     f"no table {table!r}; this world has {', '.join(sorted(state))}"
                 )
             rows = state[table]
+            # A provisioned store keys rows by id; the generated one keeps a list. Either
+            # way what gets shown is rows, not the index over them.
+            if isinstance(rows, dict):
+                rows = list(rows.values())
             matching = str(args.get("matching") or "").strip()
             if matching:
                 needle = matching.lower()
