@@ -343,40 +343,6 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-# Engines whose values survive being authored as text. Anything else reads a structured column
-# back as the type it declared, so a list written as "[]" arrives as a string and the agent's own
-# validation rejects it mid-call.
-_TEXT_SHAPED_ENGINES = {"", "sqlite", "in_process", "memory", "in-memory", "none"}
-
-
-def _engine_typing_problems(state: dict[str, Any], engine: str) -> list[str]:
-    """Seeded values that survive the authoring store but not the engine the agent runs on."""
-    if engine.strip().lower() in _TEXT_SHAPED_ENGINES:
-        return []
-    problems: list[str] = []
-    for collection, value in (state or {}).items():
-        rows = value if isinstance(value, list) else [value]
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            for column, cell in row.items():
-                if not isinstance(cell, str):
-                    continue
-                text = cell.strip()
-                if not (text.startswith(("[", "{")) and text.endswith(("]", "}"))):
-                    continue
-                try:
-                    decoded = json.loads(text)
-                except ValueError:
-                    continue
-                if isinstance(decoded, (list, dict)):
-                    problems.append(
-                        f"{collection}.{column} holds the text {cell!r}, but this agent stores "
-                        f"in {engine}, which reads that column back as a list or object"
-                    )
-                if len(problems) >= 5:
-                    return problems
-    return problems
 
 
 def world_tools(
@@ -1276,14 +1242,6 @@ def world_tools(
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
-            )
-        if typing_problems := _engine_typing_problems(world.state(), named):
-            return _err(
-                "Not saved. These seeded values are authored as text but this agent's store "
-                "would return them as structured values, so its own validation rejects them "
-                "on the first call:\n  - "
-                + "\n  - ".join(typing_problems)
-                + "\nWrite them as real lists or objects through seed, not as JSON text."
             )
         if data_problems := _base_data_problems(
             world.state(), source_state=contract.base_environment
