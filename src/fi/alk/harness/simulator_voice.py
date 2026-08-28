@@ -519,29 +519,36 @@ def simulator_definition(
     )
 
 
-_PHONE_ALIASES = ("phone", "caller_phone", "caller_ani", "ani")
+_CALLER_PHONE_KEYS = ("caller_phone", "caller_ani", "ani")
 
 
 def fixture_caller_phone(fixture: Mapping[str, Any] | None) -> str:
-    """The number the target must see for this scenario, wherever the fixture nested it.
+    """The number the target must see for this scenario.
 
-    Prose is not an identity transport. Miss this and every persona falls back to the worker's
-    demo ANI, so they all query the same rider and exercise the wrong cards, places and OTP rows.
+    Only keys that name the caller are followed into nested entities. A bare ``phone`` under a
+    driver, a business or a support line is somebody else's number, and handing it over sends the
+    call in as the wrong rider.
     """
+    if not isinstance(fixture, Mapping):
+        return ""
+    for name in (*_CALLER_PHONE_KEYS, "phone"):
+        candidate = str(fixture.get(name) or "").strip()
+        if candidate:
+            return candidate
 
-    def find(value: Any) -> str:
+    def descend(value: Any) -> str:
         if isinstance(value, Mapping):
-            for name in _PHONE_ALIASES:
+            for name in _CALLER_PHONE_KEYS:
                 candidate = str(value.get(name) or "").strip()
                 if candidate:
                     return candidate
             for nested in value.values():
-                candidate = find(nested)
+                candidate = descend(nested)
                 if candidate:
                     return candidate
         return ""
 
-    return find(fixture)
+    return descend(fixture)
 
 
 def caller_scenario(

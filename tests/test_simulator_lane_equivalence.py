@@ -127,6 +127,15 @@ def test_the_caller_carries_the_scenario_phone():
     assert scenario.dataset[0].persona["metadata"]["caller_phone"] == "+14155550107"
 
 
+def test_only_the_callers_own_number_is_followed_into_a_nested_fixture():
+    # A phone under a driver, a business or a support line belongs to someone else. Handing it
+    # over sends the call in as the wrong rider, which every identity-dependent check then reads.
+    assert fixture_caller_phone(
+        {"support_line": {"phone": "+18005551234"}, "rider": {"caller_phone": "+14155550102"}}
+    ) == "+14155550102"
+    assert fixture_caller_phone({"driver": {"phone": "+14155559999"}}) == ""
+
+
 def test_the_caller_phone_is_found_however_the_fixture_nests_it():
     # A fixture that nests the number, or names it with any accepted alias, must still reach the
     # target. Missing it sends every persona in as the demo rider.
