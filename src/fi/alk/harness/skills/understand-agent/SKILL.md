@@ -97,20 +97,20 @@ Find, in roughly this order:
     so if it is hardcoded: that is the difference between substituting a store cleanly and having
     to change the agent's code, which is a decision for the person, not for you.
 
-7. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
-   every field of every kind of record, and any values a field is constrained to. Record the
-   **contents** in proportion — a small dataset goes in whole; for a large one a representative
-   sample is what belongs here, chosen to include the awkward rows an agent has to cope with: a
-   record already cancelled, an item out of stock, an account with nothing on file.
+11. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
+    every field of every kind of record, and any values a field is constrained to. Record the
+    **contents** in proportion — a small dataset goes in whole; for a large one a representative
+    sample is what belongs here, chosen to include the awkward rows an agent has to cope with: a
+    record already cancelled, an item out of stock, an account with nothing on file.
 
-   An exact replica is not the goal. Copying thousands of records through this stage loses
-   fidelity rather than gaining it. What is needed is enough for a world that exercises the same
-   flows and can refuse for the same reasons.
+    An exact replica is not the goal. Copying thousands of records through this stage loses
+    fidelity rather than gaining it. What is needed is enough for a world that exercises the same
+    flows and can refuse for the same reasons.
 
-8. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
-   not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
-   not write a situation with a character, a sequence of events and an outcome. Those are
-   scenarios and they are written later, from these sentences.
+12. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
+    not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
+    not write a situation with a character, a sequence of events and an outcome. Those are
+    scenarios and they are written later, from these sentences.
 
 ## A repository may not hold one agent
 

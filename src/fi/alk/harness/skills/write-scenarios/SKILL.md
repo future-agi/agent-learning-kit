@@ -18,7 +18,10 @@ One test. It changes the world a little, gives the person a task, and names what
 afterwards.
 
 ```
-name          short identifier; it becomes this scenario's folder
+name          short identifier; it becomes this scenario's folder. It must describe the
+              scenario that is actually here, including the person in it: a name saying
+              one caller while the scenario runs another, or naming a card or tier the
+              scenario never uses, misreports every result anybody reads
 use_case      which of the agent's use cases this belongs to, copied from the contract
               word for word. Not paraphrased, not shortened, not reworded to fit this
               scenario: results are grouped by matching this string exactly, so a
@@ -29,7 +32,10 @@ tests         one line: the condition this scenario passes on. It is shown to pe
               read by whoever looks at results, so write them about the agent's behaviour
               and never about how the scenario was built. "synthetic", "seeded",
               "setup_code", "fixture" and the like name your own machinery, not anything
-              the agent did, and they are noise in a report
+              the agent did, and they are noise in a report. Name the particulars this
+              scenario turns on rather than restating the use case: "a recognized rider
+              books with their saved card" reads the same for every sibling, where
+              "Dana books an UberX to SFO on her saved Visa" says which one failed
 instruction   what this person is trying to achieve, written to them, plus everything
               they need to pursue it without inventing anything
 persona       who that person is: identity, communication style, languages/accent and characteristics
@@ -47,6 +53,16 @@ of the person making this request. It uses the existing voice-scenario shape: `n
 conversational risk being tested. `setup_code` is the world condition: the item
 is out of stock, the record already exists, or the order has already shipped. Keep both grounded
 in the requested test; do not invent backstory that changes nothing.
+
+**A different name is not a different person.** Personas drift toward one temperament: co-operative,
+articulate, patient, answering exactly what was asked. A suite of those tests the agent against a
+caller it will rarely meet, and it passes on every scenario for the same reason. Vary
+`personality` and `communication_style` across the suite, not just identity: someone terse to the
+point of unhelpfulness, someone who volunteers three things at once, someone distracted who has to
+be asked twice, someone who answers a near-miss of the question, someone impatient who pushes back
+early. These are the fields that decide whether the agent's handling is actually exercised, so
+spread them the way you spread use cases, and let the situation pick the temperament rather than
+attaching one at random.
 
 ## Three parts that must never leak into each other
 
@@ -220,6 +236,16 @@ Not if the wording differs. "The item is in stock" and "the item is out of stock
 scenarios, because the correct outcome is different. Two polite requests for the same thing are
 one scenario written twice.
 
+Changing who calls, where they are going, or which tier they pick does **not** make a second
+scenario. The agent does the same things in the same order and the same checks decide the result;
+all that changed is the noun. Ten of those look like coverage in a list and are one test.
+
+**A count you were given is a ceiling, not a quota.** If the agent's real branches run out at
+twelve, submit twelve and say why. Padding to reach a number buys rows that can never fail
+independently, and it hides the branches nobody wrote behind a suite that looks thorough. An even
+spread across every use case is a warning sign, not a goal: real agents have use cases worth five
+scenarios and use cases worth one.
+
 ## The bar every scenario has to clear
 
 - **A competent agent could plausibly fail it.** If any correct implementation passes for free, it
@@ -227,6 +253,21 @@ one scenario written twice.
 - **A real person could plausibly bring this situation.** Nothing contrived.
 - **Every concrete value is real**, taken from the contract or the world. An invented id or menu
   item makes the test worthless whatever else it does.
+- **Check the path, not only the outcome.** Where the right answer depends on something the agent
+  has to find out first, the sub-goals cover that too. A scenario whose solution is the single
+  terminal call passes for an agent that jumps straight there, having established nothing.
+
+```
+BAD    solution   [transfer_to_human(reason="Account suspended")]
+       sub_goals  [transferred_to_human]
+       (an agent that transfers every caller on arrival passes this. Whether it
+        looked the account up, and found the suspension, is never measured)
+
+GOOD   solution   [find_rider(phone=...), get_account(rider_id=...),
+                   transfer_to_human(reason="Account suspended")]
+       sub_goals  [rider_identified, account_state_checked, transferred_to_human]
+       (the transfer now has to be reached by discovering the reason for it)
+```
 
 ## Plan the whole suite, then write incrementally
 
@@ -433,6 +474,17 @@ test. It exists to prove the scenario can be passed at all, and it is what gate 
 Work it out with `try_calls` before you submit. Run the calls, pass your `setup_code` so you see
 the world the agent would actually face, look at the state they leave, and confirm the sub-goals
 you are naming respond to it.
+
+**A one-call solution is almost always wrong.** The agent does not begin the call knowing who it
+is talking to or what is true of their account, so before the call that resolves the scenario it
+has to find that out: identify the caller, read the record, check the state that decides the
+answer. Those lookups belong in the solution, and the sub-goals have to name them. Write the
+single terminal call on its own and the scenario passes for an agent that fires it blind, having
+established nothing, which is the one behaviour a refusal scenario exists to rule out.
+
+Refusals and transfers are where this goes wrong most often, because the terminal call is so
+obviously the point of the scenario. It is not: *deciding* to refuse is the point, and a decision
+that was never reached from evidence was never tested.
 
 ## Reuse the sub-goals
 
