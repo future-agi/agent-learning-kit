@@ -182,9 +182,35 @@ def _sqlite_type(declared: str) -> str:
     return "text"
 
 
+def _sqlite_json_type(values: list[Any], sql_type: str) -> str:
+    """Preserve structured SQLite TEXT values when moving a world to Postgres.
+
+    SQLite has no native JSON/array storage class, so generated worlds store lists and
+    objects as JSON text.  Treating those columns as Postgres ``text`` changes the tool
+    contract (``[]`` becomes the string ``"[]"``).  Only promote a column when every
+    non-null value is a JSON object or array; ordinary strings remain text.
+    """
+    if sql_type != "text":
+        return sql_type
+    present = [value for value in values if value is not None]
+    if not present or not all(isinstance(value, str) for value in present):
+        return sql_type
+    try:
+        decoded = [json.loads(value) for value in present]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return sql_type
+    return (
+        "jsonb"
+        if all(isinstance(value, (dict, list)) for value in decoded)
+        else sql_type
+    )
+
+
 def _sqlite_value(value: Any, sql_type: str) -> Any:
     if value is not None and sql_type == "boolean":
         return bool(value)
+    if value is not None and sql_type == "jsonb" and isinstance(value, str):
+        return json.loads(value)
     return value
 
 
@@ -202,12 +228,18 @@ def _sqlite_sql(path: Path) -> str:
         ]
         for table in tables:
             info = list(connection.execute(f"PRAGMA table_info({_identifier(table)})"))
+            selected = connection.execute(
+                f"SELECT * FROM {_identifier(table)}"
+            ).fetchall()
             definitions: list[str] = []
             columns: list[str] = []
             column_types: list[str] = []
             for row in info:
                 name = str(row[1])
-                sql_type = _sqlite_type(str(row[2] or ""))
+                sql_type = _sqlite_json_type(
+                    [record[name] for record in selected],
+                    _sqlite_type(str(row[2] or "")),
+                )
                 suffix = " PRIMARY KEY" if int(row[5] or 0) else ""
                 definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
                 columns.append(name)
@@ -215,9 +247,6 @@ def _sqlite_sql(path: Path) -> str:
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
             )
-            selected = connection.execute(
-                f"SELECT * FROM {_identifier(table)}"
-            ).fetchall()
             for record in selected:
                 names = ", ".join(_identifier(column) for column in columns)
                 values = ", ".join(

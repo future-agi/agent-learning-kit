@@ -653,6 +653,36 @@ def test_select_process_secrets_matches_only_the_claimed_purpose() -> None:
     assert selected == {"A": "1"}
 
 
+def test_spawn_source_process_keeps_capability_endpoint_over_pasted_env_secret(
+    tmp_path: Path,
+) -> None:
+    """A customer .env value must not replace Dockerless process-runtime wiring."""
+    process = _source_process(secret_purposes=["target_provider"])
+    process = process.model_copy(
+        update={"environment": {"TOOLS_API_URL": "{{TOOLS_API_URL}}"}}
+    )
+    captured: dict[str, str] = {}
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        del argv, cwd, log_path, user, group
+        captured.update(env)
+        return FakeHandle()
+
+    pr.spawn_source_process(
+        process,
+        build_dir=tmp_path / "build",
+        world_dir=tmp_path / "world",
+        world_index=0,
+        port_plan=_solo_port_plan(process.name),
+        configuration_addresses={"TOOLS_API_URL": "http://localhost:15101"},
+        secret_values={"TOOLS_API_URL": "http://harness:8787"},
+        secret_purposes={"TOOLS_API_URL": "target_provider"},
+        runner=runner,
+    )
+
+    assert captured["TOOLS_API_URL"] == "http://localhost:15101"
+
+
 def test_select_process_secrets_hard_excludes_source_checkout_even_if_claimed() -> None:
     """F13, p5-round1-review: §1 states `source_checkout` is gateway-only and never uploaded to
     the guest — preflight's `secret_unclaimed`/`secret_missing` pair is scoped to

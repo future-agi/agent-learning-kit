@@ -267,6 +267,83 @@ def test_hosted_authoring_repairs_partial_scenario_suite(
     assert "Add exactly 1" in observed_guidance[1][0]
 
 
+def test_hosted_authoring_repairs_scenario_adjustment_without_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    output = tmp_path / "authoring"
+    adjustments = tmp_path / "adjustments.jsonl"
+    adjustment_id = "adjustment-discount"
+    adjustments.write_text(
+        json.dumps(
+            {
+                "adjustment_id": adjustment_id,
+                "instruction": "Add a scenario where the caller declines a high price.",
+                "target_stage": "scenarios",
+                "scenario_delta": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    written: list[SimpleNamespace] = []
+    observed_guidance: list[list[str]] = []
+
+    async def ok(_args) -> int:
+        return 0
+
+    async def scenarios(args) -> int:
+        observed_guidance.append(list(args.guidance))
+        if len(observed_guidance) == 1:
+            written[:] = [
+                SimpleNamespace(fixture={}),
+                SimpleNamespace(fixture={}),
+            ]
+        else:
+            written[:] = [
+                SimpleNamespace(fixture={}),
+                SimpleNamespace(fixture={"adjustment_ids": [adjustment_id]}),
+            ]
+        return 0
+
+    monkeypatch.setattr(cli, "_understand", ok)
+    monkeypatch.setattr(cli, "_build", ok)
+    monkeypatch.setattr(cli, "_scenarios", scenarios)
+    monkeypatch.setattr(cli, "load_written", lambda _destination: list(written))
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
+
+    status = asyncio.run(
+        cli._auto(
+            SimpleNamespace(
+                path=str(source),
+                name="agent",
+                kind="repo",
+                out=str(output),
+                count=1,
+                model=None,
+                run_model=None,
+                authoring_only=True,
+                adjustments_path=str(adjustments),
+            )
+        )
+    )
+
+    assert status == 0
+    assert len(observed_guidance) == 2
+    assert adjustment_id in observed_guidance[0][0]
+    assert "No saved scenario currently carries this marker" in observed_guidance[1][0]
+    statuses = [
+        json.loads(line)
+        for line in (tmp_path / "adjustment-status.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert statuses[-1]["status"] == "applied"
+
+
 def test_hosted_authoring_treats_an_extracted_archive_as_a_repo(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
