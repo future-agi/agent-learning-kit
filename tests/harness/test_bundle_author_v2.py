@@ -269,6 +269,44 @@ def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(
     )
 
 
+def test_bundle_promotes_sqlite_json_text_to_postgres_jsonb(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, accessibility_needs TEXT, note TEXT)"
+        )
+        database.execute(
+            "INSERT INTO users VALUES (?, ?, ?)",
+            ("rider-1", json.dumps(["wheelchair"]), "ordinary text"),
+        )
+        database.execute(
+            "INSERT INTO users VALUES (?, ?, ?)",
+            ("rider-2", json.dumps([]), "123"),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert (
+        'CREATE TABLE IF NOT EXISTS "users" '
+        '("id" text PRIMARY KEY, "accessibility_needs" jsonb, "note" text);' in seed_sql
+    )
+    assert "'[\"wheelchair\"]'" in seed_sql
+    assert "'[]'" in seed_sql
+
+
 def test_bundle_combines_schema_with_frozen_store_rows(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

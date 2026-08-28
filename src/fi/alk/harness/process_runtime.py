@@ -1560,8 +1560,26 @@ def spawn_source_process(
         resolved_user=resolved_user,
         chown=chown,
     )
+    # Capability addresses are provisioner-owned runtime wiring, not customer secrets. A pasted
+    # development .env commonly contains values such as ``TOOLS_API_URL=http://harness:8787``;
+    # target-provider secret injection used to overwrite the rendered process-runtime endpoint
+    # with that stale Compose hostname. In the Dockerless hosted lane this made a healthy local
+    # tools process unreachable and crashed the voice worker on its first tool lookup. Preserve
+    # the ordinary secret precedence, then make only the capability variables actually declared
+    # by this process authoritative again (the same invariant as the Compose provisioner).
+    authoritative_endpoints = {
+        name: address
+        for name, address in configuration_addresses.items()
+        if name in process.environment
+    }
     env = _base_process_env(
-        build_dir, {**(process.build_environment or {}), **rendered, **injected}
+        build_dir,
+        {
+            **(process.build_environment or {}),
+            **rendered,
+            **injected,
+            **authoritative_endpoints,
+        },
     )
     try:
         handle = runner(

@@ -109,6 +109,36 @@ def _guidance(args: argparse.Namespace) -> str:
     )
 
 
+def _scenario_adjustment_requirement(adjustment_id: str, instruction: str) -> str:
+    """Make a live scenario correction mechanically auditable after generation."""
+    return (
+        f"Adjustment {adjustment_id}: {instruction}\n"
+        "At least one scenario that directly tests this requirement MUST include "
+        f'fixture.adjustment_ids containing "{adjustment_id}". This marker is required '
+        "evidence that the saved suite reflects the instruction."
+    )
+
+
+def _missing_scenario_adjustments(
+    written: list[Any], adjustment_ids: list[str]
+) -> list[str]:
+    covered: set[str] = set()
+    for scenario in written:
+        fixture = getattr(scenario, "fixture", None)
+        if not isinstance(fixture, dict):
+            continue
+        markers = fixture.get("adjustment_ids") or []
+        if isinstance(markers, str):
+            markers = [markers]
+        if isinstance(markers, list):
+            covered.update(str(marker) for marker in markers)
+    return [
+        adjustment_id
+        for adjustment_id in adjustment_ids
+        if adjustment_id not in covered
+    ]
+
+
 async def _understand(args: argparse.Namespace) -> int:
     source = resolve(args.kind, name=args.name, root=args.path)
     stage, destination = open_stage(
@@ -785,6 +815,7 @@ async def _auto(args: argparse.Namespace) -> int:
         stage_index = 0
         adjustment_cursor = 0
         applying: dict[str, list[str]] = {label: [] for label, *_ in stages}
+        scenario_adjustment_guidance: dict[str, str] = {}
         adjustments_path = (
             Path(args.adjustments_path)
             if getattr(args, "adjustments_path", None)
@@ -857,6 +888,50 @@ async def _auto(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     status = 1
+            if (
+                label == "scenarios"
+                and authoring_only
+                and not status
+                and applying[label]
+            ):
+                missing = _missing_scenario_adjustments(
+                    load_written(destination), applying[label]
+                )
+                repair_attempt = 0
+                while missing and repair_attempt < 2:
+                    repair_attempt += 1
+                    stage_args.guidance = [
+                        scenario_adjustment_guidance[adjustment_id]
+                        + "\nNo saved scenario currently carries this marker. Correct the "
+                        "suite, preserve unaffected scenarios, and call save_scenarios again."
+                        for adjustment_id in missing
+                    ]
+                    emit(
+                        "harness.stage.repairing",
+                        label,
+                        attempt=repair_attempt,
+                        missing_adjustment_ids=missing,
+                    )
+                    status = await operation(stage_args)
+                    if status:
+                        break
+                    missing = _missing_scenario_adjustments(
+                        load_written(destination), applying[label]
+                    )
+                if not status and missing:
+                    emit(
+                        "harness.stage.failed",
+                        label,
+                        status=1,
+                        code="scenario_adjustment_not_reflected",
+                        missing_adjustment_ids=missing,
+                    )
+                    print(
+                        "\nautomatic run stopped: saved scenarios did not reflect "
+                        f"adjustments {', '.join(missing)}",
+                        file=sys.stderr,
+                    )
+                    status = 1
             # A completed call suite returns 2 when the submitted agent fails one or more checks.
             # That is a valid RL result. Earlier stages returning non-zero are harness failures.
             if status and label != "calls":
@@ -898,15 +973,21 @@ async def _auto(args: argparse.Namespace) -> int:
                     min(stage_index, 2),
                 )
                 target_args = stages[target_index][2]
+                instruction = str(adjustment.get("instruction") or "")
+                adjustment_id = str(adjustment.get("adjustment_id") or "")
+                if target == "scenarios" and adjustment_id:
+                    instruction = _scenario_adjustment_requirement(
+                        adjustment_id, instruction
+                    )
+                    scenario_adjustment_guidance[adjustment_id] = instruction
                 target_args.guidance = [
                     *getattr(target_args, "guidance", []),
-                    str(adjustment.get("instruction") or ""),
+                    instruction,
                 ]
                 delta = adjustment.get("scenario_delta")
                 if target == "scenarios" and isinstance(delta, int) and delta > 0:
                     existing_count = len(load_written(destination))
                     target_args.count = max(target_args.count, existing_count) + delta
-                adjustment_id = str(adjustment.get("adjustment_id") or "")
                 if adjustment_id:
                     applying[target].append(adjustment_id)
                     _write_adjustment_status(
