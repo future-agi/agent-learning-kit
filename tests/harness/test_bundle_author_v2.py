@@ -62,6 +62,34 @@ def _authoring(root: Path) -> Path:
     return artifact
 
 
+def _write_voice_contract(authoring: Path) -> None:
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "voice"}), encoding="utf-8"
+    )
+
+
+def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "Dockerfile").write_text("FROM python:3.13\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(connector="auto", with_secrets=True)
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
+    assert "target_provider" in agent.secret_purposes
+    assert "target_http" not in bundle.capabilities
+
+
 @pytest.mark.parametrize(
     ("case", "connector", "packaging"),
     [
