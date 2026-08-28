@@ -2252,22 +2252,6 @@ def _runtime_credential_mounts(
     return mounts
 
 
-def _await_container_removed(container: str, *, timeout: float = 30.0) -> None:
-    """Block until the daemon has actually released a container name."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        found = _docker(
-            "ps", "--all", "--quiet", "--filter", f"name=^{container}$", check=False
-        )
-        if not (found or "").strip():
-            return
-        time.sleep(0.25)
-    raise ProvisionError(
-        f"docker still holds the container name {container!r} after {timeout:.0f}s; "
-        "a previous run's worker did not finish shutting down"
-    )
-
-
 def start_runtime(
     destination: str | Path,
     *,
@@ -2292,11 +2276,6 @@ def start_runtime(
     # session-owned container behind without recording it; always reconcile the deterministic
     # name before starting instead of trusting bookkeeping from a process that may have died.
     _docker("rm", "--force", container, check=False)
-    # ``rm --force`` returns before the daemon has finished releasing the name, and the very
-    # next call creates a container with that same deterministic name. On a busy daemon the
-    # create loses the race and fails with a name conflict, so every scenario after the first
-    # one in a suite never starts its worker and is graded as "the target worker never joined".
-    _await_container_removed(container)
     config = _config(environment)
     service_config = config["services"][service]
     service_environment = _environment_values(service_config)
@@ -2483,22 +2462,9 @@ def start_runtime(
             break
         if status.startswith("running"):
             stable_since = stable_since or time.monotonic()
-            # Staying alive is only a proxy. A voice worker announces the thing that actually
-            # matters, and dispatching before it lands leaves the room with nobody in it and
-            # the scenario reported as an agent that never joined.
-            started = _docker(
-                "logs", "--tail", "200", container, check=False, timeout=10
-            ) or ""
-            if "registered worker" in started:
-                break
-            # A worker that announced itself but has not registered is still starting. Falling
-            # through on the stable window here is what dispatches into an empty room, so for
-            # this kind of runtime the elapsed-time proxy is not allowed to decide.
-            if "starting worker" in started:
-                time.sleep(0.25)
-                continue
             # A worker often has no healthcheck. Remaining alive through startup is the strongest
             # generic signal available; an immediate import/configuration crash is still caught.
+            # This window must include worker registration, not only process creation.
             if time.monotonic() - stable_since >= stable_seconds:
                 break
         else:
@@ -2822,29 +2788,6 @@ def activate_voice_environment(
     return activated
 
 
-def _capture_runtime_logs(
-    environment: "ProvisionedEnvironment", destination: Path
-) -> None:
-    """Keep the submitted runtime's own output next to the run before the container goes."""
-    try:
-        target = Path(environment.runtime_trace_path).parent if (
-            environment.runtime_trace_path
-        ) else Path(destination)
-        target.mkdir(parents=True, exist_ok=True)
-        completed = subprocess.run(
-            ["docker", "logs", "--timestamps", environment.runtime_container],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        (target / "agent-runtime.log").write_text(
-            (completed.stdout or "") + (completed.stderr or ""), encoding="utf-8"
-        )
-    except Exception as error:  # noqa: BLE001 - never fail teardown over logging
-        print(f"could not capture runtime logs: {error}")
-
-
 def stop_runtime(destination: str | Path) -> bool:
     """Stop only the submitted worker, leaving its scenario infrastructure running."""
     destination = Path(destination)
@@ -2860,10 +2803,6 @@ def stop_runtime(destination: str | Path) -> bool:
             str(trace),
             check=False,
         )
-    # Why the agent went quiet is only ever visible in its own stderr, and removing the
-    # container throws it away. A stalled call otherwise leaves nothing to read but the
-    # silence it produced.
-    _capture_runtime_logs(environment, destination)
     _docker("rm", "--force", environment.runtime_container, check=False)
     if environment.runtime_trace_volume:
         _docker(
