@@ -914,12 +914,22 @@ class LiveKitEngine(BaseEngine):
                         )
             if outcome is not None:
                 return outcome
-            token = (
+            # The target resolves who is calling from participant attributes or metadata.
+            # Without the persona's number every scenario looks like the same demo rider and
+            # the agent looks up the wrong account, which reads as an agent bug.
+            caller_phone = str(
+                (persona.persona.get("metadata") or {}).get("caller_phone") or ""
+            ).strip()
+            builder = (
                 AccessToken(api_key, api_secret)
                 .with_identity(simulator_identity)
                 .with_grants(VideoGrants(room_join=True, room=room_name))
-                .to_jwt()
             )
+            if caller_phone:
+                builder = builder.with_attributes(
+                    {"harness.callerPhone": caller_phone}
+                ).with_metadata(json.dumps({"caller_phone": caller_phone}))
+            token = builder.to_jwt()
             await asyncio.wait_for(
                 room.connect(str(runtime.url), token),
                 timeout=connect_timeout,
