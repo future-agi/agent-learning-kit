@@ -85,7 +85,8 @@ class Store(Protocol):
     def holds(self, collection: str) -> bool: ...
     def records(self, collection: str) -> list[dict[str, Any]]: ...
     def state(self) -> dict[str, list[dict[str, Any]]]: ...
-    def add(self, collection: str, record: Mapping[str, Any]) -> int: ...
+    def table(self, name: str) -> list[dict[str, Any]]: ...
+    def add(self, collection: str, record: Mapping[str, Any]) -> int | dict[str, Any]: ...
     def amend(
         self, collection: str, key: str, changes: Mapping[str, Any], *, by: str = ""
     ) -> int: ...
@@ -154,7 +155,13 @@ class Held:
             "records() or state()."
         )
 
-    def add(self, collection: str, record: Mapping[str, Any]) -> int:
+    def table(self, name: str) -> list[dict[str, Any]]:
+        raise StoreError(
+            f"{self.engine} does not read one table at a time. Read what it holds with "
+            "records() or state()."
+        )
+
+    def add(self, collection: str, record: Mapping[str, Any]) -> int | dict[str, Any]:
         raise StoreError(_UNWRITABLE.format(engine=self.engine, verb="add to"))
 
     def amend(

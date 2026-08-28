@@ -159,6 +159,186 @@ def test_autonomous_pipeline_cleans_environment_when_a_stage_raises(
     assert cleaned == [output.resolve()]
 
 
+def test_hosted_authoring_uses_original_stages_without_running_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    output = tmp_path / "authoring"
+    observed: list[tuple[str, bool | None]] = []
+
+    async def understand(_args) -> int:
+        observed.append(("understand", None))
+        return 0
+
+    async def build(args) -> int:
+        observed.append(("environment", args.skip_source_provision))
+        return 0
+
+    async def scenarios(_args) -> int:
+        observed.append(("scenarios", None))
+        return 0
+
+    async def calls(_args) -> int:
+        observed.append(("calls", None))
+        return 0
+
+    monkeypatch.setattr(cli, "_understand", understand)
+    monkeypatch.setattr(cli, "_build", build)
+    monkeypatch.setattr(cli, "_scenarios", scenarios)
+    monkeypatch.setattr(cli, "_simulate", calls)
+    monkeypatch.setattr(cli, "load_written", lambda _destination: [object(), object()])
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
+
+    status = asyncio.run(
+        cli._auto(
+            SimpleNamespace(
+                path=str(source),
+                name="agent",
+                kind="repo",
+                out=str(output),
+                count=2,
+                model=None,
+                run_model=None,
+                authoring_only=True,
+                adjustments_path=None,
+            )
+        )
+    )
+
+    assert status == 0
+    assert observed == [
+        ("understand", None),
+        ("environment", True),
+        ("scenarios", None),
+    ]
+
+
+def test_hosted_authoring_repairs_partial_scenario_suite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    output = tmp_path / "authoring"
+    counts = iter((2, 3))
+    observed_guidance: list[list[str]] = []
+
+    async def ok(_args) -> int:
+        return 0
+
+    async def scenarios(args) -> int:
+        observed_guidance.append(list(args.guidance))
+        return 0
+
+    monkeypatch.setattr(cli, "_understand", ok)
+    monkeypatch.setattr(cli, "_build", ok)
+    monkeypatch.setattr(cli, "_scenarios", scenarios)
+    monkeypatch.setattr(
+        cli,
+        "load_written",
+        lambda _destination: [object()] * next(counts),
+    )
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
+
+    status = asyncio.run(
+        cli._auto(
+            SimpleNamespace(
+                path=str(source),
+                name="agent",
+                kind="repo",
+                out=str(output),
+                count=3,
+                model=None,
+                run_model=None,
+                authoring_only=True,
+                adjustments_path=None,
+            )
+        )
+    )
+
+    assert status == 0
+    assert len(observed_guidance) == 2
+    assert observed_guidance[0] == []
+    assert "only 2 are currently saved" in observed_guidance[1][0]
+    assert "Add exactly 1" in observed_guidance[1][0]
+
+
+def test_hosted_authoring_treats_an_extracted_archive_as_a_repo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import authoring_entrypoint
+
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    job = HarnessJob(
+        job_id="job-author",
+        run_id="run-author",
+        execution="hosted",
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={"connector": "auto"},
+        scenario_count=2,
+        runtime={"isolation": "dedicated_vm"},
+        metadata={"source_kind": "archive", "agent_name": "uploaded-agent"},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    observed = {}
+
+    async def fake_auto(args) -> int:
+        observed.update(vars(args))
+        return 0
+
+    monkeypatch.setattr(authoring_entrypoint, "_auto", fake_auto)
+
+    status = authoring_entrypoint.main(
+        [
+            str(job_path),
+            "--source",
+            str(source),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    assert observed["kind"] == "repo"
+    assert observed["authoring_only"] is True
+    assert observed["count"] == 2
+
+
+def test_deferred_hosted_authoring_never_starts_the_declared_container_store(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.contract import AgentContract, DataStore, Runtime, ToolSpec
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="hosted-voice-agent",
+        modality="voice",
+        tools=[ToolSpec(name="book_ride", args=["destination"])],
+        real_use_cases=["book a ride"],
+        data_store=DataStore(kind="postgres", database="rides"),
+        runtime=Runtime(command=["python", "agent.py"]),
+    )
+
+    _server, world = world_tools(
+        contract,
+        tmp_path,
+        source_root=str(tmp_path),
+        deferred_runtime=True,
+    )
+    try:
+        assert world.store.key == "sqlite"
+        assert world.runtime_tools == {"book_ride"}
+    finally:
+        world.close()
+
+
 def test_bundle_is_content_addressed_and_reproducible(tmp_path: Path) -> None:
     (tmp_path / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
     first = seal_bundle(tmp_path, _manifest())
@@ -329,7 +509,9 @@ def test_environment_up_rejects_a_corrupt_bundle_before_provisioning(
     )
     monkeypatch.setattr(
         "fi.alk.harness.provision.provision",
-        lambda *_args, **_kwargs: pytest.fail("corrupt bundle reached Docker provisioning"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "corrupt bundle reached Docker provisioning"
+        ),
     )
 
     result = asyncio.run(

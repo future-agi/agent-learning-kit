@@ -1542,6 +1542,13 @@ def _managed_compose(
         dsn_env = str(getattr(reached, "dsn_env", "") or "").strip()
         config_key = str(getattr(reached, "config_key", "") or "").strip()
         password_from = str(getattr(reached, "password_from", "") or "").strip()
+        normalized_description = description.replace("-", "_").replace(" ", "_")
+        reached_host = str(getattr(reached, "host", "") or "").strip()
+        normalized_reached_host = reached_host.replace("-", "_").replace(" ", "_")
+        embedded_engine = any(
+            marker in normalized_description
+            for marker in ("sqlite", "in_process", "in_memory", "filesystem")
+        )
         embedded_dependency = bool(
             reached
             and (
@@ -1551,9 +1558,10 @@ def _managed_compose(
             and not dsn_env
             and not str(getattr(reached, "config_key", "") or "").strip()
             and not str(getattr(reached, "password_from", "") or "").strip()
-            # SQLite commonly spells its process-local database as ``:memory:``.
-            # It is still embedded state, not an external service ALK must supply.
-            and str(getattr(reached, "host", "") or "").strip() in {"", ":memory:"}
+            # SQLite is process-local even when source understanding describes the host in
+            # prose (for example ``in-memory :memory:``) instead of using the literal sentinel.
+            # It is embedded state, not an external service ALK must supply.
+            and (embedded_engine or reached_host in {"", ":memory:"})
             and not getattr(reached, "port", None)
             and not str(getattr(reached, "database", "") or "").strip()
         )
@@ -1566,9 +1574,7 @@ def _managed_compose(
             and not config_key
             and not password_from
             and not str(getattr(reached, "database", "") or "").strip()
-            and not (
-                str(getattr(reached, "host", "") or "").strip() not in {"", ":memory:"}
-            )
+            and not (reached_host not in {"", ":memory:"})
             and not getattr(reached, "port", None)
         )
         external_provider = bool(
@@ -1576,12 +1582,60 @@ def _managed_compose(
             and (password_from or dsn_env or config_key)
             and not str(getattr(reached, "database", "") or "").strip()
         )
+        # Hosted model, speech and media providers are reached with customer credentials; they
+        # are not infrastructure ALK can or should synthesize. Source understanding occasionally
+        # records the provider accurately but omits its well-known credential variable. Keep that
+        # contract omission in preflight/credential UX instead of misclassifying Gemini or
+        # Deepgram as an unsupported Docker service.
+        hosted_provider = any(
+            marker in normalized_description
+            for marker in (
+                "openai",
+                "anthropic",
+                "gemini",
+                "vertex_ai",
+                "deepgram",
+                "cartesia",
+                "elevenlabs",
+                "livekit",
+                "retell",
+                "vapi",
+                "daily",
+            )
+        )
+        # A submitted image can own process-local runtime dependencies such as an ONNX VAD
+        # model downloaded by its Dockerfile. They are not infrastructure ALK must synthesize.
+        # Keep this deliberately structural and narrow: an unknown customer service with no
+        # explicit local-runtime reachability remains unsupported, and any network/database or
+        # credential seam prevents this classification.
+        local_runtime_dependency = bool(
+            reached
+            and any(
+                marker in normalized_reached_host
+                for marker in (
+                    "in_process",
+                    "in_memory",
+                    "local_model",
+                    "model_file",
+                    "downloaded_at_build",
+                    "on_device",
+                    "embedded_runtime",
+                )
+            )
+            and not dsn_env
+            and not config_key
+            and not password_from
+            and not getattr(reached, "port", None)
+            and not str(getattr(reached, "database", "") or "").strip()
+        )
         if (
             not engine
             and declared_engine
             and not external_provider
+            and not hosted_provider
             and not embedded_dependency
             and not packaged_dependency
+            and not local_runtime_dependency
         ):
             unsupported_declared = True
         if engine and engine not in {name for name, _ in requested}:
@@ -1605,10 +1659,23 @@ def _managed_compose(
         )
 
     init_mounts: list[str] = []
-    schema_value = str(getattr(store, "schema_from", "") or "")
+    schema_value = str(getattr(store, "schema_from", "") or "").strip()
     if schema_value:
-        schema = (source / schema_value).resolve()
-        if schema.exists() and (schema.is_dir() or schema.suffix.lower() == ".sql"):
+        # ``schema_from`` is evidence extracted from source, not guaranteed to be a path. Models
+        # may accurately describe an inline DDL constant here (including table names), and feeding
+        # that prose to ``stat`` can raise ENAMETOOLONG before a submitted Dockerfile is built.
+        # Only a real path contained by the submitted checkout is eligible for an init mount.
+        try:
+            schema = (source / schema_value).resolve()
+            source_root = source.resolve()
+            schema_is_source_path = (
+                schema.is_relative_to(source_root) and schema.exists()
+            )
+        except (OSError, RuntimeError, ValueError):
+            schema_is_source_path = False
+        if schema_is_source_path and (
+            schema.is_dir() or schema.suffix.lower() == ".sql"
+        ):
             target = (
                 "/docker-entrypoint-initdb.d/source"
                 if schema.is_dir()

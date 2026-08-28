@@ -11,6 +11,7 @@ is the next thing said, and the tool is re-run on the spot.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,35 @@ def turns_for(contract: AgentContract) -> int:
     return max(80, len(contract.tools or []) * 8 + 40)
 
 
+DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS = 80
+
+
+def environment_turns_for(
+    contract: AgentContract, *, requested: int = 0, deferred_runtime: bool = False
+) -> int:
+    """Bound unattended hosted correction without changing local authoring.
+
+    Local interactive/Compose authoring retains the size-aware budget. Hosted authoring has no
+    operator present and must not spend hundreds of turns trying variations when the runtime or
+    adapter cannot satisfy a validation gate. An explicit lower requested budget still wins;
+    an explicit larger one remains capped in the Dockerless hosted lane.
+    """
+    budget = requested or turns_for(contract)
+    if not deferred_runtime:
+        return budget
+    raw_limit = os.getenv(
+        "ALK_HOSTED_ENVIRONMENT_MAX_TURNS",
+        str(DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS),
+    )
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        limit = DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS
+    if limit < 1:
+        limit = DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS
+    return min(budget, limit)
+
+
 def open_stage(
     contract: AgentContract,
     *,
@@ -104,6 +134,7 @@ def open_stage(
     ask: Callable[..., Any] | None = None,
     source_root: str = "",
     max_turns: int = 0,
+    deferred_runtime: bool = False,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -164,7 +195,22 @@ def open_stage(
                 else "one truthful service-backed sequence, check_world, and save_world."
             )
         )
-    server, _world = world_tools(contract, destination, source_root=source_root)
+    elif deferred_runtime:
+        environment_note = (
+            "\n\n## Runtime deferred to hosted execution\n\n"
+            "The submitted repository processes and datastore will be built, started and "
+            "validated inside the Daytona execution sandbox from the sealed process bundle. "
+            "Do not start containers here. Build the deterministic baseline, simulator prompt, "
+            "sub-goals and world checks. Voice runtime tools are owned by the submitted worker: "
+            "do not replace, bind or smoke-call them outside a real voice session. Their real "
+            "behavior is validated when the generated scenarios run in Daytona."
+        )
+    server, _world = world_tools(
+        contract,
+        destination,
+        source_root=source_root,
+        deferred_runtime=deferred_runtime,
+    )
     spec = SessionSpec(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
@@ -175,7 +221,11 @@ def open_stage(
         servers={WORLD_SERVER: server},
         builtins=("AskUserQuestion",),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        max_turns=max_turns or turns_for(contract),
+        max_turns=environment_turns_for(
+            contract,
+            requested=max_turns,
+            deferred_runtime=deferred_runtime,
+        ),
         model=chosen_model(),
         ask=ask,
         thinking=True,

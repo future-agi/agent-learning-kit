@@ -598,6 +598,124 @@ def contract_tools(destination: Path) -> Any:
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = unwrapped(args)
+        data_store = payload.get("data_store")
+        if not isinstance(data_store, dict):
+            data_store = {}
+        source_has_seed_loader = bool(
+            str(data_store.get("loaded_by") or "").strip()
+            or str(data_store.get("loader_module") or "").strip()
+        )
+        data_schema = payload.get("data_schema")
+        if not isinstance(data_schema, dict):
+            data_schema = {}
+        base_environment = payload.get("base_environment")
+        if not isinstance(base_environment, dict):
+            base_environment = {}
+        schema_collections = {
+            str(name).strip().lower().replace("-", "_").replace(" ", "_")
+            for name in data_schema
+        }
+        starting_collections = {
+            str(name).strip().lower().replace("-", "_").replace(" ", "_")
+            for name in base_environment
+        }
+        collection_overlap = schema_collections & starting_collections
+        store_kind = str(data_store.get("kind") or "").strip().lower()
+        structured_seed_store = any(
+            marker in store_kind
+            for marker in ("sqlite", "postgres", "mysql", "mariadb", "clickhouse")
+        )
+        badly_aligned_seed = (
+            source_has_seed_loader
+            and structured_seed_store
+            and len(schema_collections) > 1
+            and bool(starting_collections)
+            and len(collection_overlap) * 2 < len(starting_collections)
+        )
+        if badly_aligned_seed:
+            return _problems(
+                [
+                    "base_environment does not use enough of the collections declared by "
+                    "data_schema. Record source fixture rows under their exact collection/table "
+                    "names (for example hotel_rooms, hotel_bookings, "
+                    "restaurant_reservations), preserving real IDs and values. Semantic "
+                    "summaries such as rooms, notable_bookings, pricing or restaurant_slots "
+                    "cannot seed or verify a structured submitted store. This is a correctness "
+                    "requirement for a source-loaded structured store; submit a corrected "
+                    "contract rather than the same summary again."
+                ]
+            )
+
+        def rows_for(collection: str) -> list[dict[str, Any]]:
+            value = base_environment.get(collection, [])
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+            if isinstance(value, dict):
+                return [value]
+            return []
+
+        missing_fk_parents: list[str] = []
+        if source_has_seed_loader and structured_seed_store:
+            for collection, fields in data_schema.items():
+                if not isinstance(fields, dict):
+                    continue
+                for field, specification in fields.items():
+                    words = (
+                        str(specification).replace("(", " ").replace(")", " ").split()
+                    )
+                    try:
+                        marker = next(
+                            index
+                            for index, word in enumerate(words)
+                            if word.upper() == "FK"
+                        )
+                    except StopIteration:
+                        continue
+                    if marker + 1 >= len(words):
+                        continue
+                    target_reference = words[marker + 1].strip("`'\".,:;")
+                    if "." in target_reference:
+                        target, target_key = target_reference.rsplit(".", 1)
+                    else:
+                        target = target_reference
+                        inferred_key = str(field).rsplit("_", 1)[-1]
+                        target_fields = data_schema.get(target)
+                        if (
+                            isinstance(target_fields, dict)
+                            and inferred_key in target_fields
+                        ):
+                            target_key = inferred_key
+                        elif (
+                            isinstance(target_fields, dict)
+                            and str(field) in target_fields
+                        ):
+                            # A same-named key such as payment_methods.rider_id ->
+                            # users.rider_id must not be shortened blindly to users.id.
+                            target_key = str(field)
+                        else:
+                            target_key = inferred_key
+                    target_values = {
+                        row.get(target_key)
+                        for row in rows_for(target)
+                        if row.get(target_key) not in (None, "")
+                    }
+                    for row in rows_for(str(collection)):
+                        value = row.get(field)
+                        if value not in (None, "") and value not in target_values:
+                            missing_fk_parents.append(
+                                f"{collection}.{field}={value!r} -> {target}.{target_key}"
+                            )
+        if missing_fk_parents:
+            examples = ", ".join(sorted(set(missing_fk_parents))[:8])
+            return _problems(
+                [
+                    "base_environment is not referentially closed: "
+                    + examples
+                    + ". Include the exact submitted parent rows for every represented FK. "
+                    "Downstream environment generation must never invent a stub row that the "
+                    "target's source loader does not contain."
+                ]
+            )
 
         thin = [
             (
@@ -621,6 +739,31 @@ def contract_tools(destination: Path) -> Any:
                 "makes will refuse. Record the shape of each kind of record the tools read or "
                 "write, and enough real rows to reach every branch those tools have — a "
                 "representative sample for a large dataset, the whole thing for a small one.",
+            ),
+            (
+                "starting-data",
+                bool(payload.get("tools"))
+                and bool(payload.get("data_schema"))
+                and not payload.get("base_environment")
+                and source_has_seed_loader,
+                "data_schema is present but base_environment is empty even though data_store "
+                "records a source seed loader. Read that fixture and record its real starting "
+                "identifiers and values: the whole dataset when small, or a representative "
+                "sample that includes every branch likely to be tested. Downstream scenarios "
+                "must use those exact records; a plausible invented identifier creates a world "
+                "the submitted agent does not have.",
+            ),
+            (
+                "starting-data-collections",
+                source_has_seed_loader
+                and len(schema_collections) > 1
+                and bool(starting_collections)
+                and len(collection_overlap) < min(2, len(schema_collections)),
+                "base_environment does not use the collections declared by data_schema. Record "
+                "the source fixture rows under their exact collection/table names (for example "
+                "hotel_rooms, hotel_bookings, restaurant_reservations), preserving real IDs and "
+                "values. Semantic summaries such as rooms, notable_bookings or restaurant_slots "
+                "cannot seed or verify the submitted store.",
             ),
         ]
         # All of them together, and each only once. Nudging in sequence would cost a turn per

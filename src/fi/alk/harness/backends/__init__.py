@@ -1,7 +1,8 @@
 """Harness backends, selected by name.
 
 ``ALK_HARNESS`` picks the backend the way ``ALK_HARNESS_MODEL`` already picks the model. With
-nothing set the choice is ``claude``, which is exactly the behaviour every existing run has.
+nothing set the choice is ``vertex-gemini``, so a machine holding only Google credentials runs
+without being told to; ``ALK_HARNESS=claude`` selects the Claude Code loop instead.
 
 Backends load lazily: choosing one never imports the other's SDK, so a deployment installs only
 the provider it uses. A new backend is a module implementing ``HarnessBackend`` plus one
@@ -56,7 +57,7 @@ __all__ = [
     "backend_names",
 ]
 
-DEFAULT_BACKEND = "claude"
+DEFAULT_BACKEND = "vertex-gemini"
 
 _LOADERS: dict[str, Callable[[], HarnessBackend]] = {}
 _ALIASES = {

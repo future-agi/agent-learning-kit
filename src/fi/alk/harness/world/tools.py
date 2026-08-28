@@ -132,7 +132,9 @@ def _size(value: Any) -> Any:
     return len(value) if isinstance(value, (list, dict, tuple, str)) else value
 
 
-def _base_data_problems(state: dict[str, Any]) -> list[str]:
+def _base_data_problems(
+    state: dict[str, Any], source_state: dict[str, Any] | None = None
+) -> list[str]:
     """Catch demo-shaped shared seed data before every scenario inherits it."""
     problems: list[str] = []
     weak_codes = {
@@ -160,22 +162,71 @@ def _base_data_problems(state: dict[str, Any]) -> list[str]:
     demo_card_endings: set[str] = set()
     demo_identifiers: set[str] = set()
 
-    def walk(value: Any, key: str = "") -> None:
+    source_rows: dict[str, list[dict[str, Any]]] = {}
+    for collection, value in (source_state or {}).items():
+        rows = value if isinstance(value, list) else [value]
+        source_rows[str(collection)] = [row for row in rows if isinstance(row, dict)]
+
+    identity_keys = (
+        "id",
+        "code",
+        "booking_ref",
+        "booking_id",
+        "transaction_id",
+        "case_number",
+        "label",
+        "email",
+        "phone",
+        "name",
+    )
+
+    def submitted_record(
+        value: dict[str, Any], collection: str
+    ) -> dict[str, Any] | None:
+        # Environment setup may resolve source-relative values such as TODAY+3. Preserve
+        # provenance through that transformation by matching the stable record identity, then
+        # exempt only leaf values that are themselves unchanged from the submitted row.
+        for source_row in source_rows.get(collection, []):
+            if source_row and all(
+                value.get(key) == item for key, item in source_row.items()
+            ):
+                return source_row
+            if any(
+                key in source_row and key in value and source_row[key] == value[key]
+                for key in identity_keys
+            ):
+                return source_row
+        return None
+
+    def walk(
+        value: Any,
+        key: str = "",
+        collection: str = "",
+        source_record: dict[str, Any] | None = None,
+    ) -> None:
         if isinstance(value, dict):
+            matched = submitted_record(value, collection) if collection else None
             for child, item in value.items():
-                walk(item, str(child))
+                child_collection = collection or str(child)
+                walk(item, str(child), child_collection, matched or source_record)
         elif isinstance(value, list):
             for item in value:
-                walk(item, key)
+                walk(item, key, collection, source_record)
         elif "otp" in key.lower() or key.lower() in {"verification_code", "code"}:
+            if source_record is not None and source_record.get(key) == value:
+                return
             text = str(value)
             if text in weak_codes:
                 seen_codes.add(text)
         elif key.lower() in {"last4", "card_last4", "payment_last4"}:
+            if source_record is not None and source_record.get(key) == value:
+                return
             text = str(value)
             if text in {"0000", "1111", "1234", "4242", "4444"}:
                 demo_card_endings.add(text)
         elif key.lower() in {"booking_ref", "booking_id", "transaction_id"}:
+            if source_record is not None and source_record.get(key) == value:
+                return
             text = str(value).lower()
             if text in {"ub12345678", "booking123", "booking_123", "test123"}:
                 demo_identifiers.add(str(value))
@@ -293,7 +344,11 @@ def _err(text: str) -> dict[str, Any]:
 
 
 def world_tools(
-    contract: AgentContract, destination: Path, *, source_root: str = ""
+    contract: AgentContract,
+    destination: Path,
+    *,
+    source_root: str = "",
+    deferred_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
@@ -334,17 +389,31 @@ def world_tools(
             # world store; import/construct bindings execute the submitted tool code normally.
             has_postgres = bool(
                 provisioned
-                and any("postgres" in service.lower() for service in provisioned.services)
+                and any(
+                    "postgres" in service.lower() for service in provisioned.services
+                )
             )
             world = (
                 GeneratedWorld(store=attached_postgres_store(destination), kind=named)
                 if has_postgres
                 else GeneratedWorld(":memory:", kind=named)
             )
-        if provisioned and provisioned.runtime_services and contract.modality == "voice":
+        if (
+            provisioned
+            and provisioned.runtime_services
+            and contract.modality == "voice"
+        ):
             # These tools execute only through a real call to the submitted worker. They need no
             # harness-authored handler and must not be smoke-called outside their captured RTC
             # session state while the world is being constructed.
+            world.runtime_tools = set(contract.tool_names())
+    elif deferred_runtime:
+        # Hosted authoring runs on a control-plane worker without Docker. The repository's
+        # exact processes and declared datastore are compiled into Bundle V2 and started in
+        # Daytona; this lightweight store exists only to author baseline data, checks and
+        # scenarios before execution-time validation against those real processes.
+        world = GeneratedWorld(":memory:", kind="sqlite")
+        if contract.modality == "voice" and contract.runtime:
             world.runtime_tools = set(contract.tool_names())
     else:
         world = GeneratedWorld(":memory:", kind=named)
@@ -1172,7 +1241,9 @@ def world_tools(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
             )
-        if data_problems := _base_data_problems(world.state()):
+        if data_problems := _base_data_problems(
+            world.state(), source_state=contract.base_environment
+        ):
             return _err(
                 "Not saved. The shared seed would make every scenario look like demo data:\n  - "
                 + "\n  - ".join(data_problems)

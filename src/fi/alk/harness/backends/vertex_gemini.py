@@ -153,9 +153,20 @@ def _project() -> str:
                 return found
         except (OSError, ValueError):
             pass
+    # Application Default Credentials already carry a project on a machine that has run
+    # ``gcloud auth application-default login`` or that runs on Google infrastructure. Asking
+    # for it again as an environment variable is a setting the operator does not need to know.
+    try:
+        import google.auth
+
+        _, discovered = google.auth.default()
+        if discovered:
+            return str(discovered)
+    except Exception:  # noqa: BLE001 - fall through to the explicit instruction below
+        pass
     raise RuntimeError(
-        "no GCP project named; set GOOGLE_CLOUD_PROJECT or point "
-        "GOOGLE_APPLICATION_CREDENTIALS at a service-account file"
+        "no GCP project named; run 'gcloud auth application-default login', or set "
+        "GOOGLE_CLOUD_PROJECT, or point GOOGLE_APPLICATION_CREDENTIALS at a service-account file"
     )
 
 

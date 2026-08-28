@@ -1856,6 +1856,9 @@ def test_a_question_still_reaches_the_operator():
 
 def _request_handler(instance, method):
     """Bridge the MCP 1.27 handler map and the older SDK helper used by this suite."""
+    # Stages describe tools neutrally now, so a caller may hand us the ToolServer rather than
+    # the MCP server a backend builds from it. Adapt here so every call site does not have to.
+    instance = _instance(instance)
     legacy = getattr(instance, "get_request_handler", None)
     if legacy is not None:
         return legacy(method)
@@ -2187,6 +2190,30 @@ def test_a_row_put_in_wrong_can_be_taken_out_again(tmp_path):
 
     refused = asyncio.run(call("change_data", {"sql": "SELECT * FROM menu"}))
     assert "UPDATE or DELETE" in refused
+
+
+def test_sqlite_world_seed_encodes_structured_values_as_json():
+    """World authoring may seed JSON-shaped fields into SQLite TEXT columns."""
+    from fi.alk.harness.world.stores.sqlite import SqliteStore
+
+    store = SqliteStore()
+    store.apply("CREATE TABLE config (id TEXT PRIMARY KEY, zones TEXT, pricing TEXT)")
+    store.add(
+        "config",
+        {
+            "id": "market",
+            "zones": ["downtown", "airport"],
+            "pricing": {"base": 4.5, "currency": "USD"},
+        },
+    )
+
+    assert store.records("config") == [
+        {
+            "id": "market",
+            "zones": '["downtown","airport"]',
+            "pricing": '{"base":4.5,"currency":"USD"}',
+        }
+    ]
 
 
 # --- the environment step: world, simulator prompt, sub-goal catalogue ---------------
@@ -2751,6 +2778,60 @@ def test_demo_payment_and_booking_values_are_rejected():
     assert any("transaction identifiers" in problem for problem in base)
 
 
+def test_submitted_fixture_demo_values_are_preserved_but_generated_copies_are_rejected():
+    from fi.alk.harness.world.tools import _base_data_problems
+
+    source = {
+        "bookings": [
+            {"booking_ref": "HTL-AB12", "card_last4": "4242", "status": "confirmed"}
+        ]
+    }
+    preserved = {
+        "bookings": [
+            {
+                "booking_ref": "HTL-AB12",
+                "card_last4": "4242",
+                "status": "confirmed",
+                "runtime_note": None,
+            }
+        ]
+    }
+    assert _base_data_problems(preserved, source_state=source) == []
+
+    transformed = {
+        "bookings": [
+            {
+                "booking_ref": "HTL-AB12",
+                "card_last4": "4242",
+                "status": "confirmed",
+                "check_in": "2026-08-26",
+            }
+        ]
+    }
+    assert _base_data_problems(transformed, source_state=source) == []
+
+    transformed["bookings"][0]["verification_code"] = "123456"
+    assert any(
+        "verification codes" in problem
+        for problem in _base_data_problems(transformed, source_state=source)
+    )
+
+    copied = {
+        "bookings": preserved["bookings"]
+        + [
+            {
+                "booking_ref": "HTL-NEW1",
+                "card_last4": "4242",
+                "status": "confirmed",
+            }
+        ]
+    }
+    assert any(
+        "payment-card" in problem
+        for problem in _base_data_problems(copied, source_state=source)
+    )
+
+
 def test_diversity_gate_catches_one_person_reworded_as_a_suite():
     from fi.alk.harness.scenario import Persona, Scenario, suite_diversity_problems
 
@@ -2955,6 +3036,172 @@ def test_livekit_runtime_log_fallback_reads_production_json_logging():
     assert calls[0].name == "list_available_slots"
     assert calls[0].arguments == {"range": "+2week"}
     assert calls[0].at > 0
+
+
+def test_livekit_runtime_log_fallback_preserves_structured_tool_refusal():
+    from fi.alk.harness.run.simulation import _livekit_log_calls
+
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "function": "schedule_appointment",
+                    "lk.pii.arguments": '{"slot_id":"8:00 AM"}',
+                    "speech_id": "speech-refused",
+                    "timestamp": "2026-08-25T19:06:23.019247+00:00",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": (
+                        "ToolError while executing tool: error: "
+                        "slot 8:00 AM was not found"
+                    ),
+                    "function": "schedule_appointment",
+                    "speech_id": "speech-refused",
+                    "timestamp": "2026-08-25T19:06:23.025115+00:00",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "tools execution completed",
+                    "speech_id": "speech-refused",
+                    "timestamp": "2026-08-25T19:06:23.026255+00:00",
+                }
+            ),
+        ]
+    )
+
+    calls = _livekit_log_calls(output)
+
+    assert len(calls) == 1
+    assert calls[0].name == "schedule_appointment"
+    assert calls[0].arguments == {"slot_id": "8:00 AM"}
+    assert calls[0].ok is False
+    assert calls[0].refused is True
+    assert calls[0].error == "error: slot 8:00 AM was not found"
+    assert calls[0].result == calls[0].error
+
+
+def test_livekit_runtime_log_fallback_rejects_missing_required_arguments():
+    from fi.alk.harness.run.simulation import _livekit_log_calls
+
+    contract = AgentContract(
+        agent="frontdesk",
+        tools=[{"name": "schedule_appointment", "args": ["slot_id"]}],
+        real_use_cases=["schedule an appointment"],
+    )
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "function": "schedule_appointment",
+                    "lk.pii.arguments": "{}",
+                    "speech_id": "speech-malformed",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "tools execution completed",
+                    "speech_id": "speech-malformed",
+                }
+            ),
+        ]
+    )
+
+    assert _livekit_log_calls(output, contract=contract) == []
+
+
+def test_livekit_runtime_log_fallback_accepts_one_valid_contract_tool():
+    from fi.alk.harness.run.simulation import _livekit_log_calls
+
+    contract = AgentContract(
+        agent="frontdesk",
+        tools=[{"name": "list_available_slots", "args": ["range"]}],
+        real_use_cases=["schedule an appointment"],
+    )
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "function": "list_available_slots",
+                    "lk.pii.arguments": '{"range":"+1week"}',
+                    "speech_id": "speech-valid",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "tools execution completed",
+                    "speech_id": "speech-valid",
+                }
+            ),
+        ]
+    )
+
+    calls = _livekit_log_calls(output, contract=contract)
+
+    assert len(calls) == 1
+    assert calls[0].name == "list_available_slots"
+    assert calls[0].arguments == {"range": "+1week"}
+    assert calls[0].ok is True
+
+
+def test_livekit_runtime_log_fallback_rejects_internal_and_ambiguous_tools():
+    from fi.alk.harness.run.simulation import _livekit_log_calls
+
+    contract = AgentContract(
+        agent="frontdesk",
+        tools=[
+            {"name": "get_current_time", "args": []},
+            {"name": "list_available_slots", "args": ["range"]},
+        ],
+        real_use_cases=["schedule an appointment"],
+    )
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "function": "update_email_address",
+                    "lk.pii.arguments": '{"email":"caller@example.com"}',
+                    "speech_id": "speech-internal",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "tools execution completed",
+                    "speech_id": "speech-internal",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "function": "get_current_time",
+                    "lk.pii.arguments": "{}",
+                    "speech_id": "speech-batch",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "executing tool",
+                    "function": "list_available_slots",
+                    "lk.pii.arguments": '{"range":"+1week"}',
+                    "speech_id": "speech-batch",
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "tools execution completed",
+                    "speech_id": "speech-batch",
+                }
+            ),
+        ]
+    )
+
+    assert _livekit_log_calls(output, contract=contract) == []
 
 
 def test_a_store_that_is_not_sqlite_needs_nothing_above_it_to_change(tmp_path):
@@ -3841,6 +4088,23 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
     assert denied != {}
 
 
+def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
+    from fi.alk.harness.build import environment_turns_for, turns_for
+    from fi.alk.harness.contract import AgentContract, ToolSpec
+
+    contract = AgentContract(
+        agent="large-agent",
+        tools=[ToolSpec(name=f"tool_{index}") for index in range(20)],
+    )
+    assert turns_for(contract) == 200
+    assert environment_turns_for(contract, deferred_runtime=False) == 200
+    assert environment_turns_for(contract, deferred_runtime=True) == 80
+
+    monkeypatch.setenv("ALK_HOSTED_ENVIRONMENT_MAX_TURNS", "40")
+    assert environment_turns_for(contract, deferred_runtime=True) == 40
+    assert environment_turns_for(contract, requested=25, deferred_runtime=True) == 25
+
+
 def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
     """Moving on is decided by code, from the artifacts, never by the model wanting to."""
     import asyncio
@@ -4051,6 +4315,269 @@ def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
     assert "Accepted" in second
 
     assert (tmp_path / "contract.json").exists()
+
+
+def test_a_seeded_contract_with_schema_but_no_starting_rows_is_nudged_once(tmp_path):
+    """A schema-only contract must not let later stages invent IDs the embedded target lacks."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None,
+            CallToolRequestParams(name="submit_contract", arguments=payload),
+        )
+        return answer.content[0].text
+
+    payload = {
+        "agent": "embedded-store-agent",
+        "tools": [{"name": "cancel", "args": ["id"]}],
+        "real_use_cases": ["cancel a seeded record"],
+        "hard_constraints": ["only existing records may be cancelled"],
+        "system_prompt_excerpt": "cancel records truthfully",
+        "data_schema": {"records": {"id": "string", "status": "string"}},
+        "data_store": {
+            "kind": "sqlite",
+            "configured_by": "hardcoded in-process",
+            "loader_module": "fixtures.seed",
+            "loaded_by": "load_seed",
+        },
+    }
+
+    first = asyncio.run(call(dict(payload)))
+    assert "base_environment is empty" in first
+    assert "plausible invented identifier" in first
+    assert not (tmp_path / "contract.json").exists()
+
+    second = asyncio.run(call(dict(payload)))
+    assert "Accepted" in second
+    assert (tmp_path / "contract.json").exists()
+
+
+def test_seeded_starting_rows_must_use_declared_collection_names(tmp_path):
+    """Semantic summaries cannot be used to seed or compare the submitted store."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None,
+            CallToolRequestParams(name="submit_contract", arguments=payload),
+        )
+        return answer.content[0].text
+
+    payload = {
+        "agent": "hotel-agent",
+        "tools": [{"name": "cancel", "args": ["id"]}],
+        "real_use_cases": ["cancel a seeded reservation"],
+        "hard_constraints": ["only existing reservations may be cancelled"],
+        "system_prompt_excerpt": "cancel reservations truthfully",
+        "data_schema": {
+            "hotel_rooms": {"id": "string"},
+            "restaurant_reservations": {"code": "string", "status": "string"},
+        },
+        "base_environment": {
+            "rooms": [{"id": "RM_201"}],
+            "restaurant_slots": [{"time": "20:30"}],
+        },
+        "data_store": {
+            "kind": "sqlite",
+            "configured_by": "hardcoded in-process",
+            "loader_module": "fake_data.seed",
+            "loaded_by": "build_seed_bytes",
+        },
+    }
+
+    first = asyncio.run(call(dict(payload)))
+    assert "exact collection/table names" in first
+    assert "restaurant_reservations" in first
+    assert not (tmp_path / "contract.json").exists()
+
+    second = asyncio.run(call(dict(payload)))
+    assert "corrected contract" in second
+    assert not (tmp_path / "contract.json").exists()
+
+    payload["base_environment"] = {
+        "hotel_rooms": [{"id": "RM_201"}],
+        "restaurant_reservations": [{"code": "RES-LM12", "status": "confirmed"}],
+    }
+    third = asyncio.run(call(dict(payload)))
+    assert "Accepted" in third
+    assert (tmp_path / "contract.json").exists()
+
+
+def test_structured_seed_alignment_uses_a_ratio_not_a_fixed_overlap(tmp_path):
+    """Two matching tables cannot excuse four semantic summaries in a relational baseline."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None,
+            CallToolRequestParams(name="submit_contract", arguments=payload),
+        )
+        return answer.content[0].text
+
+    payload = {
+        "agent": "hotel-agent",
+        "tools": [{"name": "cancel", "args": ["id"]}],
+        "real_use_cases": ["cancel a seeded reservation"],
+        "hard_constraints": ["only existing reservations may be cancelled"],
+        "system_prompt_excerpt": "cancel reservations truthfully",
+        "data_schema": {
+            "hotel_rooms": {"id": "string"},
+            "hotel_bookings": {"code": "string"},
+            "restaurant_tables": {"label": "string"},
+            "restaurant_reservations": {"code": "string"},
+        },
+        "base_environment": {
+            "hotel_rooms": [{"id": "RM_201"}],
+            "restaurant_tables": [{"label": "T-01"}],
+            "rooms": [{"id": "RM_201"}],
+            "key_bookings": [{"code": "HTL-AB12"}],
+            "pricing": {"breakfast": 2500},
+            "special_scenarios": {"sold_out": "TODAY+25"},
+        },
+        "data_store": {
+            "kind": "sqlite",
+            "loader_module": "fake_data.seed",
+            "loaded_by": "build_seed_bytes",
+        },
+    }
+    assert "does not use enough" in asyncio.run(call(payload))
+    assert not (tmp_path / "contract.json").exists()
+
+    # A process-local menu/config baseline is not a relational table dump and retains the
+    # existing advisory behavior instead of being forced into artificial schema collections.
+    payload["agent"] = "drive-through"
+    payload["data_store"]["kind"] = "in_process"
+    accepted_after_advisory = asyncio.run(call(payload))
+    if "submit again" in accepted_after_advisory:
+        accepted_after_advisory = asyncio.run(call(payload))
+    assert "Accepted" in accepted_after_advisory
+
+
+def test_structured_source_baseline_requires_fk_parent_rows(tmp_path):
+    """A representative child row is unusable when its submitted parent was omitted."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None,
+            CallToolRequestParams(name="submit_contract", arguments=payload),
+        )
+        return answer.content[0].text
+
+    payload = {
+        "agent": "hotel-agent",
+        "tools": [{"name": "dispute", "args": ["booking_code"]}],
+        "real_use_cases": ["inspect an open dispute"],
+        "hard_constraints": ["only existing bookings may be disputed"],
+        "system_prompt_excerpt": "handle disputes truthfully",
+        "data_schema": {
+            "hotel_bookings": {"code": "TEXT UNIQUE"},
+            "hotel_disputes": {
+                "case_number": "TEXT UNIQUE",
+                "booking_code": "TEXT FK hotel_bookings",
+            },
+        },
+        "base_environment": {
+            "hotel_bookings": [{"code": "HTL-AB12"}],
+            "hotel_disputes": [{"case_number": "DSP-2H6T", "booking_code": "HTL-ZP19"}],
+        },
+        "data_store": {
+            "kind": "sqlite",
+            "loader_module": "fake_data.seed",
+            "loaded_by": "build_seed_bytes",
+        },
+    }
+    rejected = asyncio.run(call(payload))
+    assert "not referentially closed" in rejected
+    assert "HTL-ZP19" in rejected
+    assert not (tmp_path / "contract.json").exists()
+
+    payload["base_environment"]["hotel_bookings"].append({"code": "HTL-ZP19"})
+    accepted = asyncio.run(call(payload))
+    assert "Accepted" in accepted
+    assert (tmp_path / "contract.json").exists()
+
+
+def test_structured_source_baseline_resolves_same_named_and_qualified_fk_keys(tmp_path):
+    """FK validation accepts real parent-key names instead of inventing an ``id`` column."""
+    import asyncio
+
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path)
+    instance = server.get("instance") if isinstance(server, dict) else server
+
+    async def call(payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None,
+            CallToolRequestParams(name="submit_contract", arguments=payload),
+        )
+        return answer.content[0].text
+
+    base = {
+        "agent": "ride-agent",
+        "tools": [{"name": "list_payment_methods", "args": ["rider_id"]}],
+        "real_use_cases": ["list a rider's saved payment methods"],
+        "hard_constraints": ["only return methods belonging to the rider"],
+        "system_prompt_excerpt": "Use the rider's saved payment methods.",
+        "data_schema": {
+            "users": {"rider_id": "TEXT UNIQUE"},
+            "payment_methods": {"rider_id": "TEXT FK users"},
+        },
+        "base_environment": {
+            "users": [{"rider_id": "rdr_maya"}],
+            "payment_methods": [{"rider_id": "rdr_maya"}],
+        },
+        "data_store": {
+            "kind": "postgres",
+            "loader_module": "tools.seed",
+            "loaded_by": "seed_database",
+        },
+    }
+
+    accepted = asyncio.run(call(base))
+    assert "Accepted" in accepted
+
+    (tmp_path / "contract.json").unlink()
+    base["data_schema"]["payment_methods"]["rider_id"] = "TEXT FK users.rider_id"
+    accepted_qualified = asyncio.run(call(base))
+    assert "Accepted" in accepted_qualified
 
 
 def test_only_a_tool_that_says_it_saved_reports_an_artifact():
@@ -5352,9 +5879,10 @@ def test_a_setup_or_ready_that_says_nothing_is_not_a_complaint():
     )
     assert not complained.ok and complained.said == "no pending orders"
 
-    # And False is a failure that says nothing, so the message says that rather than being blank.
+    # And False from ready() names no precondition, so it is broken rather than a plain failure —
+    # the message says that rather than being blank.
     bare = _run("def ready(world):\n    return False\n", "s/ready.py", "ready", None)
-    assert not bare.ok and "without saying what is wrong" in bare.said
+    assert not bare.ok and bare.broken and "without saying what is wrong" in bare.said
 
 
 def test_an_optional_field_may_be_null():
@@ -5568,14 +6096,26 @@ def test_a_target_refuses_a_model_it_cannot_drive():
     """
     from fi.alk.harness.run.targets import _drivable
 
-    # What it runs on.
+    # What the default backend runs on. Gemini is the default, so a Claude model is the one
+    # this target has to refuse until ALK_HARNESS names the backend that serves it.
     _drivable(None)
-    _drivable("claude-sonnet-4-6")
-    _drivable("anthropic/claude-opus-4-7")
+    _drivable("gemini-3.7-flash")
 
     with pytest.raises(RuntimeError) as refused:
-        _drivable("vertex_ai/gemini-2.5-flash")
+        _drivable("claude-sonnet-4-6")
     assert "cannot run" in str(refused.value)
+    # Naming the backend that does serve it is enough; the model does not have to change.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    try:
+        from fi.alk.harness import backends
+
+        backends._LIVE.clear()
+        _drivable("claude-sonnet-4-6")
+        _drivable("anthropic/claude-opus-4-7")
+    finally:
+        monkeypatch.undo()
+        backends._LIVE.clear()
     # And it says where to go instead, rather than only saying no.
     assert "endpoint adapters" in str(refused.value)
 
@@ -5939,6 +6479,30 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
     assert all(verdict.holds for verdict in verdicts)
 
 
+def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
+    monkeypatch,
+):
+    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import platform_evals
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.run.grade import judge_suite_evals
+    from fi.alk.harness.scenario import Scenario
+
+    monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
+    monkeypatch.setattr(platform_evals, "configured", lambda: False)
+    verdicts = judge_suite_evals(
+        default_suite_evals(),
+        Scenario(name="voice", instruction="help", sub_goals=[]),
+        Transcript(),
+        AgentContract(agent="voice", modality="voice"),
+    )
+
+    assert len(verdicts) == len(default_suite_evals())
+    assert all(verdict.grading_error for verdict in verdicts)
+    assert all(not verdict.holds for verdict in verdicts)
+
+
 def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
     from fi.alk.harness.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
@@ -6185,6 +6749,72 @@ def test_a_scenario_that_never_ran_is_not_reported_as_one_the_agent_failed():
     assert ran["status"] == "completed"
     assert blocked["status"] == "failed"
     assert "not ready" in blocked["error_message"]
+
+
+def test_a_grading_failure_does_not_rewrite_completed_call_status():
+    from fi.alk.harness import platform
+    from fi.alk.harness.run.grade import Checkpoint, Judgement
+
+    result = _reported_result(
+        checkpoints=[
+            Checkpoint(
+                name="task completion",
+                kind="eval",
+                passed=False,
+                detail="evaluator unavailable",
+                grading_error=True,
+            )
+        ],
+        conduct=[
+            Judgement(
+                claim="task completion",
+                kind="eval",
+                holds=False,
+                why="evaluator unavailable",
+                grading_error=True,
+            )
+        ],
+    )
+
+    payload = platform.result_of(result)
+
+    assert payload["status"] == "completed"
+    assert "error_message" not in payload
+    assert payload["call_metadata"]["harness_eval_coverage"] == {
+        "expected": 1,
+        "executed": 0,
+        "failed": 1,
+        "complete": False,
+    }
+
+
+def test_platform_call_duration_excludes_connection_and_retry_waits():
+    from fi.alk.harness import platform
+
+    connected = _reported_result(seconds=255.0)
+    connected.exchanges = [
+        {"start_time_ms": 10_000, "end_time_ms": 25_000},
+        {"start_time_ms": 100_000, "end_time_ms": 116_000},
+    ]
+    unavailable = _reported_result(
+        seconds=301.1,
+        exchanges=[],
+        problems=["the target worker never joined"],
+    )
+
+    assert platform.result_of(connected)["duration_seconds"] == 106
+    assert platform.result_of(unavailable)["duration_seconds"] == 0
+
+
+def test_platform_headers_carry_the_explicit_workspace(monkeypatch):
+    from fi.alk.harness.platform import Platform
+
+    monkeypatch.setenv("HARNESS_PLATFORM_WORKSPACE_ID", "workspace-123")
+    headers = Platform(
+        base="https://platform.example", key="key", secret="secret"
+    )._headers()
+
+    assert headers["X-Workspace-Id"] == "workspace-123"
 
 
 def test_a_second_run_joins_the_same_test_rather_than_starting_another():

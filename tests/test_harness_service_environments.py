@@ -715,7 +715,12 @@ def test_external_model_provider_is_not_mistaken_for_managed_infrastructure(
         tools=[ToolSpec(name="answer", args=["question"])],
         real_use_cases=["answer a caller"],
         dependencies=[
-            Dependency(name="OpenAI TTS", kind="service", what="speech synthesis")
+            Dependency(
+                name="Google Vertex AI",
+                kind="service",
+                engine="Google Gemini 2.5 Flash",
+                what="hosted model inference",
+            )
         ],
         runtime=Runtime(dockerfile="Dockerfile"),
     )
@@ -744,7 +749,7 @@ def test_embedded_memory_sqlite_is_not_mistaken_for_external_infrastructure(
                 kind="datastore",
                 engine="sqlite (apsw in-process)",
                 reached={
-                    "host": ":memory:",
+                    "host": "in-memory :memory:",
                     "loader_module": "fake_data.seed",
                     "loader_function": "populate",
                 },
@@ -758,6 +763,113 @@ def test_embedded_memory_sqlite_is_not_mistaken_for_external_infrastructure(
     assert target is not None
     document = json.loads(target.read_text())
     assert set(document["services"]) == {"agent-runtime"}
+
+
+def test_dockerfile_owns_local_model_downloaded_at_build(tmp_path):
+    """A submitted image owns its local model; ALK must not demand a Compose service."""
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    contract = AgentContract(
+        agent="hotel-receptionist",
+        modality="voice",
+        tools=[ToolSpec(name="book_room", args=["room_type", "date"])],
+        real_use_cases=["book a hotel room"],
+        data_store=DataStore(kind="sqlite", database=":memory:"),
+        dependencies=[
+            Dependency(
+                name="hotel_sqlite",
+                kind="datastore",
+                engine="SQLite",
+                reached={"host": "in-process"},
+            ),
+            Dependency(
+                name="LiveKit",
+                kind="service",
+                engine="LiveKit Cloud",
+                what="hosted realtime transport",
+            ),
+            Dependency(
+                name="Deepgram",
+                kind="service",
+                engine="Deepgram Nova",
+                what="hosted speech transcription",
+            ),
+            Dependency(
+                name="Gemini",
+                kind="service",
+                engine="Google Gemini",
+                what="hosted model inference",
+            ),
+            Dependency(
+                name="Silero VAD",
+                kind="service",
+                engine="Silero VAD ONNX local model",
+                reached={
+                    "host": (
+                        "local model file downloaded at build via "
+                        "livekit.agents download-files"
+                    )
+                },
+            ),
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+
+    assert target is not None
+    document = json.loads(target.read_text())
+    assert set(document["services"]) == {"agent-runtime"}
+
+
+def test_local_runtime_marker_cannot_hide_an_unknown_network_service(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    contract = AgentContract(
+        agent="voice-agent",
+        tools=[ToolSpec(name="calculate_quote", args=["route"])],
+        real_use_cases=["quote a route"],
+        dependencies=[
+            Dependency(
+                name="customer-pricing-engine",
+                kind="service",
+                engine="customer-pricing-engine",
+                reached={"host": "local model service", "port": 9911},
+            )
+        ],
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    assert _managed_compose(source, tmp_path / "session", contract) is None
+
+
+def test_inline_schema_description_is_not_treated_as_a_source_path(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    contract = AgentContract(
+        agent="hotel-voice-agent",
+        tools=[ToolSpec(name="book_room", args=["date"])],
+        real_use_cases=["book a hotel room"],
+        data_store=DataStore(
+            kind="sqlite",
+            database=":memory:",
+            schema_from=(
+                "hotel_db.py SCHEMA constant (CREATE TABLE IF NOT EXISTS DDL string). "
+                "Tables: " + ", ".join(f"hotel_table_{index}" for index in range(80))
+            ),
+        ),
+        runtime=Runtime(dockerfile="Dockerfile"),
+    )
+
+    target = _managed_compose(source, tmp_path / "session", contract)
+
+    assert target is not None
+    document = json.loads(target.read_text())
+    assert set(document["services"]) == {"agent-runtime"}
+    assert "volumes" not in document["services"]["agent-runtime"]
 
 
 def test_declared_managed_dependency_without_dockerfile_fails_actionably(tmp_path):
@@ -923,12 +1035,13 @@ def test_queue_and_object_services_are_generated_from_declared_dependencies(tmp_
         "agent-runtime",
     }
     assert document["services"]["rabbitmq"]["image"] == "rabbitmq:3.13-alpine"
-    assert document["services"]["rabbitmq"]["environment"][
-        "RABBITMQ_ERLANG_COOKIE"
-    ] == "harness-local-cookie"
-    assert "chown rabbitmq:rabbitmq" in document["services"]["rabbitmq"][
-        "entrypoint"
-    ][2]
+    assert (
+        document["services"]["rabbitmq"]["environment"]["RABBITMQ_ERLANG_COOKIE"]
+        == "harness-local-cookie"
+    )
+    assert (
+        "chown rabbitmq:rabbitmq" in document["services"]["rabbitmq"]["entrypoint"][2]
+    )
     assert document["services"]["rabbitmq"]["command"] == ["rabbitmq-server"]
     assert (
         document["services"]["rabbitmq"]["environment"][
