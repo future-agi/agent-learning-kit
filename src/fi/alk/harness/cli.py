@@ -100,8 +100,13 @@ def _guidance(args: argparse.Namespace) -> str:
     if not instructions:
         return ""
     return (
-        "\n\n## User adjustments\n\nApply these explicit corrections while preserving "
-        "all unaffected validated work:\n- " + "\n- ".join(instructions)
+        "\n\n## User adjustments (required completion criteria)\n\n"
+        "The user supplied the requirements below during this run. The final saved "
+        "artifact MUST directly represent every bullet; acknowledging a bullet or merely "
+        "changing the requested count is not enough. For scenario-stage adjustments, at "
+        "least one saved scenario must clearly test each requested behavior. Preserve all "
+        "unaffected validated work. Do not call save_scenarios until these requirements are "
+        "visible in the saved suite:\n- " + "\n- ".join(instructions)
     )
 
 

@@ -287,6 +287,7 @@ def test_hosted_authoring_treats_an_extracted_archive_as_a_repo(
     )
     job_path = tmp_path / "job.json"
     job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    adjustments_path = tmp_path / "adjustments.jsonl"
     observed = {}
 
     async def fake_auto(args) -> int:
@@ -302,6 +303,8 @@ def test_hosted_authoring_treats_an_extracted_archive_as_a_repo(
             str(source),
             "--output",
             str(output),
+            "--adjustments",
+            str(adjustments_path),
         ]
     )
 
@@ -309,6 +312,45 @@ def test_hosted_authoring_treats_an_extracted_archive_as_a_repo(
     assert observed["kind"] == "repo"
     assert observed["authoring_only"] is True
     assert observed["count"] == 2
+    assert observed["adjustments_path"] == str(adjustments_path)
+
+
+def test_hosted_authoring_persists_adjusted_scenario_count_for_bundling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import authoring_entrypoint
+
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    job = HarnessJob(
+        job_id="job-adjusted-count",
+        run_id="run-adjusted-count",
+        execution="hosted",
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={"connector": "auto"},
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+        metadata={"source_kind": "archive", "agent_name": "uploaded-agent"},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+
+    async def fake_auto(args) -> int:
+        del args
+        return 0
+
+    monkeypatch.setattr(authoring_entrypoint, "_auto", fake_auto)
+    monkeypatch.setattr(authoring_entrypoint, "load_written", lambda _path: [1, 2])
+
+    status = authoring_entrypoint.main(
+        [str(job_path), "--source", str(source), "--output", str(output)]
+    )
+
+    assert status == 0
+    persisted = HarnessJob.model_validate_json(job_path.read_text(encoding="utf-8"))
+    assert persisted.scenario_count == 2
 
 
 def test_deferred_hosted_authoring_never_starts_the_declared_container_store(

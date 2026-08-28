@@ -23,7 +23,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import random
 import signal
 import time
@@ -452,10 +451,8 @@ class ProcessWorldFactory:
 
 
 # =================================================================================================
-# CallRunner -- the real voice track. NotWired stays the fallback for every job whose
-# `agent.connector` is not `"livekit"` (absent voice config entirely, or a connector outside the
-# LiveKit-dispatched voice path -- vapi/retell/auto) -- by design, not "improved"
-# (hosted-execution-seams.md: `"connector": "livekit | vapi | retell | auto"`).
+# CallRunner -- the real voice track. Explicit LiveKit jobs and auto-discovered voice contracts
+# use it.  Explicit Vapi/Retell jobs remain outside the repository-hosted runner.
 # =================================================================================================
 
 
@@ -483,6 +480,20 @@ class NotWiredCallRunner:
 _LIVEKIT_CONNECTOR = "livekit"
 
 
+def _bundle_contract_modality(bundle_dir: Path) -> str | None:
+    path = bundle_dir / "contract.json"
+    if not path.is_file():
+        return None
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    value = str(body.get("modality") or "").strip().lower()
+    return value or None
+
+
 def _default_build_call_runner(
     adapter: "OutboundAdapter", context: CallRunnerContext
 ) -> CallRunner:
@@ -492,7 +503,11 @@ def _default_build_call_runner(
     incomplete-but-present config as a typed `call_failed`/infrastructure retry --
     `capability_unavailable` stays unreachable from this seam (would require a scheduler edit;
     the contract itself calls it "a follow-up, not shipped with this text")."""
-    if context.job.agent.connector == _LIVEKIT_CONNECTOR:
+    connector = context.job.agent.connector.lower()
+    modality = _bundle_contract_modality(context.bundle_dir)
+    if connector == _LIVEKIT_CONNECTOR or (
+        connector == "auto" and modality == "voice"
+    ):
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing

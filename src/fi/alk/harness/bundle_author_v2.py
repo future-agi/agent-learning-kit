@@ -488,13 +488,26 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
-def resolve_environment_plan(source: str | Path, job: HarnessJob) -> EnvironmentPlanV2:
+def resolve_environment_plan(
+    source: str | Path,
+    job: HarnessJob,
+    *,
+    contract_modality: str | None = None,
+) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
     if not root.is_dir():
         raise BundleAuthorError(f"source_unavailable: {root}")
     connector = job.agent.connector.lower()
-    is_livekit = connector == "livekit"
+    # Hosted repository submissions normally arrive as ``connector=auto``.  In the unified
+    # Daytona lane the contract is authored *after* dispatch, so the control plane cannot rewrite
+    # that field before this compiler runs.  The frozen contract is therefore the authoritative
+    # late-bound modality signal.  Voice is routed through LiveKit because that is the hosted
+    # repository voice connector implemented by the guest; explicit vapi/retell values never
+    # enter this path.
+    is_livekit = connector == "livekit" or (
+        connector == "auto" and (contract_modality or "").strip().lower() == "voice"
+    )
     needs_target_secrets = any(
         reference.purpose == SecretPurpose.TARGET_PROVIDER.value
         for reference in job.agent.secret_refs.values()
@@ -836,7 +849,23 @@ def author_bundle_v2(
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
-    plan = resolve_environment_plan(source_root, job)
+    contract_modality: str | None = None
+    contract_path = authoring_root / "contract.json"
+    if contract_path.is_file():
+        try:
+            contract_body = json.loads(contract_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise BundleAuthorError(
+                f"contract_invalid: cannot read {contract_path}: {exc}"
+            ) from exc
+        if not isinstance(contract_body, dict):
+            raise BundleAuthorError("contract_invalid: contract.json must be an object")
+        contract_modality = str(contract_body.get("modality") or "").strip().lower()
+    plan = resolve_environment_plan(
+        source_root,
+        job,
+        contract_modality=contract_modality,
+    )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent)

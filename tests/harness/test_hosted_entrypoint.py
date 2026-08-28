@@ -922,12 +922,30 @@ def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector(
     assert isinstance(runner, he.NotWiredCallRunner)
 
 
-def test_default_build_call_runner_returns_notwired_for_retell_and_auto_too() -> None:
+def test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto() -> None:
     for connector in ("retell", "auto"):
         runner = he._default_build_call_runner(
             mock.Mock(), _call_runner_context(job=_job(connector=connector))
         )
         assert isinstance(runner, he.NotWiredCallRunner)
+
+
+def test_default_build_call_runner_resolves_auto_voice_contract_to_livekit() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="auto-voice-contract-"))
+    (tmp / "contract.json").write_text(
+        json.dumps({"modality": "voice"}), encoding="utf-8"
+    )
+    context = _call_runner_context(job=_job(connector="auto"))
+    context = he.CallRunnerContext(
+        job=context.job,
+        bundle_dir=tmp,
+        work_directory=context.work_directory,
+        evidence_seam=context.evidence_seam,
+        target_provider_secret_values=context.target_provider_secret_values,
+        attempt_number=context.attempt_number,
+    )
+    runner = he._default_build_call_runner(mock.Mock(), context)
+    assert isinstance(runner, he.CallRunnerImpl)
 
 
 def test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit() -> (
@@ -3581,7 +3599,8 @@ TESTS = [
     test_peek_target_provider_secret_values_missing_file_is_empty,
     test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry,
     test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector,
-    test_default_build_call_runner_returns_notwired_for_retell_and_auto_too,
+    test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto,
+    test_default_build_call_runner_resolves_auto_voice_contract_to_livekit,
     test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit,
     test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam,
     test_row_counts_for_capability_returns_the_matching_store,
