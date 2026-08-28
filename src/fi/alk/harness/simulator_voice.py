@@ -519,6 +519,31 @@ def simulator_definition(
     )
 
 
+_PHONE_ALIASES = ("phone", "caller_phone", "caller_ani", "ani")
+
+
+def fixture_caller_phone(fixture: Mapping[str, Any] | None) -> str:
+    """The number the target must see for this scenario, wherever the fixture nested it.
+
+    Prose is not an identity transport. Miss this and every persona falls back to the worker's
+    demo ANI, so they all query the same rider and exercise the wrong cards, places and OTP rows.
+    """
+
+    def find(value: Any) -> str:
+        if isinstance(value, Mapping):
+            for name in _PHONE_ALIASES:
+                candidate = str(value.get(name) or "").strip()
+                if candidate:
+                    return candidate
+            for nested in value.values():
+                candidate = find(nested)
+                if candidate:
+                    return candidate
+        return ""
+
+    return find(fixture)
+
+
 def caller_scenario(
     *,
     name: str,
@@ -545,10 +570,10 @@ def caller_scenario(
             persona["voice"] = aura_voice_for(persona)
     fixture = fixture if isinstance(fixture, Mapping) else {}
     metadata = dict(persona.get("metadata") or {})
-    if fixture.get("phone"):
+    if caller_phone := fixture_caller_phone(fixture):
         # LiveKit exposes this as participant metadata/attributes, so a target hydrates the
         # seeded caller without knowing scenario internals.
-        metadata["caller_phone"] = str(fixture["phone"])
+        metadata["caller_phone"] = caller_phone
     persona["metadata"] = metadata
     if initial_message.strip():
         persona["initial_message"] = initial_message.strip()
@@ -644,6 +669,7 @@ __all__ = [
     "SIMULATOR_INSTRUCTIONS",
     "aura_voice_for",
     "caller_scenario",
+    "fixture_caller_phone",
     "cartesia_voice_for",
     "persona_stt_language",
     "simulation_spec",

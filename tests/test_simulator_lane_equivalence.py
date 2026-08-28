@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from fi.alk.harness.call_runner import _build_spec
-from fi.alk.harness.simulator_voice import caller_scenario
+from fi.alk.harness.simulator_voice import caller_scenario, fixture_caller_phone
 from fi.alk.harness.run.sdk_voice import build_spec as local_build_spec
 
 PERSONA = {
@@ -125,3 +125,23 @@ def test_the_caller_carries_the_scenario_phone():
         tts_provider="cartesia",
     )
     assert scenario.dataset[0].persona["metadata"]["caller_phone"] == "+14155550107"
+
+
+def test_the_caller_phone_is_found_however_the_fixture_nests_it():
+    # A fixture that nests the number, or names it with any accepted alias, must still reach the
+    # target. Missing it sends every persona in as the demo rider.
+    assert fixture_caller_phone({"phone": "+14155550107"}) == "+14155550107"
+    assert fixture_caller_phone({"ani": "+14155550102"}) == "+14155550102"
+    assert fixture_caller_phone({"rider": {"caller_phone": "+14155550103"}}) == "+14155550103"
+    assert fixture_caller_phone({"origin": "seed"}) == ""
+
+
+def test_a_nested_fixture_phone_reaches_the_persona_metadata():
+    scenario = caller_scenario(
+        name="nested",
+        persona={"name": "Noor"},
+        situation="book a ride",
+        fixture={"origin": "seed", "rider": {"caller_ani": "+14155550109"}},
+        tts_provider="cartesia",
+    )
+    assert scenario.dataset[0].persona["metadata"]["caller_phone"] == "+14155550109"
