@@ -614,24 +614,15 @@ async def _spoken_to(
             # A scenario that asks to be heard through background noise selects a clip for the
             # caller's environment; the voice engine mixes it under the caller. Cleared otherwise so
             # a previous call's noise never leaks into a quiet one.
-            from ..background_noise import enabled as noise_enabled
+            from ..background_noise import scenario_source
 
-            noisy = getattr(scenario, "background_noise", False) and noise_enabled()
-            if noisy:
-                from ..background_noise import source_for
-
-                # The scenario names the place when it cares which one; otherwise the fixture
-                # says where the caller is, and failing that any noise will do.
-                environment = noisy if isinstance(noisy, str) else ""
-                if not environment and isinstance(scenario.fixture, dict):
-                    environment = str(
-                        scenario.fixture.get("environment")
-                        or scenario.fixture.get("location")
-                        or ""
-                    )
-                os.environ["HARNESS_BACKGROUND_NOISE"] = source_for(
-                    environment, seed=scenario.name
-                )
+            source = scenario_source(
+                getattr(scenario, "background_noise", False),
+                scenario.fixture,
+                seed=scenario.name,
+            )
+            if source:
+                os.environ["HARNESS_BACKGROUND_NOISE"] = source
             else:
                 os.environ.pop("HARNESS_BACKGROUND_NOISE", None)
             code = place_the_call(

@@ -960,12 +960,11 @@ class LiveKitEngine(BaseEngine):
             customer_agent, models = await self._create_customer_agent(
                 persona,
                 simulator,
-                call_type=(
-                    "inbound"
-                    if conversation_direction == "simulator_first"
-                    else "outbound"
-                ),
-                agent_name=agent_definition.name,
+                # Who dialled and who speaks first are separate axes. The caller always places
+                # the call; conversation_direction only decides who opens once connected.
+                call_type="inbound",
+                # `name` is an identity for dispatch, not a label for the caller to hear.
+                agent_name=agent_definition.description,
                 min_turn_messages=min_turn_messages,
             )
             setup = getattr(self, "_last_simulator_setup", {}) or {}

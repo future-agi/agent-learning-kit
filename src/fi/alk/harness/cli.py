@@ -807,16 +807,26 @@ async def _auto(args: argparse.Namespace) -> int:
                 while written_count != wanted and repair_attempt < 2:
                     repair_attempt += 1
                     missing = wanted - written_count
+                    # Count alone is the wrong instruction: asked only for a number, the
+                    # stage pads with happy paths that satisfy cardinality and measure nothing.
                     stage_args.guidance = [
                         (
                             f"The hosted run requires exactly {wanted} scenarios, but "
                             f"only {written_count} are currently saved. "
                             + (
                                 f"Add exactly {missing} distinct validated scenario(s) and "
-                                "call save_scenarios. Preserve all existing scenarios."
+                                "call save_scenarios. Preserve all existing scenarios. Each "
+                                "one must meet the same bar as the rest of the suite: a "
+                                "different branch of the agent's behaviour from every "
+                                "scenario already saved, several steps deep, and failing "
+                                "when the agent does the wrong thing. Do not pad with "
+                                "variations of a scenario that already exists, and do not "
+                                "add a happy path that an existing scenario already covers."
                                 if missing > 0
                                 else f"Remove exactly {-missing} excess scenario(s), preserve "
-                                "the strongest coverage, and call save_scenarios."
+                                "the strongest coverage, and call save_scenarios. Drop the "
+                                "ones that duplicate a branch another scenario already "
+                                "exercises, not the ones that are hardest to pass."
                             )
                         )
                     ]

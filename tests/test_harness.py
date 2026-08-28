@@ -3884,6 +3884,7 @@ def test_sdk_voice_spec_keeps_canonical_and_engine_direction_aligned(monkeypatch
     assert spec.environment.config["params"]["conversation_direction"] == "agent_first"
 
 
+
 def test_each_source_worker_lifetime_gets_a_unique_dispatch_name():
     from fi.alk.harness.run.live import scoped_agent_name
 
@@ -4098,7 +4099,15 @@ def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkey
     )
     assert turns_for(contract) == 200
     assert environment_turns_for(contract, deferred_runtime=False) == 200
-    assert environment_turns_for(contract, deferred_runtime=True) == 80
+    # An agent this size is bounded by the ceiling rather than starved by it.
+    assert environment_turns_for(contract, deferred_runtime=True) == 200
+
+    larger = AgentContract(
+        agent="larger-agent",
+        tools=[ToolSpec(name=f"tool_{index}") for index in range(40)],
+    )
+    assert turns_for(larger) == 360
+    assert environment_turns_for(larger, deferred_runtime=True) == 200
 
     monkeypatch.setenv("ALK_HOSTED_ENVIRONMENT_MAX_TURNS", "40")
     assert environment_turns_for(contract, deferred_runtime=True) == 40

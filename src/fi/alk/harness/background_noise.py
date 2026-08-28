@@ -71,3 +71,19 @@ def source_for(environment: str = "", seed: str = "") -> str:
             if located:
                 return located
     return _BUILTIN_BY_ENVIRONMENT.get(env, _DEFAULT_BUILTIN)
+
+
+def scenario_source(
+    background_noise, fixture, seed: str = ""
+) -> str:
+    """The noise source for one scenario, or "" when it should be heard in the clear.
+
+    The scenario names the place when it cares which one; otherwise the fixture says where the
+    caller is, and failing that any noise will do.
+    """
+    if not background_noise or not enabled():
+        return ""
+    environment = background_noise if isinstance(background_noise, str) else ""
+    if not environment and isinstance(fixture, dict):
+        environment = str(fixture.get("environment") or fixture.get("location") or "")
+    return source_for(environment, seed=seed)

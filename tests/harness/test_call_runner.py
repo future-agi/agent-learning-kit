@@ -715,9 +715,9 @@ def test_place_call_outer_timeout_raises_call_aborted_with_timing_partial(
     """Forces the runner-owned `asyncio.wait_for` to actually fire (not just the SDK's own
     internal one) by shrinking every phase-overhead constant to a few milliseconds -- avoids a
     multi-minute real sleep in the test suite while still exercising the real timeout code path."""
-    monkeypatch.setattr(cr, "_CONNECT_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(cr, "_READINESS_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(cr, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cr, "CONNECT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cr, "READINESS_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cr, "CLEANUP_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(cr, "_RUN_SECONDS_PAD_SECONDS", 0.01)
     monkeypatch.setattr(cr, "_OUTER_WAIT_FOR_PAD_SECONDS", 0.01)
 

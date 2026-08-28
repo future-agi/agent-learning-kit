@@ -98,7 +98,7 @@ def turns_for(contract: AgentContract) -> int:
     return max(80, len(contract.tools or []) * 8 + 40)
 
 
-DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS = 80
+DEFAULT_HOSTED_ENVIRONMENT_MAX_TURNS = 200
 
 
 def environment_turns_for(
@@ -107,9 +107,11 @@ def environment_turns_for(
     """Bound unattended hosted correction without changing local authoring.
 
     Local interactive/Compose authoring retains the size-aware budget. Hosted authoring has no
-    operator present and must not spend hundreds of turns trying variations when the runtime or
-    adapter cannot satisfy a validation gate. An explicit lower requested budget still wins;
-    an explicit larger one remains capped in the Dockerless hosted lane.
+    operator present and must not spend unbounded turns trying variations when the runtime or
+    adapter cannot satisfy a validation gate. The ceiling matches what the size-aware budget
+    allows a twenty-tool agent, so a normal agent is bounded rather than starved. An explicit
+    lower requested budget still wins; an explicit larger one remains capped in the Dockerless
+    hosted lane.
     """
     budget = requested or turns_for(contract)
     if not deferred_runtime:
@@ -142,6 +144,19 @@ def open_stage(
 
     provisioned = ProvisionedEnvironment.load(destination)
     environment_note = ""
+    declared_store = str(
+        getattr(getattr(contract, "data_store", None), "kind", "") or ""
+    ).strip()
+    # The authoring store does not enforce the agent's types, so a structured column written as
+    # text survives here and is rejected on the first real call.
+    declared_store_note = (
+        "\n\nThis agent stores its records in "
+        + declared_store
+        + ", and the baseline seeded here is replayed into that engine before the first call. "
+        "Seed structured columns as real lists and objects, never as JSON text."
+        if declared_store.lower() not in ("", "sqlite", "in_process", "memory")
+        else ""
+    )
     if provisioned is not None and provisioned.running:
         service_tools = [
             entry.tool for entry in contract.tool_entrypoints if entry.mode == "service"
@@ -204,6 +219,12 @@ def open_stage(
             "sub-goals and world checks. Voice runtime tools are owned by the submitted worker: "
             "do not replace, bind or smoke-call them outside a real voice session. Their real "
             "behavior is validated when the generated scenarios run in Daytona."
+            + declared_store_note
+            + "\n\nYou cannot call a tool here, so you have not seen a single real response "
+            "shape. Write every world check and sub-goal against world state you can read now, "
+            "never against the fields or wording you expect a tool response to carry. A check "
+            "that asserts on an imagined response passes or fails for the wrong reason and "
+            "reports the agent did nothing when it did."
         )
     server, _world = world_tools(
         contract,
