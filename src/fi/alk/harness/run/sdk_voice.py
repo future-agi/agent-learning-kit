@@ -608,8 +608,11 @@ def build_spec(run_id: str) -> SimulationSpec:
         "readiness_timeout": 120,
         "cleanup_timeout": 30,
         "conversation_direction": direction,
+        # A cold agent worker has to start a subprocess before its first substantive turn,
+        # which on a loaded host outlasts a 45s deadline. Ending the call then records an
+        # infrastructure stall as an agent that stopped talking.
         "agent_first_silence_timeout_seconds": float(
-            os.environ.get("VOICE_AGENT_FIRST_SILENCE_SECONDS", "45")
+            os.environ.get("VOICE_AGENT_FIRST_SILENCE_SECONDS", "120")
         ),
     }
     agent = simulate.AgentDefinition(

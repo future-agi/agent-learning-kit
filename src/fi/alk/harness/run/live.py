@@ -278,6 +278,12 @@ def wire(
                 "TOOLS_API_URL": url,
                 "LIVEKIT_AGENT_NAME": agent_name,
             }
+            # The submitted agent picks its own model, and a tier that cannot emit a valid
+            # function call fails every scenario the moment it reaches for a tool. Allow an
+            # operator to pin it for a run without editing the submitted repository.
+            agent_model = os.environ.get("ALK_SUBMITTED_AGENT_MODEL", "").strip()
+            if agent_model:
+                runtime_overrides["AGENT_LLM_MODEL"] = agent_model
             os.environ["LIVEKIT_TARGET_AGENT_NAME"] = agent_name
             caller_phone = fixture_phone(scenario)
             if caller_phone:
