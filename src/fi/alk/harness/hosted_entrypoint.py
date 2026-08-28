@@ -2020,6 +2020,7 @@ async def run_job(
             evidence_seam=manifest.runtime.evidence_seam,
             target_provider_secret_values=target_provider_secret_values,
             attempt_number=capabilities.attempt_number,
+            source_directory=source,
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(

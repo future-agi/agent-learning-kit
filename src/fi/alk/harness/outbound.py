@@ -138,7 +138,11 @@ def canonical_bytes(value: Any) -> bytes:
     """
     try:
         return json.dumps(
-            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
     except ValueError as exc:
         raise OutboundError("canonical_value_not_finite", str(exc)) from exc
@@ -163,7 +167,11 @@ def _json_native_offense(value: Any, path: str) -> str | None:
     if isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
-                return f"{path}[<non-string-key>:{key!r}]" if path else f"<non-string-key>:{key!r}"
+                return (
+                    f"{path}[<non-string-key>:{key!r}]"
+                    if path
+                    else f"<non-string-key>:{key!r}"
+                )
             offense = _json_native_offense(item, f"{path}.{key}" if path else key)
             if offense is not None:
                 return offense
@@ -194,7 +202,9 @@ def whole_object_digest(obj: dict[str, Any]) -> str:
     core = {key: value for key, value in obj.items() if key != "digest"}
     offense = _json_native_offense(core, "")
     if offense is not None:
-        raise OutboundError("digest_value_not_json_native", f"non-JSON-native value at: {offense}")
+        raise OutboundError(
+            "digest_value_not_json_native", f"non-JSON-native value at: {offense}"
+        )
     return sha256_digest(canonical_bytes(core))
 
 
@@ -249,7 +259,9 @@ UtcMillisDatetime = Annotated[datetime, AfterValidator(_require_utc_millis)]
 # way a bearer token appears in git/registry output) -- a bare userinfo token is masked outright
 # rather than left verbatim on the theory that "a username alone is not a secret," which is false
 # for a token.
-_USERINFO_PATTERN = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^\s:/?#@]*)(:[^\s/?#]*)?@")
+_USERINFO_PATTERN = re.compile(
+    r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^\s:/?#@]*)(:[^\s/?#]*)?@"
+)
 
 
 def _mask_userinfo(match: re.Match[str]) -> str:
@@ -358,11 +370,13 @@ class HostedCapabilities(BaseModel):
         return format_rfc3339_millis(value)
 
     def auth_headers(self) -> dict[str, str]:
-        """"Every request: `Authorization: Bearer <token>` + `X-Harness-Fence: <fence>`." Pure
+        """ "Every request: `Authorization: Bearer <token>` + `X-Harness-Fence: <fence>`." Pure
         formatting -- issuing the request itself is a P8 transport-client concern."""
         return {"Authorization": f"Bearer {self.token}", "X-Harness-Fence": self.fence}
 
-    def event_builder(self, *, extra_secret_values: tuple[str, ...] = ()) -> Callable[..., dict[str, Any]]:
+    def event_builder(
+        self, *, extra_secret_values: tuple[str, ...] = ()
+    ) -> Callable[..., dict[str, Any]]:
         """A `build_event_record`-shaped callable with `job_id`/`attempt_id`/`attempt_number`
         closed over from THIS capabilities object. The contract's `403 attempt_mismatch` fires when
         an event's identity disagrees with the token authenticating it -- binding these three
@@ -401,7 +415,7 @@ class HostedCapabilities(BaseModel):
 
 
 def _endpoint_matches_attempt(url: str, attempt_id: str) -> bool:
-    """"an endpoint's `<attempt_id>` path segment disagrees with the declared `attempt_id`"
+    """ "an endpoint's `<attempt_id>` path segment disagrees with the declared `attempt_id`"
     (`capabilities_attempt_mismatch`, v1.3) -- checked as a whole path segment, not a substring, so
     an attempt_id that happens to be a substring of another segment can't produce a false match."""
     segments = [segment for segment in urlparse(url).path.split("/") if segment]
@@ -421,7 +435,7 @@ def _redact_validation_error(exc: ValidationError) -> str:
 
 
 def _warn_if_capabilities_file_insecure(target: Path) -> None:
-    """"owner svc-control, mode 0600" is the contract's posture for this file, but a wrong mode or
+    """ "owner svc-control, mode 0600" is the contract's posture for this file, but a wrong mode or
     owner is NOT a load-time rejection (MIN-5, fail-safe): the bearer is only a per-attempt token
     that expires on its own, and refusing to load it entirely over a permissions mistake would turn
     a minor hardening gap into a hard attempt failure. Loud warning only."""
@@ -434,7 +448,8 @@ def _warn_if_capabilities_file_insecure(target: Path) -> None:
         logger.warning(
             "%s: capabilities file mode is %o, expected 0600 -- a world/group-readable bearer in "
             "a multi-user sandbox is a leak risk (not blocking the load)",
-            target, mode,
+            target,
+            mode,
         )
     try:
         running_uid = os.geteuid()
@@ -444,7 +459,9 @@ def _warn_if_capabilities_file_insecure(target: Path) -> None:
         logger.warning(
             "%s: capabilities file is owned by uid %s, not the running uid %s -- expected owner "
             "svc-control per the contract (not blocking the load)",
-            target, info.st_uid, running_uid,
+            target,
+            info.st_uid,
+            running_uid,
         )
 
 
@@ -508,10 +525,19 @@ def load_capabilities(
             if not isinstance(value, str):
                 continue  # missing/wrong-typed -- a shape error pydantic below will catch
             if not value.endswith("/"):
-                raise CapabilitiesError("capabilities_endpoint_invalid", f"endpoints.{name} must end with '/'")
+                raise CapabilitiesError(
+                    "capabilities_endpoint_invalid",
+                    f"endpoints.{name} must end with '/'",
+                )
             if not value.startswith("https://"):
-                raise CapabilitiesError("capabilities_endpoint_insecure", f"endpoints.{name} must use https")
-            if isinstance(attempt_id, str) and attempt_id and not _endpoint_matches_attempt(value, attempt_id):
+                raise CapabilitiesError(
+                    "capabilities_endpoint_insecure", f"endpoints.{name} must use https"
+                )
+            if (
+                isinstance(attempt_id, str)
+                and attempt_id
+                and not _endpoint_matches_attempt(value, attempt_id)
+            ):
                 raise CapabilitiesError(
                     "capabilities_attempt_mismatch",
                     f"endpoints.{name} does not carry the declared attempt_id {attempt_id!r}",
@@ -520,11 +546,15 @@ def load_capabilities(
     try:
         capabilities = HostedCapabilities.model_validate(raw)
     except ValidationError as exc:
-        raise CapabilitiesError("capabilities_field_invalid", _redact_validation_error(exc)) from exc
+        raise CapabilitiesError(
+            "capabilities_field_invalid", _redact_validation_error(exc)
+        ) from exc
 
     current_time = (now or (lambda: datetime.now(timezone.utc)))()
     if capabilities.expires_at <= current_time:
-        raise CapabilitiesError("capabilities_expired", f"expires_at={capabilities.expires_at.isoformat()}")
+        raise CapabilitiesError(
+            "capabilities_expired", f"expires_at={capabilities.expires_at.isoformat()}"
+        )
 
     if unlink:
         try:
@@ -537,7 +567,8 @@ def load_capabilities(
                     "%s: failed to unlink the capabilities file after a successful load (%s) -- a "
                     "0600 bearer may still be on disk; the sandbox is destroyed at attempt end "
                     "regardless, so this does not fail the load",
-                    target, exc,
+                    target,
+                    exc,
                 )
     return capabilities
 
@@ -668,7 +699,10 @@ def truncate_log_message(
     """
     if len(canonical_bytes({"level": level, "message": message})) <= max_payload_bytes:
         return message
-    if len(canonical_bytes({"level": level, "message": _LOG_TRUNCATION_MARKER})) > max_payload_bytes:
+    if (
+        len(canonical_bytes({"level": level, "message": _LOG_TRUNCATION_MARKER}))
+        > max_payload_bytes
+    ):
         raise OutboundError(
             "log_payload_budget_too_small",
             f"max_payload_bytes={max_payload_bytes} cannot fit even the truncation marker",
@@ -677,7 +711,10 @@ def truncate_log_message(
     while lo <= hi:
         mid = (lo + hi) // 2
         candidate = message[:mid] + _LOG_TRUNCATION_MARKER
-        if len(canonical_bytes({"level": level, "message": candidate})) <= max_payload_bytes:
+        if (
+            len(canonical_bytes({"level": level, "message": candidate}))
+            <= max_payload_bytes
+        ):
             best = candidate
             lo = mid + 1
         else:
@@ -777,12 +814,24 @@ class HostedEventDraft(BaseModel):
         try:
             model_cls.model_validate(self.payload)
         except ValidationError as exc:
-            raise ValueError(f"event_payload_invalid: {self.type.value}: {exc}") from exc
+            raise ValueError(
+                f"event_payload_invalid: {self.type.value}: {exc}"
+            ) from exc
 
-        if self.type is OutboundEventType.STAGE_CHANGED and self.payload.get("to") != self.stage.value:
-            raise ValueError("event_stage_mismatch: stage_changed.to must equal the event's stage")
-        if self.type is OutboundEventType.TERMINAL and self.payload.get("stage") != self.stage.value:
-            raise ValueError("event_stage_mismatch: terminal.stage must equal the event's stage")
+        if (
+            self.type is OutboundEventType.STAGE_CHANGED
+            and self.payload.get("to") != self.stage.value
+        ):
+            raise ValueError(
+                "event_stage_mismatch: stage_changed.to must equal the event's stage"
+            )
+        if (
+            self.type is OutboundEventType.TERMINAL
+            and self.payload.get("stage") != self.stage.value
+        ):
+            raise ValueError(
+                "event_stage_mismatch: terminal.stage must equal the event's stage"
+            )
         return self
 
 
@@ -839,15 +888,21 @@ def build_event_record(
     elif type is OutboundEventType.BASELINE_FROZEN:
         baseline_ref = payload.get("baseline_ref")
         if isinstance(baseline_ref, str):
-            payload["baseline_ref"] = redact_outbound_text(baseline_ref, extra_secret_values)
+            payload["baseline_ref"] = redact_outbound_text(
+                baseline_ref, extra_secret_values
+            )
     elif type is OutboundEventType.TERMINAL:
         failure = payload.get("failure")
         if isinstance(failure, dict):
             redacted_failure = dict(failure)
             if isinstance(failure.get("code"), str):
-                redacted_failure["code"] = redact_outbound_text(failure["code"], extra_secret_values)
+                redacted_failure["code"] = redact_outbound_text(
+                    failure["code"], extra_secret_values
+                )
             if isinstance(failure.get("message"), str):
-                redacted_failure["message"] = redact_outbound_text(failure["message"], extra_secret_values)
+                redacted_failure["message"] = redact_outbound_text(
+                    failure["message"], extra_secret_values
+                )
             payload["failure"] = redacted_failure
     digest = event_payload_digest(payload)
     draft = HostedEventDraft(
@@ -891,7 +946,13 @@ class OutboundSpoolError(RuntimeError):
 
 def _iter_complete_records(
     data: bytes,
-) -> tuple[list[tuple[int, bytes, dict[str, Any] | list[Any] | str | int | float | bool | None]], int, int | None]:
+) -> tuple[
+    list[
+        tuple[int, bytes, dict[str, Any] | list[Any] | str | int | float | bool | None]
+    ],
+    int,
+    int | None,
+]:
     """Shared by `_recover` and `records()`/`pending_since_watermark()` -- the ONE place spool
     bytes are split into records, so both ever agree on what a "complete record" is.
 
@@ -980,7 +1041,9 @@ class OutboundSpool:
     _registry: ClassVar[dict[tuple[Path, str], "OutboundSpool"]] = {}
     _registry_lock: ClassVar[RLock] = RLock()
 
-    def __new__(cls, root: str | Path, name: str, *, sequenced: bool) -> "OutboundSpool":
+    def __new__(
+        cls, root: str | Path, name: str, *, sequenced: bool
+    ) -> "OutboundSpool":
         resolved_root = Path(root).expanduser().resolve()
         key = (resolved_root, name)
         with cls._registry_lock:
@@ -1011,7 +1074,9 @@ class OutboundSpool:
                 self.root = resolved_root
                 self.root.mkdir(parents=True, exist_ok=True)
                 try:
-                    os.chmod(self.root, 0o700)  # MIN-10: mkdir's mode is subject to umask
+                    os.chmod(
+                        self.root, 0o700
+                    )  # MIN-10: mkdir's mode is subject to umask
                 except OSError:
                     pass
                 self._name = name
@@ -1128,7 +1193,8 @@ class OutboundSpool:
         except OSError as exc:
             os.close(fd)
             raise OutboundSpoolError(
-                "outbound_spool_locked", f"{self._name}: already locked by another process"
+                "outbound_spool_locked",
+                f"{self._name}: already locked by another process",
             ) from exc
         return fd
 
@@ -1152,7 +1218,8 @@ class OutboundSpool:
                 "%s: spool corrupt at byte offset %d -- the file is left untouched; only records "
                 "before that offset are trusted. Reading degrades to the readable prefix rather "
                 "than raising -- this is reported once per process, not per read.",
-                self._name, offset,
+                self._name,
+                offset,
             )
 
     @property
@@ -1186,7 +1253,9 @@ class OutboundSpool:
                     with self._path.open("r+b") as stream:
                         stream.truncate(valid_length)
                         stream.flush()
-                        os.fsync(stream.fileno())  # MIN-11: durable, not left as a crash window
+                        os.fsync(
+                            stream.fileno()
+                        )  # MIN-11: durable, not left as a crash window
         if self._sequenced:
             max_sequence = 0
             offsets: dict[int, int] = {}
@@ -1205,7 +1274,9 @@ class OutboundSpool:
                     "-- the log lost records the platform already processed; seeding "
                     "next_sequence from the watermark so newly allocated sequences don't collide "
                     "with ones the platform already closed",
-                    self._name, watermark, max_sequence,
+                    self._name,
+                    watermark,
+                    max_sequence,
                 )
             self._next_sequence = max(max_sequence, watermark) + 1
 
@@ -1230,7 +1301,9 @@ class OutboundSpool:
                 "%s: rollback of a failed append could not truncate the spool back to %d bytes "
                 "(%s) -- the file may now carry torn bytes; poisoning this spool so a caller sees "
                 "a typed error instead of a future append compounding the corruption",
-                self._name, size, exc,
+                self._name,
+                size,
+                exc,
             )
 
     def append(self, record: dict[str, Any]) -> SpooledRecord:
@@ -1251,7 +1324,8 @@ class OutboundSpool:
                 # strings), so this would only fire on a value this module's own canonicalization
                 # contract disallows.
                 raise OutboundSpoolError(
-                    "outbound_spool_record_unframable", f"{self._name}: record contains a raw newline"
+                    "outbound_spool_record_unframable",
+                    f"{self._name}: record contains a raw newline",
                 )
             existed_before = self._path.exists()
             size_before = self._path.stat().st_size if existed_before else 0
@@ -1292,11 +1366,17 @@ class OutboundSpool:
         with self._path.open("rb") as stream:
             data = stream.read(size)
         parsed, _valid_length, corruption_offset = _iter_complete_records(data)
-        if corruption_offset is not None:  # N8: degrade to the readable prefix, never raise here
+        if (
+            corruption_offset is not None
+        ):  # N8: degrade to the readable prefix, never raise here
             self._report_corruption(corruption_offset)
         out: list[SpooledRecord] = []
         for _offset, line, decoded in parsed:
-            sequence = decoded.get("sequence") if self._sequenced and isinstance(decoded, dict) else None
+            sequence = (
+                decoded.get("sequence")
+                if self._sequenced and isinstance(decoded, dict)
+                else None
+            )
             out.append(SpooledRecord(sequence=sequence, body=line))
         return out
 
@@ -1332,7 +1412,8 @@ class OutboundSpool:
                 "%s: watermark file is corrupt or unreadable (%s) -- degrading to 0. Re-sending "
                 "already-acked events is safe (at-least-once + dedupe on event_id); wedging the "
                 "spool permanently is not.",
-                self._name, exc,
+                self._name,
+                exc,
             )
             return 0
 
@@ -1363,12 +1444,15 @@ class OutboundSpool:
                 )
             if sequence == current:
                 return
-            temporary = self.root / f"{self._name}.spool.watermark.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+            temporary = (
+                self.root
+                / f"{self._name}.spool.watermark.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+            )
             with temporary.open("wb") as stream:
                 stream.write(
-                    json.dumps({"acked_through_sequence": sequence}, separators=(",", ":")).encode(
-                        "utf-8"
-                    )
+                    json.dumps(
+                        {"acked_through_sequence": sequence}, separators=(",", ":")
+                    ).encode("utf-8")
                 )
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -1405,10 +1489,15 @@ class OutboundSpool:
             stream.seek(offset)
             data = stream.read(size - offset)
         parsed, _valid_length, corruption_offset = _iter_complete_records(data)
-        if corruption_offset is not None:  # N8: absolute offset -- `data` starts at `offset`
+        if (
+            corruption_offset is not None
+        ):  # N8: absolute offset -- `data` starts at `offset`
             self._report_corruption(offset + corruption_offset)
         return [
-            SpooledRecord(sequence=decoded.get("sequence") if isinstance(decoded, dict) else None, body=line)
+            SpooledRecord(
+                sequence=decoded.get("sequence") if isinstance(decoded, dict) else None,
+                body=line,
+            )
             for _offset, line, decoded in parsed
         ]
 
@@ -1445,17 +1534,25 @@ class OutboundSpool:
                     "offset (including not-yet-delivered ones) would be destroyed. The log is left "
                     "intact and grows unbounded until the attempt ends; that is the fail-safe half "
                     "of degrade-not-wedge.",
-                    self._name, corruption_offset,
+                    self._name,
+                    corruption_offset,
                 )
                 return
-            temporary = self.root / f"{self._name}.spool.jsonl.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+            temporary = (
+                self.root
+                / f"{self._name}.spool.jsonl.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+            )
             offsets: dict[int, int] = {}
             offset = 0
             with temporary.open("wb") as stream:
                 for _old_offset, line, decoded in parsed:
                     if not keep(decoded):
                         continue
-                    if self._sequenced and isinstance(decoded, dict) and isinstance(decoded.get("sequence"), int):
+                    if (
+                        self._sequenced
+                        and isinstance(decoded, dict)
+                        and isinstance(decoded.get("sequence"), int)
+                    ):
                         offsets[decoded["sequence"]] = offset
                     stream.write(line)
                     stream.write(b"\n")
@@ -1484,10 +1581,12 @@ class OutboundSpool:
             raise OutboundSpoolError("outbound_spool_unsequenced", self._name)
         effective = min(sequence, self.watermark())
         self._rewrite_retaining(
-            lambda decoded: not (
-                isinstance(decoded, dict)
-                and isinstance(decoded.get("sequence"), int)
-                and decoded["sequence"] <= effective
+            lambda decoded: (
+                not (
+                    isinstance(decoded, dict)
+                    and isinstance(decoded.get("sequence"), int)
+                    and decoded["sequence"] <= effective
+                )
             )
         )
 
@@ -1519,7 +1618,12 @@ class OutboundSpool:
         if not sequence_set:
             return
         self._rewrite_retaining(
-            lambda decoded: not (isinstance(decoded, dict) and decoded.get("sequence") in sequence_set)
+            lambda decoded: (
+                not (
+                    isinstance(decoded, dict)
+                    and decoded.get("sequence") in sequence_set
+                )
+            )
         )
 
     def drop(self, sequence: int) -> None:
@@ -1635,7 +1739,7 @@ def _iter_chunks(data: bytes, chunk_size: int) -> Iterator[bytes]:
 
 
 def _parse_retry_after(headers: Mapping[str, str] | None) -> float | None:
-    """"429 -> honor `Retry-After`." Only the delta-seconds form is parsed (the integer count of
+    """ "429 -> honor `Retry-After`." Only the delta-seconds form is parsed (the integer count of
     seconds to wait) -- the contract never mentions the alternative HTTP-date form and every
     platform emitter in this ecosystem is expected to send the simple form; an unparseable value is
     treated as absent so the caller falls back to the computed backoff rather than crashing.
@@ -1743,7 +1847,12 @@ class ChannelState:
     """
 
     def __init__(self) -> None:
-        self._error: HostedFencedError | HostedChannelFailedError | HostedAttemptSupersededError | None = None
+        self._error: (
+            HostedFencedError
+            | HostedChannelFailedError
+            | HostedAttemptSupersededError
+            | None
+        ) = None
         self._lock = RLock()
 
     def check(self) -> None:
@@ -1753,7 +1862,8 @@ class ChannelState:
             raise error
 
     def latch(
-        self, exc: "HostedFencedError | HostedChannelFailedError | HostedAttemptSupersededError"
+        self,
+        exc: "HostedFencedError | HostedChannelFailedError | HostedAttemptSupersededError",
     ) -> None:
         with self._lock:
             if self._error is None:
@@ -1798,16 +1908,32 @@ def classify_response(
             status_code=None,
         )
     if status_code in (401, 403):
-        return ChannelError(ChannelOutcome.FENCED, None, error_code or "fenced", message, status_code=status_code)
+        return ChannelError(
+            ChannelOutcome.FENCED,
+            None,
+            error_code or "fenced",
+            message,
+            status_code=status_code,
+        )
     if status_code == 404:
         # N29: PLATFORM_SYNC on every 404 attempt, not just the third -- a 404 is never a
         # connectivity fault under §4.6; only the third attempt's outcome is ever surfaced to a
         # caller, but the domain should not silently disagree across attempts 1-2 vs 3.
         domain = FailureDomain.PLATFORM_SYNC
         if attempt < 3:
-            return ChannelError(ChannelOutcome.RETRYABLE, domain, error_code or "not_found", message, status_code=404)
+            return ChannelError(
+                ChannelOutcome.RETRYABLE,
+                domain,
+                error_code or "not_found",
+                message,
+                status_code=404,
+            )
         return ChannelError(
-            ChannelOutcome.CHANNEL_FAILED, domain, error_code or "not_found", message, status_code=404
+            ChannelOutcome.CHANNEL_FAILED,
+            domain,
+            error_code or "not_found",
+            message,
+            status_code=404,
         )
     if status_code == 413:
         # N7: 413 is Channel 3's artifact-budget code specifically -- only classify it
@@ -1817,10 +1943,18 @@ def classify_response(
         # channel doesn't have.
         if error_code == "artifact_budget_exceeded":
             return ChannelError(
-                ChannelOutcome.BUDGET_EXCEEDED, None, error_code, message, status_code=413
+                ChannelOutcome.BUDGET_EXCEEDED,
+                None,
+                error_code,
+                message,
+                status_code=413,
             )
         return ChannelError(
-            ChannelOutcome.PERMANENT_ITEM, None, error_code or "http_413", message, status_code=413
+            ChannelOutcome.PERMANENT_ITEM,
+            None,
+            error_code or "http_413",
+            message,
+            status_code=413,
         )
     if status_code == 429:
         return ChannelError(
@@ -1833,24 +1967,39 @@ def classify_response(
         )
     if status_code in (400, 409, 422):
         return ChannelError(
-            ChannelOutcome.PERMANENT_ITEM, None, error_code or f"http_{status_code}", message, status_code=status_code
+            ChannelOutcome.PERMANENT_ITEM,
+            None,
+            error_code or f"http_{status_code}",
+            message,
+            status_code=status_code,
         )
     if 500 <= status_code < 600:
         return ChannelError(
-            ChannelOutcome.RETRYABLE, FailureDomain.CONNECTIVITY, error_code or "server_error", message,
+            ChannelOutcome.RETRYABLE,
+            FailureDomain.CONNECTIVITY,
+            error_code or "server_error",
+            message,
             status_code=status_code,
         )
     if 400 <= status_code < 500:
         # "Catch-all: any unlisted 4xx is permanent for that item."
         return ChannelError(
-            ChannelOutcome.PERMANENT_ITEM, None, error_code or f"http_{status_code}", message, status_code=status_code
+            ChannelOutcome.PERMANENT_ITEM,
+            None,
+            error_code or f"http_{status_code}",
+            message,
+            status_code=status_code,
         )
     # N27: no other status family is contractual -- notably a 3xx, which should never occur (every
     # endpoint ends in "/" precisely so Django's POST-redirect problem never arises). Treat as
     # permanent rather than retrying an endpoint misconfiguration `max_attempts` times before
     # giving up anyway.
     return ChannelError(
-        ChannelOutcome.PERMANENT_ITEM, None, error_code or f"http_{status_code}", message, status_code=status_code
+        ChannelOutcome.PERMANENT_ITEM,
+        None,
+        error_code or f"http_{status_code}",
+        message,
+        status_code=status_code,
     )
 
 
@@ -1861,11 +2010,13 @@ def compute_backoff_seconds(
     max_backoff_seconds: float,
     rng: Callable[[], float] = random.random,
 ) -> float:
-    """"retry with backoff (base `retry.initial_backoff_seconds`, cap `retry.max_backoff_seconds`,
+    """ "retry with backoff (base `retry.initial_backoff_seconds`, cap `retry.max_backoff_seconds`,
     full jitter)" -- `uniform(0, min(cap, base * 2**(attempt-1)))`. `attempt` is the 1-based attempt
     that just failed. `rng` is injectable so callers (and tests) can get a deterministic value.
     """
-    ceiling = min(max_backoff_seconds, initial_backoff_seconds * (2 ** max(0, attempt - 1)))
+    ceiling = min(
+        max_backoff_seconds, initial_backoff_seconds * (2 ** max(0, attempt - 1))
+    )
     return rng() * ceiling
 
 
@@ -1972,7 +2123,9 @@ def _perform_with_retry(
             return response, error
         delay = error.retry_after_seconds
         if delay is not None:
-            delay = min(delay, retry_policy.max_backoff_seconds)  # N5: clamp Retry-After
+            delay = min(
+                delay, retry_policy.max_backoff_seconds
+            )  # N5: clamp Retry-After
         else:
             delay = compute_backoff_seconds(
                 attempt,
@@ -2016,7 +2169,9 @@ class EventsFlushResult:
     dropped_records: list[SpooledRecord] = field(default_factory=list)
 
 
-_EVENTS_BATCH_PREFIX = b'{"schema_version":"' + EVENT_SCHEMA_VERSION.encode("utf-8") + b'","events":['
+_EVENTS_BATCH_PREFIX = (
+    b'{"schema_version":"' + EVENT_SCHEMA_VERSION.encode("utf-8") + b'","events":['
+)
 _EVENTS_BATCH_SUFFIX = b"]}"
 
 
@@ -2028,7 +2183,11 @@ def _encode_events_batch(records: list[SpooledRecord]) -> bytes:
     `OutboundSpool.append` already wrote for each event, closing the deviation rather than merely
     documenting it. Safe because `EVENT_SCHEMA_VERSION` is a fixed ASCII constant with no bytes
     needing escape."""
-    return _EVENTS_BATCH_PREFIX + b",".join(record.body for record in records) + _EVENTS_BATCH_SUFFIX
+    return (
+        _EVENTS_BATCH_PREFIX
+        + b",".join(record.body for record in records)
+        + _EVENTS_BATCH_SUFFIX
+    )
 
 
 class EventsClient:
@@ -2106,16 +2265,26 @@ class EventsClient:
         error: ChannelError | None = None
         while True:
             body_bytes = _encode_events_batch(batch)
-            headers = {**self._capabilities.auth_headers(), "Content-Type": "application/json"}
+            headers = {
+                **self._capabilities.auth_headers(),
+                "Content-Type": "application/json",
+            }
 
             def perform(_attempt: int) -> TransportResponse:
                 return self._transport.request(
-                    "POST", self._capabilities.endpoints.events, headers=headers, data=body_bytes
+                    "POST",
+                    self._capabilities.endpoints.events,
+                    headers=headers,
+                    data=body_bytes,
                 )
 
             try:
                 response, error = _perform_with_retry(
-                    perform, retry_policy=self._retry_policy, sleep=self._sleep, rng=self._rng, deadline=deadline
+                    perform,
+                    retry_policy=self._retry_policy,
+                    sleep=self._sleep,
+                    rng=self._rng,
+                    deadline=deadline,
                 )
             except (HostedFencedError, HostedChannelFailedError) as exc:
                 self._channel_state.latch(exc)
@@ -2126,7 +2295,9 @@ class EventsClient:
             if error is not None and error.status_code == 413 and len(batch) > 1:
                 logger.warning(
                     "events flush: batch of %d events (%d bytes) was rejected with 413 -- halving "
-                    "and retrying", len(batch), len(body_bytes),
+                    "and retrying",
+                    len(batch),
+                    len(body_bytes),
                 )
                 batch = batch[: len(batch) // 2]
                 continue
@@ -2150,19 +2321,25 @@ class EventsClient:
             acked_through = None
             logger.warning(
                 "events flush: 2xx response has a missing/invalid acked_through_sequence (got %r) "
-                "-- treating as a protocol violation, not advancing the watermark", raw_acked,
+                "-- treating as a protocol violation, not advancing the watermark",
+                raw_acked,
             )
 
         raw_rejected = body.get("rejected")
         if isinstance(raw_rejected, list):
-            rejected_entries = [entry for entry in raw_rejected if isinstance(entry, dict)]
+            rejected_entries = [
+                entry for entry in raw_rejected if isinstance(entry, dict)
+            ]
             if len(rejected_entries) != len(raw_rejected):
-                logger.warning("events flush: rejected[] contained non-object entries -- ignoring them")
+                logger.warning(
+                    "events flush: rejected[] contained non-object entries -- ignoring them"
+                )
         else:
             rejected_entries = []
             if raw_rejected is not None:
                 logger.warning(
-                    "events flush: rejected is %r, not a list -- treating as empty", type(raw_rejected).__name__
+                    "events flush: rejected is %r, not a list -- treating as empty",
+                    type(raw_rejected).__name__,
                 )
 
         if acked_through is None:
@@ -2179,24 +2356,33 @@ class EventsClient:
         # untrusted input this module owes no obedience to (it cannot be dropped, since it was
         # never spooled under that number in the first place, and trusting it would let a
         # malformed ack orphan pending records by a route the M7 clamp doesn't guard).
-        batch_sequences = {record.sequence for record in batch if record.sequence is not None}
+        batch_sequences = {
+            record.sequence for record in batch if record.sequence is not None
+        }
         valid_rejected: list[dict[str, Any]] = []
         for entry in rejected_entries:
             sequence = entry.get("sequence")
-            if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence in batch_sequences:
+            if (
+                isinstance(sequence, int)
+                and not isinstance(sequence, bool)
+                and sequence in batch_sequences
+            ):
                 valid_rejected.append(entry)
             else:
                 logger.warning(
                     "events flush: rejected entry names sequence=%r, which was not sent in this "
                     "batch (sent=%s) -- ignoring as untrusted platform input",
-                    sequence, sorted(batch_sequences),
+                    sequence,
+                    sorted(batch_sequences),
                 )
 
         # P9: capture the dropped records' own bodies BEFORE drop_many physically removes them --
         # once removed, this is the only place a caller can still recover the payload the contract
         # requires be "written to the artifact spool (`log` kind)" for a rejected event.
         rejected_sequences = {entry["sequence"] for entry in valid_rejected}
-        dropped_records = [record for record in batch if record.sequence in rejected_sequences]
+        dropped_records = [
+            record for record in batch if record.sequence in rejected_sequences
+        ]
 
         # N1/N14: pure physical removal, batched into one rewrite -- drop_many never touches the
         # watermark; the batch-level advance_watermark(acked_through) below is the ONLY chokepoint.
@@ -2211,7 +2397,8 @@ class EventsClient:
             logger.warning(
                 "events flush: platform returned an untrusted acked_through_sequence=%s outside "
                 "the guest's trusted range -- ignoring the ack, watermark unchanged at %s",
-                acked_through, self._spool.watermark(),
+                acked_through,
+                self._spool.watermark(),
             )
             return EventsFlushResult(
                 delivered_count=0,
@@ -2292,11 +2479,18 @@ class CallSummary(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
-        for label, value in (("started_at", self.started_at), ("ended_at", self.ended_at)):
+        for label, value in (
+            ("started_at", self.started_at),
+            ("ended_at", self.ended_at),
+        ):
             if not is_valid_rfc3339_millis(value):
                 raise ValueError(f"call_timestamp_invalid: {label}={value!r}")
-        if self.transcript_artifact is not None and not is_valid_digest(self.transcript_artifact):
-            raise ValueError(f"call_transcript_artifact_invalid: {self.transcript_artifact!r}")
+        if self.transcript_artifact is not None and not is_valid_digest(
+            self.transcript_artifact
+        ):
+            raise ValueError(
+                f"call_transcript_artifact_invalid: {self.transcript_artifact!r}"
+            )
         for artifact in self.recording_artifacts:
             if not is_valid_digest(artifact):
                 raise ValueError(f"call_recording_artifact_invalid: {artifact!r}")
@@ -2358,7 +2552,11 @@ class ResultReceiptDraft(BaseModel):
         expected = whole_object_digest(self.model_dump(mode="json", exclude={"digest"}))
         if self.digest != expected:
             unset = _unset_default_fields(self)
-            hint = f" -- fields not explicitly set, filled from defaults: {', '.join(unset)}" if unset else ""
+            hint = (
+                f" -- fields not explicitly set, filled from defaults: {', '.join(unset)}"
+                if unset
+                else ""
+            )
             raise ValueError(f"receipt_digest_mismatch{hint}")
 
         if self.status is ScenarioStatus.SKIPPED:
@@ -2404,14 +2602,22 @@ def build_result_receipt(
     """
 
     def _redact(text: Any) -> Any:
-        return redact_outbound_text(text, extra_secret_values) if isinstance(text, str) else text
+        return (
+            redact_outbound_text(text, extra_secret_values)
+            if isinstance(text, str)
+            else text
+        )
 
     sub_goals = [
-        {**goal, "reason": _redact(goal.get("reason"))} if isinstance(goal, dict) else goal
+        {**goal, "reason": _redact(goal.get("reason"))}
+        if isinstance(goal, dict)
+        else goal
         for goal in sub_goals
     ]
     evaluations = [
-        {**item, "reason": _redact(item.get("reason"))} if isinstance(item, dict) else item
+        {**item, "reason": _redact(item.get("reason"))}
+        if isinstance(item, dict)
+        else item
         for item in evaluations
     ]
     if isinstance(failure, dict):
@@ -2444,7 +2650,12 @@ def build_result_receipt(
 
 
 def build_skipped_receipt(
-    *, job_id: str, attempt_id: str, attempt_number: int, scenario_key: str, scenario_id: str
+    *,
+    job_id: str,
+    attempt_id: str,
+    attempt_number: int,
+    scenario_key: str,
+    scenario_id: str,
 ) -> dict[str, Any]:
     """The "exact" synthesized body for a scenario that never ran ("The guest synthesizes these
     during the flush window; the finalizer backfills any still missing")."""
@@ -2499,7 +2710,9 @@ class ResultsClient:
         self._rng = rng
         self._channel_state = channel_state or ChannelState()
 
-    def push(self, receipt: dict[str, Any], *, deadline: float | None = None) -> ReceiptPushResult:
+    def push(
+        self, receipt: dict[str, Any], *, deadline: float | None = None
+    ) -> ReceiptPushResult:
         self._channel_state.check()
 
         def perform(_attempt: int) -> TransportResponse:
@@ -2512,7 +2725,11 @@ class ResultsClient:
 
         try:
             response, error = _perform_with_retry(
-                perform, retry_policy=self._retry_policy, sleep=self._sleep, rng=self._rng, deadline=deadline
+                perform,
+                retry_policy=self._retry_policy,
+                sleep=self._sleep,
+                rng=self._rng,
+                deadline=deadline,
             )
         except (HostedFencedError, HostedChannelFailedError) as exc:
             self._channel_state.latch(exc)
@@ -2520,7 +2737,9 @@ class ResultsClient:
         if error is not None and error.code == "attempt_superseded":  # N22
             self._channel_state.latch(HostedAttemptSupersededError(error))
         if error is not None or response is None:
-            return ReceiptPushResult(delivered=False, already_existed=False, error=error)
+            return ReceiptPushResult(
+                delivered=False, already_existed=False, error=error
+            )
         # N20: `200` is read as "already exists / duplicate" per the contract's idempotency rule;
         # the contract never states the success code for a genuinely NEW receipt (this module's own
         # `FakePlatform` uses `201`, unconfirmed against the real platform -- see the review report).
@@ -2549,12 +2768,17 @@ class ArtifactKind(str, Enum):
 
 
 _RESERVED_ARTIFACT_KINDS = frozenset(
-    {ArtifactKind.BUILD, ArtifactKind.TRANSCRIPT, ArtifactKind.TOOL_TRACE, ArtifactKind.RESULT}
+    {
+        ArtifactKind.BUILD,
+        ArtifactKind.TRANSCRIPT,
+        ArtifactKind.TOOL_TRACE,
+        ArtifactKind.RESULT,
+    }
 )
 
 
 def is_reserved_artifact_kind(kind: ArtifactKind) -> bool:
-    """"the budget is partitioned by reservation: `build` + `transcript` + `tool_trace` + `result`
+    """ "the budget is partitioned by reservation: `build` + `transcript` + `tool_trace` + `result`
     are reserved (always admitted); recordings next; `trace`/`log`/`other` last.\""""
     return kind in _RESERVED_ARTIFACT_KINDS
 
@@ -2597,7 +2821,9 @@ class ArtifactBudgetTracker:
     subset of "recordings next; trace/log/other last" this class alone can enforce.
     """
 
-    def __init__(self, max_artifact_bytes: int, *, recording_headroom_bytes: int = 0) -> None:
+    def __init__(
+        self, max_artifact_bytes: int, *, recording_headroom_bytes: int = 0
+    ) -> None:
         self._max_bytes = max_artifact_bytes
         self._admitted_bytes = 0
         self._seen_digests: set[str] = set()
@@ -2661,7 +2887,11 @@ class ArtifactManifestDraft(BaseModel):
         expected = whole_object_digest(self.model_dump(mode="json", exclude={"digest"}))
         if self.digest != expected:
             unset = _unset_default_fields(self)
-            hint = f" -- fields not explicitly set, filled from defaults: {', '.join(unset)}" if unset else ""
+            hint = (
+                f" -- fields not explicitly set, filled from defaults: {', '.join(unset)}"
+                if unset
+                else ""
+            )
             raise ValueError(f"manifest_digest_mismatch{hint}")
         return self
 
@@ -2717,6 +2947,28 @@ def _default_content_type(kind: ArtifactKind) -> str:
     """N17: §3a pins recordings to mp4 and `transcript` to a JSON array; a platform serving these
     back to a UI needs an accurate `Content-Type`, not a blanket octet-stream."""
     return _DEFAULT_ARTIFACT_CONTENT_TYPES.get(kind, "application/octet-stream")
+
+
+def _artifact_content_type(kind: ArtifactKind, data: bytes) -> str:
+    """Return the wire MIME type, preferring the bytes over the nominal format.
+
+    Hosted voice engines currently materialize RIFF/WAVE recordings even though
+    the v1.4 artifact contract's preferred recording format is MP4.  Advertising
+    those bytes as ``video/mp4`` makes browsers reject an otherwise valid audio
+    artifact.  Keep the contractual default for opaque/test payloads, but sniff
+    the two recording formats we actually support before uploading.
+    """
+    if kind in {
+        ArtifactKind.RECORDING_COMBINED,
+        ArtifactKind.RECORDING_STEREO,
+        ArtifactKind.RECORDING_CUSTOMER,
+        ArtifactKind.RECORDING_ASSISTANT,
+    }:
+        if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+            return "audio/wav"
+        if len(data) >= 12 and data[4:8] == b"ftyp":
+            return "video/mp4"
+    return _default_content_type(kind)
 
 
 class ArtifactsClient:
@@ -2780,14 +3032,18 @@ class ArtifactsClient:
             logger.warning(
                 "artifacts upload: budget already exhausted (413 artifact_budget_exceeded observed "
                 "earlier this attempt) -- skipping non-reserved kind=%s without contacting the "
-                "platform", kind.value,
+                "platform",
+                kind.value,
             )
             return ArtifactUploadResult(
                 delivered=False,
                 already_existed=False,
                 error=ChannelError(
-                    ChannelOutcome.BUDGET_EXCEEDED, None, "artifact_budget_exceeded",
-                    "budget already exhausted for this attempt (latched locally)", status_code=None,
+                    ChannelOutcome.BUDGET_EXCEEDED,
+                    None,
+                    "artifact_budget_exceeded",
+                    "budget already exhausted for this attempt (latched locally)",
+                    status_code=None,
                 ),
             )
         if not re.fullmatch(r"[0-9a-f]{64}", artifact_id_hex):
@@ -2808,7 +3064,7 @@ class ArtifactsClient:
             **self._capabilities.auth_headers(),
             "X-Artifact-Kind": kind.value,
             "X-Artifact-Size": str(size),
-            "Content-Type": content_type or _default_content_type(kind),
+            "Content-Type": content_type or _artifact_content_type(kind, data),
         }
         if scenario_key is not None:
             headers["X-Scenario-Key"] = scenario_key
@@ -2824,22 +3080,34 @@ class ArtifactsClient:
 
         response: TransportResponse | None = None
         error: ChannelError | None = None
-        for outer_attempt in range(2):  # "re-upload once" on a platform-confirmed digest mismatch
+        for outer_attempt in range(
+            2
+        ):  # "re-upload once" on a platform-confirmed digest mismatch
             try:
                 response, error = _perform_with_retry(
-                    perform, retry_policy=self._retry_policy, sleep=self._sleep, rng=self._rng, deadline=deadline
+                    perform,
+                    retry_policy=self._retry_policy,
+                    sleep=self._sleep,
+                    rng=self._rng,
+                    deadline=deadline,
                 )
             except (HostedFencedError, HostedChannelFailedError) as exc:
                 self._channel_state.latch(exc)
                 raise
-            if not (error is not None and error.code == "digest_mismatch" and outer_attempt == 0):
+            if not (
+                error is not None
+                and error.code == "digest_mismatch"
+                and outer_attempt == 0
+            ):
                 break
 
         if error is not None and error.outcome is ChannelOutcome.BUDGET_EXCEEDED:
             self._budget_exhausted = True  # N18
 
         if error is not None or response is None:
-            return ArtifactUploadResult(delivered=False, already_existed=False, error=error)
+            return ArtifactUploadResult(
+                delivered=False, already_existed=False, error=error
+            )
         # N20: `200` is read as "already exists" per the contract's content-addressed upload
         # semantics; the success code for a genuinely NEW upload is `201` (this module's own
         # `FakePlatform` matches that but it is unconfirmed against the real platform).
@@ -2847,18 +3115,27 @@ class ArtifactsClient:
             delivered=True, already_existed=response.status_code == 200, error=None
         )
 
-    def push_manifest(self, manifest: dict[str, Any], *, deadline: float | None = None) -> ManifestPushResult:
+    def push_manifest(
+        self, manifest: dict[str, Any], *, deadline: float | None = None
+    ) -> ManifestPushResult:
         self._channel_state.check()
         url = f"{self._capabilities.endpoints.artifacts}manifest/"
 
         def perform(_attempt: int) -> TransportResponse:
             return self._transport.request(
-                "POST", url, headers=self._capabilities.auth_headers(), json_body=manifest
+                "POST",
+                url,
+                headers=self._capabilities.auth_headers(),
+                json_body=manifest,
             )
 
         try:
             response, error = _perform_with_retry(
-                perform, retry_policy=self._retry_policy, sleep=self._sleep, rng=self._rng, deadline=deadline
+                perform,
+                retry_policy=self._retry_policy,
+                sleep=self._sleep,
+                rng=self._rng,
+                deadline=deadline,
             )
         except (HostedFencedError, HostedChannelFailedError) as exc:
             self._channel_state.latch(exc)
@@ -2866,7 +3143,9 @@ class ArtifactsClient:
         if error is not None and error.code == "attempt_superseded":  # N22
             self._channel_state.latch(HostedAttemptSupersededError(error))
         if error is not None or response is None:
-            return ManifestPushResult(delivered=False, already_existed=False, error=error)
+            return ManifestPushResult(
+                delivered=False, already_existed=False, error=error
+            )
         # N20: same caveat as receipts/uploads above -- `200` == duplicate is contract-stated,
         # the new-manifest success code is `201` per `FakePlatform`, unconfirmed against the real
         # platform.

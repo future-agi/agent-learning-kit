@@ -77,7 +77,10 @@ class _HostedToolStore:
 
 
 def _tool_world(
-    bundle_dir: Path, contract: AgentContract, runtime: EnvironmentRuntime
+    bundle_dir: Path,
+    contract: AgentContract,
+    runtime: EnvironmentRuntime,
+    source_directory: Path | None = None,
 ) -> GeneratedWorld:
     endpoint = runtime.endpoints.get("world_db")
     if endpoint is None or endpoint.protocol != "postgres":
@@ -92,6 +95,8 @@ def _tool_world(
         if path.is_file():
             world.handlers[tool.name] = path.read_text(encoding="utf-8")
     world.refusal_signature = contract.refusal_signature
+    if source_directory is not None:
+        world.reach(str(source_directory))
     return world
 
 
@@ -186,7 +191,12 @@ class HostedChatCallRunner:
         instruction = str(document.get("instruction") or "").strip()
         if not instruction:
             raise CallAborted("chat_scenario_invalid: instruction is empty")
-        target_world = _tool_world(self._context.bundle_dir, self._contract, runtime)
+        target_world = _tool_world(
+            self._context.bundle_dir,
+            self._contract,
+            runtime,
+            self._context.source_directory,
+        )
         wrapper = HTTPAgentWrapper(
             endpoint=urljoin(
                 endpoint.address.rstrip("/") + "/", interface.path.lstrip("/")
@@ -263,8 +273,31 @@ class HostedChatCallRunner:
             kind=ArtifactKind.TRANSCRIPT,
             scenario_key=scenario.scenario_key,
         )
+        calls = tuple(target_world.calls)
+        if calls:
+            tool_trace = "\n".join(
+                json.dumps(
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "ok": call.ok,
+                        "error": call.error,
+                        "refused": call.refused,
+                        "at": call.at,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+                for call in calls
+            ).encode("utf-8")
+            await self._adapter.upload_artifact(
+                tool_trace,
+                kind=ArtifactKind.TOOL_TRACE,
+                scenario_key=scenario.scenario_key,
+            )
         return CallOutcome(
-            calls=tuple(target_world.calls),
+            calls=calls,
             turns=2,
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),

@@ -149,7 +149,12 @@ def test_event_payload_digest_matches_independently_computed_vector() -> None:
 
 def test_event_payload_digest_scope_is_payload_only_not_the_envelope() -> None:
     payload = {"world_index": 2, "cause": "boom"}
-    envelope = {"event_id": "event_x", "stage": "running", "type": "world_unhealthy", "payload": payload}
+    envelope = {
+        "event_id": "event_x",
+        "stage": "running",
+        "type": "world_unhealthy",
+        "payload": payload,
+    }
     # The envelope's other fields must not affect the digest -- only `payload` is in scope.
     assert event_payload_digest(payload) == event_payload_digest(envelope["payload"])
     assert sha256_digest(canonical_bytes(payload)) == event_payload_digest(payload)
@@ -192,7 +197,10 @@ def test_whole_object_digest_matches_receipt_and_manifest_shaped_examples() -> N
     # self-consistency-only test (is_valid_digest, invariance to `digest`, inequality between two
     # objects) cannot catch a canonicalization regression that both this test and the module agree
     # on by construction -- a fixed vector can.
-    assert digest == "sha256:b1492bcb2f62c3d79dc4d0d1b3f5097a3784112fc00276a2dc483297375652af"
+    assert (
+        digest
+        == "sha256:b1492bcb2f62c3d79dc4d0d1b3f5097a3784112fc00276a2dc483297375652af"
+    )
     # Adding a `digest` key of any value must not change the result (scope excludes it).
     assert whole_object_digest({**receipt, "digest": "sha256:" + "0" * 64}) == digest
 
@@ -202,13 +210,23 @@ def test_whole_object_digest_matches_receipt_and_manifest_shaped_examples() -> N
         "job_id": "j1",
         "attempt_id": "a1",
         "attempt_number": 1,
-        "entries": [{"artifact_id": "sha256:" + "1" * 64, "kind": "result", "size": 10, "scenario_key": "k"}],
+        "entries": [
+            {
+                "artifact_id": "sha256:" + "1" * 64,
+                "kind": "result",
+                "size": 10,
+                "scenario_key": "k",
+            }
+        ],
         "complete": True,
     }
     manifest_digest = whole_object_digest(manifest)
     assert is_valid_digest(manifest_digest)
     # FIXED expected hex, same independent-derivation method as above.
-    assert manifest_digest == "sha256:f18786749321d103cf30ebe11e935bf9177d5297783ee2dec00cb20ad8dae13d"
+    assert (
+        manifest_digest
+        == "sha256:f18786749321d103cf30ebe11e935bf9177d5297783ee2dec00cb20ad8dae13d"
+    )
     assert manifest_digest != digest
 
 
@@ -226,13 +244,17 @@ def test_canonical_bytes_rejects_infinity(value: float) -> None:
         canonical_bytes({"score": value})
 
 
-def test_canonical_bytes_is_still_byte_identical_for_valid_input_after_allow_nan_false() -> None:
+def test_canonical_bytes_is_still_byte_identical_for_valid_input_after_allow_nan_false() -> (
+    None
+):
     # "for valid input the bytes are identical" (v1.3) -- allow_nan=False changes nothing about
     # ordinary values.
     assert canonical_bytes({"b": 1, "a": 2}) == b'{"a":2,"b":1}'
 
 
-def test_whole_object_digest_rejects_a_non_json_native_value_naming_the_key_path() -> None:
+def test_whole_object_digest_rejects_a_non_json_native_value_naming_the_key_path() -> (
+    None
+):
     with pytest.raises(OutboundError) as excinfo:
         whole_object_digest({"a": {"b": datetime(2026, 1, 1, tzinfo=timezone.utc)}})
     assert excinfo.value.code == "digest_value_not_json_native"
@@ -272,7 +294,9 @@ def _write(path: Path, value: dict) -> Path:
     return path
 
 
-def test_load_capabilities_parses_the_contract_example_and_builds_auth_headers(tmp_path: Path) -> None:
+def test_load_capabilities_parses_the_contract_example_and_builds_auth_headers(
+    tmp_path: Path,
+) -> None:
     path = _write(tmp_path / "capabilities.json", VALID_CAPABILITIES)
     capabilities = load_capabilities(path, unlink=False)
     assert capabilities.job_id == VALID_CAPABILITIES["job_id"]
@@ -283,13 +307,17 @@ def test_load_capabilities_parses_the_contract_example_and_builds_auth_headers(t
     }
 
 
-def test_load_capabilities_unlinks_the_file_after_a_successful_load(tmp_path: Path) -> None:
+def test_load_capabilities_unlinks_the_file_after_a_successful_load(
+    tmp_path: Path,
+) -> None:
     path = _write(tmp_path / "capabilities.json", VALID_CAPABILITIES)
     load_capabilities(path)  # default unlink=True
     assert not path.exists()
 
 
-def test_load_capabilities_does_not_unlink_on_a_validation_failure(tmp_path: Path) -> None:
+def test_load_capabilities_does_not_unlink_on_a_validation_failure(
+    tmp_path: Path,
+) -> None:
     bad = {**VALID_CAPABILITIES, "schema_version": "futureagi.harness-capabilities.v0"}
     path = _write(tmp_path / "capabilities.json", bad)
     with pytest.raises(CapabilitiesError):
@@ -325,7 +353,9 @@ def test_load_capabilities_rejects_malformed_json(tmp_path: Path) -> None:
     assert excinfo.value.code == "capabilities_file_malformed"
 
 
-def test_load_capabilities_rejects_valid_json_that_is_not_an_object(tmp_path: Path) -> None:
+def test_load_capabilities_rejects_valid_json_that_is_not_an_object(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "capabilities.json"
     path.write_text("[1, 2, 3]", encoding="utf-8")
     with pytest.raises(CapabilitiesError) as excinfo:
@@ -357,7 +387,9 @@ def test_load_capabilities_rejects_an_endpoint_missing_its_trailing_slash(
 
 
 @pytest.mark.parametrize("channel", ["events", "results", "artifacts", "scenarios"])
-def test_load_capabilities_rejects_a_non_https_endpoint(tmp_path: Path, channel: str) -> None:
+def test_load_capabilities_rejects_a_non_https_endpoint(
+    tmp_path: Path, channel: str
+) -> None:
     bad = json.loads(json.dumps(VALID_CAPABILITIES))
     bad["endpoints"][channel] = bad["endpoints"][channel].replace("https://", "http://")
     path = _write(tmp_path / "capabilities.json", bad)
@@ -371,12 +403,16 @@ def test_load_capabilities_rejects_an_expired_token(tmp_path: Path) -> None:
     with pytest.raises(CapabilitiesError) as excinfo:
         load_capabilities(path, now=lambda: datetime(2100, 1, 1, tzinfo=timezone.utc))
     assert excinfo.value.code == "capabilities_expired"
-    assert path.exists()  # a failed load must never unlink -- same rule as any other rejection
+    assert (
+        path.exists()
+    )  # a failed load must never unlink -- same rule as any other rejection
 
 
 def test_load_capabilities_accepts_a_token_not_yet_expired(tmp_path: Path) -> None:
     path = _write(tmp_path / "capabilities.json", VALID_CAPABILITIES)
-    capabilities = load_capabilities(path, now=lambda: datetime(2020, 1, 1, tzinfo=timezone.utc))
+    capabilities = load_capabilities(
+        path, now=lambda: datetime(2020, 1, 1, tzinfo=timezone.utc)
+    )
     assert capabilities.job_id == VALID_CAPABILITIES["job_id"]
 
 
@@ -385,14 +421,18 @@ def test_load_capabilities_rejects_an_endpoint_whose_attempt_id_segment_disagree
     tmp_path: Path, channel: str
 ) -> None:
     bad = json.loads(json.dumps(VALID_CAPABILITIES))
-    bad["endpoints"][channel] = bad["endpoints"][channel].replace(_ATTEMPT_ID, "some-other-attempt")
+    bad["endpoints"][channel] = bad["endpoints"][channel].replace(
+        _ATTEMPT_ID, "some-other-attempt"
+    )
     path = _write(tmp_path / "capabilities.json", bad)
     with pytest.raises(CapabilitiesError) as excinfo:
         load_capabilities(path)
     assert excinfo.value.code == "capabilities_attempt_mismatch"
 
 
-def test_load_capabilities_field_invalid_message_never_echoes_the_input_value(tmp_path: Path) -> None:
+def test_load_capabilities_field_invalid_message_never_echoes_the_input_value(
+    tmp_path: Path,
+) -> None:
     # MIN-3: the file carries the bearer -- a validation message built from pydantic's default
     # str(exc) would embed the failing field's raw value.
     bad = json.loads(json.dumps(VALID_CAPABILITIES))
@@ -404,7 +444,9 @@ def test_load_capabilities_field_invalid_message_never_echoes_the_input_value(tm
     assert "987654321" not in excinfo.value.message
 
 
-def test_load_capabilities_unlink_failure_is_reported_via_the_callback(tmp_path: Path) -> None:
+def test_load_capabilities_unlink_failure_is_reported_via_the_callback(
+    tmp_path: Path,
+) -> None:
     # MIN-7: previously swallowed unconditionally; now the caller can tell.
     path = _write(tmp_path / "capabilities.json", VALID_CAPABILITIES)
     original_unlink = Path.unlink
@@ -446,7 +488,12 @@ def test_hosted_endpoints_shape_validator_still_fires_on_direct_construction() -
     # pre-pydantic checks entirely) must still reject a malformed endpoint.
     with pytest.raises(ValidationError):
         HostedEndpoints.model_validate(
-            {"events": "http://x/", "results": "https://x/", "artifacts": "https://x/", "scenarios": "https://x/"}
+            {
+                "events": "http://x/",
+                "results": "https://x/",
+                "artifacts": "https://x/",
+                "scenarios": "https://x/",
+            }
         )
 
 
@@ -454,10 +501,14 @@ def test_capabilities_expires_at_is_serialized_as_millis_z() -> None:
     capabilities = HostedCapabilities.model_validate(
         {**VALID_CAPABILITIES, "expires_at": "2026-08-25T12:00:00.123456+00:00"}
     )
-    assert capabilities.model_dump(mode="json")["expires_at"] == "2026-08-25T12:00:00.123Z"
+    assert (
+        capabilities.model_dump(mode="json")["expires_at"] == "2026-08-25T12:00:00.123Z"
+    )
 
 
-def test_capabilities_event_builder_binds_identity_fields_from_the_token(tmp_path: Path) -> None:
+def test_capabilities_event_builder_binds_identity_fields_from_the_token(
+    tmp_path: Path,
+) -> None:
     path = _write(tmp_path / "capabilities.json", VALID_CAPABILITIES)
     capabilities = load_capabilities(path, unlink=False)
     build = capabilities.event_builder()
@@ -473,7 +524,9 @@ def test_capabilities_event_builder_binds_identity_fields_from_the_token(tmp_pat
     assert record["attempt_number"] == capabilities.attempt_number
 
 
-def test_capabilities_event_builder_forwards_extra_secret_values_to_log_message(tmp_path: Path) -> None:
+def test_capabilities_event_builder_forwards_extra_secret_values_to_log_message(
+    tmp_path: Path,
+) -> None:
     # P4: `event_builder()` had no way to receive the job's declared secret VALUES, so a caller
     # wired for it (the shipped adapter binds identity via `event_builder()` and routes every event
     # through it) could never satisfy N9's redaction requirement for `log.message`/
@@ -486,7 +539,10 @@ def test_capabilities_event_builder_forwards_extra_secret_values_to_log_message(
         emitted_at=NOW,
         stage=HarnessStage.RUNNING,
         type=OutboundEventType.LOG,
-        payload={"level": "error", "message": "build failed: s3cr3t-value leaked in the output"},
+        payload={
+            "level": "error",
+            "message": "build failed: s3cr3t-value leaked in the output",
+        },
     )
     assert "s3cr3t-value" not in record["payload"]["message"]
     assert "***" in record["payload"]["message"]
@@ -510,7 +566,9 @@ def _event(type_: OutboundEventType, stage: HarnessStage, payload: dict) -> dict
 
 def test_build_event_record_has_no_sequence_key_and_embeds_a_valid_digest() -> None:
     record = _event(
-        OutboundEventType.LOG, HarnessStage.RUNNING, {"level": "info", "message": "hello"}
+        OutboundEventType.LOG,
+        HarnessStage.RUNNING,
+        {"level": "info", "message": "hello"},
     )
     assert "sequence" not in record
     assert is_valid_digest(record["digest"])
@@ -523,7 +581,9 @@ def test_hosted_event_requires_sequence_but_draft_does_not() -> None:
     )
     HostedEventDraft.model_validate(record)  # no sequence needed
     with pytest.raises(ValidationError):
-        HostedEvent.model_validate(record)  # sequence is required on the full wire object
+        HostedEvent.model_validate(
+            record
+        )  # sequence is required on the full wire object
     HostedEvent.model_validate({**record, "sequence": 1})
 
 
@@ -535,7 +595,11 @@ def test_hosted_event_requires_sequence_but_draft_does_not() -> None:
             HarnessStage.RUNNING,
             {"from": "connecting_agent", "to": "running"},
         ),
-        (OutboundEventType.STAGE_CHANGED, HarnessStage.QUEUED, {"from": None, "to": "queued"}),
+        (
+            OutboundEventType.STAGE_CHANGED,
+            HarnessStage.QUEUED,
+            {"from": None, "to": "queued"},
+        ),
         (
             OutboundEventType.PARALLELISM_DEGRADED,
             HarnessStage.VALIDATING_ENVIRONMENT,
@@ -566,7 +630,11 @@ def test_hosted_event_requires_sequence_but_draft_does_not() -> None:
             HarnessStage.RUNNING,
             {"scenario_key": "k", "from_world": 0, "to_world": 1},
         ),
-        (OutboundEventType.LOG, HarnessStage.RUNNING, {"level": "warning", "message": "m"}),
+        (
+            OutboundEventType.LOG,
+            HarnessStage.RUNNING,
+            {"level": "warning", "message": "m"},
+        ),
         (
             OutboundEventType.TERMINAL,
             HarnessStage.COMPLETED,
@@ -574,7 +642,12 @@ def test_hosted_event_requires_sequence_but_draft_does_not() -> None:
                 "stage": "completed",
                 "reason": None,
                 "failure": None,
-                "scenario_counts": {"passed": 2, "failed": 0, "errored": 0, "skipped": 0},
+                "scenario_counts": {
+                    "passed": 2,
+                    "failed": 0,
+                    "errored": 0,
+                    "skipped": 0,
+                },
             },
         ),
         (
@@ -584,7 +657,12 @@ def test_hosted_event_requires_sequence_but_draft_does_not() -> None:
                 "stage": "canceled",
                 "reason": "user_canceled",
                 "failure": None,
-                "scenario_counts": {"passed": 0, "failed": 0, "errored": 0, "skipped": 1},
+                "scenario_counts": {
+                    "passed": 0,
+                    "failed": 0,
+                    "errored": 0,
+                    "skipped": 1,
+                },
             },
         ),
     ],
@@ -605,7 +683,9 @@ def test_stage_changed_to_must_equal_the_events_own_stage() -> None:
         )
 
 
-def test_stage_changed_rejects_the_python_attribute_name_instead_of_the_wire_alias() -> None:
+def test_stage_changed_rejects_the_python_attribute_name_instead_of_the_wire_alias() -> (
+    None
+):
     # M9: populate_by_name=True previously let a caller who writes `from_stage` (the natural
     # mistake -- that's the attribute name) pass validation while spooling an undefined wire key.
     with pytest.raises(ValidationError):
@@ -621,7 +701,12 @@ def test_terminal_payload_stage_must_equal_the_events_own_stage() -> None:
                 "stage": "failed",
                 "reason": None,
                 "failure": None,
-                "scenario_counts": {"passed": 0, "failed": 0, "errored": 0, "skipped": 0},
+                "scenario_counts": {
+                    "passed": 0,
+                    "failed": 0,
+                    "errored": 0,
+                    "skipped": 0,
+                },
             },
         )
 
@@ -635,7 +720,12 @@ def test_terminal_payload_rejects_a_non_terminal_stage() -> None:
                 "stage": "running",
                 "reason": None,
                 "failure": None,
-                "scenario_counts": {"passed": 0, "failed": 0, "errored": 0, "skipped": 0},
+                "scenario_counts": {
+                    "passed": 0,
+                    "failed": 0,
+                    "errored": 0,
+                    "skipped": 0,
+                },
             },
         )
 
@@ -689,13 +779,20 @@ def test_oversized_payload_for_a_non_log_type_is_still_hard_rejected() -> None:
         _event(
             OutboundEventType.BASELINE_FROZEN,
             HarnessStage.VALIDATING_ENVIRONMENT,
-            {"inputs_digest": "sha256:" + "1" * 64, "baseline_ref": "x" * (EVENT_PAYLOAD_MAX_BYTES + 1)},
+            {
+                "inputs_digest": "sha256:" + "1" * 64,
+                "baseline_ref": "x" * (EVENT_PAYLOAD_MAX_BYTES + 1),
+            },
         )
 
 
 def test_log_payload_is_truncated_rather_than_rejected_when_oversized() -> None:
     huge_message = "x" * (EVENT_PAYLOAD_MAX_BYTES * 2)
-    record = _event(OutboundEventType.LOG, HarnessStage.RUNNING, {"level": "error", "message": huge_message})
+    record = _event(
+        OutboundEventType.LOG,
+        HarnessStage.RUNNING,
+        {"level": "error", "message": huge_message},
+    )
     assert len(canonical_bytes(record["payload"])) <= EVENT_PAYLOAD_MAX_BYTES
     assert record["payload"]["message"].endswith("…[truncated]")
     # The digest must match the TRUNCATED bytes actually spooled, not the original message.
@@ -722,7 +819,9 @@ def test_a_tampered_digest_is_rejected() -> None:
         HostedEventDraft.model_validate(record)
 
 
-def test_event_id_is_checked_against_utf8_byte_length_not_just_character_count() -> None:
+def test_event_id_is_checked_against_utf8_byte_length_not_just_character_count() -> (
+    None
+):
     # N-2: max_length=64 on the model counts characters; the platform's column is presumably
     # bytes. 64 non-ASCII characters can exceed 64 bytes while passing the character-count check.
     event_id = "€" * 64  # 64 chars, 3 bytes each in UTF-8 => 192 bytes
@@ -739,8 +838,12 @@ def test_event_id_is_checked_against_utf8_byte_length_not_just_character_count()
         )
 
 
-def test_hosted_event_emitted_at_is_serialized_as_millis_z_not_the_pydantic_default() -> None:
-    record = _event(OutboundEventType.LOG, HarnessStage.RUNNING, {"level": "info", "message": "m"})
+def test_hosted_event_emitted_at_is_serialized_as_millis_z_not_the_pydantic_default() -> (
+    None
+):
+    record = _event(
+        OutboundEventType.LOG, HarnessStage.RUNNING, {"level": "info", "message": "m"}
+    )
     assert record["emitted_at"] == "2026-08-25T10:14:03.412Z"
 
 
@@ -759,7 +862,9 @@ def test_hosted_event_emitted_at_rejects_a_naive_datetime() -> None:
 
 
 def test_hosted_event_emitted_at_normalizes_a_non_utc_offset_to_z() -> None:
-    ist = datetime(2026, 8, 25, 15, 44, 3, 412000, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    ist = datetime(
+        2026, 8, 25, 15, 44, 3, 412000, tzinfo=timezone(timedelta(hours=5, minutes=30))
+    )
     record = build_event_record(
         event_id="event_x",
         job_id="job-1",
@@ -776,7 +881,9 @@ def test_hosted_event_emitted_at_normalizes_a_non_utc_offset_to_z() -> None:
 # --- Spool ---------------------------------------------------------------------------------
 
 
-def test_spool_assigns_contiguous_sequence_numbers_starting_at_one(tmp_path: Path) -> None:
+def test_spool_assigns_contiguous_sequence_numbers_starting_at_one(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     sequences = [spool.append({"event_id": f"e{i}"}).sequence for i in range(5)]
     assert sequences == [1, 2, 3, 4, 5]
@@ -820,7 +927,9 @@ def test_spool_recovers_from_a_torn_tail_by_truncating_and_reusing_the_sequence(
     path = tmp_path / "events.spool.jsonl"
     size_before = path.stat().st_size
     with path.open("ab") as stream:
-        stream.write(b'{"event_id":"e3","sequ')  # torn: no closing brace, no trailing newline
+        stream.write(
+            b'{"event_id":"e3","sequ'
+        )  # torn: no closing brace, no trailing newline
 
     OutboundSpool._forget_for_tests(tmp_path, "events")
     recovered = OutboundSpool(tmp_path, "events", sequenced=True)
@@ -834,7 +943,9 @@ def test_spool_recovers_from_a_torn_tail_by_truncating_and_reusing_the_sequence(
     assert ids_in_order == ["e1", "e2", "e3-retry"]
 
 
-def test_spool_recovers_from_a_torn_tail_with_no_trailing_newline_at_all(tmp_path: Path) -> None:
+def test_spool_recovers_from_a_torn_tail_with_no_trailing_newline_at_all(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     spool.append({"event_id": "e1"})
     path = tmp_path / "events.spool.jsonl"
@@ -851,7 +962,9 @@ def test_spool_recovers_from_a_torn_tail_with_no_trailing_newline_at_all(tmp_pat
     assert recovered.append({"event_id": "e1-retry"}).sequence == 1
 
 
-def test_spool_recovery_degrades_on_mid_file_corruption_instead_of_raising(tmp_path: Path) -> None:
+def test_spool_recovery_degrades_on_mid_file_corruption_instead_of_raising(
+    tmp_path: Path,
+) -> None:
     """N8 (supersedes the old B1-era "raises" posture): a bad line with COMPLETE records after it
     (a trailing `\\n` of its own) is genuine corruption, never a torn tail -- B1 already forbids
     silently renumbering past it, but raising unconditionally was the OTHER extreme: it discarded
@@ -864,7 +977,9 @@ def test_spool_recovery_degrades_on_mid_file_corruption_instead_of_raising(tmp_p
 
     path = tmp_path / "events.spool.jsonl"
     lines = path.read_bytes().split(b"\n")
-    lines[1] = b"{not valid json but has a trailing newline"  # complete line, unparseable
+    lines[1] = (
+        b"{not valid json but has a trailing newline"  # complete line, unparseable
+    )
     path.write_bytes(b"\n".join(lines))
 
     OutboundSpool._forget_for_tests(tmp_path, "events")
@@ -888,7 +1003,9 @@ def test_spool_recovery_ships_a_record_appended_after_the_corruption_via_the_see
     spool.append({"event_id": "e1"})
     spool.append({"event_id": "e2"})
     spool.append({"event_id": "e3"})
-    spool.advance_watermark(1)  # e1 already acked before the corruption is ever discovered
+    spool.advance_watermark(
+        1
+    )  # e1 already acked before the corruption is ever discovered
 
     path = tmp_path / "events.spool.jsonl"
     lines = path.read_bytes().split(b"\n")
@@ -898,7 +1015,9 @@ def test_spool_recovery_ships_a_record_appended_after_the_corruption_via_the_see
     OutboundSpool._forget_for_tests(tmp_path, "events")
     recovered = OutboundSpool(tmp_path, "events", sequenced=True)
     assert recovered.is_corrupt
-    assert recovered.next_sequence == 2  # only e1 (pre-corruption) counted; watermark=1 agrees
+    assert (
+        recovered.next_sequence == 2
+    )  # only e1 (pre-corruption) counted; watermark=1 agrees
 
     terminal = recovered.append({"event_id": "terminal"})
     assert terminal.sequence == 2
@@ -928,7 +1047,9 @@ def test_spool_compact_through_refuses_on_a_corrupt_spool_instead_of_destroying_
     assert recovered.is_corrupt
 
     terminal = recovered.append({"event_id": "event_terminal"})
-    recovered.advance_watermark(terminal.sequence)  # fully acked -- would normally be compactable
+    recovered.advance_watermark(
+        terminal.sequence
+    )  # fully acked -- would normally be compactable
     recovered.compact_through(terminal.sequence)
 
     assert b"event_terminal" in path.read_bytes(), (
@@ -954,7 +1075,9 @@ def test_spool_records_degrades_on_corruption_instead_of_raising(
     assert spool.corruption_offset is not None
 
 
-def test_spool_corruption_is_logged_once_not_once_per_read(tmp_path: Path, caplog: Any) -> None:
+def test_spool_corruption_is_logged_once_not_once_per_read(
+    tmp_path: Path, caplog: Any
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     spool.append({"event_id": "e1"})
     path = tmp_path / "events.spool.jsonl"
@@ -1002,7 +1125,9 @@ def test_spool_failed_append_is_a_true_no_op(tmp_path: Path) -> None:
     assert [r.decode()["event_id"] for r in spool.records()] == ["ok1", "ok2"]
 
 
-def test_spool_fsyncs_the_directory_once_after_first_file_creation_only(tmp_path: Path) -> None:
+def test_spool_fsyncs_the_directory_once_after_first_file_creation_only(
+    tmp_path: Path,
+) -> None:
     # M2: a new file's directory entry isn't durable just because the file's own data is fsync'd.
     # The guard flag means exactly ONE extra fsync (the directory's) on the append that creates the
     # file, and none on later appends to the same, now-existing file.
@@ -1024,8 +1149,12 @@ def test_spool_fsyncs_the_directory_once_after_first_file_creation_only(tmp_path
     finally:
         os.fsync = original_fsync  # type: ignore[assignment]
 
-    assert after_first - before == 2  # the record's own fsync + the one-time directory fsync
-    assert after_second - after_first == 1  # just the record's own fsync -- no repeat directory sync
+    assert (
+        after_first - before == 2
+    )  # the record's own fsync + the one-time directory fsync
+    assert (
+        after_second - after_first == 1
+    )  # just the record's own fsync -- no repeat directory sync
 
 
 def test_canonical_bytes_never_contains_a_raw_newline_even_with_embedded_newlines_in_a_string() -> (
@@ -1052,7 +1181,9 @@ def test_spool_watermark_starts_at_zero_and_advances(tmp_path: Path) -> None:
     assert [r.sequence for r in spool.pending_since_watermark()] == [4, 5]
 
 
-def test_spool_watermark_rejects_a_regression_as_untrusted_input(tmp_path: Path) -> None:
+def test_spool_watermark_rejects_a_regression_as_untrusted_input(
+    tmp_path: Path,
+) -> None:
     # v1.3/M7: acked_through_sequence is untrusted platform input -- a value below the current
     # watermark is rejected (typed error), not silently ignored; the watermark stays unchanged.
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
@@ -1064,7 +1195,9 @@ def test_spool_watermark_rejects_a_regression_as_untrusted_input(tmp_path: Path)
     assert spool.watermark() == 1
 
 
-def test_spool_watermark_rejects_a_value_at_or_above_next_sequence(tmp_path: Path) -> None:
+def test_spool_watermark_rejects_a_value_at_or_above_next_sequence(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     spool.append({"event_id": "e0"})  # next_sequence becomes 2
     with pytest.raises(OutboundSpoolError) as excinfo:
@@ -1091,7 +1224,9 @@ def test_spool_watermark_is_durable_across_a_restart(tmp_path: Path) -> None:
     assert second.watermark() == 1
 
 
-def test_spool_watermark_degrades_to_zero_on_a_corrupt_file_instead_of_wedging(tmp_path: Path) -> None:
+def test_spool_watermark_degrades_to_zero_on_a_corrupt_file_instead_of_wedging(
+    tmp_path: Path,
+) -> None:
     # M1: a corrupt/torn watermark file must not permanently brick the spool -- re-sending
     # already-acked events is safe (at-least-once + dedupe on event_id); raising forever is not.
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
@@ -1189,7 +1324,9 @@ def test_spool_drop_many_batches_every_removal_into_one_rewrite(tmp_path: Path) 
     spool.drop_many({2, 4, 6})
     remaining = [r.decode()["event_id"] for r in spool.records()]
     assert remaining == ["e0", "e2", "e4"]
-    assert spool.watermark() == 0  # still untouched -- drop_many never advances it either
+    assert (
+        spool.watermark() == 0
+    )  # still untouched -- drop_many never advances it either
 
 
 def test_spool_drop_many_with_an_empty_set_is_a_no_op(tmp_path: Path) -> None:
@@ -1199,7 +1336,9 @@ def test_spool_drop_many_with_an_empty_set_is_a_no_op(tmp_path: Path) -> None:
     assert [r.decode()["event_id"] for r in spool.records()] == ["e0"]
 
 
-def test_spool_compact_through_drops_acked_records_and_keeps_pending_ones(tmp_path: Path) -> None:
+def test_spool_compact_through_drops_acked_records_and_keeps_pending_ones(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     for i in range(6):
         spool.append({"event_id": f"e{i}"})
@@ -1227,7 +1366,9 @@ def test_spool_compact_through_clamps_to_the_watermark_never_drops_pending_recor
     assert [r.decode()["event_id"] for r in spool.records()] == ["e2", "e3", "e4"]
 
 
-def test_spool_pending_since_watermark_uses_the_cached_offset_to_seek(tmp_path: Path) -> None:
+def test_spool_pending_since_watermark_uses_the_cached_offset_to_seek(
+    tmp_path: Path,
+) -> None:
     # P11: previously this only asserted the RESULT ([5..10]), which the generic records_after()
     # fallback produces identically -- it could not fail if the seek path regressed to the
     # fallback. Monkeypatching records_after to raise pins the claim: pending_since_watermark()
@@ -1238,7 +1379,9 @@ def test_spool_pending_since_watermark_uses_the_cached_offset_to_seek(tmp_path: 
     spool.advance_watermark(4)
 
     def _must_not_be_called(sequence: int) -> Any:
-        raise AssertionError("pending_since_watermark fell back to records_after instead of seeking")
+        raise AssertionError(
+            "pending_since_watermark fell back to records_after instead of seeking"
+        )
 
     spool.records_after = _must_not_be_called  # type: ignore[method-assign]
     pending = spool.pending_since_watermark()
@@ -1252,7 +1395,9 @@ def test_unsequenced_spool_assigns_no_sequence(tmp_path: Path) -> None:
     assert record.decode() == {"scenario_key": "k1", "status": "passed"}
 
 
-def test_unsequenced_spool_rejects_a_caller_supplied_sequence_key(tmp_path: Path) -> None:
+def test_unsequenced_spool_rejects_a_caller_supplied_sequence_key(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "results", sequenced=False)
     with pytest.raises(OutboundSpoolError) as excinfo:
         spool.append({"sequence": 1, "scenario_key": "k1"})
@@ -1262,9 +1407,19 @@ def test_unsequenced_spool_rejects_a_caller_supplied_sequence_key(tmp_path: Path
 
 
 @pytest.mark.parametrize(
-    "member", ["next_sequence", "watermark", "pending_since_watermark", "records_after", "drop", "compact_through"]
+    "member",
+    [
+        "next_sequence",
+        "watermark",
+        "pending_since_watermark",
+        "records_after",
+        "drop",
+        "compact_through",
+    ],
 )
-def test_unsequenced_spool_rejects_sequence_only_operations(tmp_path: Path, member: str) -> None:
+def test_unsequenced_spool_rejects_sequence_only_operations(
+    tmp_path: Path, member: str
+) -> None:
     spool = OutboundSpool(tmp_path, "results", sequenced=False)
     with pytest.raises(OutboundSpoolError) as excinfo:
         if member == "next_sequence":
@@ -1323,14 +1478,18 @@ def test_spool_creates_its_root_directory(tmp_path: Path) -> None:
     assert root.is_dir()
 
 
-def test_spool_root_directory_is_created_with_restrictive_permissions(tmp_path: Path) -> None:
+def test_spool_root_directory_is_created_with_restrictive_permissions(
+    tmp_path: Path,
+) -> None:
     # MIN-10: the spool holds event payloads and receipt bodies in a multi-user sandbox.
     root = tmp_path / "outbound"
     OutboundSpool(root, "events", sequenced=True)
     assert (root.stat().st_mode & 0o777) == 0o700
 
 
-def test_spool_records_survive_being_read_back_after_many_appends(tmp_path: Path) -> None:
+def test_spool_records_survive_being_read_back_after_many_appends(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     for i in range(50):
         spool.append({"event_id": f"e{i}", "n": i})
@@ -1343,22 +1502,34 @@ def test_spool_records_survive_being_read_back_after_many_appends(tmp_path: Path
 # --- M6: one allocator per (root, name) -----------------------------------------------------
 
 
-def test_same_stream_name_returns_the_cached_instance_not_a_second_allocator(tmp_path: Path) -> None:
+def test_same_stream_name_returns_the_cached_instance_not_a_second_allocator(
+    tmp_path: Path,
+) -> None:
     first = OutboundSpool(tmp_path, "events", sequenced=True)
     second = OutboundSpool(tmp_path, "events", sequenced=True)
     assert second is first
-    sequences = [first.append({"event_id": "a"}).sequence, second.append({"event_id": "b"}).sequence]
-    assert sequences == [1, 2]  # one allocator regardless of how many handles point at it
+    sequences = [
+        first.append({"event_id": "a"}).sequence,
+        second.append({"event_id": "b"}).sequence,
+    ]
+    assert sequences == [
+        1,
+        2,
+    ]  # one allocator regardless of how many handles point at it
 
 
-def test_same_stream_name_with_a_conflicting_sequenced_flag_raises(tmp_path: Path) -> None:
+def test_same_stream_name_with_a_conflicting_sequenced_flag_raises(
+    tmp_path: Path,
+) -> None:
     OutboundSpool(tmp_path, "events", sequenced=True)
     with pytest.raises(OutboundSpoolError) as excinfo:
         OutboundSpool(tmp_path, "events", sequenced=False)
     assert excinfo.value.code == "outbound_spool_sequenced_mismatch"
 
 
-def test_flock_rejects_a_second_lock_holder_on_the_same_lock_file(tmp_path: Path) -> None:
+def test_flock_rejects_a_second_lock_holder_on_the_same_lock_file(
+    tmp_path: Path,
+) -> None:
     # M6: cross-PROCESS protection -- the in-process registry above only protects against a second
     # Python-level instance in this same interpreter; a genuinely separate process trying to open
     # the same lock file must be rejected by the OS-level flock regardless of the registry.
@@ -1372,7 +1543,9 @@ def test_flock_rejects_a_second_lock_holder_on_the_same_lock_file(tmp_path: Path
         os.close(fd)
 
 
-def test_a_forgotten_spool_can_be_reacquired_after_the_lock_is_released(tmp_path: Path) -> None:
+def test_a_forgotten_spool_can_be_reacquired_after_the_lock_is_released(
+    tmp_path: Path,
+) -> None:
     OutboundSpool(tmp_path, "events", sequenced=True)
     OutboundSpool._forget_for_tests(tmp_path, "events")  # releases the flock fd too
     # A fresh construction must succeed cleanly -- proves _forget_for_tests actually released the
@@ -1386,7 +1559,9 @@ def test_close_releases_the_lock_and_evicts_the_registry(tmp_path: Path) -> None
     # test-only and reaches for it internally now).
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     spool.close()
-    fresh = OutboundSpool(tmp_path, "events", sequenced=True)  # must not raise outbound_spool_locked
+    fresh = OutboundSpool(
+        tmp_path, "events", sequenced=True
+    )  # must not raise outbound_spool_locked
     assert fresh is not spool
     assert fresh.next_sequence == 1
     spool.close()  # idempotent -- a second close on the old instance must not raise
@@ -1419,7 +1594,9 @@ def test_close_poisons_the_instance_so_a_closed_spool_cannot_append_with_no_lock
     assert [r.decode()["event_id"] for r in fresh.records()] == ["e1", "fresh"]
 
 
-def test_failed_construction_does_not_poison_the_registry_for_the_next_attempt(tmp_path: Path) -> None:
+def test_failed_construction_does_not_poison_the_registry_for_the_next_attempt(
+    tmp_path: Path,
+) -> None:
     # N4, ranked missing test 4: a construction that fails PARTWAY (after acquiring the process
     # lock, before finishing) must not leave a half-built instance registered -- the next
     # construction attempt for the SAME key gets a typed error reflecting its OWN failure, never
@@ -1471,10 +1648,14 @@ def test_classify_response_network_failure_is_retryable_connectivity() -> None:
 
 @pytest.mark.parametrize("status", [401, 403])
 def test_classify_response_401_403_are_fenced_never_retried(status: int) -> None:
-    error = classify_response(status, {"error": "e", "message": "m", "retryable": False}, attempt=1)
+    error = classify_response(
+        status, {"error": "e", "message": "m", "retryable": False}, attempt=1
+    )
     assert error is not None
     assert error.outcome is ChannelOutcome.FENCED
-    assert error.domain is None  # "never an infra retry" -- not a FailureDomain-tagged outcome
+    assert (
+        error.domain is None
+    )  # "never an infra retry" -- not a FailureDomain-tagged outcome
 
 
 def test_classify_response_404_retries_twice_then_channel_failed_on_the_third() -> None:
@@ -1489,17 +1670,23 @@ def test_classify_response_404_retries_twice_then_channel_failed_on_the_third() 
 
 
 def test_classify_response_413_is_budget_exceeded() -> None:
-    error = classify_response(413, {"error": "artifact_budget_exceeded", "message": "m"}, attempt=1)
+    error = classify_response(
+        413, {"error": "artifact_budget_exceeded", "message": "m"}, attempt=1
+    )
     assert error is not None
     assert error.outcome is ChannelOutcome.BUDGET_EXCEEDED
     assert error.status_code == 413
 
 
-def test_classify_response_413_without_artifact_budget_exceeded_is_permanent_item() -> None:
+def test_classify_response_413_without_artifact_budget_exceeded_is_permanent_item() -> (
+    None
+):
     # N7: 413 is Channel 3's code specifically -- a 413 that does NOT report
     # artifact_budget_exceeded (e.g. an events batch too big for the platform's own ingress cap)
     # must not be mislabeled BUDGET_EXCEEDED on a channel with no such concept.
-    error = classify_response(413, {"error": "request_entity_too_large", "message": "m"}, attempt=1)
+    error = classify_response(
+        413, {"error": "request_entity_too_large", "message": "m"}, attempt=1
+    )
     assert error is not None
     assert error.outcome is ChannelOutcome.PERMANENT_ITEM
     assert error.status_code == 413
@@ -1529,7 +1716,10 @@ def test_classify_response_unlisted_3xx_is_permanent_not_retryable() -> None:
 
 def test_classify_response_429_is_retryable_and_carries_retry_after() -> None:
     error = classify_response(
-        429, {"error": "rate_limited", "message": "m"}, attempt=1, retry_after_seconds=7.0
+        429,
+        {"error": "rate_limited", "message": "m"},
+        attempt=1,
+        retry_after_seconds=7.0,
     )
     assert error is not None
     assert error.outcome is ChannelOutcome.RETRYABLE
@@ -1538,7 +1728,9 @@ def test_classify_response_429_is_retryable_and_carries_retry_after() -> None:
 
 @pytest.mark.parametrize("status", [400, 409, 422])
 def test_classify_response_400_409_422_are_permanent_item(status: int) -> None:
-    error = classify_response(status, {"error": f"e{status}", "message": "m"}, attempt=1)
+    error = classify_response(
+        status, {"error": f"e{status}", "message": "m"}, attempt=1
+    )
     assert error is not None
     assert error.outcome is ChannelOutcome.PERMANENT_ITEM
     assert error.domain is None
@@ -1563,17 +1755,42 @@ def test_classify_response_5xx_is_retryable_connectivity(status: int) -> None:
 
 def test_compute_backoff_seconds_full_jitter_formula() -> None:
     # rng pinned to 1.0 -> exercises the pure ceiling formula, unjittered.
-    assert compute_backoff_seconds(1, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0) == 1.0
-    assert compute_backoff_seconds(2, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0) == 2.0
-    assert compute_backoff_seconds(3, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0) == 4.0
+    assert (
+        compute_backoff_seconds(
+            1, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0
+        )
+        == 1.0
+    )
+    assert (
+        compute_backoff_seconds(
+            2, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0
+        )
+        == 2.0
+    )
+    assert (
+        compute_backoff_seconds(
+            3, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0
+        )
+        == 4.0
+    )
 
 
 def test_compute_backoff_seconds_caps_at_max_backoff() -> None:
-    assert compute_backoff_seconds(10, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0) == 15.0
+    assert (
+        compute_backoff_seconds(
+            10, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 1.0
+        )
+        == 15.0
+    )
 
 
 def test_compute_backoff_seconds_scales_by_rng() -> None:
-    assert compute_backoff_seconds(3, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 0.5) == 2.0
+    assert (
+        compute_backoff_seconds(
+            3, initial_backoff_seconds=1.0, max_backoff_seconds=15.0, rng=lambda: 0.5
+        )
+        == 2.0
+    )
 
 
 # --- format_rfc3339_millis -------------------------------------------------------------------------
@@ -1608,7 +1825,9 @@ def test_artifact_budget_tracker_reserved_kinds_always_admitted() -> None:
     assert tracker.would_admit(ArtifactKind.BUILD, 999, digest="d2")
 
 
-def test_artifact_budget_tracker_refuses_non_reserved_once_budget_is_exhausted() -> None:
+def test_artifact_budget_tracker_refuses_non_reserved_once_budget_is_exhausted() -> (
+    None
+):
     tracker = ArtifactBudgetTracker(max_artifact_bytes=100)
     assert tracker.would_admit(ArtifactKind.TRACE, 60, digest="d1")
     tracker.record(ArtifactKind.TRACE, 60, digest="d1")
@@ -1640,7 +1859,9 @@ def test_priority_class_orders_reserved_recordings_other() -> None:
     assert priority_class(ArtifactKind.OTHER) == 2
 
 
-def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_log_other() -> None:
+def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_log_other() -> (
+    None
+):
     # N16: a non-zero recording_headroom_bytes shrinks what a trace/log/other candidate may
     # consume, leaving room for recordings not yet seen -- default (0) behavior is unaffected
     # (covered by the pre-existing tracker tests above).
@@ -1667,8 +1888,18 @@ def _passed_receipt(**overrides: Any) -> dict[str, Any]:
         status=ScenarioStatus.PASSED,
         sub_goals=[{"name": "n", "held": True, "reason": None, "judged": False}],
         evaluations=[
-            {"name": "customer_agent_task_completion", "kind": "metric", "score": 0.86, "reason": "r"},
-            {"name": "checked_refund", "kind": "checkpoint", "passed": True, "reason": "r"},
+            {
+                "name": "customer_agent_task_completion",
+                "kind": "metric",
+                "score": 0.86,
+                "reason": "r",
+            },
+            {
+                "name": "checked_refund",
+                "kind": "checkpoint",
+                "passed": True,
+                "reason": "r",
+            },
         ],
         call={
             "started_at": format_rfc3339_millis(NOW),
@@ -1688,13 +1919,21 @@ def test_build_result_receipt_matches_the_contract_shaped_example() -> None:
     receipt = _passed_receipt()
     assert is_valid_digest(receipt["digest"])
     assert receipt["status"] == "passed"
-    assert receipt["digest"] == whole_object_digest({k: v for k, v in receipt.items() if k != "digest"})
-    ResultReceiptDraft.model_validate(receipt)  # round-trips through the model unchanged
+    assert receipt["digest"] == whole_object_digest(
+        {k: v for k, v in receipt.items() if k != "digest"}
+    )
+    ResultReceiptDraft.model_validate(
+        receipt
+    )  # round-trips through the model unchanged
 
 
 def test_build_skipped_receipt_has_the_exact_contract_shape() -> None:
     receipt = build_skipped_receipt(
-        job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k2", scenario_id="sid-2"
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k2",
+        scenario_id="sid-2",
     )
     assert receipt["scenario_attempt"] == 1
     assert receipt["world_index"] is None
@@ -1708,7 +1947,13 @@ def test_build_skipped_receipt_has_the_exact_contract_shape() -> None:
 def test_skipped_shape_is_enforced_even_outside_the_synthesizing_helper() -> None:
     with pytest.raises(ValidationError):
         # world_index must be null for a skipped receipt -- even via the general-purpose builder.
-        _passed_receipt(status=ScenarioStatus.SKIPPED, world_index=0, sub_goals=[], evaluations=[], call=None)
+        _passed_receipt(
+            status=ScenarioStatus.SKIPPED,
+            world_index=0,
+            sub_goals=[],
+            evaluations=[],
+            call=None,
+        )
 
 
 def test_errored_receipt_requires_a_failure() -> None:
@@ -1718,19 +1963,31 @@ def test_errored_receipt_requires_a_failure() -> None:
     errored = _passed_receipt(
         status=ScenarioStatus.ERRORED,
         call=None,
-        failure={"domain": "agent", "stage": "running", "code": "agent_crashed", "message": "m"},
+        failure={
+            "domain": "agent",
+            "stage": "running",
+            "code": "agent_crashed",
+            "message": "m",
+        },
     )
     assert is_valid_digest(errored["digest"])
 
 
 def test_receipt_evaluations_discriminated_union_rejects_a_mixed_up_kind() -> None:
     with pytest.raises(ValidationError):
-        _passed_receipt(evaluations=[{"name": "n", "kind": "metric", "passed": True, "reason": "r"}])
+        _passed_receipt(
+            evaluations=[{"name": "n", "kind": "metric", "passed": True, "reason": "r"}]
+        )
 
 
 def test_receipt_call_timestamp_must_be_the_canonical_rfc3339_millis_form() -> None:
     with pytest.raises(ValidationError):
-        _passed_receipt(call={**_passed_receipt()["call"], "started_at": "2026-08-25T10:14:03.412000+00:00"})
+        _passed_receipt(
+            call={
+                **_passed_receipt()["call"],
+                "started_at": "2026-08-25T10:14:03.412000+00:00",
+            }
+        )
 
 
 def test_a_tampered_receipt_digest_is_rejected() -> None:
@@ -1755,8 +2012,14 @@ def test_receipt_digest_mismatch_names_the_unset_default_field() -> None:
     }
     with pytest.raises(ValidationError) as excinfo:
         build_result_receipt(
-            job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid",
-            scenario_attempt=1, world_index=0, status=ScenarioStatus.PASSED,
+            job_id="j1",
+            attempt_id="a1",
+            attempt_number=1,
+            scenario_key="k",
+            scenario_id="sid",
+            scenario_attempt=1,
+            world_index=0,
+            status=ScenarioStatus.PASSED,
             sub_goals=[{"name": "n", "held": True, "reason": None, "judged": False}],
             evaluations=[],
             call=call_without_recording_artifacts,
@@ -1773,7 +2036,14 @@ def test_build_artifact_manifest_matches_the_contract_shaped_example() -> None:
         job_id="j1",
         attempt_id="a1",
         attempt_number=1,
-        entries=[{"artifact_id": "sha256:" + "1" * 64, "kind": "result", "size": 1048576, "scenario_key": "k"}],
+        entries=[
+            {
+                "artifact_id": "sha256:" + "1" * 64,
+                "kind": "result",
+                "size": 1048576,
+                "scenario_key": "k",
+            }
+        ],
         complete=True,
     )
     assert is_valid_digest(manifest["digest"])
@@ -1781,9 +2051,20 @@ def test_build_artifact_manifest_matches_the_contract_shaped_example() -> None:
 
 
 def test_manifest_complete_flag_changes_the_digest() -> None:
-    entries = [{"artifact_id": "sha256:" + "2" * 64, "kind": "log", "size": 10, "scenario_key": None}]
-    complete_manifest = build_artifact_manifest(job_id="j1", attempt_id="a1", attempt_number=1, entries=entries, complete=True)
-    partial_manifest = build_artifact_manifest(job_id="j1", attempt_id="a1", attempt_number=1, entries=entries, complete=False)
+    entries = [
+        {
+            "artifact_id": "sha256:" + "2" * 64,
+            "kind": "log",
+            "size": 10,
+            "scenario_key": None,
+        }
+    ]
+    complete_manifest = build_artifact_manifest(
+        job_id="j1", attempt_id="a1", attempt_number=1, entries=entries, complete=True
+    )
+    partial_manifest = build_artifact_manifest(
+        job_id="j1", attempt_id="a1", attempt_number=1, entries=entries, complete=False
+    )
     # "a later `complete: true` manifest is a distinct document that supersedes an earlier
     # `complete: false` one from the same attempt."
     assert complete_manifest["digest"] != partial_manifest["digest"]
@@ -1792,8 +2073,17 @@ def test_manifest_complete_flag_changes_the_digest() -> None:
 def test_manifest_entry_rejects_a_malformed_artifact_id() -> None:
     with pytest.raises(ValidationError):
         build_artifact_manifest(
-            job_id="j1", attempt_id="a1", attempt_number=1,
-            entries=[{"artifact_id": "not-a-digest", "kind": "log", "size": 1, "scenario_key": None}],
+            job_id="j1",
+            attempt_id="a1",
+            attempt_number=1,
+            entries=[
+                {
+                    "artifact_id": "not-a-digest",
+                    "kind": "log",
+                    "size": 1,
+                    "scenario_key": None,
+                }
+            ],
             complete=True,
         )
 
@@ -1852,7 +2142,9 @@ class FakePlatform:
     def _maybe_crash(self, response: TransportResponse) -> TransportResponse:
         if self.crash_after_next_write:
             self.crash_after_next_write = False
-            raise TransportError("simulated crash: response lost after platform-side processing")
+            raise TransportError(
+                "simulated crash: response lost after platform-side processing"
+            )
         return response
 
     def _check_auth(self, headers: dict[str, str]) -> TransportResponse | None:
@@ -1860,9 +2152,25 @@ class FakePlatform:
         # bearer + fence -- exercising the auth-header wiring the contract mandates on every one of
         # the four endpoints, not just implicitly via "the call succeeded."
         if headers.get("Authorization") != f"Bearer {self.expected_token}":
-            return TransportResponse(401, {"error": "token_invalid", "message": "missing/wrong bearer", "retryable": False}, {})
+            return TransportResponse(
+                401,
+                {
+                    "error": "token_invalid",
+                    "message": "missing/wrong bearer",
+                    "retryable": False,
+                },
+                {},
+            )
         if headers.get("X-Harness-Fence") != self.expected_fence:
-            return TransportResponse(403, {"error": "fence_mismatch", "message": "missing/wrong fence", "retryable": False}, {})
+            return TransportResponse(
+                403,
+                {
+                    "error": "fence_mismatch",
+                    "message": "missing/wrong fence",
+                    "retryable": False,
+                },
+                {},
+            )
         return None
 
     def request(
@@ -1927,7 +2235,11 @@ class FakePlatform:
             self._events_by_id[event["event_id"]] = event
         self._watermark = max(self._watermark, max_seq)
         return self._maybe_crash(
-            TransportResponse(200, {"acked_through_sequence": self._watermark, "rejected": rejected}, {})
+            TransportResponse(
+                200,
+                {"acked_through_sequence": self._watermark, "rejected": rejected},
+                {},
+            )
         )
 
     def _handle_receipt(self, body: dict[str, Any]) -> TransportResponse:
@@ -1938,13 +2250,19 @@ class FakePlatform:
         core = {k: v for k, v in body.items() if k != "digest"}
         if body.get("digest") != whole_object_digest(core):
             return self._maybe_crash(
-                TransportResponse(422, {"error": "digest_mismatch", "message": "m", "retryable": False}, {})
+                TransportResponse(
+                    422,
+                    {"error": "digest_mismatch", "message": "m", "retryable": False},
+                    {},
+                )
             )
         key = (body["job_id"], body["scenario_key"])
         existing = self._receipts.get(key)
         if existing is not None:
             if existing["digest"] == body["digest"]:
-                return self._maybe_crash(TransportResponse(200, {"status": "duplicate"}, {}))
+                return self._maybe_crash(
+                    TransportResponse(200, {"status": "duplicate"}, {})
+                )
             if existing["attempt_number"] >= body["attempt_number"]:
                 code = (
                     "attempt_superseded"
@@ -1952,19 +2270,29 @@ class FakePlatform:
                     else "receipt_conflict"
                 )
                 return self._maybe_crash(
-                    TransportResponse(409, {"error": code, "message": "m", "retryable": False}, {})
+                    TransportResponse(
+                        409, {"error": code, "message": "m", "retryable": False}, {}
+                    )
                 )
         self._receipts[key] = body
         return self._maybe_crash(TransportResponse(201, {"status": "stored"}, {}))
 
-    def _handle_upload(self, url: str, headers: dict[str, str], data: Any) -> TransportResponse:
+    def _handle_upload(
+        self, url: str, headers: dict[str, str], data: Any
+    ) -> TransportResponse:
         digest_hex = url[len(self.artifacts_url) :].rstrip("/")
         body_bytes = data if isinstance(data, (bytes, bytearray)) else b"".join(data)
         if digest_hex in self._artifacts:
-            return self._maybe_crash(TransportResponse(200, {"status": "already_exists"}, {}))
+            return self._maybe_crash(
+                TransportResponse(200, {"status": "already_exists"}, {})
+            )
         if hashlib.sha256(body_bytes).hexdigest() != digest_hex:
             return self._maybe_crash(
-                TransportResponse(422, {"error": "digest_mismatch", "message": "m", "retryable": False}, {})
+                TransportResponse(
+                    422,
+                    {"error": "digest_mismatch", "message": "m", "retryable": False},
+                    {},
+                )
             )
         kind = headers.get("X-Artifact-Kind")
         if (
@@ -1974,7 +2302,13 @@ class FakePlatform:
         ):
             return self._maybe_crash(
                 TransportResponse(
-                    413, {"error": "artifact_budget_exceeded", "message": "m", "retryable": False}, {}
+                    413,
+                    {
+                        "error": "artifact_budget_exceeded",
+                        "message": "m",
+                        "retryable": False,
+                    },
+                    {},
                 )
             )
         self._artifacts[digest_hex] = body_bytes
@@ -1987,16 +2321,30 @@ class FakePlatform:
         core = {k: v for k, v in body.items() if k != "digest"}
         if body.get("digest") != whole_object_digest(core):
             return self._maybe_crash(
-                TransportResponse(422, {"error": "digest_mismatch", "message": "m", "retryable": False}, {})
+                TransportResponse(
+                    422,
+                    {"error": "digest_mismatch", "message": "m", "retryable": False},
+                    {},
+                )
             )
         key = (body["attempt_id"], body["digest"])
         if key in self._manifests:
-            return self._maybe_crash(TransportResponse(200, {"status": "duplicate"}, {}))
+            return self._maybe_crash(
+                TransportResponse(200, {"status": "duplicate"}, {})
+            )
         for entry in body["entries"]:
             digest_hex = entry["artifact_id"].split(":", 1)[1]
             if digest_hex not in self._artifacts:
                 return self._maybe_crash(
-                    TransportResponse(422, {"error": "artifact_unknown", "message": entry["artifact_id"], "retryable": False}, {})
+                    TransportResponse(
+                        422,
+                        {
+                            "error": "artifact_unknown",
+                            "message": entry["artifact_id"],
+                            "retryable": False,
+                        },
+                        {},
+                    )
                 )
         self._manifests[key] = body
         return self._maybe_crash(TransportResponse(201, {"status": "stored"}, {}))
@@ -2027,7 +2375,9 @@ def _capabilities() -> HostedCapabilities:
 
 def _platform() -> FakePlatform:
     return FakePlatform(
-        events_url=ENDPOINTS["events"], results_url=ENDPOINTS["results"], artifacts_url=ENDPOINTS["artifacts"]
+        events_url=ENDPOINTS["events"],
+        results_url=ENDPOINTS["results"],
+        artifacts_url=ENDPOINTS["artifacts"],
     )
 
 
@@ -2045,8 +2395,12 @@ def _spooled_log_event(spool: OutboundSpool, event_id: str) -> None:
     spool.append(record)
 
 
-@pytest.mark.parametrize("channel", ["events", "results", "artifacts_upload", "artifacts_manifest"])
-def test_every_channel_client_sends_authorization_and_fence_headers(tmp_path: Path, channel: str) -> None:
+@pytest.mark.parametrize(
+    "channel", ["events", "results", "artifacts_upload", "artifacts_manifest"]
+)
+def test_every_channel_client_sends_authorization_and_fence_headers(
+    tmp_path: Path, channel: str
+) -> None:
     # Ranked missing test 8: one parametrized test over all four endpoints. `FakePlatform` now
     # enforces these headers itself (`_check_auth`) -- a wrong/missing one would 401/403 here, so a
     # passing run proves the header is both sent AND correct, not merely present in a recorded list.
@@ -2055,20 +2409,36 @@ def test_every_channel_client_sends_authorization_and_fence_headers(tmp_path: Pa
     if channel == "events":
         spool = OutboundSpool(tmp_path, "events", sequenced=True)
         _spooled_log_event(spool, "event_x")
-        result = EventsClient(capabilities, spool, platform, sleep=lambda s: None).flush()
+        result = EventsClient(
+            capabilities, spool, platform, sleep=lambda s: None
+        ).flush()
         assert result.error is None
     elif channel == "results":
-        receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
-        result = ResultsClient(capabilities, platform, sleep=lambda s: None).push(receipt)
+        receipt = build_skipped_receipt(
+            job_id="j1",
+            attempt_id="a1",
+            attempt_number=1,
+            scenario_key="k",
+            scenario_id="sid",
+        )
+        result = ResultsClient(capabilities, platform, sleep=lambda s: None).push(
+            receipt
+        )
         assert result.delivered
     elif channel == "artifacts_upload":
         data = b"auth header check"
         digest_hex = hashlib.sha256(data).hexdigest()
-        result = ArtifactsClient(capabilities, platform, sleep=lambda s: None).upload(digest_hex, data, kind=ArtifactKind.LOG)
+        result = ArtifactsClient(capabilities, platform, sleep=lambda s: None).upload(
+            digest_hex, data, kind=ArtifactKind.LOG
+        )
         assert result.delivered
     else:
-        manifest = build_artifact_manifest(job_id="j1", attempt_id="a1", attempt_number=1, entries=[], complete=True)
-        result = ArtifactsClient(capabilities, platform, sleep=lambda s: None).push_manifest(manifest)
+        manifest = build_artifact_manifest(
+            job_id="j1", attempt_id="a1", attempt_number=1, entries=[], complete=True
+        )
+        result = ArtifactsClient(
+            capabilities, platform, sleep=lambda s: None
+        ).push_manifest(manifest)
         assert result.delivered
 
     assert platform.received_headers  # at least one request actually happened
@@ -2080,7 +2450,9 @@ def test_every_channel_client_sends_authorization_and_fence_headers(tmp_path: Pa
 # --- EventsClient ------------------------------------------------------------------------------
 
 
-def test_events_client_flush_delivers_and_advances_the_watermark(tmp_path: Path) -> None:
+def test_events_client_flush_delivers_and_advances_the_watermark(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     for i in range(3):
         _spooled_log_event(spool, f"event_{i}")
@@ -2096,7 +2468,9 @@ def test_events_client_flush_delivers_and_advances_the_watermark(tmp_path: Path)
     assert spool.watermark() == 3
 
 
-def test_events_client_flush_is_a_no_op_transport_call_when_nothing_is_pending(tmp_path: Path) -> None:
+def test_events_client_flush_is_a_no_op_transport_call_when_nothing_is_pending(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     platform = _platform()
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
@@ -2105,81 +2479,128 @@ def test_events_client_flush_is_a_no_op_transport_call_when_nothing_is_pending(t
     assert platform.calls == []
 
 
-def test_events_client_never_advances_watermark_on_a_retryable_failure(tmp_path: Path) -> None:
+def test_events_client_never_advances_watermark_on_a_retryable_failure(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
     platform.queue(TransportError("boom"))
     client = EventsClient(
-        _capabilities(), spool, platform, sleep=lambda s: None, retry_policy=RetryPolicy(max_attempts=1)
+        _capabilities(),
+        spool,
+        platform,
+        sleep=lambda s: None,
+        retry_policy=RetryPolicy(max_attempts=1),
     )
     result = client.flush()
     assert result.error is not None
     assert result.error.outcome is ChannelOutcome.RETRYABLE
-    assert spool.watermark() == 0  # "advancing the spool watermark only on confirmed delivery"
+    assert (
+        spool.watermark() == 0
+    )  # "advancing the spool watermark only on confirmed delivery"
 
 
-def test_events_client_transient_then_success_network_error_then_5xx(tmp_path: Path) -> None:
+def test_events_client_transient_then_success_network_error_then_5xx(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
     platform.queue(TransportError("connection refused"))
-    platform.queue(TransportResponse(503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}))
+    platform.queue(
+        TransportResponse(
+            503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}
+        )
+    )
     sleeps: list[float] = []
-    client = EventsClient(_capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0)
+    client = EventsClient(
+        _capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0
+    )
 
     result = client.flush()
     assert result.error is None
     assert result.delivered_count == 1
-    assert sleeps == [1.0, 2.0]  # base backoff, then doubled -- full jitter pinned to 1.0
+    assert sleeps == [
+        1.0,
+        2.0,
+    ]  # base backoff, then doubled -- full jitter pinned to 1.0
     assert len(platform.calls) == 3
 
 
-def test_events_client_429_honors_retry_after_over_computed_backoff(tmp_path: Path) -> None:
+def test_events_client_429_honors_retry_after_over_computed_backoff(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(429, {"error": "rate_limited", "message": "m", "retryable": True}, {"Retry-After": "9"}))
+    platform.queue(
+        TransportResponse(
+            429,
+            {"error": "rate_limited", "message": "m", "retryable": True},
+            {"Retry-After": "9"},
+        )
+    )
     sleeps: list[float] = []
-    client = EventsClient(_capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0)
+    client = EventsClient(
+        _capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0
+    )
 
     result = client.flush()
     assert result.error is None
     assert sleeps == [9.0]
 
 
-def test_events_client_retry_after_86400_is_clamped_to_max_backoff(tmp_path: Path) -> None:
+def test_events_client_retry_after_86400_is_clamped_to_max_backoff(
+    tmp_path: Path,
+) -> None:
     # N5, ranked missing test 6: an absurd Retry-After must not be honored verbatim -- clamp to
     # retry_policy.max_backoff_seconds (15.0 by default).
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
     platform.queue(
-        TransportResponse(429, {"error": "rate_limited", "message": "m", "retryable": True}, {"Retry-After": "86400"})
+        TransportResponse(
+            429,
+            {"error": "rate_limited", "message": "m", "retryable": True},
+            {"Retry-After": "86400"},
+        )
     )
     sleeps: list[float] = []
-    client = EventsClient(_capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0)
+    client = EventsClient(
+        _capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0
+    )
 
     result = client.flush()
     assert result.error is None
     assert sleeps == [15.0]
 
 
-def test_events_client_retry_after_negative_is_treated_as_absent(tmp_path: Path) -> None:
+def test_events_client_retry_after_negative_is_treated_as_absent(
+    tmp_path: Path,
+) -> None:
     # N5: a negative Retry-After must not reach `time.sleep` (ValueError) -- treated as absent, the
     # caller falls back to the computed full-jitter backoff instead.
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
     platform.queue(
-        TransportResponse(429, {"error": "rate_limited", "message": "m", "retryable": True}, {"Retry-After": "-5"})
+        TransportResponse(
+            429,
+            {"error": "rate_limited", "message": "m", "retryable": True},
+            {"Retry-After": "-5"},
+        )
     )
     sleeps: list[float] = []
-    client = EventsClient(_capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0)
+    client = EventsClient(
+        _capabilities(), spool, platform, sleep=sleeps.append, rng=lambda: 1.0
+    )
 
     result = client.flush()
     assert result.error is None
-    assert sleeps == [1.0]  # the computed backoff for attempt 1, not -5.0 and not a crash
+    assert sleeps == [
+        1.0
+    ]  # the computed backoff for attempt 1, not -5.0 and not a crash
 
 
 def test_perform_with_retry_deadline_refuses_a_new_attempt_once_elapsed() -> None:
@@ -2189,7 +2610,9 @@ def test_perform_with_retry_deadline_refuses_a_new_attempt_once_elapsed() -> Non
 
     def perform(attempt: int) -> TransportResponse:
         calls.append(attempt)
-        return TransportResponse(503, {"error": "e", "message": "m", "retryable": True}, {})
+        return TransportResponse(
+            503, {"error": "e", "message": "m", "retryable": True}, {}
+        )
 
     response, error = _perform_with_retry(
         perform,
@@ -2213,7 +2636,9 @@ def test_perform_with_retry_deadline_clamps_the_sleep_to_the_remaining_budget() 
         return clock[0]
 
     def perform(_attempt: int) -> TransportResponse:
-        return TransportResponse(503, {"error": "e", "message": "m", "retryable": True}, {})
+        return TransportResponse(
+            503, {"error": "e", "message": "m", "retryable": True}, {}
+        )
 
     sleeps: list[float] = []
 
@@ -2223,7 +2648,9 @@ def test_perform_with_retry_deadline_clamps_the_sleep_to_the_remaining_budget() 
 
     _perform_with_retry(
         perform,
-        retry_policy=RetryPolicy(max_attempts=8, initial_backoff_seconds=100.0, max_backoff_seconds=100.0),
+        retry_policy=RetryPolicy(
+            max_attempts=8, initial_backoff_seconds=100.0, max_backoff_seconds=100.0
+        ),
         sleep=sleep,
         rng=lambda: 1.0,
         now=now,
@@ -2232,7 +2659,9 @@ def test_perform_with_retry_deadline_clamps_the_sleep_to_the_remaining_budget() 
     assert sleeps[0] == 5.0  # clamped to what remained, not the full computed backoff
 
 
-def test_events_client_deterministic_rejection_advances_watermark_but_never_retries(tmp_path: Path) -> None:
+def test_events_client_deterministic_rejection_advances_watermark_but_never_retries(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_ok")
     _spooled_log_event(spool, "event_bad")
@@ -2245,11 +2674,15 @@ def test_events_client_deterministic_rejection_advances_watermark_but_never_retr
     assert result.acked_through_sequence == 2
     assert [item["event_id"] for item in result.rejected] == ["event_bad"]
     assert result.delivered_count == 1
-    assert spool.watermark() == 2  # "the watermark is highest-processed -- accepted AND rejected"
+    assert (
+        spool.watermark() == 2
+    )  # "the watermark is highest-processed -- accepted AND rejected"
     assert len(platform.calls) == 1  # never retried
 
 
-def test_events_client_physically_drops_a_rejected_record_from_the_spool(tmp_path: Path) -> None:
+def test_events_client_physically_drops_a_rejected_record_from_the_spool(
+    tmp_path: Path,
+) -> None:
     # P8 alignment: rejected-event handling must go through the spool's own drop(sequence), not
     # leave the rejected record sitting in the log forever.
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
@@ -2288,8 +2721,10 @@ def test_events_client_flush_rejection_does_not_destroy_an_unacked_record_past_a
     recovered = OutboundSpool(tmp_path, "events", sequenced=True)
     assert recovered.is_corrupt
 
-    _spooled_log_event(recovered, "event_bad")       # sequence 1, appended post-recovery
-    _spooled_log_event(recovered, "event_terminal")  # sequence 2, genuinely never yet acked
+    _spooled_log_event(recovered, "event_bad")  # sequence 1, appended post-recovery
+    _spooled_log_event(
+        recovered, "event_terminal"
+    )  # sequence 2, genuinely never yet acked
 
     platform = _platform()
     # Ack ONLY sequence 1 (rejected) -- sequence 2 (event_terminal) is deliberately left un-acked,
@@ -2299,7 +2734,9 @@ def test_events_client_flush_rejection_does_not_destroy_an_unacked_record_past_a
             200,
             {
                 "acked_through_sequence": 1,
-                "rejected": [{"sequence": 1, "code": "event_type_unknown", "message": "m"}],
+                "rejected": [
+                    {"sequence": 1, "code": "event_type_unknown", "message": "m"}
+                ],
             },
             {},
         )
@@ -2325,7 +2762,9 @@ def test_events_client_rejects_an_untrusted_acked_through_sequence_and_leaves_wa
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(200, {"acked_through_sequence": 10**9, "rejected": []}, {}))
+    platform.queue(
+        TransportResponse(200, {"acked_through_sequence": 10**9, "rejected": []}, {})
+    )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     result = client.flush()
@@ -2346,13 +2785,24 @@ def test_events_client_rejected_sequence_outside_the_batch_is_ignored_not_orphan
         _spooled_log_event(spool, f"event_{i}")
     platform = _platform()
     platform.queue(
-        TransportResponse(200, {"acked_through_sequence": 0, "rejected": [{"event_id": "x9", "sequence": 10**9, "code": "c", "message": "m"}]}, {})
+        TransportResponse(
+            200,
+            {
+                "acked_through_sequence": 0,
+                "rejected": [
+                    {"event_id": "x9", "sequence": 10**9, "code": "c", "message": "m"}
+                ],
+            },
+            {},
+        )
     )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     result = client.flush()
     assert result.error is None
-    assert result.rejected == []  # the bogus entry never makes it into the reported rejections
+    assert (
+        result.rejected == []
+    )  # the bogus entry never makes it into the reported rejections
     assert spool.watermark() == 0
     assert len(spool.pending_since_watermark()) == 10  # nothing orphaned
     assert len(spool.records()) == 10  # nothing physically dropped either
@@ -2380,11 +2830,16 @@ def test_events_client_ack_body_missing_acked_through_sequence_sets_ack_missing(
     [
         {"acked_through_sequence": None, "rejected": []},
         {"acked_through_sequence": "abc", "rejected": []},
-        {"acked_through_sequence": True, "rejected": []},  # bool must not pass an int check
+        {
+            "acked_through_sequence": True,
+            "rejected": [],
+        },  # bool must not pass an int check
         {},
     ],
 )
-def test_events_client_hostile_ack_bodies_never_raise(tmp_path: Path, body: dict[str, Any]) -> None:
+def test_events_client_hostile_ack_bodies_never_raise(
+    tmp_path: Path, body: dict[str, Any]
+) -> None:
     # N2, ranked missing test 1: a non-int/missing acked_through_sequence must produce a typed,
     # non-exception result, never crash the flusher (`TypeError`/`ValueError` from a bare `int()`).
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
@@ -2404,7 +2859,9 @@ def test_events_client_rejected_is_not_a_list_never_raises(tmp_path: Path) -> No
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(200, {"acked_through_sequence": 1, "rejected": None}, {}))
+    platform.queue(
+        TransportResponse(200, {"acked_through_sequence": 1, "rejected": None}, {})
+    )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     result = client.flush()  # must not raise
@@ -2418,7 +2875,11 @@ def test_events_client_rejected_list_of_non_dicts_never_raises(tmp_path: Path) -
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(200, {"acked_through_sequence": 1, "rejected": ["oops", 5, None]}, {}))
+    platform.queue(
+        TransportResponse(
+            200, {"acked_through_sequence": 1, "rejected": ["oops", 5, None]}, {}
+        )
+    )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     result = client.flush()  # must not raise
@@ -2427,7 +2888,9 @@ def test_events_client_rejected_list_of_non_dicts_never_raises(tmp_path: Path) -
     assert spool.watermark() == 1
 
 
-def test_events_client_503_503_404_does_not_raise_channel_failed(tmp_path: Path) -> None:
+def test_events_client_503_503_404_does_not_raise_channel_failed(
+    tmp_path: Path,
+) -> None:
     # N6: interleaved 5xx must not shorten the 404 budget -- only 3 OBSERVED 404s (not 3 attempts
     # total) reach CHANNEL_FAILED. The ranked missing test names this sequence exactly.
     # max_attempts=3 stops the retry loop right after this exact sequence (rather than letting it
@@ -2437,28 +2900,60 @@ def test_events_client_503_503_404_does_not_raise_channel_failed(tmp_path: Path)
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}))
-    platform.queue(TransportResponse(503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}))
-    platform.queue(TransportResponse(404, {"error": "not_found", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}
+        )
+    )
+    platform.queue(
+        TransportResponse(
+            503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}
+        )
+    )
+    platform.queue(
+        TransportResponse(
+            404, {"error": "not_found", "message": "m", "retryable": False}, {}
+        )
+    )
     client = EventsClient(
-        _capabilities(), spool, platform, sleep=lambda s: None, retry_policy=RetryPolicy(max_attempts=3)
+        _capabilities(),
+        spool,
+        platform,
+        sleep=lambda s: None,
+        retry_policy=RetryPolicy(max_attempts=3),
     )
 
-    result = client.flush()  # must NOT raise HostedChannelFailedError -- only one 404 seen so far
+    result = (
+        client.flush()
+    )  # must NOT raise HostedChannelFailedError -- only one 404 seen so far
     assert result.error is not None
     assert result.error.outcome is ChannelOutcome.RETRYABLE
     assert result.error.status_code == 404
     assert len(platform.calls) == 3
 
 
-def test_events_client_503_503_404_404_404_raises_channel_failed(tmp_path: Path) -> None:
+def test_events_client_503_503_404_404_404_raises_channel_failed(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}))
-    platform.queue(TransportResponse(503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}))
+    platform.queue(
+        TransportResponse(
+            503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}
+        )
+    )
+    platform.queue(
+        TransportResponse(
+            503, {"error": "service_unavailable", "message": "m", "retryable": True}, {}
+        )
+    )
     for _ in range(3):
-        platform.queue(TransportResponse(404, {"error": "not_found", "message": "m", "retryable": False}, {}))
+        platform.queue(
+            TransportResponse(
+                404, {"error": "not_found", "message": "m", "retryable": False}, {}
+            )
+        )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     with pytest.raises(HostedChannelFailedError) as excinfo:
@@ -2467,14 +2962,22 @@ def test_events_client_503_503_404_404_404_raises_channel_failed(tmp_path: Path)
     assert len(platform.calls) == 5
 
 
-def test_events_client_413_on_the_events_channel_does_not_forever_loop(tmp_path: Path) -> None:
+def test_events_client_413_on_the_events_channel_does_not_forever_loop(
+    tmp_path: Path,
+) -> None:
     # N7, ranked missing test 7: a 413 with no artifact_budget_exceeded body classifies as a
     # PERMANENT_ITEM (not a nonsensical BUDGET_EXCEEDED on a non-artifact channel) so the batch does
     # not silently re-send forever with no diagnostic.
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(413, {"error": "request_entity_too_large", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            413,
+            {"error": "request_entity_too_large", "message": "m", "retryable": False},
+            {},
+        )
+    )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     result = client.flush()
@@ -2490,7 +2993,13 @@ def test_events_client_413_halves_the_batch_and_retries(tmp_path: Path) -> None:
     for i in range(4):
         _spooled_log_event(spool, f"event_{i}")
     platform = _platform()
-    platform.queue(TransportResponse(413, {"error": "artifact_budget_exceeded", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            413,
+            {"error": "artifact_budget_exceeded", "message": "m", "retryable": False},
+            {},
+        )
+    )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     result = client.flush()
@@ -2509,9 +3018,15 @@ def test_events_client_channel_state_latches_a_fence_and_stops_touching_the_tran
     _spooled_log_event(spool, "event_x")
     _spooled_log_event(spool, "event_y")
     platform = _platform()
-    platform.queue(TransportResponse(401, {"error": "token_expired", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            401, {"error": "token_expired", "message": "m", "retryable": False}, {}
+        )
+    )
     state = ChannelState()
-    client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None, channel_state=state)
+    client = EventsClient(
+        _capabilities(), spool, platform, sleep=lambda s: None, channel_state=state
+    )
 
     with pytest.raises(HostedFencedError):
         client.flush()
@@ -2529,19 +3044,35 @@ def test_channel_state_shared_across_clients_fences_all_of_them(tmp_path: Path) 
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(403, {"error": "fence_invalid", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            403, {"error": "fence_invalid", "message": "m", "retryable": False}, {}
+        )
+    )
     state = ChannelState()
-    events_client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None, channel_state=state)
-    results_client = ResultsClient(_capabilities(), platform, sleep=lambda s: None, channel_state=state)
+    events_client = EventsClient(
+        _capabilities(), spool, platform, sleep=lambda s: None, channel_state=state
+    )
+    results_client = ResultsClient(
+        _capabilities(), platform, sleep=lambda s: None, channel_state=state
+    )
 
     with pytest.raises(HostedFencedError):
         events_client.flush()
     calls_before = len(platform.calls)
 
-    receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
+    receipt = build_skipped_receipt(
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+    )
     with pytest.raises(HostedFencedError) as excinfo:
         results_client.push(receipt)
-    assert len(platform.calls) == calls_before  # results_client never touched the transport
+    assert (
+        len(platform.calls) == calls_before
+    )  # results_client never touched the transport
     assert excinfo.value.error.code == "fence_invalid"
 
 
@@ -2549,7 +3080,11 @@ def test_events_client_401_raises_hosted_fenced_error(tmp_path: Path) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
-    platform.queue(TransportResponse(401, {"error": "token_expired", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            401, {"error": "token_expired", "message": "m", "retryable": False}, {}
+        )
+    )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     with pytest.raises(HostedFencedError) as excinfo:
@@ -2558,12 +3093,18 @@ def test_events_client_401_raises_hosted_fenced_error(tmp_path: Path) -> None:
     assert spool.watermark() == 0
 
 
-def test_events_client_404_exhausted_three_times_raises_hosted_channel_failed_error(tmp_path: Path) -> None:
+def test_events_client_404_exhausted_three_times_raises_hosted_channel_failed_error(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_x")
     platform = _platform()
     for _ in range(3):
-        platform.queue(TransportResponse(404, {"error": "not_found", "message": "m", "retryable": False}, {}))
+        platform.queue(
+            TransportResponse(
+                404, {"error": "not_found", "message": "m", "retryable": False}, {}
+            )
+        )
     client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None)
 
     with pytest.raises(HostedChannelFailedError) as excinfo:
@@ -2572,7 +3113,9 @@ def test_events_client_404_exhausted_three_times_raises_hosted_channel_failed_er
     assert len(platform.calls) == 3
 
 
-def test_events_client_crash_between_send_and_ack_redelivers_safely_within_one_flush(tmp_path: Path) -> None:
+def test_events_client_crash_between_send_and_ack_redelivers_safely_within_one_flush(
+    tmp_path: Path,
+) -> None:
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     _spooled_log_event(spool, "event_crash")
     platform = _platform()
@@ -2587,14 +3130,18 @@ def test_events_client_crash_between_send_and_ack_redelivers_safely_within_one_f
     assert "event_crash" in platform._events_by_id
 
 
-def test_events_client_batch_size_is_clamped_to_the_contract_max(tmp_path: Path) -> None:
+def test_events_client_batch_size_is_clamped_to_the_contract_max(
+    tmp_path: Path,
+) -> None:
     from fi.alk.harness.outbound import EVENTS_MAX_BATCH
 
     spool = OutboundSpool(tmp_path, "events", sequenced=True)
     for i in range(EVENTS_MAX_BATCH + 10):
         _spooled_log_event(spool, f"event_{i}")
     platform = _platform()
-    client = EventsClient(_capabilities(), spool, platform, sleep=lambda s: None, batch_size=10_000)
+    client = EventsClient(
+        _capabilities(), spool, platform, sleep=lambda s: None, batch_size=10_000
+    )
 
     result = client.flush()
     assert result.error is None
@@ -2610,7 +3157,13 @@ def test_events_client_batch_size_is_clamped_to_the_contract_max(tmp_path: Path)
 def test_results_client_pushes_a_receipt_successfully() -> None:
     platform = _platform()
     client = ResultsClient(_capabilities(), platform, sleep=lambda s: None)
-    receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
+    receipt = build_skipped_receipt(
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+    )
     result = client.push(receipt)
     assert result.delivered
     assert not result.already_existed
@@ -2619,9 +3172,19 @@ def test_results_client_pushes_a_receipt_successfully() -> None:
 
 def test_results_client_permanent_item_is_never_retried() -> None:
     platform = _platform()
-    platform.queue(TransportResponse(422, {"error": "artifact_unknown", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            422, {"error": "artifact_unknown", "message": "m", "retryable": False}, {}
+        )
+    )
     client = ResultsClient(_capabilities(), platform, sleep=lambda s: None)
-    receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
+    receipt = build_skipped_receipt(
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+    )
 
     result = client.push(receipt)
     assert not result.delivered
@@ -2633,31 +3196,63 @@ def test_results_client_permanent_item_is_never_retried() -> None:
 
 def test_results_client_401_raises_hosted_fenced_error() -> None:
     platform = _platform()
-    platform.queue(TransportResponse(401, {"error": "token_expired", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            401, {"error": "token_expired", "message": "m", "retryable": False}, {}
+        )
+    )
     client = ResultsClient(_capabilities(), platform, sleep=lambda s: None)
     with pytest.raises(HostedFencedError):
-        client.push({"job_id": "j1", "scenario_key": "k", "digest": "sha256:" + "0" * 64, "attempt_number": 1})
+        client.push(
+            {
+                "job_id": "j1",
+                "scenario_key": "k",
+                "digest": "sha256:" + "0" * 64,
+                "attempt_number": 1,
+            }
+        )
 
 
 def test_results_client_crash_between_send_and_ack_redelivers_within_one_push() -> None:
     platform = _platform()
-    receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
+    receipt = build_skipped_receipt(
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+    )
     platform.crash_after_next_write = True
     client = ResultsClient(_capabilities(), platform, sleep=lambda s: None)
 
     result = client.push(receipt)
     assert result.delivered
-    assert result.already_existed  # the retry loop's own second attempt saw the already-stored write
+    assert (
+        result.already_existed
+    )  # the retry loop's own second attempt saw the already-stored write
     assert len(platform.calls) == 2
 
 
-def test_results_client_crash_between_send_and_ack_redelivers_across_a_simulated_restart() -> None:
+def test_results_client_crash_between_send_and_ack_redelivers_across_a_simulated_restart() -> (
+    None
+):
     platform = _platform()
-    receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
+    receipt = build_skipped_receipt(
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+    )
     platform.crash_after_next_write = True
     # max_attempts=1: the retry loop can't self-heal, so the crash surfaces as a RETRYABLE return
     # from this one push() call -- as if the guest process died right here.
-    first_client = ResultsClient(_capabilities(), platform, sleep=lambda s: None, retry_policy=RetryPolicy(max_attempts=1))
+    first_client = ResultsClient(
+        _capabilities(),
+        platform,
+        sleep=lambda s: None,
+        retry_policy=RetryPolicy(max_attempts=1),
+    )
     first = first_client.push(receipt)
     assert not first.delivered
     assert first.error is not None and first.error.outcome is ChannelOutcome.RETRYABLE
@@ -2676,10 +3271,22 @@ def test_results_client_attempt_superseded_latches_the_shared_channel_state() ->
     # every SUBSEQUENT call: "a fenced attempt's in-flight requests cannot land after registration
     # of its successor" is a fence in substance.
     platform = _platform()
-    platform.queue(TransportResponse(409, {"error": "attempt_superseded", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            409, {"error": "attempt_superseded", "message": "m", "retryable": False}, {}
+        )
+    )
     state = ChannelState()
-    client = ResultsClient(_capabilities(), platform, sleep=lambda s: None, channel_state=state)
-    receipt = build_skipped_receipt(job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid")
+    client = ResultsClient(
+        _capabilities(), platform, sleep=lambda s: None, channel_state=state
+    )
+    receipt = build_skipped_receipt(
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+    )
 
     first = client.push(receipt)
     assert not first.delivered
@@ -2696,7 +3303,10 @@ def test_build_event_record_redacts_a_dsn_in_world_unhealthy_cause() -> None:
     record = _event(
         OutboundEventType.WORLD_UNHEALTHY,
         HarnessStage.RUNNING,
-        {"world_index": 2, "cause": "connect failed: postgresql://harness:s3cr3t@localhost:14000/w0"},
+        {
+            "world_index": 2,
+            "cause": "connect failed: postgresql://harness:s3cr3t@localhost:14000/w0",
+        },
     )
     cause = record["payload"]["cause"]
     assert "s3cr3t" not in cause
@@ -2726,18 +3336,46 @@ def test_build_event_record_redacts_terminal_failure_message() -> None:
     assert "postgresql://harness:***@localhost:14000/w0" in message
 
 
-def test_build_result_receipt_redacts_sub_goal_and_evaluation_reasons_and_failure_message() -> None:
+def test_build_result_receipt_redacts_sub_goal_and_evaluation_reasons_and_failure_message() -> (
+    None
+):
     receipt = build_result_receipt(
-        job_id="j1", attempt_id="a1", attempt_number=1, scenario_key="k", scenario_id="sid",
-        scenario_attempt=1, world_index=None,
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        scenario_key="k",
+        scenario_id="sid",
+        scenario_attempt=1,
+        world_index=None,
         status=ScenarioStatus.ERRORED,
-        sub_goals=[{"name": "n", "held": None, "reason": "leaked postgresql://harness:pw123@host/db", "judged": False}],
-        evaluations=[{"name": "n2", "kind": "metric", "score": 0.5, "reason": "saw postgresql://harness:pw123@host/db"}],
+        sub_goals=[
+            {
+                "name": "n",
+                "held": None,
+                "reason": "leaked postgresql://harness:pw123@host/db",
+                "judged": False,
+            }
+        ],
+        evaluations=[
+            {
+                "name": "n2",
+                "kind": "metric",
+                "score": 0.5,
+                "reason": "saw postgresql://harness:pw123@host/db",
+            }
+        ],
         call=None,
-        failure={"domain": "agent", "stage": "running", "code": "c", "message": "postgresql://harness:pw123@host/db"},
+        failure={
+            "domain": "agent",
+            "stage": "running",
+            "code": "c",
+            "message": "postgresql://harness:pw123@host/db",
+        },
     )
     assert "pw123" not in str(receipt)
-    assert receipt["sub_goals"][0]["reason"] == "leaked postgresql://harness:***@host/db"
+    assert (
+        receipt["sub_goals"][0]["reason"] == "leaked postgresql://harness:***@host/db"
+    )
     assert receipt["evaluations"][0]["reason"] == "saw postgresql://harness:***@host/db"
     assert receipt["failure"]["message"] == "postgresql://harness:***@host/db"
     # The digest must match the redacted bytes.
@@ -2745,9 +3383,15 @@ def test_build_result_receipt_redacts_sub_goal_and_evaluation_reasons_and_failur
 
 
 def test_redact_outbound_text_scrubs_userinfo_and_extra_secrets() -> None:
-    assert redact_outbound_text("postgresql://harness:pw@localhost/db") == "postgresql://harness:***@localhost/db"
+    assert (
+        redact_outbound_text("postgresql://harness:pw@localhost/db")
+        == "postgresql://harness:***@localhost/db"
+    )
     assert redact_outbound_text("no secrets here") == "no secrets here"
-    assert redact_outbound_text("token=abc123 leaked", extra_secret_values=("abc123",)) == "token=*** leaked"
+    assert (
+        redact_outbound_text("token=abc123 leaked", extra_secret_values=("abc123",))
+        == "token=*** leaked"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2792,26 +3436,42 @@ def test_artifacts_client_upload_new_then_already_exists() -> None:
 
     first = client.upload(digest_hex, data, kind=ArtifactKind.RESULT, scenario_key="k1")
     assert first.delivered and not first.already_existed
-    second = client.upload(digest_hex, data, kind=ArtifactKind.RESULT, scenario_key="k1")
+    second = client.upload(
+        digest_hex, data, kind=ArtifactKind.RESULT, scenario_key="k1"
+    )
     assert second.delivered and second.already_existed
 
 
 def test_artifacts_client_digest_mismatch_gets_exactly_one_re_upload() -> None:
     platform = _platform()
-    platform.queue(TransportResponse(422, {"error": "digest_mismatch", "message": "m", "retryable": False}, {}))
+    platform.queue(
+        TransportResponse(
+            422, {"error": "digest_mismatch", "message": "m", "retryable": False}, {}
+        )
+    )
     client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
     data = b"re-upload me"
     digest_hex = hashlib.sha256(data).hexdigest()
 
     result = client.upload(digest_hex, data, kind=ArtifactKind.LOG)
     assert result.delivered
-    assert len(platform.calls) == 2  # the queued failure, then the one allowed re-upload
+    assert (
+        len(platform.calls) == 2
+    )  # the queued failure, then the one allowed re-upload
 
 
-def test_artifacts_client_digest_mismatch_twice_is_permanent_the_scenario_is_errored() -> None:
+def test_artifacts_client_digest_mismatch_twice_is_permanent_the_scenario_is_errored() -> (
+    None
+):
     platform = _platform()
     for _ in range(2):
-        platform.queue(TransportResponse(422, {"error": "digest_mismatch", "message": "m", "retryable": False}, {}))
+        platform.queue(
+            TransportResponse(
+                422,
+                {"error": "digest_mismatch", "message": "m", "retryable": False},
+                {},
+            )
+        )
     client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
     data = b"re-upload me twice"
     digest_hex = hashlib.sha256(data).hexdigest()
@@ -2819,7 +3479,9 @@ def test_artifacts_client_digest_mismatch_twice_is_permanent_the_scenario_is_err
     result = client.upload(digest_hex, data, kind=ArtifactKind.LOG)
     assert not result.delivered
     assert result.error is not None and result.error.code == "digest_mismatch"
-    assert len(platform.calls) == 2  # exactly one re-upload attempted, per "re-upload once"
+    assert (
+        len(platform.calls) == 2
+    )  # exactly one re-upload attempted, per "re-upload once"
 
 
 def test_artifacts_client_sends_x_artifact_size_derived_from_the_actual_bytes() -> None:
@@ -2858,6 +3520,17 @@ def test_artifacts_client_content_type_defaults_by_kind() -> None:
     assert platform.received_headers[-1]["Content-Type"] == "application/octet-stream"
 
 
+def test_artifacts_client_detects_wave_recording_bytes() -> None:
+    platform = _platform()
+    client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
+    data = b"RIFF" + (36).to_bytes(4, "little") + b"WAVEfmt " + b"\x00" * 20
+    digest_hex = hashlib.sha256(data).hexdigest()
+
+    client.upload(digest_hex, data, kind=ArtifactKind.RECORDING_COMBINED)
+
+    assert platform.received_headers[-1]["Content-Type"] == "audio/wav"
+
+
 def test_artifacts_client_content_type_override() -> None:
     platform = _platform()
     client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
@@ -2867,21 +3540,33 @@ def test_artifacts_client_content_type_override() -> None:
     assert platform.received_headers[-1]["Content-Type"] == "text/plain"
 
 
-def test_artifacts_client_latches_after_413_and_skips_non_reserved_without_the_transport() -> None:
+def test_artifacts_client_latches_after_413_and_skips_non_reserved_without_the_transport() -> (
+    None
+):
     # N18: once a 413 artifact_budget_exceeded is observed, later non-reserved uploads must be
     # refused LOCALLY (never touching the transport again); reserved kinds keep going.
     platform = _platform()
     platform.budget_remaining = 1
     client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
     first_data = b"too big for the tiny budget"
-    first = client.upload(hashlib.sha256(first_data).hexdigest(), first_data, kind=ArtifactKind.TRACE)
-    assert first.error is not None and first.error.outcome is ChannelOutcome.BUDGET_EXCEEDED
+    first = client.upload(
+        hashlib.sha256(first_data).hexdigest(), first_data, kind=ArtifactKind.TRACE
+    )
+    assert (
+        first.error is not None
+        and first.error.outcome is ChannelOutcome.BUDGET_EXCEEDED
+    )
     calls_after_413 = len(platform.calls)
 
     second_data = b"another non-reserved upload"
-    second = client.upload(hashlib.sha256(second_data).hexdigest(), second_data, kind=ArtifactKind.LOG)
+    second = client.upload(
+        hashlib.sha256(second_data).hexdigest(), second_data, kind=ArtifactKind.LOG
+    )
     assert not second.delivered
-    assert second.error is not None and second.error.outcome is ChannelOutcome.BUDGET_EXCEEDED
+    assert (
+        second.error is not None
+        and second.error.outcome is ChannelOutcome.BUDGET_EXCEEDED
+    )
     assert len(platform.calls) == calls_after_413  # no new transport call
 
     reserved_data = b"reserved kind always goes through"
@@ -2905,9 +3590,17 @@ def test_artifacts_client_413_budget_exceeded_is_never_retried() -> None:
     assert len(platform.calls) == 1
 
 
-def test_artifacts_client_chunks_uploads_over_the_threshold_and_reassembles_correctly() -> None:
+def test_artifacts_client_chunks_uploads_over_the_threshold_and_reassembles_correctly() -> (
+    None
+):
     platform = _platform()
-    client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None, chunk_threshold_bytes=10, chunk_size_bytes=4)
+    client = ArtifactsClient(
+        _capabilities(),
+        platform,
+        sleep=lambda s: None,
+        chunk_threshold_bytes=10,
+        chunk_size_bytes=4,
+    )
     data = b"0123456789abcdef"
     digest_hex = hashlib.sha256(data).hexdigest()
 
@@ -2916,7 +3609,9 @@ def test_artifacts_client_chunks_uploads_over_the_threshold_and_reassembles_corr
     assert platform._artifacts[digest_hex] == data
 
 
-def test_artifacts_client_crash_between_send_and_ack_redelivers_as_already_exists() -> None:
+def test_artifacts_client_crash_between_send_and_ack_redelivers_as_already_exists() -> (
+    None
+):
     platform = _platform()
     data = b"artifact bytes" * 100
     digest_hex = hashlib.sha256(data).hexdigest()
@@ -2938,22 +3633,42 @@ def test_artifacts_client_push_manifest_is_idempotent_and_checks_references() ->
     client.upload(digest_hex, data, kind=ArtifactKind.RESULT)
 
     manifest = build_artifact_manifest(
-        job_id="j1", attempt_id="a1", attempt_number=1,
-        entries=[{"artifact_id": f"sha256:{digest_hex}", "kind": "result", "size": len(data), "scenario_key": "k"}],
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        entries=[
+            {
+                "artifact_id": f"sha256:{digest_hex}",
+                "kind": "result",
+                "size": len(data),
+                "scenario_key": "k",
+            }
+        ],
         complete=True,
     )
     first = client.push_manifest(manifest)
     assert first.delivered and not first.already_existed
     second = client.push_manifest(manifest)
-    assert second.delivered and second.already_existed  # idempotent on (attempt_id, digest)
+    assert (
+        second.delivered and second.already_existed
+    )  # idempotent on (attempt_id, digest)
 
 
 def test_artifacts_client_push_manifest_rejects_an_unknown_artifact_reference() -> None:
     platform = _platform()
     client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
     manifest = build_artifact_manifest(
-        job_id="j1", attempt_id="a1", attempt_number=1,
-        entries=[{"artifact_id": "sha256:" + "f" * 64, "kind": "result", "size": 1, "scenario_key": "k"}],
+        job_id="j1",
+        attempt_id="a1",
+        attempt_number=1,
+        entries=[
+            {
+                "artifact_id": "sha256:" + "f" * 64,
+                "kind": "result",
+                "size": 1,
+                "scenario_key": "k",
+            }
+        ],
         complete=True,
     )
     result = client.push_manifest(manifest)

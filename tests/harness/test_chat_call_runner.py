@@ -150,3 +150,69 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     assert outcome.calls[0].arguments == {"account_id": "ACC-2048"}
     assert outcome.transcript_artifact == "transcript-1"
     assert b"The account is active" in adapter.uploads[0]
+    assert b'"name": "lookup_account"' in adapter.uploads[1]
+
+
+def test_tool_world_can_import_customer_tool_from_uploaded_source(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    context = _context(tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "tools.py").write_text(
+        "def lookup_account(account_id):\n"
+        "    return {'account_id': account_id, 'status': 'active'}\n",
+        encoding="utf-8",
+    )
+    handlers = context.bundle_dir / "handlers"
+    handlers.mkdir()
+    (handlers / "lookup_account.py").write_text(
+        "from tools import lookup_account\n"
+        "from fi.alk.harness.world.runtime import settled\n\n"
+        "def handle(args, db):\n"
+        "    return settled(lookup_account(**args))\n",
+        encoding="utf-8",
+    )
+
+    class Store:
+        def __init__(self, _dsn: str) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def collections(self) -> list[str]:
+            return []
+
+        def records(self, _collection: str) -> list[dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr(chat, "_HostedToolStore", Store)
+    contract = chat.AgentContract.model_validate_json(
+        (context.bundle_dir / "contract.json").read_text(encoding="utf-8")
+    )
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "world_db": RuntimeEndpoint(
+                capability="world_db",
+                protocol="postgres",
+                address="postgresql://unused",
+            )
+        },
+    )
+
+    world = chat._tool_world(context.bundle_dir, contract, runtime, source)
+    result = world.handle_tool_call(
+        {
+            "id": "tool-1",
+            "name": "lookup_account",
+            "arguments": {"account_id": "ACC-2048"},
+        }
+    )
+
+    assert result is not None
+    assert result.result == {"account_id": "ACC-2048", "status": "active"}

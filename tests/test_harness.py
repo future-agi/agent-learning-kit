@@ -6456,6 +6456,30 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
     assert all(verdict.holds for verdict in verdicts)
 
 
+def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
+    monkeypatch,
+):
+    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import platform_evals
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.run.grade import judge_suite_evals
+    from fi.alk.harness.scenario import Scenario
+
+    monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
+    monkeypatch.setattr(platform_evals, "configured", lambda: False)
+    verdicts = judge_suite_evals(
+        default_suite_evals(),
+        Scenario(name="voice", instruction="help", sub_goals=[]),
+        Transcript(),
+        AgentContract(agent="voice", modality="voice"),
+    )
+
+    assert len(verdicts) == len(default_suite_evals())
+    assert all(verdict.grading_error for verdict in verdicts)
+    assert all(not verdict.holds for verdict in verdicts)
+
+
 def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
     from fi.alk.harness.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
@@ -6702,6 +6726,72 @@ def test_a_scenario_that_never_ran_is_not_reported_as_one_the_agent_failed():
     assert ran["status"] == "completed"
     assert blocked["status"] == "failed"
     assert "not ready" in blocked["error_message"]
+
+
+def test_a_grading_failure_does_not_rewrite_completed_call_status():
+    from fi.alk.harness import platform
+    from fi.alk.harness.run.grade import Checkpoint, Judgement
+
+    result = _reported_result(
+        checkpoints=[
+            Checkpoint(
+                name="task completion",
+                kind="eval",
+                passed=False,
+                detail="evaluator unavailable",
+                grading_error=True,
+            )
+        ],
+        conduct=[
+            Judgement(
+                claim="task completion",
+                kind="eval",
+                holds=False,
+                why="evaluator unavailable",
+                grading_error=True,
+            )
+        ],
+    )
+
+    payload = platform.result_of(result)
+
+    assert payload["status"] == "completed"
+    assert "error_message" not in payload
+    assert payload["call_metadata"]["harness_eval_coverage"] == {
+        "expected": 1,
+        "executed": 0,
+        "failed": 1,
+        "complete": False,
+    }
+
+
+def test_platform_call_duration_excludes_connection_and_retry_waits():
+    from fi.alk.harness import platform
+
+    connected = _reported_result(seconds=255.0)
+    connected.exchanges = [
+        {"start_time_ms": 10_000, "end_time_ms": 25_000},
+        {"start_time_ms": 100_000, "end_time_ms": 116_000},
+    ]
+    unavailable = _reported_result(
+        seconds=301.1,
+        exchanges=[],
+        problems=["the target worker never joined"],
+    )
+
+    assert platform.result_of(connected)["duration_seconds"] == 106
+    assert platform.result_of(unavailable)["duration_seconds"] == 0
+
+
+def test_platform_headers_carry_the_explicit_workspace(monkeypatch):
+    from fi.alk.harness.platform import Platform
+
+    monkeypatch.setenv("HARNESS_PLATFORM_WORKSPACE_ID", "workspace-123")
+    headers = Platform(
+        base="https://platform.example", key="key", secret="secret"
+    )._headers()
+
+    assert headers["X-Workspace-Id"] == "workspace-123"
 
 
 def test_a_second_run_joins_the_same_test_rather_than_starting_another():

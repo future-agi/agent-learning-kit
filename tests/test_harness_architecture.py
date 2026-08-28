@@ -189,6 +189,7 @@ def test_hosted_authoring_uses_original_stages_without_running_calls(
     monkeypatch.setattr(cli, "_build", build)
     monkeypatch.setattr(cli, "_scenarios", scenarios)
     monkeypatch.setattr(cli, "_simulate", calls)
+    monkeypatch.setattr(cli, "load_written", lambda _destination: [object(), object()])
     monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
 
     status = asyncio.run(
@@ -213,6 +214,57 @@ def test_hosted_authoring_uses_original_stages_without_running_calls(
         ("environment", True),
         ("scenarios", None),
     ]
+
+
+def test_hosted_authoring_repairs_partial_scenario_suite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    output = tmp_path / "authoring"
+    counts = iter((2, 3))
+    observed_guidance: list[list[str]] = []
+
+    async def ok(_args) -> int:
+        return 0
+
+    async def scenarios(args) -> int:
+        observed_guidance.append(list(args.guidance))
+        return 0
+
+    monkeypatch.setattr(cli, "_understand", ok)
+    monkeypatch.setattr(cli, "_build", ok)
+    monkeypatch.setattr(cli, "_scenarios", scenarios)
+    monkeypatch.setattr(
+        cli,
+        "load_written",
+        lambda _destination: [object()] * next(counts),
+    )
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
+
+    status = asyncio.run(
+        cli._auto(
+            SimpleNamespace(
+                path=str(source),
+                name="agent",
+                kind="repo",
+                out=str(output),
+                count=3,
+                model=None,
+                run_model=None,
+                authoring_only=True,
+                adjustments_path=None,
+            )
+        )
+    )
+
+    assert status == 0
+    assert len(observed_guidance) == 2
+    assert observed_guidance[0] == []
+    assert "only 2 are currently saved" in observed_guidance[1][0]
+    assert "Add exactly 1" in observed_guidance[1][0]
 
 
 def test_hosted_authoring_treats_an_extracted_archive_as_a_repo(

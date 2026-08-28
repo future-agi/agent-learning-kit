@@ -791,6 +791,58 @@ async def _auto(args: argparse.Namespace) -> int:
             print(f"\n=== {label} ===", flush=True)
             emit("harness.stage.started", label)
             status = await operation(stage_args)
+            # Hosted authoring is unattended, and a successful scenario-stage
+            # process is not sufficient evidence that it honoured the requested
+            # cardinality.  Models can checkpoint a valid partial suite (for
+            # example 2/3); Bundle V2 must remain strict, so repair the producer
+            # output here while the authoring context is still available.
+            if label == "scenarios" and authoring_only and not status:
+                repair_attempt = 0
+                wanted = int(stage_args.count)
+                written_count = len(load_written(destination))
+                while written_count != wanted and repair_attempt < 2:
+                    repair_attempt += 1
+                    missing = wanted - written_count
+                    stage_args.guidance = [
+                        (
+                            f"The hosted run requires exactly {wanted} scenarios, but "
+                            f"only {written_count} are currently saved. "
+                            + (
+                                f"Add exactly {missing} distinct validated scenario(s) and "
+                                "call save_scenarios. Preserve all existing scenarios."
+                                if missing > 0
+                                else f"Remove exactly {-missing} excess scenario(s), preserve "
+                                "the strongest coverage, and call save_scenarios."
+                            )
+                        )
+                    ]
+                    emit(
+                        "harness.stage.repairing",
+                        label,
+                        attempt=repair_attempt,
+                        expected_scenarios=wanted,
+                        written_scenarios=written_count,
+                    )
+                    status = await operation(stage_args)
+                    if status:
+                        break
+                    written_count = len(load_written(destination))
+                if not status and written_count != wanted:
+                    emit(
+                        "harness.stage.failed",
+                        label,
+                        status=1,
+                        code="scenario_count_mismatch",
+                        expected_scenarios=wanted,
+                        written_scenarios=written_count,
+                    )
+                    print(
+                        "\nautomatic run stopped: scenario generation saved "
+                        f"{written_count}/{wanted} requested scenarios after "
+                        f"{repair_attempt} repair attempts",
+                        file=sys.stderr,
+                    )
+                    status = 1
             # A completed call suite returns 2 when the submitted agent fails one or more checks.
             # That is a valid RL result. Earlier stages returning non-zero are harness failures.
             if status and label != "calls":

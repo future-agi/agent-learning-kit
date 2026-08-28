@@ -38,6 +38,7 @@ from typing import Any
 BASE_URL = ("HARNESS_PLATFORM_URL", "FI_BASE_URL")
 API_KEY = ("HARNESS_PLATFORM_API_KEY", "FI_API_KEY")
 SECRET_KEY = ("HARNESS_PLATFORM_SECRET_KEY", "FI_SECRET_KEY")
+WORKSPACE_ID = "HARNESS_PLATFORM_WORKSPACE_ID"
 
 
 def _setting(names: tuple[str, ...]) -> str:
@@ -141,17 +142,23 @@ class Platform:
         self.key = key or _setting(API_KEY)
         self.secret = secret or _setting(SECRET_KEY)
 
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "X-Api-Key": self.key,
+            "X-Secret-Key": self.secret,
+        }
+        workspace_id = os.environ.get(WORKSPACE_ID, "").strip()
+        if workspace_id:
+            headers["X-Workspace-Id"] = workspace_id
+        return headers
+
     def _call(
         self, path: str, payload: dict[str, Any], method: str = "POST"
     ) -> dict[str, Any]:
         request = urllib.request.Request(
             f"{self.base}{INGESTION}{path}",
             data=json.dumps(payload).encode(),
-            headers={
-                "Content-Type": "application/json",
-                "X-Api-Key": self.key,
-                "X-Secret-Key": self.secret,
-            },
+            headers={"Content-Type": "application/json", **self._headers()},
             method=method,
         )
         try:
@@ -242,8 +249,7 @@ class Platform:
             data=body,
             headers={
                 "Content-Type": f"multipart/form-data; boundary={edge}",
-                "X-Api-Key": self.key,
-                "X-Secret-Key": self.secret,
+                **self._headers(),
             },
         )
         try:
@@ -353,16 +359,17 @@ def evaluations_of(result: Any) -> list[dict[str, Any]]:
         # attach the already-computed result to that template/config instead of
         # merely leaving a second, disconnected EvalTemplate in the library.
         platform_template = decided_by.rsplit(" (", 1)[0] if decided_by else ""
-        judged.append(
-            {
-                "name": getattr(check, "name", ""),
-                "kind": getattr(check, "kind", "") or "checkpoint",
-                "passed": bool(getattr(check, "passed", False)),
-                "reason": str(getattr(check, "detail", ""))[:2000],
-                "decided_by": decided_by[:2000],
-                "platform_template": platform_template[:2000],
-            }
-        )
+        evaluation = {
+            "name": getattr(check, "name", ""),
+            "kind": getattr(check, "kind", "") or "checkpoint",
+            "passed": bool(getattr(check, "passed", False)),
+            "reason": str(getattr(check, "detail", ""))[:2000],
+            "decided_by": decided_by[:2000],
+            "platform_template": platform_template[:2000],
+        }
+        if getattr(check, "grading_error", False):
+            evaluation["grading_error"] = True
+        judged.append(evaluation)
     for metric in (getattr(result, "measured", None) or {}).get("metrics") or []:
         if not metric.get("applicable", True):
             continue
@@ -375,6 +382,28 @@ def evaluations_of(result: Any) -> list[dict[str, Any]]:
             }
         )
     return [one for one in judged if one["name"]]
+
+
+def conversation_seconds(result: Any) -> int:
+    """Return user-visible conversation time, excluding setup and retry waits."""
+    exchanges = getattr(result, "exchanges", None) or []
+    starts = [
+        float(exchange["start_time_ms"])
+        for exchange in exchanges
+        if isinstance(exchange, dict)
+        and isinstance(exchange.get("start_time_ms"), (int, float))
+    ]
+    ends = [
+        float(exchange["end_time_ms"])
+        for exchange in exchanges
+        if isinstance(exchange, dict)
+        and isinstance(exchange.get("end_time_ms"), (int, float))
+    ]
+    if starts and ends:
+        return max(0, int((max(ends) - min(starts)) / 1000))
+    if not exchanges and getattr(result, "problems", None):
+        return 0
+    return max(0, int(getattr(result, "seconds", 0) or 0))
 
 
 def result_of(result: Any) -> dict[str, Any]:
@@ -393,11 +422,23 @@ def result_of(result: Any) -> dict[str, Any]:
         for check in getattr(result, "checkpoints", None) or []
     ]
     problems = list(getattr(result, "problems", None) or [])
+    grading_failures = list(getattr(result, "grading_failures", None) or [])
+    evaluations = evaluations_of(result)
+    evaluation_coverage = {
+        "expected": len(evaluations),
+        "executed": sum(
+            1 for evaluation in evaluations if not evaluation.get("grading_error")
+        ),
+        "failed": sum(
+            1 for evaluation in evaluations if evaluation.get("grading_error")
+        ),
+        "complete": not grading_failures,
+    }
     payload: dict[str, Any] = {
         # A scenario that never ran is not a scenario the agent failed, and the two must not
         # arrive as the same status.
         "status": "failed" if problems else "completed",
-        "duration_seconds": max(0, int(getattr(result, "seconds", 0) or 0)),
+        "duration_seconds": conversation_seconds(result),
         "ended_reason": (getattr(result, "ended", "") or "")[:10000],
         "call_summary": (getattr(result, "line", lambda: "")() or "")[:2000],
         "transcript": segments_of(result),
@@ -410,7 +451,11 @@ def result_of(result: Any) -> dict[str, Any]:
             # Platform evaluations are backend-owned. Harness checks are direct
             # execution evidence and stay namespaced in metadata rather than
             # being sent through the removed SDK `evaluations` input field.
-            "harness_evaluations": evaluations_of(result),
+            "harness_evaluations": evaluations,
+            "harness_eval_coverage": evaluation_coverage,
+            "harness_failure_classification": (
+                "grading_failure" if grading_failures else ""
+            ),
             "harness_spent_usd": round(
                 float(getattr(result, "spent_usd", 0.0) or 0.0), 4
             ),

@@ -156,6 +156,7 @@ class CallRunnerContext:
     evidence_seam: EvidenceSeam | None
     target_provider_secret_values: Mapping[str, str]
     attempt_number: int
+    source_directory: Path | None = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------

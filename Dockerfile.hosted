@@ -69,6 +69,11 @@ RUN groupadd --gid 2000 svc-control \
     && install -d -o root -g root -m 0755 /opt/alk
 
 WORKDIR /opt/alk
+# Daytona's direct-image builder can reuse an image when only build-context
+# files change.  Bump this source revision whenever guest code changes so a
+# hosted test cannot silently execute an older installed ALK.
+ARG ALK_HOSTED_SOURCE_REVISION=20260828-chat-tool-trace-r1
+LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json

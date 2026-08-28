@@ -65,6 +65,37 @@ class EnvironmentPlanV2:
     capabilities: dict[str, CapabilityV2]
     readiness: tuple[ReadinessProbeV2, ...]
 
+    def __post_init__(self) -> None:
+        names = [process.name for process in self.processes]
+        if len(names) != len(set(names)):
+            raise BundleAuthorError("environment_plan_process_names_not_unique")
+        if self.control_service not in names:
+            raise BundleAuthorError("environment_plan_control_service_missing")
+        known = set(names)
+        for process in self.processes:
+            missing = sorted(set(process.depends_on) - known)
+            if missing:
+                raise BundleAuthorError(
+                    f"environment_plan_dependency_missing: {process.name}: {', '.join(missing)}"
+                )
+        for slug, capability in self.capabilities.items():
+            if capability.service not in known:
+                raise BundleAuthorError(
+                    f"environment_plan_capability_service_missing: {slug}: {capability.service}"
+                )
+        missing_probes = sorted(
+            {
+                probe.capability
+                for probe in self.readiness
+                if probe.capability not in self.capabilities
+            }
+        )
+        if missing_probes:
+            raise BundleAuthorError(
+                "environment_plan_readiness_capability_missing: "
+                + ", ".join(missing_probes)
+            )
+
 
 _COMPOSE_NAMES = (
     "compose.yml",
