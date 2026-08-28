@@ -443,7 +443,7 @@ class LiveKitEngine(BaseEngine):
         readiness_timeout: float = 30.0,
         cleanup_timeout: float = 30.0,
         conversation_direction: str = "simulator_first",
-        agent_first_silence_timeout_seconds: float = 30.0,
+        agent_first_silence_timeout_seconds: float = 120.0,
         recording_root: str | Path = "recordings",
         recording_case_directory: str | Path | None = None,
         run_id: str | None = None,
@@ -957,6 +957,28 @@ class LiveKitEngine(BaseEngine):
                 ),
                 agent_name=agent_definition.name,
                 min_turn_messages=min_turn_messages,
+            )
+            setup = getattr(self, "_last_simulator_setup", {}) or {}
+            _record_simulator_setup(
+                case_directory,
+                persona=persona,
+                instructions=setup.get("instructions", ""),
+                llm_config=setup.get("llm_config"),
+                stt_config=setup.get("stt_config"),
+                tts_config=setup.get("tts_config"),
+                extra={
+                    "room_name": room_name,
+                    "agent_name": agent_definition.name,
+                    "test_case_id": test_case_id,
+                    "run_id": run_id,
+                    "conversation_direction": conversation_direction,
+                    "allow_interruptions": setup.get("allow_interruptions"),
+                    "min_endpointing_delay": setup.get("min_endpointing_delay"),
+                    "max_endpointing_delay": setup.get("max_endpointing_delay"),
+                    "use_tts_aligned_transcript": setup.get(
+                        "use_tts_aligned_transcript"
+                    ),
+                },
             )
             sip_participant_identity: str | None = None
             bridge_identity: str | None = None
@@ -1704,6 +1726,16 @@ class LiveKitEngine(BaseEngine):
             tts_config=tts_config,
         )
         vad = await asyncio.to_thread(_load_silero_vad_sync)
+        self._last_simulator_setup = {
+            "instructions": instructions,
+            "llm_config": llm_config,
+            "stt_config": stt_config,
+            "tts_config": tts_config,
+            "allow_interruptions": allow_interruptions,
+            "min_endpointing_delay": min_endpointing_delay,
+            "max_endpointing_delay": max_endpointing_delay,
+            "use_tts_aligned_transcript": use_aligned_transcript,
+        }
         agent = _TestRunnerAgent(
             persona=persona,
             min_turn_messages=min_turn_messages,
@@ -2488,6 +2520,58 @@ def _failure_outcome(
             details=details or {},
         ),
     )
+
+
+def _record_simulator_setup(
+    case_directory: Path,
+    *,
+    persona: Persona,
+    instructions: str,
+    llm_config: Any,
+    stt_config: Any,
+    tts_config: Any,
+    turn_handling: Any = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Write the exact prompt and voice settings this call is about to use.
+
+    Reconstructing either one afterwards from a transcript is guesswork, and the simulator's
+    prompt is what decides how the caller behaves. Written before the call connects so it
+    survives a run that dies mid-conversation.
+    """
+
+    def settings(config: Any) -> Any:
+        if config is None:
+            return None
+        for method in ("model_dump", "dict"):
+            dump = getattr(config, method, None)
+            if callable(dump):
+                try:
+                    return dump()
+                except Exception:  # noqa: BLE001 - never fail a call over logging
+                    pass
+        return str(config)
+
+    try:
+        case_directory.mkdir(parents=True, exist_ok=True)
+        (case_directory / "simulator-prompt.txt").write_text(
+            instructions or "", encoding="utf-8"
+        )
+        payload = {
+            "persona": settings(persona),
+            "simulator_system_prompt": instructions or "",
+            "llm": settings(llm_config),
+            "stt": settings(stt_config),
+            "tts": settings(tts_config),
+            "turn_handling": settings(turn_handling),
+        }
+        payload.update(extra or {})
+        (case_directory / "simulator-setup.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception as error:  # noqa: BLE001 - logging must never break a run
+        logger.warning("could not record simulator setup: %s", error)
 
 
 def _attach_recordings(
