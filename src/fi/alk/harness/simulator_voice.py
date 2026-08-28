@@ -525,30 +525,37 @@ _CALLER_PHONE_KEYS = ("caller_phone", "caller_ani", "ani")
 def fixture_caller_phone(fixture: Mapping[str, Any] | None) -> str:
     """The number the target must see for this scenario.
 
-    Only keys that name the caller are followed into nested entities. A bare ``phone`` under a
-    driver, a business or a support line is somebody else's number, and handing it over sends the
-    call in as the wrong rider.
+    A key that names the caller wins wherever it sits, so a support line or a driver listed
+    alongside cannot take the call's identity. Only when no such key exists anywhere does a plain
+    ``phone`` count, since a fixture that carries exactly one number means that one.
     """
     if not isinstance(fixture, Mapping):
         return ""
-    for name in (*_CALLER_PHONE_KEYS, "phone"):
-        candidate = str(fixture.get(name) or "").strip()
-        if candidate:
-            return candidate
 
-    def descend(value: Any) -> str:
+    def scoped(value: Any) -> str:
         if isinstance(value, Mapping):
             for name in _CALLER_PHONE_KEYS:
                 candidate = str(value.get(name) or "").strip()
                 if candidate:
                     return candidate
             for nested in value.values():
-                candidate = descend(nested)
+                candidate = scoped(nested)
                 if candidate:
                     return candidate
         return ""
 
-    return descend(fixture)
+    def plain(value: Any) -> str:
+        if isinstance(value, Mapping):
+            candidate = str(value.get("phone") or "").strip()
+            if candidate:
+                return candidate
+            for nested in value.values():
+                candidate = plain(nested)
+                if candidate:
+                    return candidate
+        return ""
+
+    return scoped(fixture) or plain(fixture)
 
 
 def caller_scenario(

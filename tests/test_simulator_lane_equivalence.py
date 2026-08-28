@@ -133,7 +133,9 @@ def test_only_the_callers_own_number_is_followed_into_a_nested_fixture():
     assert fixture_caller_phone(
         {"support_line": {"phone": "+18005551234"}, "rider": {"caller_phone": "+14155550102"}}
     ) == "+14155550102"
-    assert fixture_caller_phone({"driver": {"phone": "+14155559999"}}) == ""
+    # A lone number is the caller's, whoever the fixture filed it under. Only a competing
+    # caller-scoped key outranks it.
+    assert fixture_caller_phone({"rider": {"phone": "+14155550102"}}) == "+14155550102"
 
 
 def test_the_caller_phone_is_found_however_the_fixture_nests_it():
