@@ -210,6 +210,12 @@ GOOD   You have your <device> with you and you are willing to follow anything yo
 The closing sentence matters: stating what has **not** happened yet is what stops the person
 assuming it has.
 
+Only write such a step when the agent can observe it completing. The person can say they did the
+thing, but saying it changes nothing the agent reads. If the agent confirms progress by checking
+state, that state has to be something the world moves once the person acts. Where it cannot, the
+agent is left polling something that never changes and the scenario measures the world's gap
+rather than the agent, so choose an outcome the agent can reach through its own actions.
+
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
 from a polite one only if the agent must handle that difference. Persona never contains the
