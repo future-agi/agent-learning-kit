@@ -164,6 +164,10 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
         dispatch_name = control.environment["LIVEKIT_AGENT_NAME"]
         assert "{{JOB_ID}}" in dispatch_name
         assert "{{WORLD_INDEX}}" in dispatch_name
+        assert (
+            control.environment["HARNESS_TOOL_TRACE"]
+            == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+        )
         assert control.started_check is not None
         assert control.started_check.log_marker == "registered worker"
     preflight_bundle(

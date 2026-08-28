@@ -647,6 +647,10 @@ def resolve_environment_plan(
                     "LIVEKIT_AGENT_NAME",
                     "uber-voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
                 )
+                environment.setdefault(
+                    "HARNESS_TOOL_TRACE",
+                    "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                )
             entry = (
                 "agent/agent.py"
                 if (service_root / "agent" / "agent.py").is_file()
@@ -744,7 +748,8 @@ def resolve_environment_plan(
             {
                 "LIVEKIT_AGENT_NAME": (
                     root.name.replace("_", "-") + "-{{JOB_ID}}-w{{WORLD_INDEX}}"
-                )
+                ),
+                "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
             }
             if is_livekit
             else {}

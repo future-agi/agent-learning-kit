@@ -1528,8 +1528,21 @@ def spawn_source_process(
         stage="spawn",
         domain=FailureDomain.AGENT,
     )
+    trace_bootstrap: Path | None = None
     try:
         world_dir.mkdir(parents=True, exist_ok=True)
+        if "HARNESS_TOOL_TRACE" in process.environment:
+            trace_bootstrap = world_dir / "sitecustomize.py"
+            # Reset reuses this agent-owned directory. The hook is immutable for the job,
+            # so preserve an existing copy instead of overwriting a 0444 file after ownership
+            # has already moved from svc-control to svc-agent.
+            if not trace_bootstrap.exists():
+                trace_bootstrap.write_bytes(
+                    Path(__file__)
+                    .with_name("livekit_tool_trace_bootstrap.py")
+                    .read_bytes()
+                )
+                trace_bootstrap.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
     except OSError as exc:
@@ -1581,9 +1594,18 @@ def spawn_source_process(
             **authoritative_endpoints,
         },
     )
+    command = list(process.run_command)
+    if trace_bootstrap is not None:
+        # Python imports ``sitecustomize`` at interpreter startup. Put the ALK-owned hook first
+        # on PYTHONPATH so it is installed in the parent worker and every LiveKit job child.
+        # Preserve any repository-supplied path after it.
+        existing_pythonpath = env.get("PYTHONPATH", "").strip()
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(world_dir), existing_pythonpath) if part
+        )
     try:
         handle = runner(
-            list(process.run_command),
+            command,
             cwd=build_dir,
             env=env,
             log_path=world_dir / "process.log",
