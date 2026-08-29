@@ -154,18 +154,27 @@ class HostedWorld:
         """Insert one record; return exactly what the table stored, generated key included.
 
         `key` exists only to keep this signature a superset of `GeneratedWorld.put`; a hosted
-        table already knows its own key — the column its own migrations gave it — so a
-        scenario naming one here would be telling the table what to call a value the table is
-        about to generate itself.
+        table already knows its own key — the column its own migrations gave it. Scenario
+        authoring has historically emitted ``key=<primary-key column>`` for table-backed
+        worlds, however, while ``GeneratedWorld`` harmlessly ignores that hint. Accept that
+        one redundant, unambiguous spelling when the record contains the same single-column
+        primary key. Continue rejecting key values and non-primary columns so a mapping-style
+        setup cannot silently acquire different semantics after moving to hosted Postgres.
         """
         self._reject_reserved(collection)
-        if key:
-            raise WorldUsageError("a hosted table's key is the table's own — do not pass one.")
         if collection not in self._visible_tables():
             raise WorldUsageError(
                 f"{collection!r} is not a table in this world; hosted worlds cannot invent "
                 "one, so put() only reaches what the agent's own migrations made."
             )
+        if key:
+            primary_key = self._primary_key_order(collection)
+            if primary_key != [key] or key not in record:
+                raise WorldUsageError(
+                    "a hosted table's key is the table's own; key= is accepted only when it "
+                    "names the table's single-column primary key and that column is present "
+                    "in the record."
+                )
         return self._store.add(collection, dict(record))
 
     def change(

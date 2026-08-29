@@ -335,12 +335,35 @@ def test_put_into_something_that_is_not_a_table_is_a_usage_error() -> None:
         world.put("not_a_table", {"name": "ana"})
 
 
-def test_put_with_a_key_is_a_usage_error() -> None:
-    """A hosted table's key is the table's own; passing one is telling it what to call a value
-    the table is about to generate itself."""
+def test_put_with_a_mapping_key_value_is_a_usage_error() -> None:
+    """A mapping-style key value must not silently become a hosted table column hint."""
     world = _world({"customers": []})
     with pytest.raises(WorldUsageError):
         world.put("customers", {"name": "ana"}, key="c1")
+
+
+def test_put_accepts_redundant_single_primary_key_column_hint() -> None:
+    """GeneratedWorld ignores this table hint, so hosted execution must behave identically."""
+    world = _world(
+        {"customers": []},
+        primary_keys={"customers": ["customer_id"]},
+        columns={"customers": {"customer_id", "name"}},
+    )
+    stored = world.put(
+        "customers", {"customer_id": "c1", "name": "ana"}, key="customer_id"
+    )
+    assert stored["customer_id"] == "c1"
+    assert stored["name"] == "ana"
+
+
+def test_put_rejects_non_primary_column_hint() -> None:
+    world = _world(
+        {"customers": []},
+        primary_keys={"customers": ["customer_id"]},
+        columns={"customers": {"customer_id", "name"}},
+    )
+    with pytest.raises(WorldUsageError):
+        world.put("customers", {"customer_id": "c1", "name": "ana"}, key="name")
 
 
 def test_change_without_by_is_a_usage_error() -> None:
