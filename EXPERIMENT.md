@@ -144,3 +144,72 @@ Being honest about this, because none of it has run in anger:
    check that made it defensible.
 2. Run one hosted job and read what the model does with a shell. That is the experiment.
 3. Then the world handle, because it is what makes "any stack" true rather than aspirational.
+
+## The runtime-tool gate (the thing that earns the shell)
+
+`verify_runtime_tools` had no callers. The autonomy was in and the verification that justifies it
+was not, which is the one configuration worse than the restriction it replaced.
+
+It now returns a `RuntimeToolVerdict` with three outcomes, not a list. `checked=False` means
+nothing was proven and is **not** the same as an empty `broken` list, because reading absence as
+success is exactly the defect this gate exists to close. `HostedScheduler` verifies a world once,
+caches by index, demotes a world whose tools do not answer (`runtime_tools_broken`, marked
+unhealthy so the pool reconciles), and logs at WARNING when a world cannot be asked at all.
+
+The honest limit: `HostedWorld` has no `forward` seam and `HostedWorld.call()` raises by design
+("the http_tool shim wire format is not yet pinned by the contracts"). So in the hosted lane the
+gate currently reports that N runtime tools go ungraded rather than proving them. That is the
+truthful state, and it is loud instead of silent. Wiring it to pass quietly would have looked
+finished and proven nothing. The seam has to exist before this gate can bite in hosted; in the
+provisioned lane, where `forward` is real, it bites today.
+
+## A crash found on the way
+
+`hosted_scheduler.py` logged `scenario.name` in the readiness path, but the `Scenario` protocol
+has `scenario_key` and no `name`. Every `ready_not_ready` verdict therefore raised `AttributeError`
+and surfaced as `driver_crashed`. It predates this branch and is on `feat/pluggable-harness`, so it
+affects PR #69: the logging added to diagnose a 0-turn readiness failure crashed on exactly that
+path. Fixed here in `e47a5e5`.
+
+## The skill library
+
+`voice-livekit.md` is now 170 lines against the Anthropic `pptx` skill's anatomy: frontmatter that
+routes toward and away from itself, a routing table, a scripts table with each gotcha inline, real
+import and assembly code taken from `call_runner._build_spec`, a footguns section where every
+entry names the symptom the reader will actually observe, a required QA section, and an avoid
+list. Its thesis is borrowed: the model knows Python and HTTP, so spend the skill on what it
+cannot guess.
+
+Two scripts ship beside it:
+
+- `scripts/probe_voice_providers.py` asks Cartesia and Deepgram a trivial question and prints the
+  HTTP truth. A provisioning pass costs ~13 minutes before the first word, so a dead key is
+  otherwise found at the worst moment; `402` is out of credit.
+- `scripts/check_call_evidence.py` is the QA gate as a command. It catches the mute-simulator case
+  specifically, because caller turns with text and null `started_speaking_at` read as a stalled
+  agent and cost a full night to diagnose by hand.
+
+Every sub-skill now carries a frontmatter `description` naming when it applies and when it does
+not. `config.sub_skills` reads that description for the catalogue, so the selection the model makes
+is informed by the same text that routes it away.
+
+### Adding an agent kind is a markdown file
+
+Demonstrated, not asserted. `voice-bland.md` was added as a stub and became selectable in the
+catalogue with **zero Python changes**. The one `config.py` edit in this pass is a mechanism fix
+made once (read the frontmatter `description` rather than the first line of prose, which would
+have summarised every new skill as `---`); Bland was selectable before it, just with a poor
+summary. Adding Vapi, Retell or a browser platform tomorrow is the same single file.
+
+## Still unproven
+
+- No hosted run has happened. Docker is down on this machine. The shell has never been exercised
+  by a model, which is the actual experiment.
+- The hosted gate reports ungraded tools rather than proving them, pending the `http_tool` seam.
+- World handle (`reset -> step -> reward`) is not implemented; `world/snapshot.py` still decides
+  "is there a world" by looking for `world.sqlite`.
+- Vapi/Retell/Bland have skills and no code path: `NotWiredCallRunner` still refuses them.
+- Multi-actor is carriable through `Scenario.extras` and not runnable; `SimulationSpec.simulator`
+  is still singular.
+- The remaining sub-skills (browser, retrieval, hosted-platform, multi-actor) have routing
+  frontmatter but not the depth `voice-livekit.md` now has.

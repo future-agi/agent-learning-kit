@@ -1,3 +1,8 @@
+---
+name: voice-multi-actor
+description: "Use when a scenario needs more than one participant with independent goals: a caller and a second person on the line, a transfer between departments, a conference, a supervisor intervention, or an outbound call answered by someone else. Read voice-livekit.md first; this only covers what changes with a second actor. Do NOT use for an ordinary one-caller conversation, which every other voice skill already handles."
+---
+
 # Multi-actor voice environments
 
 Use this only when a scenario needs more than one participant with independent goals: an agent,

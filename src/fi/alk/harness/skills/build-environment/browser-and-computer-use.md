@@ -1,3 +1,8 @@
+---
+name: browser-and-computer-use
+description: "Use when the agent drives a browser, a desktop or any visible application rather than calling an API: Playwright, Puppeteer, Selenium, a CDP client or a computer-use loop in the dependencies, and success judged by what is on a screen. The world is the real site or application, built from the submitted repository. Do NOT use for an agent that only calls HTTP tools, and do NOT use for a voice agent that happens to open a page."
+---
+
 # Agents that drive a browser or a desktop
 
 The world is a real site or application, not a table-shaped imitation of one. Build the submitted
