@@ -27,12 +27,12 @@ service-account JSON containing a private key.
 
 **The symptom that makes this absolute: anything you print reaches the guest log, and the guest log
 is captured into the run artifacts, which outlive the sandbox and are mirrored to disk. A single
-debug `echo` therefore leaks a live key permanently, into a file nobody thinks to check. There is
+debug print therefore leaks a live key permanently, into a file nobody thinks to check. There is
 no undo, only rotation.**
 
 So:
 
-1. **Never print, echo, `cat`, log or write a credential value.** Not to stdout, not into a file,
+1. **Never print, echo, dump, log or write a credential value.** Not to stdout, not into a file,
    not into generated config, not into a scenario, a receipt, an artifact or a commit message.
 2. **Read a credential at the point of use and pass it on by reference.** Never copy one into
    generated code, a compose file, a fixture or a seed.
