@@ -216,6 +216,13 @@ state, that state has to be something the world moves once the person acts. Wher
 agent is left polling something that never changes and the scenario measures the world's gap
 rather than the agent, so choose an outcome the agent can reach through its own actions.
 
+The same holds for anything the agent can only offer. A check that passes only once the person
+accepts an optional courtesy needs that willingness written into the person, because the agent can
+raise the offer but cannot make them take it. A person left free to decline turns a correctly
+offered step into a failed check, and the run then scores the disposition the persona happened to
+be given rather than the agent's behaviour. Either give the person a reason to accept, or check
+that the agent made the offer rather than what followed it.
+
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
 from a polite one only if the agent must handle that difference. Persona never contains the
