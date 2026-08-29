@@ -255,7 +255,7 @@ class _TestRunnerAgent(Agent):
     )
     async def end_call(self, ctx: RunContext) -> str:
         if self._session is None:
-            logger.info("endCall refused: no session yet")
+            logger.warning("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
         if len(messages) < self._min_turn_messages or not _has_role_alternation(
@@ -263,7 +263,7 @@ class _TestRunnerAgent(Agent):
         ):
             # Whether the caller ever reached for this tool, and why it was turned away, is the
             # difference between a simulator that will not hang up and one that was not allowed to.
-            logger.info(
+            logger.warning(
                 "endCall refused: %d messages, floor %d, alternating=%s",
                 len(messages),
                 self._min_turn_messages,
@@ -273,7 +273,7 @@ class _TestRunnerAgent(Agent):
                 "Continue the conversation until both speakers have participated "
                 f"and at least {self._min_turn_messages} messages are complete."
             )
-        logger.info("endCall accepted after %d messages", len(messages))
+        logger.warning("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
         # natural closing sentence. Remember that exact handle before waking
         # the outer runner so it cannot snapshot history in the brief interval
