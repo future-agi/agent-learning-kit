@@ -422,22 +422,57 @@ def _run_sequence(
     return ProbeResult(name, SEQUENCE, True)
 
 
-def verify_runtime_tools(world: Any, contract: Any) -> list[str]:
+@dataclass(frozen=True)
+class RuntimeToolVerdict:
+    """What executing the agent's own tools against a built world established.
+
+    Three outcomes, and conflating the last two is the failure this type exists to prevent.
+    ``checked`` false does not mean "fine", it means nothing was proven, and a caller that reads
+    an empty ``broken`` list as success would repeat exactly the defect this gate was added to
+    close: recording an unexecuted tool as passing.
+    """
+
+    checked: bool
+    broken: list[str] = field(default_factory=list)
+    reason: str = ""
+    tools: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """True only when tools were actually called and none of them was broken."""
+        return self.checked and not self.broken
+
+
+def verify_runtime_tools(world: Any, contract: Any) -> RuntimeToolVerdict:
     """Execute the agent's own tools against the world that was just built.
 
     The build stage cannot reach these: in the hosted lane the runtime they live in is started
     after authoring finishes, so `probe` can only record them as unproven. This is where that
     debt is settled, once there is something to call.
 
-    A tool that refuses is working, so only a crash or a server error counts against it. Returns
-    one line per broken tool, empty when every declared tool answered. Nothing is written here;
-    the caller decides whether a broken tool stops the run.
+    A tool that refuses is working, so only a crash or a server error counts against it. The
+    verdict distinguishes "called them, these are broken" from "had no way to call them", because
+    a world handle without a `forward` seam proves nothing and must not read as a pass.
     """
+    declared = [
+        tool.name
+        for tool in getattr(contract, "tools", [])
+        if tool.name in set(getattr(world, "runtime_tools", set()))
+    ]
     forward = getattr(world, "forward", None)
     endpoints = getattr(world, "endpoint_for", {}) or {}
     runtime_tools = set(getattr(world, "runtime_tools", set()))
-    if not callable(forward) or not runtime_tools:
-        return []
+    if not runtime_tools:
+        return RuntimeToolVerdict(checked=True, reason="no runtime tools declared")
+    if not callable(forward):
+        return RuntimeToolVerdict(
+            checked=False,
+            reason=(
+                f"{type(world).__name__} has no forward seam, so the agent's own tools cannot "
+                "be called from here"
+            ),
+            tools=declared,
+        )
     broken: list[str] = []
     for tool in getattr(contract, "tools", []):
         if tool.name not in runtime_tools:
@@ -453,4 +488,4 @@ def verify_runtime_tools(world: Any, contract: Any) -> list[str]:
             continue
         if not call.ok and not call.refused:
             broken.append(f"{tool.name}: {call.error or 'failed with no reason given'}")
-    return broken
+    return RuntimeToolVerdict(checked=True, broken=broken, tools=declared)

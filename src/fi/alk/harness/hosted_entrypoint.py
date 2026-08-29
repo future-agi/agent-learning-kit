@@ -494,6 +494,27 @@ def _bundle_contract_modality(bundle_dir: Path) -> str | None:
     return value or None
 
 
+def _bundle_contract(bundle_dir: Path) -> Any | None:
+    """The frozen contract, for the gate that makes a world prove it answers the agent's tools.
+
+    Best effort by design: a bundle without a readable contract loses the gate, not the run.
+    """
+    path = bundle_dir / "contract.json"
+    if not path.is_file():
+        return None
+    try:
+        from .contract import AgentContract
+
+        return AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - an unreadable contract must not take the job down
+        logger.warning(
+            "contract.json could not be read for runtime-tool verification: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
 def _default_build_call_runner(
     adapter: "OutboundAdapter", context: CallRunnerContext
 ) -> CallRunner:
@@ -505,9 +526,7 @@ def _default_build_call_runner(
     the contract itself calls it "a follow-up, not shipped with this text")."""
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
-    if connector == _LIVEKIT_CONNECTOR or (
-        connector == "auto" and modality == "voice"
-    ):
+    if connector == _LIVEKIT_CONNECTOR or (connector == "auto" and modality == "voice"):
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
@@ -1216,15 +1235,18 @@ class OutboundAdapter:
             if build_path.is_file()
             else b'{"status":"build metadata unavailable"}\n'
         )
-        result = json.dumps(
-            {
-                "stage": stage.value,
-                "failure": failure,
-                "scenario_counts": self.scenario_counts,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        result = (
+            json.dumps(
+                {
+                    "stage": stage.value,
+                    "failure": failure,
+                    "scenario_counts": self.scenario_counts,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         log = (
             f"hosted harness terminal stage={stage.value}; "
             f"scenario_counts={json.dumps(self.scenario_counts, sort_keys=True)}\n"
@@ -2045,6 +2067,7 @@ async def run_job(
             outbound=adapter,
             job_seed=job_seed,
             cancel_requested=cancel_requested,
+            contract=_bundle_contract(bundle_dir),
         )
         result: RunResult = await scheduler.run(scenarios)
 
