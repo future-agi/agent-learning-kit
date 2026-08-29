@@ -13,7 +13,11 @@ import pytest
 pytest.importorskip("livekit")
 
 from fi.simulate.agent.definition import AgentDefinition
-from fi.simulate.recording.room_recorder import mix_recordings, mix_recordings_stereo
+from fi.simulate.recording.room_recorder import (
+    RecordedTrack,
+    mix_recordings,
+    mix_recordings_stereo,
+)
 from fi.simulate.runtime import TestCaseStatus as CaseStatus
 from fi.simulate.simulation import bridge as _bridge
 from fi.simulate.simulation.engines import livekit
@@ -56,6 +60,33 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 8000) -> None
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(samples.astype(np.int16).tobytes())
+
+
+def test_simulator_identity_carries_fixture_phone_for_repository_agents() -> None:
+    persona = Persona(
+        persona={
+            "name": "Noor",
+            "metadata": {"caller_phone": "+1 (415) 555-0107"},
+        },
+        situation="Cancel my ride.",
+        outcome="The ride is cancelled.",
+    )
+    assert (
+        livekit._simulator_participant_identity(persona, "case_aaaaaaaaaaaa")
+        == "fagi-simulator-phone-14155550107-aaaaaaaaaaaa"
+    )
+
+
+def test_simulator_identity_preserves_legacy_shape_without_valid_phone() -> None:
+    persona = Persona(
+        persona={"name": "Caller", "metadata": {"caller_phone": "unknown"}},
+        situation="I need help.",
+        outcome="The issue is resolved.",
+    )
+    assert (
+        livekit._simulator_participant_identity(persona, "case_bbbbbbbbbbbb")
+        == "fagi-simulator-bbbbbbbbbbbb"
+    )
 
 
 def test_managed_room_names_are_unique_per_run_and_case() -> None:
@@ -500,6 +531,88 @@ def test_stereo_mix_leaves_missing_side_silent(tmp_path: Path) -> None:
             dtype=np.int16,
         )
     assert samples.tolist() == [0, 2000, 0, 2000]
+
+
+def test_attach_recordings_falls_back_to_all_target_tracks(tmp_path: Path) -> None:
+    simulator = tmp_path / "simulator.wav"
+    target_speech = tmp_path / "target-speech.wav"
+    target_ambient = tmp_path / "target-ambient.wav"
+    for path, samples in (
+        (simulator, np.array([100, 100], dtype=np.int16)),
+        (target_speech, np.array([200, 200], dtype=np.int16)),
+        (target_ambient, np.array([50, 50], dtype=np.int16)),
+    ):
+        _write_wav(path, samples)
+
+    records = (
+        RecordedTrack("sim", "p1", "sim-track", simulator),
+        RecordedTrack("target", "p2", "speech-track", target_speech),
+        RecordedTrack("target", "p2", "ambient-track", target_ambient),
+    )
+    recorder = SimpleNamespace(
+        records=records,
+        errors=(),
+        recording_started_at=None,
+        paths_for_participant=lambda identity, track_sid=None: [
+            record.path
+            for record in records
+            if record.participant_identity == identity
+            and (track_sid is None or record.track_sid == track_sid)
+        ],
+    )
+    outcome = livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    livekit._attach_recordings(
+        outcome,
+        recorder,
+        simulator_identity="sim",
+        target_identity="target",
+        target_track_sid="replaced-readiness-track",
+        case_directory=tmp_path / "case",
+        sample_rate=8000,
+    )
+
+    assert outcome.audio_combined_path is not None
+    assert outcome.audio_output_path is not None
+    assert outcome.metadata["recording_diagnostics"]["target_track_count"] == 2
+
+
+def test_attach_recordings_uses_unambiguous_simulator_identity_fallback(
+    tmp_path: Path,
+) -> None:
+    simulator = tmp_path / "sdk-local-track.wav"
+    target = tmp_path / "target.wav"
+    _write_wav(simulator, np.array([100, 100], dtype=np.int16))
+    _write_wav(target, np.array([200, 200], dtype=np.int16))
+    records = (
+        RecordedTrack("sdk-local-identity", "p1", "sim-track", simulator),
+        RecordedTrack("target", "p2", "target-track", target),
+    )
+    recorder = SimpleNamespace(
+        records=records,
+        errors=(),
+        recording_started_at=None,
+        paths_for_participant=lambda identity, track_sid=None: [
+            record.path
+            for record in records
+            if record.participant_identity == identity
+            and (track_sid is None or record.track_sid == track_sid)
+        ],
+    )
+    outcome = livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    livekit._attach_recordings(
+        outcome,
+        recorder,
+        simulator_identity="expected-simulator-identity",
+        target_identity="target",
+        target_track_sid="target-track",
+        case_directory=tmp_path / "case",
+        sample_rate=8000,
+    )
+
+    assert outcome.audio_input_path == str(simulator)
+    assert outcome.metadata["recording_diagnostics"]["simulator_track_count"] == 1
 
 
 def test_room_recorder_token_is_hidden_subscribe_only() -> None:

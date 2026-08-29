@@ -40,14 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from fi import simulate
 from fi.simulate.runtime import (
-    AgentEndpointSpec,
-    EnvironmentSpec,
-    ExecutionPolicy,
     SimulationSpec,
-    SimulatorPolicySpec,
-    TimeoutPolicy,
     new_run_id,
 )
 from fi.simulate.runtime.report import SimulationReport
@@ -483,8 +477,67 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
+    raw = runtime.metadata.get("tool_trace_path")
+    return Path(raw) if isinstance(raw, str) and raw.strip() else None
+
+
+def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
+    path = _tool_trace_file(runtime)
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.debug(
+            "file tool_trace clear failed; continuing without blocking the call"
+        )
+
+
+def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    path = _tool_trace_file(runtime)
+    if path is None or not path.is_file():
+        return ()
+    calls: list[Call] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ()
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        name = record.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        arguments = record.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except ValueError:
+                arguments = {"raw": arguments}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        is_error = bool(record.get("is_error", False))
+        output = record.get("output")
+        calls.append(
+            Call(
+                name=name,
+                arguments=arguments,
+                result=None if is_error else output,
+                ok=not is_error,
+                error=str(output) if is_error and output is not None else None,
+            )
+        )
+    return tuple(calls)
+
+
 def _truncate(value: str, *, limit: int = _RESULT_TRUNCATE_CHARS) -> str:
     return value if len(value) <= limit else value[:limit]
+
 
 def _materialize_vertex_adc(
     secret_values: Mapping[str, str],
@@ -512,7 +565,9 @@ def _materialize_vertex_adc(
         )
     credential_dir = work_directory / ".caller-credentials"
     credential_dir.mkdir(parents=True, exist_ok=True)
-    fd, path_text = tempfile.mkstemp(prefix="google-", suffix=".json", dir=credential_dir)
+    fd, path_text = tempfile.mkstemp(
+        prefix="google-", suffix=".json", dir=credential_dir
+    )
     path = Path(path_text)
     try:
         os.write(fd, raw.encode("utf-8"))
@@ -584,7 +639,9 @@ class CallRunnerImpl:
             or context.target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
             or ""
         )
-        self._missing_config = _check_config(context.job, context.target_provider_secret_values)
+        self._missing_config = _check_config(
+            context.job, context.target_provider_secret_values
+        )
         self._scenario_attempt_counts: dict[str, int] = {}
 
     def _cleanup_credentials(self) -> None:
@@ -594,7 +651,9 @@ class CallRunnerImpl:
             self._adc_path.unlink(missing_ok=True)
         except OSError:
             pass
-        if self._environ.get(GOOGLE_APPLICATION_CREDENTIALS_ALIAS) == str(self._adc_path):
+        if self._environ.get(GOOGLE_APPLICATION_CREDENTIALS_ALIAS) == str(
+            self._adc_path
+        ):
             self._environ.pop(GOOGLE_APPLICATION_CREDENTIALS_ALIAS, None)
         self._adc_path = None
 
@@ -654,7 +713,9 @@ class CallRunnerImpl:
         # The engine reads this from the environment at call time, so it is set per
         # scenario and cleared otherwise rather than leaking into the next call.
         noise = scenario_source(
-            doc.get("background_noise"), doc.get("fixture"), seed=str(doc.get("name") or "")
+            doc.get("background_noise"),
+            doc.get("fixture"),
+            seed=str(doc.get("name") or ""),
         )
         if noise:
             self._environ["HARNESS_BACKGROUND_NOISE"] = noise
@@ -675,6 +736,7 @@ class CallRunnerImpl:
         )
 
         if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE:
+            _clear_file_tool_calls(runtime)
             endpoint = _find_postgres_endpoint(runtime)
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
@@ -887,6 +949,9 @@ class CallRunnerImpl:
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         seam = self._context.evidence_seam
+        file_calls = _collect_file_tool_calls(runtime)
+        if file_calls:
+            return file_calls
         if seam is EvidenceSeam.HTTP_TOOL:
             return _collect_http_tool_calls(runtime)
         if seam is EvidenceSeam.TOOL_TRACE:

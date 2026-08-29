@@ -110,6 +110,24 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 _VOICE_MAX_CASE_CONCURRENCY_DEFAULT = 4
 
 
+def _simulator_participant_identity(persona: Persona, test_case_id: str) -> str:
+    """Give repository agents the scenario caller ANI through a standard identity seam.
+
+    LiveKit token metadata is not exposed consistently across every SDK/agent version. The
+    harness therefore uses the identity convention already understood by repository voice
+    agents: ``fagi-simulator-phone-<digits>-...``. A persona without a fixture-derived phone
+    keeps the legacy anonymous identity.
+    """
+    definition = persona.persona if isinstance(persona.persona, dict) else {}
+    metadata = definition.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    digits = re.sub(r"\D", "", str(metadata.get("caller_phone") or ""))
+    suffix = test_case_id[-12:]
+    if 7 <= len(digits) <= 15:
+        return f"fagi-simulator-phone-{digits}-{suffix}"
+    return f"fagi-simulator-{suffix}"
+
+
 def _voice_max_case_concurrency() -> int:
     raw = os.environ.get("ALK_VOICE_MAX_CASE_CONCURRENCY", "").strip()
     if not raw:
@@ -737,7 +755,7 @@ class LiveKitEngine(BaseEngine):
                 "livekit_credentials_missing",
                 f"{runtime.api_key_env} and {runtime.api_secret_env} are required",
             )
-        simulator_identity = f"fagi-simulator-{test_case_id[-12:]}"
+        simulator_identity = _simulator_participant_identity(persona, test_case_id)
         recorder_identity = f"fagi-recorder-{test_case_id[-12:]}"
         room = rtc.Room()
         models: LiveKitModels | None = None
@@ -2644,6 +2662,30 @@ def _attach_recordings(
         if target_identity is not None
         else []
     )
+    # ``audio_track_sid`` identifies the track used to establish target
+    # readiness, but it is not necessarily the track that remains published for
+    # the conversation.  Agents using ``BackgroundAudioPlayer`` publish more
+    # than one audio track and can replace the initially selected publication.
+    # Recording is evidence of the whole participant, so fall back to all of the
+    # target participant's tracks instead of silently producing no artifact.
+    if target_identity is not None and not target_paths:
+        target_paths = recorder.paths_for_participant(target_identity)
+
+    # The simulator normally publishes with ``simulator_identity``.  Retain a
+    # conservative fallback for SDKs that expose the local publication under a
+    # different participant identity: only use it when there is exactly one
+    # non-target publishing participant, so another caller can never be folded
+    # into the customer channel accidentally.
+    if not simulator_paths:
+        non_target_identities = {
+            record.participant_identity
+            for record in recorder.records
+            if record.participant_identity != target_identity
+        }
+        if len(non_target_identities) == 1:
+            simulator_paths = recorder.paths_for_participant(
+                next(iter(non_target_identities))
+            )
     audio_directory = case_directory / "audio"
     input_path = _collapse_recordings(
         simulator_paths,
@@ -2682,6 +2724,27 @@ def _attach_recordings(
         }
         for record in recorder.records
     ]
+    outcome.metadata["recording_diagnostics"] = {
+        "simulator_identity": simulator_identity,
+        "target_identity": target_identity,
+        "target_track_sid": target_track_sid,
+        "simulator_track_count": len(simulator_paths),
+        "target_track_count": len(target_paths),
+        "recorder_error_types": [type(error).__name__ for error in recorder.errors],
+    }
+    if combined_path is None:
+        logger.warning(
+            "LiveKit call completed without captured audio tracks",
+            extra={
+                "simulator_identity": simulator_identity,
+                "target_identity": target_identity,
+                "target_track_sid": target_track_sid,
+                "recorded_track_count": len(recorder.records),
+                "recorder_error_types": [
+                    type(error).__name__ for error in recorder.errors
+                ],
+            },
+        )
     speech_starts = [
         float(message["started_speaking_at"])
         for message in outcome.messages

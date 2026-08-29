@@ -114,6 +114,46 @@ def _postgres_endpoint(
     )
 
 
+def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "name": "book_ride",
+                "arguments": '{"destination":"airport"}',
+                "output": {"booking_id": "ride-1"},
+                "is_error": False,
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "name": "charge_card",
+                "arguments": {},
+                "output": "declined",
+                "is_error": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert [call.name for call in calls] == ["book_ride", "charge_card"]
+    assert calls[0].arguments == {"destination": "airport"}
+    assert calls[0].ok is True
+    assert calls[1].ok is False
+    assert calls[1].error == "declined"
+
+
+def test_file_tool_trace_clear_removes_previous_attempt(tmp_path: Path) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text("stale\n", encoding="utf-8")
+    cr._clear_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    assert not trace.exists()
+
+
 def _context(
     *,
     tmp_path: Path,
@@ -493,7 +533,9 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
     # take this string as the full on-the-wire room name.
     assert livekit_runtime["room_name"].startswith("harness-job-abcd-a1-k1-s1")
     assert livekit_runtime["url"] == "wss://custom.livekit.cloud/"
-    assert spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
+    assert (
+        spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
+    )
 
 
 def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(
@@ -624,9 +666,14 @@ def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
 
     assert exc.partial is not None
     assert exc.partial.calls == (captured,)
-    trace_uploads = [item for item in adapter.uploads if item[0] is cr.ArtifactKind.TOOL_TRACE]
+    trace_uploads = [
+        item for item in adapter.uploads if item[0] is cr.ArtifactKind.TOOL_TRACE
+    ]
     assert len(trace_uploads) == 1
-    assert json.loads(trace_uploads[0][2].decode().splitlines()[0])["name"] == "get_ride_options"
+    assert (
+        json.loads(trace_uploads[0][2].decode().splitlines()[0])["name"]
+        == "get_ride_options"
+    )
 
 
 def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(

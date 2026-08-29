@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -6523,6 +6524,57 @@ def test_spawn_source_process_carries_rendered_dispatch_agent_name(
         runner=fake_runner,
     )
     assert without.dispatch_agent_name is None
+
+
+def test_spawn_source_process_injects_child_safe_livekit_tool_trace(
+    tmp_path: Path,
+) -> None:
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, env=env)
+        return FakeHandle()
+
+    process = _source_process(
+        environment={"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"}
+    ).model_copy(update={"run_command": [".venv/bin/python", "agent.py", "start"]})
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+    )
+    assert captured["argv"] == [".venv/bin/python", "agent.py", "start"]
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(world_dir)
+    assert "ALK_HARNESS_ORIGINAL_ARGV" not in captured["env"]
+    assert (world_dir / "sitecustomize.py").is_file()
+
+    # A world reset spawns the process again in the same agent-owned scratch directory. The
+    # immutable hook must be reused rather than rewritten.
+    (world_dir / "sitecustomize.py").chmod(0o444)
+    world_dir.chmod(0o555)
+    try:
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=fake_runner,
+        )
+    finally:
+        world_dir.chmod(0o755)
 
 
 def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
