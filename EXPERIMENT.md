@@ -52,7 +52,7 @@ for a kind that did not exist and silently got the sqlite fallback.
 | `run_env_command`, `write_env_file` | `Bash` and `Write` do this without an allowlist |
 | `UNWANTED`, `gate_hooks`, denying `permission_gate` (110 lines) | the restriction itself |
 | `skills/provision-environment/` | dead code, no Python referenced it |
-| 3 tests in `test_harness.py` | they asserted the deny-by-default gate: `test_a_stage_may_use_nothing_it_was_not_given`, `test_a_tool_a_stage_was_not_given_is_denied_by_the_hook`, `test_every_stage_gates_with_the_hook_not_only_the_callback` |
+| 4 tests in `test_harness.py` | they asserted the deny-by-default gate: `test_a_stage_may_use_nothing_it_was_not_given`, `test_a_tool_a_stage_was_not_given_is_denied_by_the_hook`, `test_every_stage_gates_with_the_hook_not_only_the_callback`, `test_granting_a_tool_rebuilds_the_gate_not_just_the_list` |
 
 `test_a_question_still_reaches_the_operator` was kept and updated: operator routing survived.
 
@@ -80,8 +80,16 @@ The build stage will now have a shell.
 
 Baseline on the branch point: **74 failed, 2789 passed, 38 skipped** (24m14s). Those failures are
 pre-existing and concentrated in `test_config_and_facades.py` and `test_harness_architecture.py`.
-Three tests were deleted as described. The fast structural suites (livekit engine, lane
-equivalence, call runner) pass at 133.
+
+A full run mid-way showed 75 failed / 2785 passed, one worse than baseline once the deleted tests
+were accounted for. That one was real and is worth recording, because it is the argument for
+keeping this kind of test: `test_a_skill_only_names_tools_its_stage_actually_has` caught that
+`build-environment/SKILL.md` still instructed the model to call `run_env_command` and
+`write_env_file` after I had deleted both. Nothing else would have noticed until a run wasted
+turns on tools that were not there. The skill now points at `Bash`, `Write` and `Edit`.
+
+After that fix `tests/test_harness.py` passes at **288**, and the voice surface passes at **136**.
+Four tests were deleted, all of them assertions about the gate that no longer exists.
 
 ## Voice, which is the acceptance test
 

@@ -185,18 +185,19 @@ tools are bound, their state is loaded, and the world is done. Say so rather tha
 something unnecessary.
 
 Where the agent's tools do talk to a store or a service, that has to exist before they can answer,
-and it must not be installed on the machine this is running on. Build it, in containers, with
-`write_env_file` and `run_env_command`.
+and it must not be installed on the machine this is running on. Build it, in containers.
 
 You decide what that means for this agent. Nothing here is prescribed, because prescribing it
-would mean guessing for an agent nobody has read yet. What you have is somewhere to write files
-and a way to run container commands from there:
+would mean guessing for an agent nobody has read yet. You have a shell and an editor, in a
+sandbox, and you are expected to use them like an engineer would:
 
-- `write_env_file` puts a file into the environment directory: a Dockerfile, a compose file, a
-  schema, an entrypoint. Anything the environment is built from.
-- `run_env_command` runs one docker or docker compose command from that directory and gives you
-  the exit code and the output. Only container commands run, so whatever the environment needs
-  belongs in a file it builds from rather than in a command.
+- `Write` and `Edit` put files wherever the environment needs them: a Dockerfile, a compose file,
+  a schema, an entrypoint, a seed script.
+- `Bash` runs anything. Bring services up, install what they need, call them, read the error and
+  fix it. There is no allowlist. The sandbox is the boundary, so a mistake costs this run and
+  nothing else.
+- `Read`, `Glob` and `Grep` are how you work out what the submitted repository actually needs
+  before you build anything for it.
 
 Some things worth knowing before you start:
 
@@ -440,7 +441,7 @@ Never work around a contract you believe is wrong. Everything after you inherits
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
 8. `add_sub_goal` for each thing worth checking, with its check in code.
-9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
+9. `Write` and `Bash`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.
 11. `check_world`, fix what it names, repeat.

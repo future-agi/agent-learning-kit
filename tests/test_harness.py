@@ -4027,40 +4027,6 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     assert (tmp_path / "contract.json").exists()
 
 
-def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
-    """A grant has to reach the permission gate, not only the tool list. The gate is built
-    from the spec when the backend opens the session, so a tool granted to the spec must be
-    permitted by the hooks of a session built afterwards."""
-    import asyncio
-
-    from fi.alk.harness.backends import SessionSpec, ToolSpec, ToolServer
-    from fi.alk.harness.backends.claude import ClaudeBackend
-    from fi.alk.harness.session import Stage
-
-    spec = SessionSpec(system_prompt="x", builtins=("Read",), max_turns=1)
-    stage = Stage(spec, name="t")
-
-    async def hand(_args):
-        return {"content": [{"type": "text", "text": "ok"}]}
-
-    server = ToolServer(
-        name="flow",
-        tools=[ToolSpec("hand_to_next_stage", "hand over", {"request": str}, hand)],
-    )
-    stage.grant("flow", server, ["hand_to_next_stage"])
-    assert "mcp__flow__hand_to_next_stage" in spec.granted()
-
-    options = ClaudeBackend().create(spec)._options
-    assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
-    refuse = options.hooks["PreToolUse"][0].hooks[0]
-    granted = asyncio.run(
-        refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None)
-    )
-    assert granted == {}
-    denied = asyncio.run(refuse({"tool_name": "Bash"}, None, None))
-    assert denied != {}
-
-
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
     from fi.alk.harness.build import environment_turns_for, turns_for
     from fi.alk.harness.contract import AgentContract, ToolSpec
