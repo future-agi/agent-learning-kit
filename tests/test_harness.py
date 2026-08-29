@@ -2525,6 +2525,35 @@ def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_pat
     assert "refused by the world" in text and "sushi" in text
 
 
+def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
+    """A hosted lane has no endpoint yet, so the step is recorded ok without ever running.
+
+    That silence is what let a scenario be kept on a solution nothing executed, so the warning
+    naming the tool is the only signal that the proof below it covers less than it appears to.
+    """
+    import logging
+
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld()
+    world.runtime_tools = {"lookup_rider_by_phone"}
+    world.endpoint_for = {}
+    try:
+        with caplog.at_level(logging.WARNING, logger="fi.alk.harness.prove"):
+            call = play_reference_step(
+                world, Step(tool="lookup_rider_by_phone", arguments={"phone": "+14155550101"})
+            )
+    finally:
+        world.close()
+
+    assert call.ok is True
+    assert call.result is None
+    assert "assumed rather than executed" in caplog.text
+    assert "lookup_rider_by_phone" in caplog.text
+
+
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
     """Proof may drive the real backend, but must only credit what the agent could call."""
     from fi.alk.harness.prove import play_reference_step

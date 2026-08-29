@@ -26,6 +26,7 @@ Only a scenario that clears all three is kept. That is the green light.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -152,6 +153,9 @@ def prepared(
     return world, applied, ready
 
 
+logger = logging.getLogger(__name__)
+
+
 def play_reference_step(world: GeneratedWorld, step: object) -> Call:
     """Play one correct-agent step without confusing its API with its dependency's API.
 
@@ -185,9 +189,17 @@ def play_reference_step(world: GeneratedWorld, step: object) -> Call:
             at=effect.at,
         )
     else:
-        # This is a local orchestration/state-machine action.  Its presence and ordering are
-        # observable in the real worker trace; it has no independent environment effect to
-        # replay during proof.
+        # Reaching here means the tool is a declared runtime tool with nothing bound to call.
+        # Two very different situations arrive at the same place: a local orchestration action
+        # that genuinely has no environment effect, and a lane where the runtime is built after
+        # authoring so no endpoint exists yet. The second cannot be proved, and recording it as
+        # a pass is what lets a scenario be kept on a solution nothing ever executed. Say so.
+        logger.warning(
+            "reference step assumed rather than executed: tool=%s reason=%s. Its result is "
+            "recorded ok with no call made, so this step proves nothing about the world.",
+            name,
+            "no endpoint bound" if not endpoint else "no forwarder on the world",
+        )
         semantic = Call(name=name, arguments=arguments)
     world.calls.append(semantic)
     return semantic
@@ -234,6 +246,29 @@ def _run(
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
+        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        endpoints = getattr(world, "endpoint_for", {}) or {}
+        assumed = [
+            str(getattr(step, "tool", ""))
+            for step in scenario.solution
+            if str(getattr(step, "tool", "")) in runtime_tools
+            and not endpoints.get(str(getattr(step, "tool", "")))
+        ]
+        if assumed:
+            logger.warning(
+                "scenario %s: %d of %d solution steps were assumed, not executed (%s). The "
+                "proof below covers only the remaining steps.",
+                scenario.name,
+                len(assumed),
+                len(scenario.solution),
+                ", ".join(sorted(set(assumed))),
+            )
+        else:
+            logger.info(
+                "scenario %s: all %d solution steps executed against the world",
+                scenario.name,
+                len(scenario.solution),
+            )
     return world, list(world.calls), refused
 
 
