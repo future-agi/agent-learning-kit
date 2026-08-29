@@ -248,3 +248,131 @@ summary. Adding Vapi, Retell or a browser platform tomorrow is the same single f
   is still singular.
 - The remaining sub-skills (browser, retrieval, hosted-platform, multi-actor) have routing
   frontmatter but not the depth `voice-livekit.md` now has.
+
+
+---
+
+# Phase 2: generality beyond the build stage
+
+## The run stage stopped enumerating connectors
+
+`_default_build_call_runner` was an if/elif over two known connectors with a comment saying
+Vapi and Retell were "deliberately not inferred", so a Vapi agent could not run because a Python
+branch refused it however well its environment had been built.
+
+It now resolves. `transports.py` holds a registry in the shape `world/kinds.py` already used:
+each transport carries its own `claims` predicate, so recognising a LiveKit agent is knowledge
+that lives with the LiveKit transport rather than in a branch the run stage owns. Resolution order
+is the environment's declaration first, then self-recognition.
+
+The declaration is `transport.json` in the bundle, written by whoever built the environment,
+because that is the only stage that has read the repository and knows:
+
+```json
+{"transport": "whatsapp_business", "runner": "runners.whatsapp:WhatsappCallRunner",
+ "requires": ["turns", "transcript", "timing"]}
+```
+
+`runner` is imported with the bundle on `sys.path`, so a runner the build stage wrote for a
+transport nobody has implemented is loaded and used. **Demonstrated in a test**: a connector named
+`whatsapp_business`, which appears nowhere in this codebase, resolves to a written runner and
+executes while ALK knows only `livekit` and `repository_chat`.
+
+`NotWiredCallRunner`'s role as a catch-all refusal is gone. An unresolvable transport now raises
+`TransportUnresolved` **before any world is leased**, naming what was asked for, what is
+registered, and what to declare. The two tests that asserted the old silent refusal were replaced
+with tests asserting the new contract.
+
+## The receipt is a validated boundary
+
+A runner the build stage wrote is free in how it works and not in what it returns. `_run_call` now
+validates the outcome and raises `CallEvidenceMissing` with repair instructions, the same treatment
+`submit_scenario` gives a scenario.
+
+One correction worth recording, because the first version was wrong. The boundary initially
+demanded recordings from every runner, which would have rejected a correct text agent, and it
+enforced against every `CallOutcome` ever constructed, which broke 43 scheduler tests whose fakes
+are deliberately minimal. Both were the same mistake: assuming a single fixed set of evidence.
+**What a runner owes is now declared by its transport** (`Transport.requires`, overridable in
+`transport.json`). Voice owes turns, transcript, recordings and timing; text owes the same minus
+recordings; a caller that declares nothing is held to nothing, because it is exercising the
+scheduler rather than shipping a receipt.
+
+## Scenario generation is a first-class skill
+
+Built on the PM's framework (internal-docs PR 44), in the same shape as `build-environment`:
+
+```
+write-scenarios/
+├── SKILL.md            points at the framework before any scenario is written
+├── references/
+│   ├── _framework.md   the invariant part: six orthogonal axes, the 12 canonical operations,
+│   │                   the compatibility mask and sampling strategy
+│   ├── voice.md  chat.md  cua.md  coding.md    the axis VALUES per agent type
+└── scripts/
+```
+
+The framework's own claim is that onboarding a new agent type means answering five questions about
+axis X with its levels and nothing else moves, which is exactly the structure the skill library
+already had. Task intent is derived rather than listed: the agent's domain objects crossed with
+Retrieve, Compare, Explain, Diagnose, Create, Update, Cancel, Execute, Configure, Authenticate,
+Navigate, Handoff. That is what makes coverage provable instead of ad hoc, and it puts the
+irreversible Execute cell where it belongs, always covered.
+
+## The doctrine that shapes all of it
+
+`harness.md` is the preamble every stage receives, so three things now sit there rather than in
+one stage's file:
+
+**You decide and write; the code executes.** Be as inventive as you like up to the moment the first
+call is placed, and a machine after it. A model improvising mid-run destroys reproducibility, the
+frozen baseline and the flakiness answer, and destroys them invisibly because the results still
+look like results. If you want to intervene during a run, the runner is wrong: stop, fix it,
+restart.
+
+**One loop, and you may go back.** Phases are checkpoints, not doors that lock. Discovering a
+broken world while writing scenarios must send you back to fix the world. Writing scenarios against
+it instead is what produced most of yesterday's debugging: the failure surfaces in a graded call an
+hour later and blames the agent.
+
+**Memory is on disk.** `contract.json`, the world, the scenarios, the receipts. Re-read rather than
+remember, because a run of this length outlasts any context window.
+
+---
+
+# What still requires a human
+
+Honest list. Each item says why it is still there and what would remove it.
+
+1. **Credentials for a hosted assistant.** An assistant id, API key or phone number cannot be
+   inferred from a repository. The harness asks via `AskUserQuestion`. This one is irreducible:
+   it is a secret the operator holds.
+2. **The `http_tool` wire format.** `HostedWorld.call()` raises by design because the shape is not
+   pinned by any contract. Until it is, the hosted lane cannot execute the agent's own tools from
+   the scheduler, so `verify_runtime_tools` reports "N tools go ungraded" rather than proving them.
+   Removing this needs a decision about the seam, not code.
+3. **Stage entry is still sequential.** The doctrine and the backtracking rule are written and the
+   validated boundaries are the checkpoints, but the entrypoint still calls stages in order. A true
+   single loop with model-driven phase re-entry was not attempted inside the timebox. What exists
+   is re-enterable in principle (each stage reads its inputs from disk) and not yet driven that way.
+4. **Voice remains the only transport with a runner in this repo.** Vapi, Retell and Bland have
+   references and a declaration mechanism, and no shipped runner. The next one written proves
+   whether `_writing-a-runner.md` is sufficient; until then it is untested guidance.
+5. **The five non-voice build references are shallow.** They route correctly and carry selection
+   checks, but only `voice-livekit.md` has the depth (170 lines, real code, footguns with symptoms)
+   that makes a skill usable by a cold model.
+6. **Nothing here has been exercised by a live run.** The shell, the transport resolution, the
+   receipt boundary and the runtime-tool gate are all statically verified and unit-tested only.
+
+## For the operator to check on the next run
+
+Please confirm, and send me the evidence if any of these do not hold:
+
+- A LiveKit job still resolves its runner and completes exactly as before. The resolution path is
+  new; the runner is not.
+- The authoring log contains `world N: M runtime tools go ungraded` naming the tools. That is the
+  gate reporting honestly rather than passing silently.
+- No receipt is rejected with `CallEvidenceMissing` on a normal voice run. If one is, the message
+  names exactly what was missing and that is the bug report.
+- `endCall accepted after N messages` still appears, confirming the WARNING-level diagnostics
+  survive the changes.

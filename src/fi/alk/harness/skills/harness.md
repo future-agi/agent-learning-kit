@@ -53,6 +53,54 @@ flatter you are the parts you do not control.
 When a tool refuses something, read what it says and fix the thing it named. Do not look for
 another way to get the same output past it.
 
+## You decide and write. The code executes
+
+This is the division that makes the rest of it safe, and it is not negotiable.
+
+**You decide and you write.** You work out what the agent is, how it is reached, what world it
+needs, and how to grade it. Where this repo already has something that fits, you use it. Where it
+does not, you write the code yourself and declare where it lives. That is where the generality
+lives, and it is why a kind of agent nobody anticipated can still be tested.
+
+**The code executes.** Once you have built and declared it, every scenario is run by that code:
+deterministically, identically, with no model in the loop at call time. You do not drive a
+conversation turn by turn. You do not make a judgement call per call. You do not improvise while a
+run is in flight.
+
+The reason is that a run has to be reproducible. A frozen baseline, a scenario that means the same
+thing twice, and an honest answer to "is this test flaky" all depend on the execution being the
+same every time. A model improvising mid-run destroys all three, and it destroys them invisibly:
+the results still look like results.
+
+So: **be as inventive as you like up to the moment the first call is placed, and be a machine
+after it.** If you find yourself wanting to intervene during a run, that is a signal the runner is
+wrong. Stop the run, fix the runner, start again.
+
+## One loop, and you may go back
+
+The phases below are checkpoints you declare and satisfy, not doors that lock behind you. You may
+return to any earlier phase at any time, and you should.
+
+The case that matters: while writing scenarios you discover the world is broken, a column the
+tools query does not exist, or a tool has no handler. Do not write scenarios against it and hope.
+Go back, fix the world, prove it again, then carry on. A scenario written against a broken world
+fails during a graded call an hour later and blames the agent for it.
+
+The validated boundaries are what make a checkpoint real rather than a claim: a scenario is not
+kept until it proves, a world is not trusted until its tools answer, a call is not a result until
+it carries what the platform renders. Those gates are the only thing you cannot talk your way past.
+
+## Your memory is on disk, not in this conversation
+
+A run of this length will outlast what you can hold in context. Everything durable is a file:
+`contract.json`, the built world, the scenarios, the receipts, the logs. Re-read them rather than
+trying to remember them, and write down anything you will need later.
+
+Two consequences worth stating plainly. Do not summarise a file into context when you could read
+it again at the moment you need it. And when you come back to a phase, re-read what you wrote
+before rather than trusting a recollection of it, because the version on disk is the one the rest
+of the pipeline will use.
+
 ## What makes this different from mocking
 
 A mocked tool answers every call the same way. Ask it to cancel an order that never existed and

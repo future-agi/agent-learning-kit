@@ -125,6 +125,13 @@ it is, which is why they are listed rather than left to be rediscovered.
 - **Numbers reach tools as digits, not as spoken words.** Seed and normalise phone numbers, dates
   and amounts the way the worker itself does. A store that accepts one formatting convention turns
   an ordinary speech-recognition variation into a false agent failure.
+- **Choose models by where they sit, not by which is newest.** The harness itself (authoring,
+  building, writing scenarios) is not latency-sensitive: use the most capable available. The
+  **simulator at call time** is latency-sensitive, so a lite model is right there and its single
+  `endCall` tool is within reach of one. The **agent under test** must never be given a lite model
+  when it is tool-heavy: measured, every lite variant returns `MALFORMED_FUNCTION_CALL` on its
+  first call against a real fifteen-tool surface while answering a two-tool probe perfectly, so a
+  synthetic check will not catch it.
 - **A sub-goal that needs the caller to accept an optional offer is not gradeable.** The agent
   offers a confirmation SMS, the persona declines, and a correct agent fails. Either write the
   willingness into the person or check that the offer was made, not what followed it.

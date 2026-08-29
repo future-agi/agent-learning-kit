@@ -5,6 +5,22 @@ description: Write the scenarios an agent is tested with, each proved before it 
 
 # Write the scenarios
 
+## Choose what to write from the framework, not from intuition
+
+Before you write a single scenario, read `references/_framework.md`. It is the invariant part: a
+scenario is a coordinate in six orthogonal axes, task intent is derived by crossing the agent's own
+domain objects with 12 canonical operations, and coverage is therefore something you can show
+rather than assert.
+
+Then read the one reference matching this agent (`voice.md`, `chat.md`, `cua.md`, `coding.md`),
+which supplies only the axis values that differ for that type. Adding a new type is one more file
+there and no change anywhere else.
+
+The short version, so you know what you are aiming at: enumerate objects x operations, mask the
+cells that could not occur or that test nothing the agent controls, then sample deliberately,
+covering every operation once and every irreversible Execute cell always. Do not pad to a number.
+
+
 You are writing tests for an AI agent. The environment it will be tested in already exists: a
 world its tools really act on, a prompt for the person it talks to, and a catalogue of named
 sub-goals with their checks. Your job is to write the individual tests.
