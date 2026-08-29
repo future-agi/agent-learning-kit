@@ -221,6 +221,28 @@ def load_skill(name: str) -> str:
     )
 
 
+def _summarise(entry: Path) -> str:
+    """One line describing a sub-skill, for the catalogue the model chooses from.
+
+    A skill states when it applies, and when it does not, in its frontmatter `description` -- that
+    is the field written to be read by whoever is deciding. Falling back to the first line of prose
+    would otherwise summarise a skill as `---`, and a catalogue that describes nothing is a
+    catalogue nobody can choose from.
+    """
+    text = entry.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            for line in text[3:end].splitlines():
+                if line.strip().startswith("description:"):
+                    value = line.split(":", 1)[1].strip()
+                    return value.strip('"').strip("'")
+    for line in text.splitlines():
+        if line.strip() and not line.startswith("#") and not line.startswith("---"):
+            return line.strip()
+    return ""
+
+
 def sub_skills(name: str) -> str:
     """The per-kind guidance available inside a stage, for the model to choose between.
 
@@ -245,12 +267,7 @@ def sub_skills(name: str) -> str:
         "",
     ]
     for entry in found:
-        first = ""
-        for line in entry.read_text(encoding="utf-8").splitlines():
-            if line.strip() and not line.startswith("#"):
-                first = line.strip()
-                break
-        lines.append(f"- `{entry.name}`: {first or 'no summary line'}")
+        lines.append(f"- `{entry.name}`: {_summarise(entry) or 'no summary line'}")
     lines.append("")
     lines.append(
         f"They are in `{directory}`. Read one with the Read tool before you rely on it."
