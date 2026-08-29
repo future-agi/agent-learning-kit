@@ -351,7 +351,11 @@ class _TestRunnerAgent(Agent):
 
             try:
                 suffix = (
-                    ".mp3" if ".mp3" in source else ".ogg" if ".ogg" in source else ".wav"
+                    ".mp3"
+                    if ".mp3" in source
+                    else ".ogg"
+                    if ".ogg" in source
+                    else ".wav"
                 )
                 with urllib.request.urlopen(source, timeout=15) as response:
                     data = response.read()
@@ -372,7 +376,9 @@ class _TestRunnerAgent(Agent):
             else:
                 clip_source = getattr(BuiltinAudioClip, source, None)
                 if clip_source is None:
-                    logger.warning("background audio clip %r is not one LiveKit ships", source)
+                    logger.warning(
+                        "background audio clip %r is not one LiveKit ships", source
+                    )
                     return
             player = BackgroundAudioPlayer(
                 ambient_sound=AudioConfig(clip_source, volume=volume)
@@ -1683,9 +1689,7 @@ class LiveKitEngine(BaseEngine):
             variables={"instruction": persona.situation or ""},
             # Delivery cues are Cartesia only. Passing the provider here rather than reading it
             # inside the prompt keeps the decision where the provider is actually known.
-            tts_provider=(
-                simulator.tts.provider if simulator is not None else None
-            ),
+            tts_provider=(simulator.tts.provider if simulator is not None else None),
         )
         if simulator is None:
             voice_provider = os.environ.get(
@@ -2353,6 +2357,30 @@ def _merge_captured_target_turns(
     return merged
 
 
+def _caller_never_spoke(messages: list[dict[str, Any]]) -> bool:
+    """Whether the simulated caller's turns exist as text with no audio behind them.
+
+    Speech synthesis that fails still leaves the caller's line in the transcript, so a mute
+    simulator and a silent agent produce the same stall unless the missing audio is read directly.
+    """
+
+    def timed(message: dict[str, Any]) -> bool:
+        return isinstance(message.get("started_speaking_at"), (int, float))
+
+    spoken = [
+        message
+        for message in messages
+        if message.get("role") == "user" and (message.get("content") or "").strip()
+    ]
+    if not spoken or any(timed(message) for message in spoken):
+        return False
+    # Only the agent's turns carrying timing makes the caller's missing timing evidence of
+    # silence rather than a transcript that simply does not record when anyone spoke.
+    return any(
+        timed(message) for message in messages if message.get("role") == "assistant"
+    )
+
+
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
@@ -2398,6 +2426,20 @@ def _conversation_outcome(
             transcript=transcript,
             messages=messages,
             retryable=True,
+        )
+    if stop_reason == "conversation_silence_timeout" and _caller_never_spoke(messages):
+        # The target sat in real silence because nothing was ever spoken at it. Retrying cannot
+        # put a voice back on the line, so fail fast and name the synthesis rather than spending
+        # the attempt budget reporting the agent as stalled.
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            "simulator_tts_silent",
+            "Simulated caller produced transcript text but no audio",
+            transcript=transcript,
+            messages=messages,
+            retryable=False,
+            details={"stop_reason": stop_reason, "turn_count": str(len(messages))},
         )
     if stop_reason in {
         "conversation_silence_timeout",

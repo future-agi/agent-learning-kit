@@ -1295,6 +1295,59 @@ def test_agent_first_silence_after_terminal_exchange_is_completed(
     }
 
 
+def test_silence_with_untimed_caller_turns_names_the_synthesis() -> None:
+    # Shape taken from a run whose speech synthesis was out of credit: the caller's line reaches
+    # the transcript, but nothing was ever spoken, so the agent's silence is not the agent's fault.
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi Dana, where should the driver pick you up?",
+                "started_speaking_at": 100.0,
+                "stopped_speaking_at": 104.0,
+            },
+            {
+                "role": "user",
+                "content": "Hi, I'd like to book a ride from 88 King Street.",
+                "started_speaking_at": None,
+                "stopped_speaking_at": None,
+            },
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "simulator_tts_silent"
+    assert outcome.failure.retryable is False
+
+
+def test_silence_with_audible_caller_turns_still_reports_a_stall() -> None:
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi Dana, where should the driver pick you up?",
+                "started_speaking_at": 100.0,
+                "stopped_speaking_at": 104.0,
+            },
+            {
+                "role": "user",
+                "content": "I'm at 333 O'Farrell Street.",
+                "started_speaking_at": 105.0,
+                "stopped_speaking_at": 109.0,
+            },
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "conversation_silence_timeout"
+
+
 def test_unsupported_provider_lists_supported_options() -> None:
     from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
 
