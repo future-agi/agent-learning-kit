@@ -83,6 +83,29 @@ pre-existing and concentrated in `test_config_and_facades.py` and `test_harness_
 Three tests were deleted as described. The fast structural suites (livekit engine, lane
 equivalence, call runner) pass at 133.
 
+## Voice, which is the acceptance test
+
+Voice still works, and the strongest evidence is negative: **the voice run path was not modified
+at all.** `git diff 0d56c93..HEAD` against `src/fi/simulate/`, `call_runner.py`,
+`simulator_voice.py`, `hosted_scheduler.py` and `hosted_entrypoint.py` is empty. Every change here
+is in the authoring stages, so what a voice run emits is byte-identical to the branch it came
+from: the per-scenario receipt with status, turns, duration and sub-goal verdicts; the transcript
+with real `started_speaking_at` / `stopped_speaking_at` timing; the recordings; the tool trace.
+136 voice tests pass (engine, call runner, lane equivalence, voice prompt, model selection).
+
+One change did put the voice path at risk and was caught before it left the branch. Making probe
+honest about unexecuted runtime tools moved them out of `results`, and for a voice agent every
+tool is a runtime tool. `ProbeReport.score` returns `0.00` for an empty `results`, and
+`save_world` refuses below `0.85`, so a voice world would have become unsaveable with a failure no
+amount of fixing could clear. `save_world` now recognises "nothing here is executable from this
+stage" and saves, carrying the tools as unproven rather than inventing a score. Verified by
+construction: a report with ten passing runtime probes scores 1.00 before and 1.00 after, because
+those entries leave the numerator and the denominator together.
+
+What remains unverified for voice is the same thing that is unverified for everything else: no
+hosted job has been run on this branch. The claim is that the voice path is unchanged, not that it
+was re-run.
+
 ## What is not proven
 
 Being honest about this, because none of it has run in anger:

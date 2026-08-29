@@ -1186,7 +1186,12 @@ def world_tools(
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
         report = probe(world, contract, sequences=sequences, kind=kind)
-        if report.score < ACCEPTABLE:
+        # A world whose every tool runs inside the submitted runtime has nothing this stage can
+        # execute, so there is no score to meet. Refusing on the resulting 0.00 would be a false
+        # failure that no amount of fixing could clear. It saves, carrying the debt: the tools
+        # stay unproven until verify_runtime_tools reaches them where they actually run.
+        nothing_executable = not report.results and report.unproven
+        if not nothing_executable and report.score < ACCEPTABLE:
             return _err(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
