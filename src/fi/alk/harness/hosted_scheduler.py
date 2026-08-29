@@ -1860,7 +1860,7 @@ class HostedScheduler:
             # same whether its setup failed or its check is wrong.
             logger.warning(
                 "scenario %s not ready on world %s: %s (setup reported: %s)",
-                scenario.name,
+                scenario.scenario_key,
                 world_index,
                 verdict.reason or "no reason given",
                 getattr(setup, "value", None),
