@@ -1,9 +1,11 @@
 ---
 name: browser-and-computer-use
-description: "Use when the agent drives a browser, a desktop or any visible application rather than calling an API: Playwright, Puppeteer, Selenium, a CDP client or a computer-use loop in the dependencies, and success judged by what is on a screen. The world is the real site or application, built from the submitted repository. Do NOT use for an agent that only calls HTTP tools, and do NOT use for a voice agent that happens to open a page."
+description: "The agent acts on a screen. Evidence: playwright, puppeteer, selenium, a CDP client or a computer-use loop in the dependencies; code that navigates URLs, clicks selectors or reads a DOM; success judged by what is visible rather than by an API response. The world is the real site or application. NOT this file for an agent that only calls HTTP tools."
 ---
 
 # Agents that drive a browser or a desktop
+
+> **Selection check.** You are in the right file if the agent's actions are clicks, keystrokes or navigation against a rendered surface. If it only calls HTTP tools, you are in the wrong file.
 
 The world is a real site or application, not a table-shaped imitation of one. Build the submitted
 application and its dependencies, then make its visible state repeatable between scenarios.

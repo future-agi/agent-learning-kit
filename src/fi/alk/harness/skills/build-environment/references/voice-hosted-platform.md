@@ -1,9 +1,11 @@
 ---
 name: voice-hosted-platform
-description: "Use when a platform runs the voice agent and calls a service you expose: Vapi, Retell, or any assistant configured by API keys and a webhook URL rather than a worker in the repository. You build the tool service their webhooks target and give it a stable ingress. Do NOT use when the repository ships its own LiveKit worker, which is voice-livekit.md, and do NOT try to recreate the platform's own conversation runtime or audio stack."
+description: "A platform runs the voice agent and calls YOU. Evidence: a Vapi or Retell API key, assistant id or pathway id in configuration; webhook or function-call HTTP handlers in the repository with no agent process anywhere; docs describing an assistant configured in someone's dashboard. You cannot run their worker; you build the tool service their webhooks hit. NOT this file when the repository ships its own LiveKit worker (voice-livekit.md)."
 ---
 
 # Voice agents hosted by a platform
+
+> **Selection check.** You are in the right file if the repository serves webhooks but contains no agent process, and the agent itself lives in a platform account. If you found a runnable worker in the repository, stop and read `voice-livekit.md` instead.
 
 The platform runs the agent and calls the service you expose. Build the real tool service and its
 dependencies; do not recreate the platform's conversation runtime, audio stack or tool dispatcher.

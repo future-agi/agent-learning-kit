@@ -189,9 +189,44 @@ Two scripts ship beside it:
   specifically, because caller turns with text and null `started_speaking_at` read as a stalled
   agent and cost a full night to diagnose by hand.
 
-Every sub-skill now carries a frontmatter `description` naming when it applies and when it does
-not. `config.sub_skills` reads that description for the catalogue, so the selection the model makes
-is informed by the same text that routes it away.
+### Canonical skill structure
+
+Restructured to the layout `skill-creator` specifies, so progressive disclosure is real rather
+than nominal:
+
+```
+build-environment/
+├── SKILL.md          (498 lines: workflow, selection, QA, shared footguns)
+├── references/       (one domain per file, loaded only when chosen)
+└── scripts/          (executable, never loaded into context)
+```
+
+Three levels: the {name, description} index is always in context; SKILL.md loads when the stage
+runs; a reference body is read only once the model has decided it applies. `config.sub_skills`
+now globs `references/*.md` and publishes each file's frontmatter `description`.
+
+### Selection is the model's judgement, from evidence
+
+No constant names a reference and nothing is passed in. SKILL.md sequences it: gather evidence
+from the repository and contract, state the conclusion and the evidence for it out loud, read the
+matching reference, then build. Stating it out loud is deliberate, so a wrong turn is visible in
+the log rather than only in the outcome an hour later.
+
+Descriptions are triggers, not summaries. Each names the discriminating evidence: an agent process
+with `livekit-agents` and an `rtc_session` entrypoint, versus webhook handlers and a Vapi key with
+no agent process at all, versus a browser driver, versus a vector store. The failure mode this
+guards against is silent: a vague description gets a plausible-but-wrong reference loaded, followed
+confidently, with nothing erroring. So every reference also opens with a **selection check** that
+restates the evidence justifying it, which makes a wrong load self-detecting.
+
+When the evidence does not settle it, SKILL.md directs the model to `AskUserQuestion` rather than
+guess, and lists what is worth asking about: no agent process and no platform credentials, two
+plausible transports, a datastore referenced but never configured, a missing credential.
+
+**Stage-level selection remains hardcoded** (`understand.py:22`, `build.py:26`, `scenarios.py:40`,
+`run/stage.py:29`). That is a different question and defensibly so: the pipeline decides which
+stage runs, and a stage choosing whether to be the build stage is not autonomy but confusion. The
+within-stage choice, which is the one that varies by agent, is now fully the model's.
 
 ### Adding an agent kind is a markdown file
 

@@ -1,9 +1,11 @@
 ---
 name: voice-multi-actor
-description: "Use when a scenario needs more than one participant with independent goals: a caller and a second person on the line, a transfer between departments, a conference, a supervisor intervention, or an outbound call answered by someone else. Read voice-livekit.md first; this only covers what changes with a second actor. Do NOT use for an ordinary one-caller conversation, which every other voice skill already handles."
+description: "A scenario needs a second independent participant: a bystander who interjects, a transfer between departments, a conference, a supervisor, or an outbound call answered by someone other than the intended person. Read the matching transport reference first; this covers only what a second actor changes. NOT this file for an ordinary one-caller conversation."
 ---
 
 # Multi-actor voice environments
+
+> **Selection check.** You are in the right file only if a scenario genuinely needs two independent participants. One caller and one agent is the ordinary case and every transport reference already covers it.
 
 Use this only when a scenario needs more than one participant with independent goals: an agent,
 caller and recipient; a transfer between departments; a conference; a supervisor intervention; or

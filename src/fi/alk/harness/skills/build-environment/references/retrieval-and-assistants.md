@@ -1,9 +1,11 @@
 ---
 name: retrieval-and-assistants
-description: "Use when the agent answers from a corpus: a vector store, an embedding model, a retrieval or rerank service, or an assistant reached over an API whose quality depends on what it retrieved. The world is the corpus, its index and the real retrieval service. Do NOT use when retrieval is incidental and the graded behaviour is a transaction, and do NOT substitute a hand-written search endpoint for the repository's own."
+description: "The agent answers from a corpus. Evidence: a vector store client (pgvector, pinecone, weaviate, chroma, qdrant), an embedding model, a rerank or retrieval service, or an assistant API whose answer quality depends on retrieved documents. The world is the corpus, its index and the real retrieval service. NOT this file when retrieval is incidental and the graded behaviour is a transaction."
 ---
 
 # RAG systems and assistants reached over an API
+
+> **Selection check.** You are in the right file if what the agent is graded on is whether it retrieved and used the right material. If it is graded on completing a transaction, you are in the wrong file.
 
 The world is a corpus, its index and the retrieval service the agent actually calls. Build all
 three from the submitted repository when it provides them; do not substitute a hand-written search

@@ -251,25 +251,32 @@ def sub_skills(name: str) -> str:
     that belongs in a sub-skill the model selects after it has read the contract rather than in a
     constant chosen before anyone has looked at the repository.
 
-    Every ``*.md`` beside the stage's ``SKILL.md`` is offered. Adding support for a new kind is a
-    file, not a release.
+    Every ``*.md`` under the stage's ``references/`` is offered, name and description only. The
+    body stays on disk until the model asks for it, so a stage carries the index of everything it
+    could do at a fraction of the cost of carrying all of it. Adding support for a new kind of
+    agent is a file in that directory, not a release.
     """
-    directory = SKILLS_ROOT / name
-    found = sorted(p for p in directory.glob("*.md") if p.name != "SKILL.md")
+    directory = SKILLS_ROOT / name / "references"
+    found = sorted(directory.glob("*.md")) if directory.is_dir() else []
     if not found:
         return ""
     lines = [
-        "## Ways of working available to you",
+        "## References available to you",
         "",
-        "Read the contract first, then read whichever of these fits the agent in front of you.",
-        "Nothing selects one for you, and using none of them is a legitimate answer for an agent",
-        "none of them describes: they are accumulated experience, not a menu you must pick from.",
+        "Each line is a file you may read, and the text after the name states the evidence that",
+        "makes it the right one. Nothing selects for you: gather the evidence first, then choose.",
+        "Using none of them is a legitimate answer for an agent none of them describes, and asking",
+        "the operator is the right move when the evidence does not settle it.",
         "",
     ]
     for entry in found:
         lines.append(f"- `{entry.name}`: {_summarise(entry) or 'no summary line'}")
     lines.append("")
     lines.append(
-        f"They are in `{directory}`. Read one with the Read tool before you rely on it."
+        f"They are in `{directory}`. Decide from the evidence in the repository and the contract "
+        "which one describes the agent in front of you, say what you concluded and why, then read "
+        "that file with the Read tool before you rely on it. A description that does not match "
+        "what you found is the wrong file: reading it anyway produces confident, plausible work "
+        "against the wrong shape of agent, and nothing will error."
     )
     return "\n".join(lines)

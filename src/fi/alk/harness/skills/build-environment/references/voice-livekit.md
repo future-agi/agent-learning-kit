@@ -1,9 +1,11 @@
 ---
 name: voice-livekit
-description: "Use when the submitted repository ships its own LiveKit voice worker: an agent that joins a room and talks, whose tools are its own code or its own service. Signs you are here: livekit-agents or livekit.plugins in the dependency list, an entrypoint decorated with rtc_session or a WorkerOptions call, an AgentSession assembled from stt/llm/tts, contract.modality == voice. Do NOT use for a hosted assistant you can only reach over a webhook, where their platform places the call and you cannot run their worker - that is voice-hosted-platform.md. Do NOT use for a text or chat agent, or for a browser agent, even one that speaks."
+description: "The repository CONTAINS the voice agent process. Evidence: livekit-agents or livekit.plugins in pyproject/requirements, an entrypoint decorated with rtc_session or a WorkerOptions call, an AgentSession built from stt/llm/tts. You can run their worker yourself. NOT this file if the repository has no agent process and only serves webhooks (voice-hosted-platform.md), and not for a browser or retrieval agent that happens to speak."
 ---
 
 # Voice agents that bring their own LiveKit worker
+
+> **Selection check.** You are in the right file if you found an agent process in the repository that joins a LiveKit room. If the repository has no agent process at all and only exposes webhook endpoints, stop and read `voice-hosted-platform.md` instead.
 
 You are making a stranger's voice agent testable without changing what it is. The agent already
 works somewhere; your job is to stand up the world beneath it faithfully enough that a failure in

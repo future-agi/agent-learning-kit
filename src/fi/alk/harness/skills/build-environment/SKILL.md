@@ -19,6 +19,40 @@ short — they can see every tool you call and what it answered.
 Ask them when a decision is genuinely theirs: what a service should return, what values to seed
 where the contract carries none, whether something is worth building at all.
 
+## Work out what kind of agent this is, before you build anything
+
+Nothing tells you which references apply. Decide it yourself, from evidence, in this order. Doing
+it the other way round is the expensive mistake: a reference chosen before you have read the
+repository will be plausible, you will follow it confidently, and nothing will error until a
+hosted run has already spent its twenty-five minutes.
+
+1. **Gather evidence.** Read the dependency manifest, the entrypoint, the tool registrations, the
+   configuration and the contract. Establish: is there an agent process in this repository at all,
+   or only endpoints something else calls? What does it talk to, and over what?
+2. **State your conclusion and the evidence for it**, in one or two sentences, before you act.
+   "This repository ships its own LiveKit worker: livekit-agents is a dependency and
+   `agent/agent.py` registers an rtc_session entrypoint." A wrong turn stated out loud is visible
+   in the log; a wrong turn taken silently is only visible in the outcome, an hour later.
+3. **Read the matching reference** from the list at the end of this skill. Each opens with a
+   selection check that restates the evidence justifying it. If that check does not describe what
+   you found, you are in the wrong file: go back to step 1 rather than adapting the file to fit.
+4. **Then build.**
+
+### When the evidence does not settle it, ask
+
+`AskUserQuestion` is available to you. Use it. Guessing wrong costs an entire run, and the
+operator can answer in seconds. Ask when:
+
+- there is no agent process in the repository **and** no platform credentials, so you cannot tell
+  what would place the call
+- two transports are both plausible, for example a LiveKit worker present alongside Vapi keys
+- the repository references a datastore it never configures, so you cannot tell whether to stand
+  one up or point at theirs
+- a credential, endpoint or account id you need is simply absent
+
+Ask a specific question with the options you are choosing between and what each would mean. Do not
+ask what you could establish by reading one more file.
+
 ## What you are building
 
 **1. The world.** Whatever this agent acts on. For an agent with records and a catalogue, a
