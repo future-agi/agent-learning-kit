@@ -237,10 +237,19 @@ def open_stage(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
             + environment_note
         ),
-        # No file tools and no shell. Everything this stage can do goes through a tool that
-        # executes it and reports back, which is what makes the guardrails meaningful.
         servers={WORLD_SERVER: server},
-        builtins=("AskUserQuestion",),
+        # A shell, a file editor and the repository. This stage builds infrastructure for an
+        # agent it has never seen, so the work is engineering rather than form filling: read the
+        # code, write what it needs, run it, read the error, fix it. The sandbox is the boundary.
+        builtins=(
+            "AskUserQuestion",
+            "Read",
+            "Glob",
+            "Grep",
+            "Write",
+            "Edit",
+            "Bash",
+        ),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=environment_turns_for(
             contract,

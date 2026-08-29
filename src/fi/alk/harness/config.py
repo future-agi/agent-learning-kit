@@ -156,10 +156,9 @@ def read_only_session(
     )
 
 
-# Tools the host offers every session that no stage of this harness has any use for. Denying
-# them at the gate works and is the backstop, but a denial still costs the turn that discovered
-# it — and these get reached for in almost every stage. Naming them as disallowed keeps them out
-# of the tool list the model is shown, so the turn is never spent.
+# Host tools no stage gets unless it asks. Off by default because a tool nobody wants still
+# costs the turn that discovers it, not because any of them is forbidden: a stage that names one
+# in its builtins gets it, and the backend removes it from this list for that session.
 UNWANTED = (
     "ToolSearch",
     "Bash",

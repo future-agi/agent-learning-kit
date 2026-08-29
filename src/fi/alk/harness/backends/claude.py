@@ -183,7 +183,11 @@ class ClaudeBackend:
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            options.disallowed_tools = list(UNWANTED)
+            # Deny only what this stage was not granted. A stage that asks for Bash or Write
+            # means it, and a blanket denial here would silently outrank its own tool list.
+            options.disallowed_tools = [
+                name for name in UNWANTED if name not in set(allowed)
+            ]
             options.hooks = gate_hooks(allowed)
             options.can_use_tool = spec.permission_override or permission_gate(
                 spec.ask, allowed
