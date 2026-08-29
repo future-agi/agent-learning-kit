@@ -433,6 +433,38 @@ One existing test needed correcting rather than working around: it looped with a
 iteration, which under the fix is correctly re-verified. Its intent was "one world, verified once",
 so it now holds one runtime across the loop.
 
+## The scenario skill was layered upside down
+
+`write-scenarios/SKILL.md` was 586 lines against a 500 ideal, while its per-type references were
+34 to 47. Both halves of that are wrong, and the second matters more.
+
+The body loads every time the skill triggers; a reference loads only when chosen. So length in the
+body is the expensive kind and length in a reference is nearly free, and this is the one place that
+asymmetry actually bites.
+
+More importantly the richness was in the wrong file. The per-type reference is what someone edits
+to add an agent kind, so a 40-line type file makes "adding an agent type is one file" true in
+mechanism and hollow in practice: the file they add carries almost nothing.
+
+Two changes. The code-authoring cluster (setup_code, collection shape, ready_code, the solution)
+moved to `references/_authoring-code.md`, which is a real hierarchy layer rather than a filing
+exercise: it is needed at the point of writing those three fields and not at all while deciding
+which scenarios the suite needs. SKILL.md is now 498, matching build-environment.
+
+Then the per-type files were thickened toward the depth `voice-livekit.md` reached: voice 47 to
+107, chat 34 to 85, cua 36 to 81, coding 37 to 85. Each now states, per axis, what the values
+actually are for that modality and **what failure varying that lever surfaces**, plus a footguns
+section and a minimum-coverage list. The framework stayed lean at 82 lines, which is the right
+shape: invariant and short, per-type and rich.
+
+Worth recording what the rewrite forced into the open, because it is the part that could not have
+been produced by moving text around. Each modality has one structural fact the others do not have,
+and once named it explains most of that modality's failures: voice is lossy and interrupting with
+no private field; chat is durable and asynchronous, so its risk is a confident well-formatted wrong
+answer and pasted-content injection; browser use has an interface that is not a contract and
+actions that cannot be undone; and a coding agent can see and modify its own grader, which is why
+gaming verification is its dominant harm class.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
