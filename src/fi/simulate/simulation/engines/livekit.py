@@ -255,15 +255,25 @@ class _TestRunnerAgent(Agent):
     )
     async def end_call(self, ctx: RunContext) -> str:
         if self._session is None:
+            logger.info("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
         if len(messages) < self._min_turn_messages or not _has_role_alternation(
             messages
         ):
+            # Whether the caller ever reached for this tool, and why it was turned away, is the
+            # difference between a simulator that will not hang up and one that was not allowed to.
+            logger.info(
+                "endCall refused: %d messages, floor %d, alternating=%s",
+                len(messages),
+                self._min_turn_messages,
+                _has_role_alternation(messages),
+            )
             return (
                 "Continue the conversation until both speakers have participated "
                 f"and at least {self._min_turn_messages} messages are complete."
             )
+        logger.info("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
         # natural closing sentence. Remember that exact handle before waking
         # the outer runner so it cannot snapshot history in the brief interval
@@ -1996,6 +2006,7 @@ async def _wait_for_conversation_end(
         "conversation_settled": asyncio.create_task(
             _wait_for_conversation_silence(session)
         ),
+        "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
             _wait_for_conversation_never_started(
                 session,
@@ -2054,6 +2065,9 @@ async def _wait_for_conversation_end(
             "target_disconnected",
             "room_disconnected",
             "no_conversation",
+            # A farewell loop is a finished conversation, so it outranks the silence backstop
+            # that would otherwise report the same call as a stall.
+            "closing_loop",
             "conversation_silence_timeout",
             "conversation_settled",
             "provider_disconnected",
@@ -2071,6 +2085,63 @@ async def _wait_for_conversation_end(
             on_participant_disconnected,
         )
         _remove_room_listener(room, "disconnected", on_room_disconnected)
+
+
+_CLOSING_PHRASES = (
+    "goodbye",
+    "bye",
+    "take care",
+    "have a great day",
+    "have a good day",
+    "have a wonderful day",
+    "you too",
+)
+
+_CLOSING_EXCHANGE_LIMIT = 4
+
+
+def _is_closing_only(text: str) -> bool:
+    """Whether a turn is nothing but a farewell.
+
+    Deliberately narrow: a turn that closes AND carries anything else (a question, a fact, a
+    correction) is still conversation, and ending on it would cut a live call short.
+    """
+    stripped = "".join(
+        character.lower() if character.isalnum() or character.isspace() else " "
+        for character in (text or "")
+    ).split()
+    if not stripped or len(stripped) > 6:
+        return False
+    joined = " ".join(stripped)
+    return any(phrase in joined for phrase in _CLOSING_PHRASES)
+
+
+async def _wait_for_closing_loop(
+    session: AgentSession,
+    *,
+    limit: int = _CLOSING_EXCHANGE_LIMIT,
+) -> None:
+    """Finish once both sides are only trading farewells.
+
+    A simulator that does not reach for ``endCall`` leaves the target answering goodbye with
+    goodbye until the deadline. One such call ran seventy-six turns, held its worker past the
+    world pool's patience and cost the rest of that job its worlds, so this ends the call on the
+    evidence already in the transcript rather than waiting for a timeout that arrives too late.
+    """
+    while True:
+        messages = _session_messages(session)
+        tail = [
+            message for message in messages if (message.get("content") or "").strip()
+        ][-limit:]
+        if len(tail) == limit and all(
+            _is_closing_only(str(message.get("content") or "")) for message in tail
+        ):
+            logger.info(
+                "closing loop: last %d turns were farewells only, ending the call",
+                limit,
+            )
+            return
+        await asyncio.sleep(1.0)
 
 
 async def _wait_for_conversation_silence(
