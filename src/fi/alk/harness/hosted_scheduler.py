@@ -63,6 +63,7 @@ from .world.errors import (
     WorldUnavailable,
     WorldUsageError,
 )
+from .world.probe import verify_runtime_tools
 from .world.runtime import Call
 
 logger = logging.getLogger(__name__)
@@ -1392,6 +1393,7 @@ class HostedScheduler:
         outbound: OutboundPort,
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
+        contract: Any | None = None,
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1400,6 +1402,49 @@ class HostedScheduler:
         self._job_seed = job_seed
         self._cancel_requested = cancel_requested or (lambda: False)
         self._executor: ThreadPoolExecutor | None = None
+        # The agent's own declared tools, so a world can be made to prove it answers them before
+        # it is trusted to grade anybody. Optional: a job with no contract simply skips the gate.
+        self._contract = contract
+        # Verified once per world, not per scenario -- calling every declared tool before each of
+        # ten scenarios would triple a run's tool traffic to re-establish the same fact.
+        self._verified_worlds: set[int] = set()
+
+    async def _verify_world(self, world: Any, world_index: int) -> str:
+        """Make a freshly built world answer the agent's own tools, once, before it grades.
+
+        Returns a cause when the world must not be used, empty when it may. An unverifiable world
+        is reported and allowed through: the hosted lane has no seam to call these tools yet
+        (`HostedWorld.call` raises by design), and failing every hosted run over a missing seam
+        would be a worse lie than the silence it replaces. What it must never do is pass quietly,
+        so the tools that go ungraded are named.
+        """
+        if self._contract is None or world_index in self._verified_worlds:
+            return ""
+        try:
+            verdict = await asyncio.to_thread(
+                verify_runtime_tools, world, self._contract
+            )
+        except Exception as exc:  # noqa: BLE001 - verification must never take the run down
+            logger.warning(
+                "world %s: could not verify runtime tools: %s: %s",
+                world_index,
+                type(exc).__name__,
+                exc,
+            )
+            self._verified_worlds.add(world_index)
+            return ""
+        self._verified_worlds.add(world_index)
+        if verdict.broken:
+            return "runtime tools did not answer: " + "; ".join(verdict.broken)
+        if not verdict.checked and verdict.tools:
+            logger.warning(
+                "world %s: %d runtime tools go ungraded (%s): %s",
+                world_index,
+                len(verdict.tools),
+                verdict.reason,
+                ", ".join(sorted(verdict.tools)),
+            )
+        return ""
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -1674,14 +1719,26 @@ class HostedScheduler:
                     mark_unhealthy=True,
                 )
             else:
-                outcome = await self._execute(
-                    scenario,
-                    world,
-                    runtime,
-                    world_index,
-                    attempt=attempt,
-                    context=context,
-                )
+                # The gate that earns the build stage its shell: a world that cannot answer the
+                # agent's own tools is not allowed to grade anyone, because every sub-goal it
+                # judged would be measuring the world's gap rather than the agent.
+                unusable = await self._verify_world(world, world_index)
+                if unusable:
+                    outcome = _Retry(
+                        _failure("runtime_tools_broken", unusable),
+                        sub_goals=_unjudged(scenario.sub_goals),
+                        call=None,
+                        mark_unhealthy=True,
+                    )
+                else:
+                    outcome = await self._execute(
+                        scenario,
+                        world,
+                        runtime,
+                        world_index,
+                        attempt=attempt,
+                        context=context,
+                    )
 
             if isinstance(outcome, _Retry):
                 # R6: `mark_unhealthy()` itself emits `world_unhealthy` now (every demotion path
