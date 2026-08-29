@@ -1,23 +1,34 @@
-# Voice agents hosted by a platform (Vapi, Retell, and anything like them)
+# Voice agents hosted by a platform
 
-The direction is inverted here. There is no worker to start: their platform runs the agent and
-calls you. What you build is something reachable that answers the way their tools expect.
+The platform runs the agent and calls the service you expose. Build the real tool service and its
+dependencies; do not recreate the platform's conversation runtime, audio stack or tool dispatcher.
 
-You will usually be given credentials, an assistant or agent id, and a repository holding the tool
-implementations their assistant already calls by webhook.
+## Prove reachability before building scenarios
 
-What that means for you:
+Read the assistant configuration and its repository together. Establish:
 
-- Build the tool service from the repository and put a real store under it, the same as any other
-  agent. That part does not change.
-- The service has to be reachable from their platform, not just from inside this sandbox. Work out
-  what the ingress is before you build anything on top of it.
-- Their assistant configuration names the webhook. Point it at what you built, or state plainly
-  that you cannot and why.
-- Their platform holds the conversation, so you do not own turn taking, barge-in or audio.
+- The exact webhook or tool URL configuration seam.
+- Authentication expected by the service and how the platform sends it.
+- The ingress path from the hosted platform to this environment.
+- Any callback, status or transcript path required to observe a completed call.
 
-If you cannot reach their platform from here, say so and stop. A world that looks right but
-receives no calls is worse than an honest failure, because the run will look like an agent defect.
+The service must be reachable from the platform, not merely from inside the sandbox. If ingress,
+credentials or an update path for the platform configuration is unavailable, state the missing seam
+and stop. A healthy local service that cannot receive platform calls is not an environment for this
+agent.
 
-ALK's own voice stack is for agents we run ourselves. Most of it does not apply. `world/` and the
-stores do.
+## Build only the submitted service
+
+Use the repository's Compose file, Dockerfile, migrations, lockfile and seed process. Give its
+real datastore an isolated baseline and change only documented configuration values needed to point
+the service at it. Preserve request and response schema exactly. Do not provide a replacement
+webhook handler, synthetic success response or a local imitation of the hosted assistant.
+
+Checks should verify durable business state and the service's own refusal paths. They should not
+claim that a remote platform tool executed until a real platform call and evidence record prove it.
+
+## Keep platform concerns separate
+
+The platform owns audio, interruption, turn timing and conversation lifecycle. Describe those in
+the simulator and scenario only where its supported runner can actually drive them. The world owns
+the tool service, its data and the records that show what the service did.

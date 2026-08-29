@@ -25,10 +25,10 @@ in a skill rather than in the tool list.
 
 **Skill selection is a model decision.** `load_skill` appends a catalogue of the `*.md` files
 sitting beside a stage's `SKILL.md`, and the model reads whichever fits after it has seen the
-contract. Four written for the build stage: `voice-livekit.md`, `voice-hosted-platform.md`
-(Vapi/Retell, where their platform calls us), `browser-and-computer-use.md`,
-`retrieval-and-assistants.md`. Each points at the ALK code to reuse rather than describing how to
-rewrite it. Adding a kind of agent is now a markdown file.
+contract. Five are written for the build stage: `voice-livekit.md`, `voice-hosted-platform.md`,
+`voice-multi-actor.md`, `browser-and-computer-use.md` and `retrieval-and-assistants.md`. Each
+points at the ALK code to reuse rather than describing how to rewrite it. Adding guidance for an
+agent class is now a markdown file.
 
 **Probe stopped claiming unexecuted tools pass.** It recorded every runtime tool as a passing
 probe with "executes inside the submitted agent runtime" without calling it, so a voice world,
@@ -69,7 +69,7 @@ or has checks that stay green against an emptied world.
 ## Delta
 
 Seven commits, `0d56c93..HEAD`. 33 files, roughly 500 added and 600 removed, net negative.
-Three source files deleted, four skills added.
+Three source files deleted, five skills added.
 
 ## How to run it
 
@@ -121,10 +121,11 @@ Being honest about this, because none of it has run in anger:
 - **No hosted Daytona job has been run on this branch.** Everything below is unverified in a real
   run, and the shell in particular has never been exercised by a model.
 - **`verify_runtime_tools` is written and imports, but is not wired into the hosted pipeline.**
-  The scheduler does not carry the contract, so calling it there means threading the contract
-  through, which is a bigger change than I was willing to make untested. Until it is wired, the
-  behavioural gate exists as a function nobody calls. **This is the most important gap: the
-  autonomy is in and the gate that makes it safe is not.**
+  The scheduler does not carry the contract, and `HostedWorld` exposes only the database surface:
+  it has neither an agent-tool endpoint map nor a worker invocation/evidence bridge. Calling it
+  safely needs all three, not a generic HTTP request guessed from a tool name. Until that contract
+  and bridge exist, the behavioural gate is a function nobody calls. **This is the most important
+  gap: the autonomy is in and the gate that makes it safe is not.**
 - **The world handle (`reset -> step -> reward`) is not implemented.** Downstream still reaches
   for stores directly, and `world/snapshot.py` still decides "is there a world" by looking for a
   file called `world.sqlite`.
@@ -138,7 +139,8 @@ Being honest about this, because none of it has run in anger:
 
 ## What I would do next, in order
 
-1. Wire `verify_runtime_tools` into the hosted run after the world comes up. Without it this
-   branch grants autonomy and removes the check that made it defensible.
+1. Define a runtime-tool invocation/evidence contract, then wire `verify_runtime_tools` into the
+   hosted run after the world comes up. Without it this branch grants autonomy and removes the
+   check that made it defensible.
 2. Run one hosted job and read what the model does with a shell. That is the experiment.
 3. Then the world handle, because it is what makes "any stack" true rather than aspirational.
