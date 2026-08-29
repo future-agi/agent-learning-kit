@@ -50,6 +50,9 @@ class ProbeResult:
 @dataclass
 class ProbeReport:
     results: list[ProbeResult] = field(default_factory=list)
+    # Tools that could not be executed from here at all. Kept apart from results so they never
+    # count towards the score in either direction: they are not failures, and they are not proof.
+    unproven: list[str] = field(default_factory=list)
 
     @property
     def score(self) -> float:
@@ -64,13 +67,22 @@ class ProbeReport:
         return [result for result in self.results if not result.passed]
 
     def summary(self) -> str:
-        if not self.results:
+        if not self.results and not self.unproven:
             return "no probes ran"
-        lines = [
-            f"{len(self.results) - len(self.failures)}/{len(self.results)} probes passed"
-        ]
+        lines = (
+            [
+                f"{len(self.results) - len(self.failures)}/{len(self.results)} probes passed"
+            ]
+            if self.results
+            else []
+        )
         for failure in self.failures:
             lines.append(f"  {failure.kind}:{failure.name}: {failure.detail}")
+        if self.unproven:
+            lines.append(
+                f"  {len(self.unproven)} tools not executed from here, so still unproven: "
+                + ", ".join(sorted(self.unproven))
+            )
         return "\n".join(lines)
 
 
@@ -248,14 +260,11 @@ def probe(
 
     for tool in contract.tools:
         if tool.name in runtime_tools:
-            report.results.append(
-                ProbeResult(
-                    tool.name,
-                    COVERAGE,
-                    True,
-                    "executes inside the submitted agent runtime",
-                )
-            )
+            # Not executed here, so not claimed as passing. The runtime this tool lives in is
+            # built after this stage in the hosted lane, so the only honest report is that it
+            # remains unproven; verify_runtime_tools settles it once the runtime is up. Recording
+            # it as a pass is how a world with nothing exercised used to score perfectly.
+            report.unproven.append(tool.name)
             continue
         if tool.name not in world.handlers:
             continue
@@ -411,3 +420,37 @@ def _run_sequence(
     if failures:
         return ProbeResult(name, SEQUENCE, False, failures[0])
     return ProbeResult(name, SEQUENCE, True)
+
+
+def verify_runtime_tools(world: Any, contract: Any) -> list[str]:
+    """Execute the agent's own tools against the world that was just built.
+
+    The build stage cannot reach these: in the hosted lane the runtime they live in is started
+    after authoring finishes, so `probe` can only record them as unproven. This is where that
+    debt is settled, once there is something to call.
+
+    A tool that refuses is working, so only a crash or a server error counts against it. Returns
+    one line per broken tool, empty when every declared tool answered. Nothing is written here;
+    the caller decides whether a broken tool stops the run.
+    """
+    forward = getattr(world, "forward", None)
+    endpoints = getattr(world, "endpoint_for", {}) or {}
+    runtime_tools = set(getattr(world, "runtime_tools", set()))
+    if not callable(forward) or not runtime_tools:
+        return []
+    broken: list[str] = []
+    for tool in getattr(contract, "tools", []):
+        if tool.name not in runtime_tools:
+            continue
+        endpoint = endpoints.get(tool.name)
+        if not endpoint:
+            broken.append(f"{tool.name}: nothing bound to call, so it cannot be proven")
+            continue
+        try:
+            call = forward(endpoint, _valid_arguments(tool), record=False)
+        except Exception as exc:  # noqa: BLE001 - a raising tool is exactly what we are looking for
+            broken.append(f"{tool.name}: raised {type(exc).__name__}: {exc}")
+            continue
+        if not call.ok and not call.refused:
+            broken.append(f"{tool.name}: {call.error or 'failed with no reason given'}")
+    return broken
