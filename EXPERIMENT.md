@@ -340,6 +340,25 @@ remember, because a run of this length outlasts any context window.
 
 ---
 
+## Credentials, and a risk this experiment created
+
+Granting the build stage a shell was only safe to reason about while it could not read anything
+sensitive. The sandbox holds live secrets (`/run/futureagi/secrets.json`, LiveKit, Deepgram,
+Cartesia, and a Google service-account private key), and a model with `Bash` can now print any of
+them. Anything printed reaches the guest log, which is captured into the run artifacts and outlives
+the sandbox, so one debug `echo` leaks a live key permanently.
+
+Scrubbing on the operator's side is a net, not a fix, so the instruction is now in the skills: a
+named **Credentials** section in `build-environment/SKILL.md` with the symptom attached, and the
+same rule in the three references where credentials actually appear (`voice-livekit.md`,
+`_writing-a-runner.md`, `voice-hosted-platform.md`). Report the variable and the status code, never
+the value.
+
+Audit of what this experiment had already written: no credential literals, no `echo $VAR`, no
+placeholder shaped like a real key. One latent risk found and fixed in
+`scripts/probe_voice_providers.py`, which bound the HTTP response body it never used. A provider
+error can quote the credential you sent it, so it now returns a status code and nothing else.
+
 # What still requires a human
 
 Honest list. Each item says why it is still there and what would remove it.

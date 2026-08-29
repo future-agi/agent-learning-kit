@@ -99,6 +99,22 @@ webhook. So the runner has two jobs the LiveKit one does not:
 2. **Start the call through their API**, then wait for their webhooks and their end-of-call event,
    and assemble the transcript from what they report.
 
+### Credentials in a runner you write
+
+The runner needs secrets and must never hold them. Read from the environment at the point of use:
+
+```python
+import os
+
+api_key = os.environ["VENDOR_API_KEY"]          # at the point of use
+resp = await client.start_call(api_key=api_key)  # passed on, never stored or echoed
+```
+
+Never inline a literal, never write one into `transport.json`, never log the value. If a call
+fails, report the variable and the status (`VENDOR_API_KEY rejected with 401`) and nothing more:
+what you print lands in the guest log, which is captured into the run artifacts and survives the
+sandbox, so one debug print leaks a live key permanently.
+
 Credentials are the usual blocker. An assistant id, an API key and a phone number cannot be
 inferred from a repository. When they are absent, ask with `AskUserQuestion` naming exactly what
 you need and what it is for. Do not invent a placeholder and do not skip the scenario: a run that

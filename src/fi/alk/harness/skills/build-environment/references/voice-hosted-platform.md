@@ -39,3 +39,12 @@ claim that a remote platform tool executed until a real platform call and eviden
 The platform owns audio, interruption, turn timing and conversation lifecycle. Describe those in
 the simulator and scenario only where its supported runner can actually drive them. The world owns
 the tool service, its data and the records that show what the service did.
+
+## Credentials
+
+An assistant id, API key and phone number cannot be inferred from a repository, so ask for them
+with `AskUserQuestion`, naming what you need and what it is for. Then hold them the way
+`_writing-a-runner.md` describes: read from the environment at the point of use, pass on by
+reference, never inline into the runner, the declaration or a config file, and never print the
+value. A key echoed once into the guest log is captured into the run artifacts and outlives the
+sandbox. Report the variable and the status code instead.

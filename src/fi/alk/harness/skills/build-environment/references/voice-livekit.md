@@ -125,6 +125,11 @@ it is, which is why they are listed rather than left to be rediscovered.
 - **Numbers reach tools as digits, not as spoken words.** Seed and normalise phone numbers, dates
   and amounts the way the worker itself does. A store that accepts one formatting convention turns
   an ordinary speech-recognition variation into a false agent failure.
+- **Never print a credential while debugging one.** The keys named in this file are live, and
+  anything printed reaches the guest log, which is captured into the run artifacts and outlives the
+  sandbox. Report the variable and the status: `CARTESIA_API_KEY returned 402`. Use
+  `scripts/probe_voice_providers.py`, which prints status codes only and never binds a response
+  body, because a provider error can quote the key you sent it.
 - **Choose models by where they sit, not by which is newest.** The harness itself (authoring,
   building, writing scenarios) is not latency-sensitive: use the most capable available. The
   **simulator at call time** is latency-sensitive, so a lite model is right there and its single

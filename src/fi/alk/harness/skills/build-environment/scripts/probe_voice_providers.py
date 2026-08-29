@@ -21,19 +21,19 @@ import urllib.error
 import urllib.request
 
 
-def _post(url: str, headers: dict, body: bytes, timeout: int = 30) -> tuple[int, bytes]:
+def _post(url: str, headers: dict, body: bytes, timeout: int = 30) -> int:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, response.read()[:400]
+            return response.status
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()[:400]
-    except Exception as exc:  # noqa: BLE001 - a probe reports, it does not raise
-        return 0, str(exc).encode()[:400]
+        return exc.code
+    except Exception:  # noqa: BLE001 - a probe reports a status, it does not raise or quote
+        return 0
 
 
 def probe_cartesia(key: str) -> dict:
-    status, body = _post(
+    status = _post(
         "https://api.cartesia.ai/tts/bytes",
         {
             "X-API-Key": key,
@@ -60,7 +60,7 @@ def probe_cartesia(key: str) -> dict:
 
 
 def probe_deepgram_tts(key: str) -> dict:
-    status, body = _post(
+    status = _post(
         "https://api.deepgram.com/v1/speak?model=aura-asteria-en",
         {"Authorization": f"Token {key}", "Content-Type": "application/json"},
         json.dumps({"text": "This is a test."}).encode(),

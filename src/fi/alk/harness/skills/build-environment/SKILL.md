@@ -19,6 +19,38 @@ short — they can see every tool you call and what it answered.
 Ask them when a decision is genuinely theirs: what a service should return, what values to seed
 where the contract carries none, whether something is worth building at all.
 
+## Credentials: never print one, ever
+
+You have a shell in a sandbox that holds live secrets: `/run/futureagi/secrets.json`, plus
+`LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`, and a Google
+service-account JSON containing a private key.
+
+**The symptom that makes this absolute: anything you print reaches the guest log, and the guest log
+is captured into the run artifacts, which outlive the sandbox and are mirrored to disk. A single
+debug `echo` therefore leaks a live key permanently, into a file nobody thinks to check. There is
+no undo, only rotation.**
+
+So:
+
+1. **Never print, echo, `cat`, log or write a credential value.** Not to stdout, not into a file,
+   not into generated config, not into a scenario, a receipt, an artifact or a commit message.
+2. **Read a credential at the point of use and pass it on by reference.** Never copy one into
+   generated code, a compose file, a fixture or a seed.
+3. **Never write a credential into the built world or its database.** A seeded key is in the
+   baseline, and the baseline is an artifact.
+4. **Report the variable and the symptom, never the value.** `CARTESIA_API_KEY returned 402` is a
+   correct bug report. Echoing the key to see whether it looks right is not, and it does not tell
+   you anything the status code did not.
+5. **Code you write must read from the environment at runtime.** No inlined literal, not even a
+   placeholder shaped like a real key, because placeholders get replaced with real values by the
+   next person and the shape is what makes that feel safe.
+6. **If a diagnostic needs a key, copy the shape of `scripts/probe_voice_providers.py`.** It reads
+   from `os.environ`, sends the request, and prints only a status code and a note. It deliberately
+   does not bind the response body, because a provider error can quote the credential you sent it.
+
+Debugging a credential is exactly when the temptation to print one is strongest, and exactly when
+the cost is highest. The status code is the evidence; the value never is.
+
 ## Work out what kind of agent this is, before you build anything
 
 Nothing tells you which references apply. Decide it yourself, from evidence, in this order. Doing
