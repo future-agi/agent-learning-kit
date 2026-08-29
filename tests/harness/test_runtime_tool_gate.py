@@ -112,7 +112,11 @@ def test_scheduler_refuses_a_world_whose_tools_are_broken():
     world = _Reachable(
         {"book_ride": Call(name="book_ride", arguments={}, ok=False, error="boom")}
     )
-    cause = asyncio.run(_scheduler(_contract("book_ride"))._verify_world(world, 0))
+    cause = asyncio.run(
+        _scheduler(_contract("book_ride"))._verify_world(
+            world, SimpleNamespace(tag="rt"), 0
+        )
+    )
     assert "runtime tools did not answer" in cause
     assert "book_ride" in cause
 
@@ -122,7 +126,9 @@ def test_scheduler_allows_an_unverifiable_world_but_names_what_goes_ungraded(cap
     # allowed through, loudly, at a level the hosted guest actually emits.
     scheduler = _scheduler(_contract("book_ride"))
     with caplog.at_level(logging.WARNING, logger="fi.alk.harness.hosted_scheduler"):
-        cause = asyncio.run(scheduler._verify_world(_NoSeam("book_ride"), 3))
+        cause = asyncio.run(
+            scheduler._verify_world(_NoSeam("book_ride"), SimpleNamespace(tag="rt"), 3)
+        )
     assert cause == ""
     assert "ungraded" in caplog.text
     assert "book_ride" in caplog.text
@@ -138,14 +144,22 @@ def test_a_world_is_verified_once_not_per_scenario():
 
     world = Counting({"book_ride": Call(name="book_ride", arguments={}, ok=True)})
     scheduler = _scheduler(_contract("book_ride"))
+    # One runtime held across the loop: the same world leased for three scenarios, which is the
+    # caching this gate exists for. A NEW runtime object would rightly be verified again.
+    runtime = SimpleNamespace(tag="rt")
     for _ in range(3):
-        assert asyncio.run(scheduler._verify_world(world, 0)) == ""
+        assert asyncio.run(scheduler._verify_world(world, runtime, 0)) == ""
     assert calls == ["book_ride"]
 
 
 def test_no_contract_means_no_gate():
     scheduler = _scheduler(None)
-    assert asyncio.run(scheduler._verify_world(_NoSeam("book_ride"), 0)) == ""
+    assert (
+        asyncio.run(
+            scheduler._verify_world(_NoSeam("book_ride"), SimpleNamespace(tag="rt"), 0)
+        )
+        == ""
+    )
 
 
 # --- the receipt boundary ----------------------------------------------------------------------
@@ -319,3 +333,99 @@ def test_missing_evidence_gets_its_own_code_not_the_generic_one():
     assert failure.domain == "simulator"
     # Deterministic: a runner that omits a transcript omits it again, so a retry buys nothing.
     assert "call_evidence_missing" not in _RETRYABLE_CODES
+
+
+# --- an index is a position, not an identity ----------------------------------------------------
+#
+# Reconcile replaces a demoted world with a fresh one at the same index. That replacement is
+# exactly when checking matters most: the world it replaced may have been demoted BY this gate.
+
+
+def _counting_world(calls: list[str], name: str):
+    class W:
+        runtime_tools = {"book_ride"}
+        endpoint_for = {"book_ride": "book_ride"}
+
+        def forward(self, endpoint, arguments, *, record=False):
+            from fi.alk.harness.world.runtime import Call
+
+            calls.append(name)
+            return Call(name=endpoint, arguments={}, ok=True)
+
+    return W()
+
+
+def test_a_replacement_world_at_the_same_index_is_verified_again():
+    import asyncio
+
+    seen: list[str] = []
+    scheduler = _scheduler(_contract("book_ride"))
+
+    first_runtime = SimpleNamespace(world_index=0, tag="original")
+    assert (
+        asyncio.run(
+            scheduler._verify_world(_counting_world(seen, "first"), first_runtime, 0)
+        )
+        == ""
+    )
+    assert seen == ["first"]
+
+    # Same index, same world payload, but reconcile built a NEW runtime object.
+    second_runtime = SimpleNamespace(world_index=0, tag="rebuilt")
+    assert (
+        asyncio.run(
+            scheduler._verify_world(_counting_world(seen, "second"), second_runtime, 0)
+        )
+        == ""
+    )
+    assert seen == ["first", "second"], "the replacement world was never verified"
+
+
+def test_the_same_runtime_is_still_verified_only_once():
+    # The caching this gate exists for must survive the identity fix: ten scenarios on one world
+    # must not call every declared tool ten times.
+    import asyncio
+
+    seen: list[str] = []
+    scheduler = _scheduler(_contract("book_ride"))
+    runtime = SimpleNamespace(world_index=0)
+    for _ in range(5):
+        asyncio.run(scheduler._verify_world(_counting_world(seen, "same"), runtime, 0))
+    assert seen == ["same"]
+
+
+def test_a_rebuilt_world_that_is_still_broken_is_caught_again():
+    # The case the defect hid: the gate demotes a world, reconcile rebuilds it just as broken,
+    # and the successor must not be waved through as already verified.
+    import asyncio
+
+    from fi.alk.harness.world.runtime import Call
+
+    class Broken:
+        runtime_tools = {"book_ride"}
+        endpoint_for = {"book_ride": "book_ride"}
+
+        def forward(self, endpoint, arguments, *, record=False):
+            return Call(name=endpoint, arguments={}, ok=False, error="500")
+
+    scheduler = _scheduler(_contract("book_ride"))
+    first = asyncio.run(scheduler._verify_world(Broken(), SimpleNamespace(tag="a"), 0))
+    second = asyncio.run(scheduler._verify_world(Broken(), SimpleNamespace(tag="b"), 0))
+    assert "runtime tools did not answer" in first
+    assert "runtime tools did not answer" in second, "successor skipped verification"
+
+
+def test_verification_is_tracked_per_index_not_globally():
+    import asyncio
+
+    seen: list[str] = []
+    scheduler = _scheduler(_contract("book_ride"))
+    shared = SimpleNamespace(tag="r")
+    asyncio.run(scheduler._verify_world(_counting_world(seen, "w0"), shared, 0))
+    # A different index holding a different runtime must still be checked.
+    asyncio.run(
+        scheduler._verify_world(
+            _counting_world(seen, "w1"), SimpleNamespace(tag="s"), 1
+        )
+    )
+    assert seen == ["w0", "w1"]

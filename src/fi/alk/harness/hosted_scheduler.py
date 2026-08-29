@@ -1495,9 +1495,16 @@ class HostedScheduler:
         self._call_evidence_requires = tuple(call_evidence_requires)
         # Verified once per world, not per scenario -- calling every declared tool before each of
         # ten scenarios would triple a run's tool traffic to re-establish the same fact.
-        self._verified_worlds: set[int] = set()
+        #
+        # Keyed by the runtime OBJECT, not by its index. An index is a position in the pool and is
+        # reused: reconcile replaces a demoted world with a fresh one at the same index, and that
+        # replacement is exactly when checking matters most, because the world it replaced may have
+        # been demoted by this gate. `lease()` compares identity for the same reason. The verified
+        # runtime is held rather than its `id()`, so a freed object's address cannot be recycled
+        # into a false match.
+        self._verified_runtimes: dict[int, Any] = {}
 
-    async def _verify_world(self, world: Any, world_index: int) -> str:
+    async def _verify_world(self, world: Any, runtime: Any, world_index: int) -> str:
         """Make a freshly built world answer the agent's own tools, once, before it grades.
 
         Returns a cause when the world must not be used, empty when it may. An unverifiable world
@@ -1506,7 +1513,9 @@ class HostedScheduler:
         would be a worse lie than the silence it replaces. What it must never do is pass quietly,
         so the tools that go ungraded are named.
         """
-        if self._contract is None or world_index in self._verified_worlds:
+        if self._contract is None:
+            return ""
+        if self._verified_runtimes.get(world_index) is runtime:
             return ""
         try:
             verdict = await asyncio.to_thread(
@@ -1519,9 +1528,9 @@ class HostedScheduler:
                 type(exc).__name__,
                 exc,
             )
-            self._verified_worlds.add(world_index)
+            self._verified_runtimes[world_index] = runtime
             return ""
-        self._verified_worlds.add(world_index)
+        self._verified_runtimes[world_index] = runtime
         if verdict.broken:
             return "runtime tools did not answer: " + "; ".join(verdict.broken)
         if not verdict.checked and verdict.tools:
@@ -1810,7 +1819,7 @@ class HostedScheduler:
                 # The gate that earns the build stage its shell: a world that cannot answer the
                 # agent's own tools is not allowed to grade anyone, because every sub-goal it
                 # judged would be measuring the world's gap rather than the agent.
-                unusable = await self._verify_world(world, world_index)
+                unusable = await self._verify_world(world, runtime, world_index)
                 if unusable:
                     outcome = _Retry(
                         _failure("runtime_tools_broken", unusable),

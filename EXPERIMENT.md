@@ -404,6 +404,35 @@ crashed the scheduler -- the same class of defect again. Mapped and tested.
 Mutation-verified in three directions: policing zero-turn outcomes again fails 2 tests, removing
 the domain mapping fails 1, restoring the turn floor fails 1.
 
+## The verification gate cached by position, so it only ever caught a world once
+
+`_verified_worlds` was a `set[int]` keyed by world index, written in two places and never
+discarded. `mark_unhealthy` did not touch it and neither did reconcile.
+
+An index is a position in the pool and it is reused. Once index 0 was verified, every future world
+landing at index 0 was treated as already checked, and the replacement path is precisely where
+checking matters most: the previous world there may have been demoted **by this gate** via
+`runtime_tools_broken`, reconcile builds a fresh one, and the fresh one skipped verification
+entirely. So the gate caught a broken world once and then silently accepted its successors, which
+is the "passes quietly" failure its own docstring says it must never do.
+
+The codebase already knew this. `lease()` a few lines above goes out of its way to compare object
+identity, with a comment that a concurrent reconcile may have replaced this index's runtime and
+that a verdict computed against the old object no longer describes the new one.
+
+Now keyed by the runtime object: `dict[int, Any]` mapping index to the runtime that was verified,
+compared with `is`. The runtime is held rather than its `id()`, so a freed object's address cannot
+be recycled into a false match. Caching still works for the case it exists for -- ten scenarios on
+one world verify once -- because that is the same runtime object throughout.
+
+Mutation-verified: keying by index again fails 2 tests. Four new tests cover replacement at the
+same index, a rebuilt-and-still-broken world, per-index independence, and that the once-per-world
+caching survives.
+
+One existing test needed correcting rather than working around: it looped with a fresh runtime per
+iteration, which under the fix is correctly re-verified. Its intent was "one world, verified once",
+so it now holds one runtime across the loop.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
