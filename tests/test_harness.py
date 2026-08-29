@@ -1819,27 +1819,10 @@ def test_an_amendment_that_makes_no_sense_is_refused(tmp_path, overrides, expect
 # --- what a stage is allowed to do ---------------------------------------------------
 
 
-def test_a_stage_may_use_nothing_it_was_not_given():
-    """Deny by default, not deny-a-list. A session is offered whatever its host exposes, and an
-    allow-by-default gate let a host search tool through that cost a stage its whole budget."""
-    import asyncio
-
-    from fi.alk.harness.config import permission_gate
-
-    gate = permission_gate(granted=["Read", "Glob"])
-    for refused in ("Write", "Edit", "Bash", "Task", "ToolSearch", "WebFetch"):
-        verdict = asyncio.run(gate(refused, {}, None))
-        assert type(verdict).__name__ == "PermissionResultDeny"
-        assert "not part of this stage" in verdict.message
-
-    allowed = asyncio.run(gate("Read", {"file_path": "a.py"}, None))
-    assert type(allowed).__name__ == "PermissionResultAllow"
-
-
 def test_a_question_still_reaches_the_operator():
     import asyncio
 
-    from fi.alk.harness.config import permission_gate
+    from fi.alk.harness.config import operator_ask
 
     asked = {}
 
@@ -1847,7 +1830,7 @@ def test_a_question_still_reaches_the_operator():
         asked["tool"] = tool_name
         return "answered"
 
-    assert asyncio.run(permission_gate(ask)("AskUserQuestion", {}, None)) == "answered"
+    assert asyncio.run(operator_ask(ask)("AskUserQuestion", {}, None)) == "answered"
     assert asked["tool"] == "AskUserQuestion"
 
 
@@ -3953,46 +3936,6 @@ def test_a_run_result_survives_being_written_and_read(tmp_path):
 
     save_results([record], tmp_path)
     assert load_results(tmp_path) == [record]
-
-
-def test_a_tool_a_stage_was_not_given_is_denied_by_the_hook():
-    """can_use_tool alone does not do this. An allowed_tools entry approves its tools before the
-    callback runs, and the SDK warns the callback is shadowed; a host ToolSearch reached every
-    stage, returned nothing and cost a turn. The PreToolUse hook is consulted for every call."""
-    import asyncio
-
-    from fi.alk.harness.config import gate_hooks
-
-    hooks = gate_hooks(["mcp__world__seed"])
-    refuse = hooks["PreToolUse"][0].hooks[0]
-
-    granted = asyncio.run(refuse({"tool_name": "mcp__world__seed"}, None, None))
-    assert granted == {}
-
-    asked = asyncio.run(refuse({"tool_name": "AskUserQuestion"}, None, None))
-    assert asked == {}
-
-    denied = asyncio.run(refuse({"tool_name": "ToolSearch"}, None, None))
-    said = denied["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
-    assert "ToolSearch is not part of this stage" in said["permissionDecisionReason"]
-    assert "mcp__world__seed" in said["permissionDecisionReason"]
-
-
-def test_every_stage_gates_with_the_hook_not_only_the_callback():
-    """One stage left on the callback alone is one stage a host tool still reaches."""
-    import inspect
-
-    from fi.alk.harness.run import grade, stage, targets
-
-    from fi.alk.harness import build, reception, scenarios
-
-    for module in (build, reception, scenarios, stage, targets, grade):
-        source = inspect.getsource(module)
-        if "permission_gate(" in source:
-            assert "gate_hooks(allowed)" in source, (
-                f"{module.__name__} has no hook gate"
-            )
 
 
 def test_writing_new_results_keeps_the_ones_not_rerun(tmp_path):

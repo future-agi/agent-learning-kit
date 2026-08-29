@@ -223,6 +223,16 @@ offered step into a failed check, and the run then scores the disposition the pe
 be given rather than the agent's behaviour. Either give the person a reason to accept, or check
 that the agent made the offer rather than what followed it.
 
+**The scenario's shape is not described here.** `submit_scenario` validates against the
+`Scenario` model in `fi/alk/harness/scenario.py` and refuses with the specific problems to fix, so
+that model is the only description of the shape that cannot go stale. Read it when you need the
+fields; do not work from a summary of it, including this one.
+
+If this agent needs something the named fields have no room for, put it in `extras`. It is carried
+and returned untouched, so it is yours to define and yours to read again later. What you may not
+do is repurpose a named field to mean something else: those are what the platform renders and what
+every scenario is checked against.
+
 **Use persona deliberately.** An accent, personality or characteristic belongs in `persona` only
 when it changes the conversational risk being exercised. A rude customer is a different scenario
 from a polite one only if the agent must handle that difference. Persona never contains the
