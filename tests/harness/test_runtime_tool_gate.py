@@ -209,7 +209,7 @@ def test_every_missing_piece_is_reported_at_once_with_repair_instructions():
 
     faults = call_evidence_faults(
         _outcome(
-            turns=1,
+            turns=4,
             transcript_artifact=None,
             recording_artifacts=(),
             duration_ms=0,
@@ -217,8 +217,10 @@ def test_every_missing_piece_is_reported_at_once_with_repair_instructions():
         ),
         ("turns", "transcript", "recordings", "timing"),
     )
-    # One round trip, not five: a runner should be able to fix everything and return once.
-    assert len(faults) == 5
+    # One round trip, not four: a runner should be able to fix everything and return once.
+    # There is no turn-count fault: the floor was removed, because a short real call is a real
+    # call and a zero-turn outcome is a diagnosis this contract must not touch.
+    assert len(faults) == 4
 
 
 def test_the_boundary_raises_rather_than_passing_an_unrenderable_outcome():
@@ -233,3 +235,87 @@ def test_the_boundary_raises_rather_than_passing_an_unrenderable_outcome():
     with pytest.raises(CallEvidenceMissing) as raised:
         asyncio.run(_run_call(Runner(), None, None, None, ("transcript",)))
     assert "Fix these and return the outcome again" in str(raised.value)
+
+
+# --- a zero-turn outcome is a diagnosis, not a broken receipt -----------------------------------
+#
+# The voice runner deliberately maps the engine's "agent joined but never spoke" codes to a normal
+# CallOutcome so the scheduler can report evidence_missing/simulator. Policing that here would
+# replace a precise finding with "the runner produced an unrenderable outcome" -- the exact
+# misleading-message failure this contract exists to prevent.
+
+
+def test_a_silent_agent_outcome_is_not_treated_as_a_broken_receipt():
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    # What call_runner returns for no_conversation / conversation_silence_timeout at zero turns:
+    # no calls, no transcript, no recordings. That shape IS the diagnosis.
+    silent = _outcome(
+        turns=0,
+        transcript_artifact=None,
+        recording_artifacts=(),
+        duration_ms=0,
+        started_at=None,
+    )
+    assert (
+        call_evidence_faults(silent, ("turns", "transcript", "recordings", "timing"))
+        == []
+    )
+
+
+def test_a_silent_agent_never_surfaces_as_call_failed_or_evidence_missing():
+    import asyncio
+
+    from fi.alk.harness.hosted_scheduler import _run_call
+
+    class SilentAgentRunner:
+        async def run(self, scenario, runtime, *, world=None):
+            return _outcome(
+                turns=0,
+                transcript_artifact=None,
+                recording_artifacts=(),
+                duration_ms=0,
+                started_at=None,
+            )
+
+    # It must pass straight through, so the scheduler's own coverage rule can report the real
+    # cause rather than this boundary masking it.
+    outcome = asyncio.run(
+        _run_call(
+            SilentAgentRunner(), None, None, None, ("turns", "transcript", "timing")
+        )
+    )
+    assert outcome.turns == 0
+    assert outcome.calls == ()
+
+
+def test_a_one_turn_call_is_a_real_call_not_a_broken_receipt():
+    # The agent answered and the caller rang off. Whether that went far enough to judge is what
+    # sub-goal grading decides, not this contract.
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    assert (
+        call_evidence_faults(_outcome(turns=1), ("turns", "transcript", "timing")) == []
+    )
+
+
+def test_a_completed_call_missing_its_transcript_is_still_rejected():
+    # The contract must still bite where it should: a call that ran and cannot be rendered.
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    faults = call_evidence_faults(
+        _outcome(turns=8, transcript_artifact=None), ("transcript",)
+    )
+    assert len(faults) == 1
+    assert "transcript_artifact" in faults[0]
+
+
+def test_missing_evidence_gets_its_own_code_not_the_generic_one():
+    from fi.alk.harness.hosted_scheduler import _CODE_DOMAIN, _RETRYABLE_CODES, _failure
+
+    assert "call_evidence_missing" in _CODE_DOMAIN
+    failure = _failure("call_evidence_missing", "x")
+    assert failure.code == "call_evidence_missing"
+    assert failure.domain == "simulator"
+    # Deterministic: a runner that omits a transcript omits it again, so a retry buys nothing.
+    assert "call_evidence_missing" not in _RETRYABLE_CODES

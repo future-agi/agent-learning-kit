@@ -367,6 +367,43 @@ name -- so that test was not pinning the defect. Forcing the original `import_mo
 reproduced it exactly: `assert 'from-world-0' == 'from-world-1'`. Twelve tests now cover both
 defects plus sibling imports, dotted module names, and `sys.path` restoration on the failure path.
 
+## The receipt boundary was masking the diagnosis it exists to protect
+
+The worst of the three, because this one destroyed a finding rather than merely crashing.
+
+`call_runner.py` deliberately maps the engine's "agent joined but never spoke" codes
+(`no_conversation`, `conversation_silence_timeout`, and only at zero turns) to a normal
+`CallOutcome` with no calls, so the scheduler's own coverage rule reports
+`evidence_missing`/simulator. That is what tells an operator the agent was silent or the caller's
+speech never rendered. The receipt boundary I added then fired first on `turns < 2`, raised
+`CallEvidenceMissing`, and -- because nothing caught it specifically -- fell through the generic
+`except Exception` and arrived as `call_failed: CallEvidenceMissing: the call runner produced an
+outcome the platform cannot render`.
+
+So a dead TTS key or a silent agent would have reported as a broken runner. That is exactly the
+misleading-message failure that cost a full day to diagnose, and this time we would have built it
+ourselves, into the very contract meant to prevent it.
+
+Three changes:
+
+- **A zero-turn outcome is a diagnosis, not a receipt.** The contract now returns early on
+  `turns == 0` and lets it pass through untouched. `CallOutcome` carries no status field, so the
+  boundary cannot ask "did this claim to be a completed call"; zero turns is the honest proxy, and
+  it is exactly the shape the runner deliberately produces.
+- **`CallEvidenceMissing` is caught explicitly**, next to `CallAborted`, with its own code
+  `call_evidence_missing` (domain simulator, not retryable -- a runner that omits a transcript
+  omits it again). Two different problems no longer arrive under one label.
+- **The turn floor is gone entirely.** A one-turn call where the agent answered and the caller rang
+  off is a real call, and whether a conversation went far enough to judge is what sub-goal grading
+  already decides.
+
+One thing the fix nearly introduced: `_failure` does `_CODE_DOMAIN[code]`, a closed table that
+raises `KeyError` on an unmapped code. Adding a new code without adding its domain would have
+crashed the scheduler -- the same class of defect again. Mapped and tested.
+
+Mutation-verified in three directions: policing zero-turn outcomes again fails 2 tests, removing
+the domain mapping fails 1, restoring the turn floor fails 1.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

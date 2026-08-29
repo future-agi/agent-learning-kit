@@ -249,6 +249,11 @@ def call_evidence_faults(
     carry no speech timing produces a conversation view where talk ratio, words per minute and
     latency are all zero, and nothing errors, so nobody discovers it until a customer asks why the
     metrics are empty.
+
+    There is deliberately no turn floor. A one-turn call where the agent answered and the caller
+    rang off is a real call, and whether a conversation went far enough to judge is what sub-goal
+    grading already decides. A floor here would only duplicate that, and would misreport the
+    shortest real calls as broken receipts.
     """
     wanted = set(requires)
     if not wanted:
@@ -256,12 +261,17 @@ def call_evidence_faults(
         # what it owes; a caller that declares nothing is exercising the scheduler, not shipping
         # a receipt.
         return []
+    if outcome.turns == 0:
+        # A zero-turn outcome is a DIAGNOSIS, not a receipt claiming a completed call. The voice
+        # runner deliberately maps the engine's "agent joined but never spoke" codes
+        # (`no_conversation`, `conversation_silence_timeout`, and only at zero turns) to a normal
+        # CallOutcome precisely so the scheduler's own coverage rule can report it as
+        # `evidence_missing`/simulator -- which is what tells an operator the agent was silent or
+        # the caller's speech never rendered. Policing it here would replace that precise finding
+        # with "the runner produced an unrenderable outcome", which is the misleading-message
+        # failure this contract exists to prevent, not to cause.
+        return []
     faults: list[str] = []
-    if "turns" in wanted and outcome.turns < 2:
-        faults.append(
-            f"turns={outcome.turns}: a call with fewer than two turns is not a conversation, so "
-            "there is nothing for a sub-goal to be judged against"
-        )
     if "transcript" in wanted and not outcome.transcript_artifact:
         faults.append(
             "no transcript_artifact: the platform has nothing to show and no evaluation can read "
@@ -422,6 +432,11 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "ready_broken": FailureDomain.SIMULATOR,
     "check_broken": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
+    # The runner returned something the platform cannot render. Simulator domain because it is our
+    # own runner at fault, not the agent under test and not the infrastructure. Deliberately not
+    # retryable: a runner that omits a transcript will omit it again, so a retry spends a world to
+    # learn nothing.
+    "call_evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -2027,6 +2042,19 @@ class HostedScheduler:
                 _failure("call_failed", str(exc)),
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=call,
+            )
+        except CallEvidenceMissing as exc:
+            # Its own code, never the generic one. "The runner returned something the platform
+            # cannot render" and "the call machinery crashed" are different problems with
+            # different fixes, and a run stops being diagnosable the moment two causes arrive
+            # under one label.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("call_evidence_missing", str(exc)),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=None,
             )
         except Exception as exc:  # noqa: BLE001
             # B3: the call runner crashing outright (not a `CallAborted` it chose to raise) is the
