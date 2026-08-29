@@ -195,7 +195,7 @@ def open_stage(
             "environment endpoints: "
             + (", ".join(runtime_tools) or "none")
             + "\nDo not adopt either group, inspect their source again, or recreate any service "
-            "or behavior. Do not use run_env_command for source discovery. The contract already "
+            "or behavior. Do not go source hunting with the shell. The contract already "
             "contains that evidence. Inspect the live data once. Preserve useful repository seed "
             "rows. If the submitted schema is empty or lacks the records needed to exercise the "
             "contract's branches, add a small varied realistic baseline through seed only; never "

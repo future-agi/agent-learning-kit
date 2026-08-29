@@ -21,7 +21,7 @@ from .config import (
     artifact_dir,
     load_skill,
     provider_env,
-    read_only_session,
+    working_session,
 )
 from .contract import AgentContract, Runtime, RuntimeInterface, ToolSpec, validate_contract
 from .job import ExecutionMode, HarnessJob, HarnessStage
@@ -64,7 +64,7 @@ __all__ = [
     "open_conversation",
     "open_stage",
     "provider_env",
-    "read_only_session",
+    "working_session",
     "register_source",
     "resolve",
     "seal_bundle",

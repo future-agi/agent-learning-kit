@@ -1069,49 +1069,6 @@ def world_tools(
         )
 
     @tool(
-        "write_env_file",
-        "Write one file the environment is built from: a Dockerfile, a compose file, a schema, an "
-        "entrypoint, whatever this agent needs. Paths are relative and stay inside the "
-        "environment directory. Call it once per file, then build with run_env_command.",
-        schema({"path": str, "contents": str}, ["path", "contents"]),
-    )
-    async def write_env_file(args: dict[str, Any]) -> dict[str, Any]:
-        from .workspace import listing, write
-
-        try:
-            written = write(destination, str(args["path"]), str(args["contents"]))
-        except ValueError as refused:
-            return _err(str(refused))
-        lines = len(str(args["contents"]).splitlines())
-        return _ok(
-            f"wrote {written.name}, {lines} lines. The environment now has: "
-            + ", ".join(listing(destination))
-        )
-
-    @tool(
-        "run_env_command",
-        "Run one docker or docker compose command from the environment directory: build an image, "
-        "bring a store up, run something inside a container. Only container commands run here, so "
-        "anything the environment needs belongs in a file it builds from rather than in a "
-        "command. Returns the exit code and the output.",
-        schema({"command": str}, ["command"]),
-    )
-    async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
-        from .workspace import run
-
-        # Off the event loop: a docker build takes minutes, and run synchronously
-        # it deafens every API endpoint this server has until it finishes.
-        code, output = await asyncio.to_thread(run, destination, str(args["command"]))
-        shown = (
-            output
-            if len(output) <= 2500
-            else output[:1200] + "\n...\n" + output[-1200:]
-        )
-        if code != 0:
-            return _err(f"exit {code}\n{shown or '(no output)'}")
-        return _ok(f"ok\n{shown or '(no output)'}")
-
-    @tool(
         "write_store_ops",
         "Teach the harness an engine it has never stood up: the image, the port it listens on, "
         "the environment it needs to boot, and how to read, reset and change what it holds. "
@@ -1376,8 +1333,6 @@ def world_tools(
             adopt_tool,
             write_store_ops,
             add_world_check,
-            write_env_file,
-            run_env_command,
             check_world,
             save_world,
         ],
@@ -1405,8 +1360,6 @@ TOOL_NAMES = (
     "add_sub_goal",
     "write_store_ops",
     "add_world_check",
-    "write_env_file",
-    "run_env_command",
     "check_world",
     "save_world",
 )

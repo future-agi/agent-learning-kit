@@ -25,7 +25,7 @@ from .config import (
     artifact_dir,
     chosen_model,
     credentials_hint,
-    permission_gate,
+    operator_ask,
 )
 from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
@@ -146,7 +146,7 @@ async def _understand(args: argparse.Namespace) -> int:
         out=Path(args.out) if args.out else None,
         # Unattended, there is nobody to answer, so the model records what it could not
         # resolve in open_questions rather than blocking on a prompt nobody will see.
-        ask=permission_gate(_ask_operator) if args.interactive else None,
+        ask=operator_ask(_ask_operator) if args.interactive else None,
     )
 
     print(f"agent: {source.name}  ({source.kind})")
@@ -248,7 +248,7 @@ async def _build(args: argparse.Namespace) -> int:
     stage, _ = build_stage(
         contract,
         out=destination,
-        ask=permission_gate(_ask_operator) if args.interactive else None,
+        ask=operator_ask(_ask_operator) if args.interactive else None,
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
     )
@@ -385,7 +385,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
         contract,
         out=destination,
         wanted=wanted,
-        ask=permission_gate(_ask_operator) if args.interactive else None,
+        ask=operator_ask(_ask_operator) if args.interactive else None,
     )
     await _converse(
         stage,
@@ -434,7 +434,7 @@ async def _live(args: argparse.Namespace) -> int:
     stage, _ = run_stage(
         contract,
         out=destination,
-        ask=permission_gate(_ask_operator) if args.interactive else None,
+        ask=operator_ask(_ask_operator) if args.interactive else None,
     )
     await _converse(
         stage, run_opening(contract, destination), interactive=args.interactive
@@ -1087,7 +1087,7 @@ async def _chat(args: argparse.Namespace) -> int:
         path=args.path or "",
         kind=args.kind,
         out=Path(args.out) if args.out else None,
-        ask=permission_gate(_ask_operator),
+        ask=operator_ask(_ask_operator),
     )
     print(f"model:       {chosen_model()}")
     print(credentials_hint())

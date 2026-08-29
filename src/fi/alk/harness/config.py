@@ -124,7 +124,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     return env
 
 
-def read_only_session(
+def working_session(
     *,
     system_prompt: str,
     cwd: str | Path,
@@ -133,17 +133,27 @@ def read_only_session(
     max_turns: int = 40,
     model: str | None = None,
 ) -> SessionSpec:
-    """A session that may read the agent under test but never write to it.
+    """A session that can read, write and run things.
 
-    The agent under test is somebody's real repository. The harness reads it and writes its own
-    artifacts elsewhere, so the built-in write tools are simply not granted; the only way this
-    session can produce anything is by calling one of ours.
+    The sandbox is the boundary. A stage that has to work out what an unfamiliar agent is, build
+    the infrastructure it talks to, and prove that infrastructure answers, is doing engineering,
+    and engineering needs a shell and an editor. Withholding them did not make the work safer, it
+    made the stage unable to finish it and left the finishing to a person reading logs.
     """
     return SessionSpec(
         system_prompt=system_prompt,
         servers=dict(servers or {}),
         builtins=tuple(
-            dict.fromkeys([*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_builtins])
+            dict.fromkeys(
+                [
+                    *_READ_ONLY_TOOLS,
+                    "Write",
+                    "Edit",
+                    "Bash",
+                    "AskUserQuestion",
+                    *extra_builtins,
+                ]
+            )
         ),
         cwd=str(cwd),
         max_turns=max_turns,
@@ -152,84 +162,19 @@ def read_only_session(
     )
 
 
-# Host tools no stage gets unless it asks. Off by default because a tool nobody wants still
-# costs the turn that discovers it, not because any of them is forbidden: a stage that names one
-# in its builtins gets it, and the backend removes it from this list for that session.
-UNWANTED = (
-    "ToolSearch",
-    "Bash",
-    "Write",
-    "Edit",
-    "NotebookEdit",
-    "WebFetch",
-    "WebSearch",
-)
+def operator_ask(ask: Any | None = None) -> Any:
+    """Route the model's questions to whoever is running this, and allow everything else.
 
-
-def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
-    """Deny anything a stage was not given, at the point the SDK actually asks.
-
-    ``can_use_tool`` alone does not do this. An ``allowed_tools`` entry approves those tools
-    before the callback is consulted, and the SDK then warns that the callback is shadowed — so
-    the gate never runs for the tools we granted, and in practice does not stop the ones we did
-    not either. A host ``ToolSearch`` reached every stage, returned nothing, and cost a turn each
-    time.
-
-    A PreToolUse hook is consulted for every call, which is what the deny-by-default rule needed
-    in order to be true rather than intended.
+    What used to be here also denied by default. That gate is gone: a stage is now trusted with
+    the tools it was given, and the sandbox is what stands between a mistake and anything real.
     """
-    from claude_agent_sdk.types import HookMatcher
-
-    permitted = {*granted, "AskUserQuestion"}
-
-    async def refuse(
-        payload: dict[str, Any], _tool_use_id: Any, _context: Any
-    ) -> dict[str, Any]:
-        name = str(payload.get("tool_name") or "")
-        if not name or name in permitted:
-            return {}
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"{name} is not part of this stage. You have "
-                    f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
-                    "produce goes through those, because those are what check it."
-                ),
-            }
-        }
-
-    return {"PreToolUse": [HookMatcher(hooks=[refuse])]}
-
-
-def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
-    """Decide what a stage may do: nothing it was not given.
-
-    Deny by default, not deny-a-list. A session is offered whatever tools its host happens to
-    expose, and anything not named here is by definition not part of how this stage works. An
-    allow-by-default gate let a host search tool through, which returned nothing useful and cost
-    a stage its entire turn budget looping on it; the same hole would let a file write through.
-
-    Tools granted through ``allowed_tools`` are approved before this is consulted, so this only
-    ever sees the ones that were not.
-    """
-    permitted = set(granted)
 
     async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
-        from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+        from claude_agent_sdk.types import PermissionResultAllow
 
         if tool_name == "AskUserQuestion" and ask is not None:
             return await ask(tool_name, payload, context)
-        if tool_name in permitted:
-            return PermissionResultAllow(updated_input=payload)
-        return PermissionResultDeny(
-            message=(
-                f"{tool_name} is not part of this stage. You have "
-                f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
-                "produce goes through those, because those are what check it."
-            )
-        )
+        return PermissionResultAllow(updated_input=payload)
 
     return gate
 
