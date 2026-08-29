@@ -12,6 +12,8 @@ import asyncio
 import contextlib
 import hashlib
 import json
+
+import pytest
 import os
 import random
 import stat
@@ -900,11 +902,14 @@ def test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry
 
 
 def _call_runner_context(
-    *, job: HarnessJob | None = None, evidence_seam: Any = EvidenceSeam.HTTP_TOOL
+    *,
+    job: HarnessJob | None = None,
+    evidence_seam: Any = EvidenceSeam.HTTP_TOOL,
+    bundle_dir: Path | None = None,
 ) -> he.CallRunnerContext:
     return he.CallRunnerContext(
         job=job or _job(),
-        bundle_dir=Path("/nonexistent/bundle"),
+        bundle_dir=bundle_dir or Path("/nonexistent/bundle"),
         work_directory=Path("/nonexistent/work"),
         evidence_seam=evidence_seam,
         target_provider_secret_values={},
@@ -912,22 +917,48 @@ def _call_runner_context(
     )
 
 
-def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector() -> (
+def test_an_unresolved_connector_says_what_to_declare_instead_of_refusing_later() -> (
     None
 ):
-    # `_job()`'s own default is `connector="vapi"` -- out of this worker's mission, by design.
-    runner = he._default_build_call_runner(
-        mock.Mock(), _call_runner_context(job=_job(connector="vapi"))
+    # These connectors used to receive a runner that refused once per scenario, tens of minutes
+    # into a run. The environment stage can now declare how any agent is reached, so failing to
+    # declare is an actionable error raised before a world is leased, not a silent dead end.
+    from fi.alk.harness import transports
+
+    for connector in ("vapi", "retell", "auto"):
+        with pytest.raises(transports.TransportUnresolved) as raised:
+            he._default_build_call_runner(
+                mock.Mock(), _call_runner_context(job=_job(connector=connector))
+            )
+        message = str(raised.value)
+        assert "transport.json" in message
+        assert "livekit" in message  # names what is registered
+        assert connector in message  # and what it was asked for
+
+
+def test_a_declared_runner_resolves_for_a_connector_nothing_implements(
+    tmp_path,
+) -> None:
+    # The acceptance case: a transport this codebase has never heard of, running because the
+    # environment declared a runner written for it. No branch here knows the word "whatsapp".
+    (tmp_path / "runner_mod.py").write_text(
+        "class R:\n"
+        "    def __init__(self, adapter, context):\n"
+        "        self.adapter = adapter\n"
+        "    async def run(self, scenario, runtime, *, world=None):\n"
+        "        return 'ok'\n",
+        encoding="utf-8",
     )
-    assert isinstance(runner, he.NotWiredCallRunner)
-
-
-def test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto() -> None:
-    for connector in ("retell", "auto"):
-        runner = he._default_build_call_runner(
-            mock.Mock(), _call_runner_context(job=_job(connector=connector))
-        )
-        assert isinstance(runner, he.NotWiredCallRunner)
+    (tmp_path / "transport.json").write_text(
+        '{"transport": "whatsapp_business", "runner": "runner_mod:R"}', encoding="utf-8"
+    )
+    runner = he._default_build_call_runner(
+        mock.Mock(),
+        _call_runner_context(
+            job=_job(connector="whatsapp_business"), bundle_dir=tmp_path
+        ),
+    )
+    assert runner.__class__.__name__ == "R"
 
 
 def test_default_build_call_runner_resolves_auto_voice_contract_to_livekit() -> None:
@@ -1923,7 +1954,10 @@ def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
         source.mkdir(parents=True, exist_ok=True)
         _write_bundle(bundle_dir)
         job_path = tmp / "job.json"
-        _write_job(job_path, _job(parallelism=1))
+        # A resolvable connector: this test is about terminal-vs-close ordering, and an agent
+        # whose transport nobody declared now fails before the pool is built, which is a
+        # different test.
+        _write_job(job_path, _job(parallelism=1, connector="livekit"))
         capabilities = _capabilities()
 
         class OrderTrackingTransport(FakeTransport):
@@ -3598,8 +3632,8 @@ TESTS = [
     test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias,
     test_peek_target_provider_secret_values_missing_file_is_empty,
     test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry,
-    test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector,
-    test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto,
+    test_an_unresolved_connector_says_what_to_declare_instead_of_refusing_later,
+    test_a_declared_runner_resolves_for_a_connector_nothing_implements,
     test_default_build_call_runner_resolves_auto_voice_contract_to_livekit,
     test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit,
     test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam,

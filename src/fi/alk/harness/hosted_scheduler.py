@@ -236,11 +236,74 @@ class CallRunner(Protocol):
     ) -> CallOutcome: ...
 
 
+def call_evidence_faults(
+    outcome: "CallOutcome", requires: Sequence[str] = ()
+) -> list[str]:
+    """What a runner failed to produce, phrased so it can be repaired.
+
+    The build stage can now write its own runner, so nothing guarantees a new one emits what the
+    platform renders. This is the same treatment `submit_scenario` gives a scenario: the shape is
+    fixed because something downstream depends on it, the implementation behind it is free.
+
+    Every check here is a thing that has actually been rendered wrong. A transcript whose messages
+    carry no speech timing produces a conversation view where talk ratio, words per minute and
+    latency are all zero, and nothing errors, so nobody discovers it until a customer asks why the
+    metrics are empty.
+    """
+    wanted = set(requires)
+    if not wanted:
+        # Nothing was promised, so there is nothing to hold the runner to. A transport declares
+        # what it owes; a caller that declares nothing is exercising the scheduler, not shipping
+        # a receipt.
+        return []
+    faults: list[str] = []
+    if "turns" in wanted and outcome.turns < 2:
+        faults.append(
+            f"turns={outcome.turns}: a call with fewer than two turns is not a conversation, so "
+            "there is nothing for a sub-goal to be judged against"
+        )
+    if "transcript" in wanted and not outcome.transcript_artifact:
+        faults.append(
+            "no transcript_artifact: the platform has nothing to show and no evaluation can read "
+            "what was said. Upload the transcript and put its digest here"
+        )
+    if "recordings" in wanted and not outcome.recording_artifacts:
+        faults.append(
+            "no recording_artifacts: nobody can listen back to the call. Upload the audio and "
+            "list the digests here"
+        )
+    if "timing" in wanted and outcome.duration_ms <= 0:
+        faults.append(
+            f"duration_ms={outcome.duration_ms}: measure the call, do not report zero"
+        )
+    if "timing" in wanted and (not outcome.started_at or not outcome.ended_at):
+        faults.append(
+            "started_at/ended_at missing: the platform orders and groups calls by these"
+        )
+    return faults
+
+
+class CallEvidenceMissing(RuntimeError):
+    """A runner returned an outcome the platform cannot display.
+
+    Raised rather than passed on, because a receipt that is silently incomplete is indistinguishable
+    from a run that went fine and had nothing to say.
+    """
+
+    def __init__(self, faults: list[str]) -> None:
+        self.faults = faults
+        super().__init__(
+            "the call runner produced an outcome the platform cannot render. Fix these and "
+            "return the outcome again:\n  - " + "\n  - ".join(faults)
+        )
+
+
 async def _run_call(
     runner: CallRunner,
     scenario: Scenario,
     runtime: EnvironmentRuntime,
     world: World,
+    requires: Sequence[str] = (),
 ) -> CallOutcome:
     """Pass the world to text runners while preserving older two-argument integrations.
 
@@ -255,9 +318,15 @@ async def _run_call(
         parameter.name == "world" or parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in parameters
     )
-    if accepts_world:
-        return await run(scenario, runtime, world=world)
-    return await run(scenario, runtime)
+    outcome = (
+        await run(scenario, runtime, world=world)
+        if accepts_world
+        else await run(scenario, runtime)
+    )
+    faults = call_evidence_faults(outcome, requires)
+    if faults:
+        raise CallEvidenceMissing(faults)
+    return outcome
 
 
 # --- receipts (outbound-channels.md Channel 2; envelope fields — job_id/attempt_id/digest/etc —
@@ -1394,6 +1463,7 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         contract: Any | None = None,
+        call_evidence_requires: Sequence[str] = (),
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1405,6 +1475,9 @@ class HostedScheduler:
         # The agent's own declared tools, so a world can be made to prove it answers them before
         # it is trusted to grade anybody. Optional: a job with no contract simply skips the gate.
         self._contract = contract
+        # What the resolved transport promised the platform. Empty when nothing was declared, in
+        # which case the runner is held to nothing.
+        self._call_evidence_requires = tuple(call_evidence_requires)
         # Verified once per world, not per scenario -- calling every declared tool before each of
         # ten scenarios would triple a run's tool traffic to re-establish the same fact.
         self._verified_worlds: set[int] = set()
@@ -1931,7 +2004,13 @@ class HostedScheduler:
             )
 
         try:
-            call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
+            call_outcome = await _run_call(
+                self._call_runner,
+                scenario,
+                runtime,
+                world,
+                self._call_evidence_requires,
+            )
         except WorldUnavailable as exc:
             return _Retry(
                 _failure("world_unavailable", str(exc)),

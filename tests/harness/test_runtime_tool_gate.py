@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+
+import pytest
 from types import SimpleNamespace
 
 from fi.alk.harness.world.probe import verify_runtime_tools
@@ -61,7 +63,10 @@ def test_a_server_error_is_broken():
     world = _Reachable(
         {
             "book_ride": Call(
-                name="book_ride", arguments={}, ok=False, error="500 Internal Server Error"
+                name="book_ride",
+                arguments={},
+                ok=False,
+                error="500 Internal Server Error",
             )
         }
     )
@@ -141,3 +146,90 @@ def test_a_world_is_verified_once_not_per_scenario():
 def test_no_contract_means_no_gate():
     scheduler = _scheduler(None)
     assert asyncio.run(scheduler._verify_world(_NoSeam("book_ride"), 0)) == ""
+
+
+# --- the receipt boundary ----------------------------------------------------------------------
+#
+# A runner the build stage wrote is free in how it works and not in what it returns, because the
+# platform renders a fixed shape. Same treatment as `submit_scenario`: reject, and say how to fix.
+
+
+def _outcome(**over):
+    from fi.alk.harness.hosted_scheduler import CallOutcome
+
+    base = dict(
+        calls=(),
+        turns=6,
+        started_at="2026-08-30T00:00:00.000Z",
+        ended_at="2026-08-30T00:02:00.000Z",
+        duration_ms=120000,
+        transcript_artifact="sha256:abc",
+        recording_artifacts=("sha256:def",),
+    )
+    base.update(over)
+    return CallOutcome(**base)
+
+
+def test_a_complete_voice_outcome_passes():
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    wanted = ("turns", "transcript", "recordings", "timing")
+    assert call_evidence_faults(_outcome(), wanted) == []
+
+
+def test_a_runner_that_promised_nothing_is_held_to_nothing():
+    # An empty requirement set is a caller exercising the scheduler, not a runner shipping a
+    # receipt. Holding it to a contract it never declared would fail every scheduler test.
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    assert call_evidence_faults(_outcome(turns=0, transcript_artifact=None)) == []
+
+
+def test_a_text_agent_is_not_delinquent_for_having_no_audio():
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    wanted = ("turns", "transcript", "timing")
+    assert call_evidence_faults(_outcome(recording_artifacts=()), wanted) == []
+
+
+def test_a_voice_runner_without_recordings_is_rejected():
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    faults = call_evidence_faults(
+        _outcome(recording_artifacts=()),
+        ("turns", "transcript", "recordings", "timing"),
+    )
+    assert len(faults) == 1
+    assert "recording_artifacts" in faults[0]
+    assert "Upload the audio" in faults[0]  # tells the runner how to repair it
+
+
+def test_every_missing_piece_is_reported_at_once_with_repair_instructions():
+    from fi.alk.harness.hosted_scheduler import call_evidence_faults
+
+    faults = call_evidence_faults(
+        _outcome(
+            turns=1,
+            transcript_artifact=None,
+            recording_artifacts=(),
+            duration_ms=0,
+            started_at=None,
+        ),
+        ("turns", "transcript", "recordings", "timing"),
+    )
+    # One round trip, not five: a runner should be able to fix everything and return once.
+    assert len(faults) == 5
+
+
+def test_the_boundary_raises_rather_than_passing_an_unrenderable_outcome():
+    import asyncio
+
+    from fi.alk.harness.hosted_scheduler import CallEvidenceMissing, _run_call
+
+    class Runner:
+        async def run(self, scenario, runtime, *, world=None):
+            return _outcome(transcript_artifact=None)
+
+    with pytest.raises(CallEvidenceMissing) as raised:
+        asyncio.run(_run_call(Runner(), None, None, None, ("transcript",)))
+    assert "Fix these and return the outcome again" in str(raised.value)
