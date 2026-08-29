@@ -54,11 +54,7 @@ def chosen_model(model: str | None = None) -> str:
     With nothing named anywhere, the selected backend's own default runs, so switching
     ``ALK_HARNESS`` never sends one vendor's model name to another vendor's loop.
     """
-    return (
-        model
-        or os.environ.get("ALK_HARNESS_MODEL")
-        or resolve().default_model
-    )
+    return model or os.environ.get("ALK_HARNESS_MODEL") or resolve().default_model
 
 
 def thinking_config() -> dict[str, Any]:
@@ -267,6 +263,9 @@ def load_skill(name: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"no skill at {path}")
     stage = path.read_text(encoding="utf-8")
+    catalogue = sub_skills(name)
+    if catalogue:
+        stage = f"{stage}\n\n{catalogue}"
     if not HARNESS.exists():
         return stage
     return (
@@ -275,3 +274,40 @@ def load_skill(name: str) -> str:
         "# The stage you are in now\n\n"
         f"{stage}"
     )
+
+
+def sub_skills(name: str) -> str:
+    """The per-kind guidance available inside a stage, for the model to choose between.
+
+    A stage skill says how the stage works for any agent. What differs between a LiveKit voice
+    agent, a Vapi assistant reached only by webhook, and a browser agent is method, not stage, so
+    that belongs in a sub-skill the model selects after it has read the contract rather than in a
+    constant chosen before anyone has looked at the repository.
+
+    Every ``*.md`` beside the stage's ``SKILL.md`` is offered. Adding support for a new kind is a
+    file, not a release.
+    """
+    directory = SKILLS_ROOT / name
+    found = sorted(p for p in directory.glob("*.md") if p.name != "SKILL.md")
+    if not found:
+        return ""
+    lines = [
+        "## Ways of working available to you",
+        "",
+        "Read the contract first, then read whichever of these fits the agent in front of you.",
+        "Nothing selects one for you, and using none of them is a legitimate answer for an agent",
+        "none of them describes: they are accumulated experience, not a menu you must pick from.",
+        "",
+    ]
+    for entry in found:
+        first = ""
+        for line in entry.read_text(encoding="utf-8").splitlines():
+            if line.strip() and not line.startswith("#"):
+                first = line.strip()
+                break
+        lines.append(f"- `{entry.name}`: {first or 'no summary line'}")
+    lines.append("")
+    lines.append(
+        f"They are in `{directory}`. Read one with the Read tool before you rely on it."
+    )
+    return "\n".join(lines)
