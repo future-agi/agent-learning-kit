@@ -79,7 +79,12 @@ class WorldKind(Protocol):
 
 
 class SqliteWorld:
-    """A world whose state is rows in tables. Tool APIs, and anything with a data store."""
+    """A world whose state is rows in tables. Tool APIs, and anything with a data store.
+
+    The name says SQLite for history; what this actually describes is the shape of the state, not
+    the engine holding it. Everything here reads ``world.state()``, so Postgres, and any other
+    row store a world is built on, are the same kind of world to look at.
+    """
 
     key = "sqlite"
     label = "a database behind the agent's tools"
@@ -152,6 +157,9 @@ class InProcessWorld:
 
 _REGISTRY: dict[str, Callable[[], WorldKind]] = {
     SqliteWorld.key: SqliteWorld,
+    # A contract naming its store as postgres asked for a kind that did not exist and got the
+    # sqlite fallback silently. Rows are rows: the same inspection serves both.
+    "postgres": SqliteWorld,
     BrowserWorld.key: BrowserWorld,
     InProcessWorld.key: InProcessWorld,
 }

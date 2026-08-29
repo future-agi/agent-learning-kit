@@ -1,0 +1,30 @@
+{
+  "persona": {
+    "persona": {
+      "name": "Caller 0"
+    },
+    "situation": "I need help.",
+    "outcome": "The issue is resolved.",
+    "identity": null,
+    "temperament": null,
+    "behavior_policy": null,
+    "knowledge": [],
+    "attack": null,
+    "provenance": null,
+    "version": null
+  },
+  "simulator_system_prompt": "",
+  "llm": null,
+  "stt": null,
+  "tts": null,
+  "turn_handling": null,
+  "room_name": "sdk-suite-case_845b00e731b35c3c8a9a909f789ffd02-32ca064c8f46",
+  "agent_name": "support-agent",
+  "test_case_id": "case_845b00e731b35c3c8a9a909f789ffd02",
+  "run_id": "run_sip",
+  "conversation_direction": "simulator_first",
+  "allow_interruptions": null,
+  "min_endpointing_delay": null,
+  "max_endpointing_delay": null,
+  "use_tts_aligned_transcript": null
+}
