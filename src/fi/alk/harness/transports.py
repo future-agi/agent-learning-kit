@@ -14,7 +14,9 @@ this replaces.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import importlib.util
 import json
 import sys
 from dataclasses import dataclass
@@ -94,30 +96,112 @@ def declared(bundle_dir: Path | None) -> dict[str, Any]:
     return body if isinstance(body, dict) else {}
 
 
+def _bundle_namespace(bundle_dir: Path | None) -> str:
+    """A module-name prefix unique to one bundle.
+
+    `import_module` caches by module name, so two bundles in one job that both call their runner
+    something conventional -- and they will, because a skill teaches one name -- would resolve to
+    whichever was imported first. Every later world would then run the earlier world's runner,
+    silently, producing plausible receipts that belong to the wrong environment. Namespacing by
+    the bundle's own path is what keeps them apart.
+    """
+    seed = str(bundle_dir.resolve()) if bundle_dir is not None else "no-bundle"
+    return "_alk_runner_" + hashlib.sha256(seed.encode()).hexdigest()[:12]
+
+
+def _module_file(module_name: str, bundle_dir: Path | None) -> Path | None:
+    """Where a dotted module name sits inside the bundle, if it is a file there at all."""
+    if bundle_dir is None:
+        return None
+    parts = module_name.split(".")
+    candidate = bundle_dir.joinpath(*parts).with_suffix(".py")
+    if candidate.is_file():
+        return candidate
+    package = bundle_dir.joinpath(*parts, "__init__.py")
+    return package if package.is_file() else None
+
+
 def _load_written_runner(
     spec: str, bundle_dir: Path | None
 ) -> Callable[[Any, Any], Any]:
     """Import a runner the build stage wrote, named ``module:Attribute``.
 
-    The bundle goes on ``sys.path`` first: a runner written for this environment lives with the
-    environment, not in this package, and requiring it to be installed would mean no new transport
-    could ever arrive without a release.
+    Loaded from its file under a name unique to this bundle rather than by bare module name, so a
+    second world cannot be served the first world's runner out of the module cache.
+
+    Every failure here is a declaration problem and is reported as one. Model-written code is
+    exactly the code most likely to carry a module-level mistake, and a `SyntaxError` reaching the
+    scheduler as an untyped crash tells the operator nothing about what to fix; a
+    `TransportUnresolved` naming the file and the error tells them everything.
     """
     if ":" not in spec:
         raise TransportUnresolved(
             f"runner {spec!r} is not in module:Attribute form, so it cannot be imported"
         )
     module_name, _, attribute = spec.partition(":")
+    if not module_name or not attribute:
+        raise TransportUnresolved(
+            f"runner {spec!r} needs both a module and an attribute, as module:Attribute"
+        )
+
+    importlib.invalidate_caches()
+    unique_name = f"{_bundle_namespace(bundle_dir)}.{module_name}"
+    source = _module_file(module_name, bundle_dir)
+    # The bundle goes on sys.path only while the module executes, so a runner may import its own
+    # siblings, and is taken off again so it cannot shadow the next bundle's imports.
+    added = False
     if bundle_dir is not None and str(bundle_dir) not in sys.path:
         sys.path.insert(0, str(bundle_dir))
+        added = True
     try:
-        module = importlib.import_module(module_name)
-    except ImportError as exc:
+        if source is not None:
+            spec_obj = importlib.util.spec_from_file_location(unique_name, source)
+            if spec_obj is None or spec_obj.loader is None:
+                raise TransportUnresolved(
+                    f"runner {spec!r} names {source}, which python cannot load as a module"
+                )
+            module = importlib.util.module_from_spec(spec_obj)
+            # Registered before execution so a module that refers to itself, or uses dataclasses,
+            # resolves; removed again if it fails, so a broken module is never left cached.
+            sys.modules[unique_name] = module
+            try:
+                spec_obj.loader.exec_module(module)
+            except Exception as exc:
+                sys.modules.pop(unique_name, None)
+                raise TransportUnresolved(
+                    f"runner {spec!r} was found at {source} but failed while loading: "
+                    f"{type(exc).__name__}: {exc}. Fix the module so it imports cleanly on its "
+                    "own, then declare it again."
+                ) from exc
+        else:
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError as exc:
+                raise TransportUnresolved(
+                    f"runner {spec!r} could not be imported from "
+                    f"{bundle_dir or 'sys.path'}: {exc}. The module has to sit in the bundle and "
+                    "import cleanly on its own."
+                ) from exc
+            except Exception as exc:
+                raise TransportUnresolved(
+                    f"runner {spec!r} was found but failed while loading: "
+                    f"{type(exc).__name__}: {exc}. Fix the module so it imports cleanly on its "
+                    "own, then declare it again."
+                ) from exc
+    finally:
+        if added:
+            try:
+                sys.path.remove(str(bundle_dir))
+            except ValueError:
+                pass
+
+    try:
+        found = getattr(module, attribute)
+    except Exception as exc:
+        # A module can raise from __getattr__ as readily as from its body.
         raise TransportUnresolved(
-            f"runner {spec!r} could not be imported from {bundle_dir or 'sys.path'}: {exc}. "
-            "The module has to sit in the bundle and import cleanly on its own."
+            f"reading {attribute!r} from {module_name} failed: {type(exc).__name__}: {exc}"
         ) from exc
-    found = getattr(module, attribute, None)
     if found is None:
         raise TransportUnresolved(
             f"{module_name} has no {attribute!r}; runner must name a class or factory that exists"

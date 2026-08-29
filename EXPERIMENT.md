@@ -340,6 +340,33 @@ remember, because a run of this length outlasts any context window.
 
 ---
 
+## Two defects in the written-runner loader
+
+Both were invisible to the suite and both fired only where the feature earns its keep: a runner a
+model wrote, in a job with more than one world.
+
+**A bad runner crashed instead of failing typed.** `_load_written_runner` caught only
+`ImportError`, so a module that exists and raises while executing -- a `SyntaxError`, a
+module-level exception, a missing dependency re-raised as something else -- propagated raw and the
+scheduler saw an untyped crash. Model-written code is precisely the code most likely to carry a
+module-level mistake, and that is the one path where a typed failure carrying "here is what to fix"
+matters most. Now every failure is a `TransportUnresolved` naming the file, the exception type and
+its text, and a module that fails is removed from the cache rather than left half-loaded.
+
+**The module cache served one world another world's runner.** `import_module` caches by module
+name, and a skill teaches one conventional name, so two bundles in a job both calling their runner
+`runner` or `runners.voice` resolved to whichever imported first. Every later world silently ran
+the earlier world's runner: nothing errors, and the receipts look plausible while belonging to the
+wrong environment. Runners are now loaded by file location under a name namespaced by the bundle's
+path, so the cache cannot alias them, and `sys.path` is restored in a `finally` so one bundle
+cannot shadow the next.
+
+Mutation-tested, and the first attempt was not good enough. Reverting the per-bundle namespace left
+the two-bundle test passing, because file-location loading bypasses `sys.modules` regardless of the
+name -- so that test was not pinning the defect. Forcing the original `import_module` path instead
+reproduced it exactly: `assert 'from-world-0' == 'from-world-1'`. Twelve tests now cover both
+defects plus sibling imports, dotted module names, and `sys.path` restoration on the failure path.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
