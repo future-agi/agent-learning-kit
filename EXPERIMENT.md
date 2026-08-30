@@ -1080,6 +1080,38 @@ Not fatal, because the conversation-judged half is a real pass and refusing woul
 Closing it properly is a design decision between leasing the agent its own engine and giving the
 chat path a tool trace, written up in `_work/plans/2026-08-30-single-harness-loop.md`.
 
+## The runner reference named everything except the one thing its example needs
+
+Not a code defect. `_writing-a-runner.md` is the document whose sufficiency IS the acceptance test
+for "adding an agent type is a skill file, not a code change", and no runner has ever been written
+against it. Audited against the real interfaces: every claim it makes is correct. The signature
+matches, all seven `CallOutcome` fields exist, `CallRunnerContext` is right.
+
+The gap was in what it did not say. It told an author what to return and never how to produce it:
+zero mentions of `upload_artifact`, `evidence_seam`, `http_tool`. Its example returns
+`transcript_artifact="sha256:..."` and an author following it has no way to obtain that digest.
+The mechanism lives in a `call_runner.py` docstring they have no reason to open. So the two likely
+outcomes were to fabricate a digest, or return None and hit `CallEvidenceMissing` after a world
+had been built and a run paid for.
+
+Fixed with the three things it was missing and nothing more: the upload that produces the digests,
+including that it returns None on refusal rather than raising, since that shapes the calling code;
+that `runtime.evidence_seam` decides whether `calls` can be populated at all and that `http_tool`
+captures nothing today, deferred to `call_runner` rather than restated; and the two
+`CallRunnerContext` fields it had left out, one of which was `evidence_seam` itself.
+
+**The interesting part is the guard.** `test_a_skill_only_names_tools_its_stage_actually_has`
+checks that named things exist. It cannot see an omission, and an omission was the defect. So
+there are now two tests in opposite directions: the example's `CallOutcome` keywords are read out
+of the document itself and checked against the real dataclass, so a renamed field is caught rather
+than skipped; and every `CallRunnerContext` field must appear somewhere in the document, which is
+the direction that actually bit.
+
+My first version of the first test was circular in the way I have criticised twice this week: it
+matched field names against a whitelist written in the test, so renaming `duration_ms` to
+`elapsed_ms` in the document simply stopped matching and passed. Mutation testing caught it. The
+keywords are now extracted from the example's own text.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

@@ -22,21 +22,37 @@ A runner is any object with this method. There is no base class to inherit.
 class MyCallRunner:
     def __init__(self, adapter, context):
         # `adapter` is the outbound channel; `context` is a CallRunnerContext carrying job,
-        # bundle_dir, work_directory, secret values and attempt_number.
+        # bundle_dir, work_directory, evidence_seam, target_provider_secret_values,
+        # attempt_number and source_directory.
         self.adapter, self.context = adapter, context
 
     async def run(self, scenario, runtime, *, world=None):
         ...
+        # Digests come from uploading, not from hashing anything yourself. This returns None if
+        # the upload was refused (budget or level), never an exception, so a runner that ignores
+        # the return value reports a transcript the platform does not have.
+        transcript = await self.adapter.upload_artifact(
+            transcript_bytes, kind=ArtifactKind.TRANSCRIPT, scenario_key=scenario.scenario_key
+        )
         return CallOutcome(
-            calls=(),                      # tool calls observed, as evidence
+            calls=(),                      # tool calls observed; see the note below
             turns=len(messages),
             started_at="2026-08-30T12:00:00.000Z",
             ended_at="2026-08-30T12:02:00.000Z",
             duration_ms=120_000,
-            transcript_artifact="sha256:...",
-            recording_artifacts=("sha256:...",),
+            transcript_artifact=transcript,
+            recording_artifacts=(),        # same, one digest per upload
         )
 ```
+
+Everything uploaded must be uploaded **before** you return, because the outcome carries ids the
+platform has already acknowledged rather than files it still has to fetch.
+
+Whether `calls` can be populated at all is not up to your runner. The bundle declares one
+`runtime.evidence_seam`, and on `http_tool` there is no guest-side capture surface in this
+repository, so a correct runner on that seam still reports zero calls. Read the module docstring
+of `call_runner.py`, and `_collect_http_tool_calls`, before you spend an afternoon on an empty
+tuple. Zero captured calls is never to be filled in with something plausible.
 
 `world` is optional and is passed when the signature accepts it. Take it if your tools execute
 against the leased world, so that setup, checks and your calls all see the same state.
