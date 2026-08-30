@@ -613,6 +613,47 @@ are twenty-one and a shell. Corrected, and there is now a guard that reads the `
 and checks every name against the real servers. It is scoped to those tables rather than every
 backticked word because the same document tabulates contract fields, which are not tools.
 
+## The evidence gate was inert for the only thing it was built to police
+
+`call_evidence_faults` exists because the build stage can write its own runner, so nothing
+guarantees a new one emits what the platform renders. A written runner was exactly what escaped
+it.
+
+`resolve()` returned a freshly constructed `Transport` for any declaration carrying a `runner`
+and never passed `requires`, so it defaulted to `()`. The declared transport name was used only
+as the key; the registry was never consulted for its default. Reproduced end to end:
+
+    builtin livekit requires        : ('turns', 'transcript', 'recordings', 'timing')
+    written runner, requires omitted: ()   key = livekit
+    faults on a 6-turn call with no transcript, no audio, no timing: []
+
+An author following the skill, which said "omit it and the built-in default for a named transport
+applies", shipped a runner that could return a silent voice call and the gate reported nothing.
+That is the empty-conversation-view failure the docstring describes, restored by omission.
+
+Fixed by inheriting the registered transport's `requires` when a written runner names one. Two
+adjacent conflations came out of the same read:
+
+- `"requires": []` was treated as unset and inherited the default, so an author who said this
+  runner owes nothing was overridden by a guess. An empty list is now a declaration; only an
+  absent key inherits. That is the same defect as the main one, pointing the other way.
+- A written runner for a transport ALK has never seen has nothing to inherit, and `()` there is
+  truthful. It now says so rather than reporting a clean gate.
+
+**I got the `TransportUnresolved` path wrong first, and the tests caught it.** The review called
+it probably unreachable because the runner is built from the same Evidence first; I agreed and
+made it raise. That broke 29 tests. The reason is worth keeping: building the runner is what
+resolves the transport, so any caller injecting its own `build_call_runner` never resolves at
+all, and injection is the normal path for an embedder and for most of the entrypoint's own tests.
+The path is not unreachable, it is routine. It now returns `()` with a warning, because with no
+declaration there is genuinely nothing to hold anyone to, and the only thing wrong with the
+original was that it was silent.
+
+Four mutations, all caught: delete the inheritance, treat `[]` as unset, silence either warning.
+
+The pattern holds for the sixth time. Every one of these is a gate that fails open, and in this
+case the gate was written specifically to catch this class and had been disabled for it.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

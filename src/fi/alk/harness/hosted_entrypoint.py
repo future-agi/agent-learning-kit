@@ -580,11 +580,22 @@ def _transport_requires(*, context: CallRunnerContext) -> tuple[str, ...]:
                 bundle_dir=context.bundle_dir,
             )
         )
-    except transports.TransportUnresolved:
+    except transports.TransportUnresolved as unresolved:
+        # Reached when the caller supplied its own call runner, since building one is what would
+        # otherwise have resolved this first. There is then no declaration to hold anyone to and
+        # an empty tuple is the only truthful answer, but it is indistinguishable from a runner
+        # that genuinely owes nothing, so it is said out loud rather than returned quietly.
+        logger.warning(
+            "no transport resolved for this run (%s), so nothing a call returns will be checked. "
+            "Declare transport.json in the bundle to have its evidence held to a contract.",
+            unresolved,
+        )
         return ()
     declaration = transports.declared(context.bundle_dir)
     stated = declaration.get("requires")
-    if isinstance(stated, list) and stated:
+    # An empty list is a declaration, not an absence: an author who writes `"requires": []` has
+    # said this runner owes nothing and is held to exactly that. Only an absent key inherits.
+    if isinstance(stated, list):
         return tuple(str(item) for item in stated)
     return transport.requires
 

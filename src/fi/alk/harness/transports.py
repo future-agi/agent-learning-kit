@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import logging
 import importlib.util
 import json
 import sys
@@ -65,6 +66,8 @@ class Transport:
     # text conversation without audio is simply a text conversation.
     requires: tuple[str, ...] = ()
 
+
+logger = logging.getLogger(__name__)
 
 _REGISTRY: dict[str, Transport] = {}
 
@@ -221,10 +224,28 @@ def resolve(evidence: Evidence) -> Transport:
     written = str(declaration.get("runner") or "").strip()
     if written:
         factory = _load_written_runner(written, evidence.bundle_dir)
+        key = str(declaration.get("transport") or "declared")
+        # A written runner for a transport we already implement still owes what that transport
+        # owes. Writing your own LiveKit runner does not make a voice call without audio complete;
+        # it is the same call, reached the same way, rendered by the same platform. Dropping the
+        # default here is what made the evidence gate inert for the only thing it was built to
+        # police, since a runner is exactly what nothing else guarantees the shape of.
+        known = _REGISTRY.get(key)
+        if known is None and not isinstance(declaration.get("requires"), list):
+            # Nothing to inherit and nothing declared. The run continues, because refusing would
+            # block every genuinely new transport, but "no evidence is owed" and "we could not
+            # work out what is owed" are different states and only one of them is true here.
+            logger.warning(
+                "transport %r is written for this environment and declares no 'requires', and no "
+                "built-in default exists for that name, so nothing its runner returns will be "
+                "checked. Declare requires in transport.json to be held to it.",
+                key,
+            )
         return Transport(
-            key=str(declaration.get("transport") or "declared"),
+            key=key,
             build=factory,
             summary=f"written for this environment ({written})",
+            requires=known.requires if known is not None else (),
         )
 
     named = str(declaration.get("transport") or "").strip().lower()

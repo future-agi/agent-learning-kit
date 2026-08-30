@@ -160,3 +160,139 @@ def test_a_malformed_spec_says_what_shape_is_wanted(tmp_path):
         with pytest.raises(transports.TransportUnresolved) as raised:
             transports._load_written_runner(bad, tmp_path)
         assert "module:Attribute" in str(raised.value)
+
+
+# --- defect 3: a written runner inherited no evidence contract at all --------------------------
+
+
+def _declared(tmp_path: Path, declaration: dict) -> Path:
+    import json
+
+    root = _bundle(tmp_path, "declared", GOOD.replace("{tag}", "x"))
+    (root / "transport.json").write_text(json.dumps(declaration), encoding="utf-8")
+    return root
+
+
+def _resolve(root: Path):
+    from fi.alk.harness.hosted_entrypoint import _register_builtin_transports
+
+    _register_builtin_transports()
+    return transports.resolve(
+        transports.Evidence(connector="livekit", modality="voice", bundle_dir=root)
+    )
+
+
+def test_a_written_runner_for_a_known_transport_owes_what_that_transport_owes(tmp_path):
+    """The evidence gate exists because the build stage can write its own runner, so a written
+    runner is the only thing it was built to police. Declaring a transport ALK implements and
+    omitting `requires` is what the skill tells authors to do, and it left the gate holding an
+    empty tuple: a six-turn voice call with no transcript and no audio passed clean."""
+    from fi.alk.harness.hosted_scheduler import CallOutcome, call_evidence_faults
+
+    inherited = _resolve(_declared(tmp_path, {"transport": "livekit", "runner": "runner:R"})).requires
+    assert inherited == transports._REGISTRY["livekit"].requires
+    assert "transcript" in inherited and "recordings" in inherited
+
+    silent_voice_call = CallOutcome(
+        calls=[],
+        turns=6,
+        started_at=None,
+        ended_at=None,
+        duration_ms=0,
+        transcript_artifact=None,
+        recording_artifacts=[],
+    )
+    faults = call_evidence_faults(silent_voice_call, inherited)
+    assert faults, "a voice call with no transcript and no audio must not pass"
+    assert any("transcript" in fault for fault in faults)
+    assert any("recording" in fault for fault in faults)
+
+
+def test_writing_your_own_runner_does_not_change_what_the_transport_owes(tmp_path):
+    """Same transport, same platform, same rendering. Who wrote the runner is not a reason for a
+    voice call to owe less evidence than one the built-in runner produced."""
+    written = _resolve(_declared(tmp_path, {"transport": "livekit", "runner": "runner:R"}))
+    builtin = _resolve(_declared(tmp_path, {"transport": "livekit"}))
+    assert written.requires == builtin.requires
+    assert written.key == builtin.key == "livekit"
+
+
+def test_a_declared_requires_still_wins_over_the_inherited_default(tmp_path):
+    """"Declare it and you are held to exactly that" has to keep meaning that, or inheritance
+    would quietly become a floor nobody can go under."""
+    from fi.alk.harness.hosted_entrypoint import _transport_requires
+
+    root = _declared(
+        tmp_path, {"transport": "livekit", "runner": "runner:R", "requires": ["turns"]}
+    )
+    assert _transport_requires(context=_context(root)) == ("turns",)
+
+
+def test_an_explicitly_empty_requires_is_a_promise_not_an_absence(tmp_path):
+    """`"requires": []` is an author saying this runner owes nothing. Treating it as "unset" and
+    inheriting the default would override a stated intention with a guess, which is the same
+    conflation as the defect itself, pointing the other way."""
+    from fi.alk.harness.hosted_entrypoint import _transport_requires
+
+    root = _declared(
+        tmp_path, {"transport": "livekit", "runner": "runner:R", "requires": []}
+    )
+    assert _transport_requires(context=_context(root)) == ()
+
+
+def test_a_novel_transport_still_resolves_but_says_nothing_will_be_checked(tmp_path, caplog):
+    """A transport ALK has never heard of must keep working: that genericity is the point. But
+    there is nothing to inherit, so the run says so rather than reporting a clean gate."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger=transports.__name__):
+        resolved = _resolve(
+            _declared(tmp_path, {"transport": "whatsapp_business", "runner": "runner:R"})
+        )
+    assert resolved.key == "whatsapp_business"
+    assert resolved.requires == ()
+    assert "nothing its runner returns will be checked" in caplog.text
+    assert "whatsapp_business" in caplog.text
+
+
+def test_a_novel_transport_that_declares_requires_is_not_warned_about(tmp_path, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger=transports.__name__):
+        _resolve(
+            _declared(
+                tmp_path,
+                {
+                    "transport": "whatsapp_business",
+                    "runner": "runner:R",
+                    "requires": ["turns", "transcript"],
+                },
+            )
+        )
+    assert caplog.text == ""
+
+
+def _context(bundle_dir: Path):
+    """The narrow slice of CallRunnerContext that _transport_requires actually reads."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        job=SimpleNamespace(agent=SimpleNamespace(connector="livekit")),
+        bundle_dir=bundle_dir,
+    )
+
+
+def test_an_unresolvable_transport_says_nothing_will_be_checked(tmp_path, caplog):
+    """Reached whenever the caller injects its own call runner, which is the normal path for an
+    embedder and for most of the entrypoint's own tests: building a runner is what would
+    otherwise have resolved this first, and nothing enforces that ordering. An empty tuple is
+    then the only truthful answer, since there is no declaration to hold anyone to, but it is
+    indistinguishable from a runner that genuinely owes nothing. So it is announced."""
+    import logging
+
+    from fi.alk.harness import hosted_entrypoint as he
+
+    root = _declared(tmp_path, {"transport": "nothing_implements_this"})
+    with caplog.at_level(logging.WARNING, logger=he.__name__):
+        assert he._transport_requires(context=_context(root)) == ()
+    assert "nothing a call returns will be checked" in caplog.text

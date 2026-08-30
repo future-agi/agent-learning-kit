@@ -56,8 +56,12 @@ without any branch in ALK knowing your transport exists.
 
 - `runner` is `module:Attribute`, imported with the bundle on `sys.path`. The module must sit in
   the bundle and import cleanly on its own.
-- `requires` is what you promise the platform. Omit it and the built-in default for a named
-  transport applies; declare it and you are held to exactly that.
+- `requires` is what you promise the platform. Declare it and you are held to exactly that,
+  including `[]`, which says this runner owes nothing. Omit it and you inherit the default for
+  the transport you named, so a runner you write for a transport ALK already implements owes
+  what that transport owes: writing your own does not make a voice call without audio complete.
+  A transport ALK has never seen has no default to inherit, so omitting it there means nothing
+  your runner returns is checked. Declare it whenever you are naming a new transport.
 - Naming only `transport` with no `runner` selects a transport ALK already implements.
 
 An agent whose transport resolves to nothing fails **before any world is leased**, with a message
