@@ -943,6 +943,48 @@ And the skill now requires what the bundler consumes. It asked for the *install*
 language and the ingress, but never the *start* command; the model recorded one anyway on this
 run, so nothing guaranteed it. Five mutations caught, including reverting to the glob.
 
+## A composite primary key became two primary keys
+
+From job `decb5bae`, the run after the entrypoint fix. That fix held: the job got through bundle
+authoring, validating_environment and into building_environment, and the failure came back as
+`seed_failed` / `environment` / `building_environment` rather than `guest_crashed` /
+`infrastructure`, so the reporting fix held too and no attempt was wasted retrying it.
+
+`PRAGMA table_info`'s `pk` column is not a flag. It is the column's **1-based position** in the
+key, so a two-column key reports `pk=1` and `pk=2`, both truthy, and
+
+    suffix = " PRIMARY KEY" if int(row[5] or 0) else ""
+
+emitted one column-level PRIMARY KEY per key column. Postgres refuses the table. Single-column
+keys were unaffected, which is why the first agent tested never surfaced it: it had no composite
+key anywhere, and only a second agent shape would ever reach this.
+
+Now one table-level constraint, ordered by that position because a key is ordered, emitted the
+same way for a single-column key as for a composite one. Verified against a real Postgres 16, not
+only asserted: the generated SQL runs clean, and restoring the per-column form reproduces
+`ERROR: multiple primary keys for table "alk_chk_shares" are not allowed` exactly.
+
+**The two things flagged as questions were both real**, and checking rather than taking them on
+trust is what showed they were the same defect wearing different clothes. The same loop read
+`row[2]` for the type and ignored `row[3]` and `row[4]`:
+
+    owner TEXT NOT NULL                -> "owner" text
+    title TEXT DEFAULT 'untitled'      -> "title" text
+    can_edit INTEGER NOT NULL DEFAULT 0 -> "can_edit" bigint
+
+So the seeded world accepted rows the agent's own schema rejects, and filled in different values
+where the real one has defaults. A scenario then grades behaviour the agent could not produce,
+which is the thing this translation exists to prevent. Both now survive. Defaults are kept when
+they are literals Postgres reads the same way and dropped **with a warning** otherwise, because a
+SQLite expression has no Postgres meaning and guessing at one would put values in the world that
+the real schema never produces.
+
+Two existing tests pinned the whole `CREATE TABLE` string while actually testing type promotion.
+Their expectations about types were right and are unchanged; the key form in them was the defect,
+and is updated.
+
+Five mutations caught, including the per-column revert and losing the key's declared order.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

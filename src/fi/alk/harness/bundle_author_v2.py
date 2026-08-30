@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import shlex
 import re
 import shutil
@@ -215,6 +216,36 @@ def _sqlite_value(value: Any, sql_type: str) -> Any:
     return value
 
 
+logger = logging.getLogger(__name__)
+
+
+# Defaults SQLite stores as text that Postgres reads the same way. Anything else is a SQLite
+# expression whose meaning does not carry, and guessing at a translation would put a value in the
+# world that the real schema never produces.
+_PORTABLE_DEFAULTS = {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "NULL", "TRUE", "FALSE"}
+
+
+def _postgres_default(raw: Any, *, table: str, column: str) -> str | None:
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return None
+    if text.upper() in _PORTABLE_DEFAULTS:
+        return text.upper()
+    if re.fullmatch(r"-?\d+(\.\d+)?", text) or re.fullmatch(r"'[^']*'", text):
+        return text
+    # Dropped rather than mistranslated, and said out loud: a column that silently loses its
+    # default gives the agent a world that fills in something different from the one it runs
+    # against, which is the same class of wrong as losing the constraint entirely.
+    logger.warning(
+        "%s.%s has default %r, which does not translate to Postgres; the column is being "
+        "created without it",
+        table,
+        column,
+        text,
+    )
+    return None
+
+
 def _sqlite_sql(path: Path) -> str:
     statements: list[str] = []
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -235,16 +266,39 @@ def _sqlite_sql(path: Path) -> str:
             definitions: list[str] = []
             columns: list[str] = []
             column_types: list[str] = []
+            # PRAGMA table_info's `pk` is the column's 1-based POSITION in the key, not a flag.
+            # Read as a boolean it makes every column of a composite key its own PRIMARY KEY, and
+            # Postgres rejects the table outright ("multiple primary keys ... are not allowed").
+            # The position matters as well as the membership: a key is ordered.
+            key: list[tuple[int, str]] = []
             for row in info:
                 name = str(row[1])
                 sql_type = _sqlite_json_type(
                     [record[name] for record in selected],
                     _sqlite_type(str(row[2] or "")),
                 )
-                suffix = " PRIMARY KEY" if int(row[5] or 0) else ""
-                definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
+                column = [f"{_identifier(name)} {sql_type}"]
+                # NOT NULL and DEFAULT are part of what the agent's own code runs against. A world
+                # that accepts a row the real schema rejects grades behaviour the agent could not
+                # actually produce, which is the thing this whole translation exists to avoid.
+                if int(row[3] or 0):
+                    column.append("NOT NULL")
+                default = _postgres_default(row[4], table=table, column=name)
+                if default is not None:
+                    column.append(f"DEFAULT {default}")
+                definitions.append(" ".join(column))
+                if int(row[5] or 0):
+                    key.append((int(row[5]), name))
                 columns.append(name)
                 column_types.append(sql_type)
+            if key:
+                # One table-level constraint, for a single-column key as well as a composite one:
+                # valid Postgres either way, and one form is one thing to get right.
+                definitions.append(
+                    "PRIMARY KEY ("
+                    + ", ".join(_identifier(name) for _, name in sorted(key))
+                    + ")"
+                )
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
             )

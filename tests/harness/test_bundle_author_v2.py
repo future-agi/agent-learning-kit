@@ -263,8 +263,9 @@ def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(
     seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
     assert (
         'CREATE TABLE IF NOT EXISTS "payment_methods" '
-        '("id" text PRIMARY KEY, "is_valid" boolean, "is_expired" boolean, '
-        '"attempts" bigint, "score" double precision);' in seed_sql
+        '("id" text, "is_valid" boolean, "is_expired" boolean, '
+        '"attempts" bigint, "score" double precision, '
+        'PRIMARY KEY ("id"));' in seed_sql
     )
     assert (
         'INSERT INTO "payment_methods" '
@@ -305,7 +306,8 @@ def test_bundle_promotes_sqlite_json_text_to_postgres_jsonb(tmp_path: Path) -> N
     seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
     assert (
         'CREATE TABLE IF NOT EXISTS "users" '
-        '("id" text PRIMARY KEY, "accessibility_needs" jsonb, "note" text);' in seed_sql
+        '("id" text, "accessibility_needs" jsonb, "note" text, '
+        'PRIMARY KEY ("id"));' in seed_sql
     )
     assert "'[\"wheelchair\"]'" in seed_sql
     assert "'[]'" in seed_sql
