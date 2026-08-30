@@ -120,6 +120,17 @@ Being honest about this, because none of it has run in anger:
 
 - **No hosted Daytona job has been run on this branch.** Everything below is unverified in a real
   run, and the shell in particular has never been exercised by a model.
+
+  Worth stating the reason precisely, because a wrong one circulated for a while and cost real
+  time. A hosted run builds its sandbox from *this checkout*: the gateway takes the
+  `Image.from_dockerfile` branch whenever `ALK_DAYTONA_DOCKERFILE` is set, which it is, and
+  `/opt/alk-source` is bind-mounted from this repository. `ALK_DAYTONA_SNAPSHOT` is named in the
+  environment but never read on that path, so nothing about snapshot publication gates a run and
+  it never needed anyone's intervention. What the last attempt actually failed on was the egress
+  proxy Daytona injects into the sandbox refusing the authoring call to Vertex
+  (`ClientHttpProxyError: 502`, `172.20.0.1:18080`). Whether that is still live is unknown: it has
+  not been retried since roughly 2026-08-29, and nothing here should be read as saying it is
+  fixed.
 - **`verify_runtime_tools` is written and imports, but is not wired into the hosted pipeline.**
   The scheduler does not carry the contract, and `HostedWorld` exposes only the database surface:
   it has neither an agent-tool endpoint map nor a worker invocation/evidence bridge. Calling it
