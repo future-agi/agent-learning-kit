@@ -1045,6 +1045,41 @@ and derivable from nothing. Then the documentation was restored to the wording i
 have had, and the guard proved it still catches what it is for: renaming `save_world` to
 `freeze_world` fires, and re-adding `write_env_file`/`run_env_command` fires.
 
+## The graded pass, and what the failing half was actually measuring
+
+Job `eaebaff7` is the generate path working end to end on an agent nobody had pointed the harness
+at: contract, invented world, generated scenarios, real conversation, grading, receipts, and a
+scenario that PASSED 2/2. That is what the path existed to prove.
+
+The other scenario failed 0/2, and the question asked was whether the hosted generate path sets
+`data_store.configured_by` in the agent's environment. Traced from the run's own bundle manifest
+rather than reasoned about: **no**, and the gap is wider than that field.
+
+    processes    : world-db (postgres:16), agent
+    capabilities : TARGET_HTTP_URL, WORLD_DATABASE_URL
+    agent process: "environment": {}
+
+`configured_by` is consumed only on the adopt/compose path. The agent got no environment at all,
+so it read its own default `/tmp/notes.db`, empty. Two further things have to line up and neither
+does: the chat runner collects tool calls only when the agent hands them back for the harness to
+execute, and the contract says `include_tools: false`, so it delegates nothing; and
+`HARNESS_TOOL_TRACE` is set only on the compose and livekit branches, so there is no trace either.
+
+That predicts the split exactly. `refuse-past-reminder` passed because both sub-goals are judged
+from the conversation. `delete-note-after-confirmation` failed because both ask what a tool did,
+and on this agent shape **no tool-based sub-goal can pass however correct the agent is**. The
+local reproduction showing the agent deleting properly is consistent with that rather than in
+tension with it.
+
+The harness was therefore reporting a confident wrong verdict: "no successful delete_note call was
+made" reads as an agent fault when it means "nothing here could have seen one". Same shape as the
+runtime-tool gate saying ok when it had proven nothing, one level up and pointed at the customer.
+
+Shipped: the configuration says so at bundle time instead of being discovered from the verdict.
+Not fatal, because the conversation-judged half is a real pass and refusing would throw it away.
+Closing it properly is a design decision between leasing the agent its own engine and giving the
+chat path a tool trace, written up in `_work/plans/2026-08-30-single-harness-loop.md`.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

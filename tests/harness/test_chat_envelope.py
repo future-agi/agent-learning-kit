@@ -114,3 +114,60 @@ def test_the_documented_envelopes_match_what_is_actually_sent():
     )
     for field in ("thread_id", "new_message", "metadata"):
         assert field in said, f"the refusal no longer names {field}"
+
+
+# --- when nothing the agent's tools do can be observed ------------------------------------------
+
+
+def _self_contained(**overrides):
+    body = {
+        "agent": "notes",
+        "runtime": {
+            "interface": {"kind": "http", "protocol": "fi.alk", "include_tools": False}
+        },
+        "tool_entrypoints": [{"tool": "delete_note", "mode": "import"}],
+        "data_store": {"kind": "sqlite", "configured_by": "NOTES_DB"},
+    }
+    body.update(overrides)
+    return body
+
+
+def test_an_agent_the_harness_cannot_observe_says_so_before_the_run():
+    """A chat agent is graded on tool calls only when it hands them back for the harness to run
+    against the leased world. One that runs its own tools against its own store delegates nothing,
+    so the world records no calls and its state never moves, and every tool sub-goal fails however
+    correctly the agent behaves. The conversation-only sub-goals still pass, which is what makes it
+    read as a partial success with the agent at fault."""
+    from fi.alk.harness.bundle_author_v2 import _warn_if_tool_calls_are_unobservable
+
+    said = _warn_if_tool_calls_are_unobservable(_self_contained())
+    assert said
+    assert "include_tools=false" in said
+    assert "Only sub-goals judged from the conversation can pass" in said
+    # It names the store setting the contract found, since that is the other half of the gap.
+    assert "'NOTES_DB'" in said and "nothing on this path sets it" in said
+
+
+def test_an_agent_that_delegates_its_tools_is_not_warned_about():
+    """include_tools=true is the shape the chat runner is built for: the agent returns tool_calls
+    and the harness executes them against the world."""
+    from fi.alk.harness.bundle_author_v2 import _warn_if_tool_calls_are_unobservable
+
+    body = _self_contained()
+    body["runtime"]["interface"]["include_tools"] = True
+    assert _warn_if_tool_calls_are_unobservable(body) == ""
+
+
+def test_an_agent_with_no_tool_implementations_is_not_warned_about():
+    """Nothing to delegate and nothing to observe: no gap to report."""
+    from fi.alk.harness.bundle_author_v2 import _warn_if_tool_calls_are_unobservable
+
+    assert _warn_if_tool_calls_are_unobservable(_self_contained(tool_entrypoints=[])) == ""
+
+
+def test_the_warning_stands_without_a_declared_store():
+    """The observability half is true whether or not the contract found a store setting."""
+    from fi.alk.harness.bundle_author_v2 import _warn_if_tool_calls_are_unobservable
+
+    said = _warn_if_tool_calls_are_unobservable(_self_contained(data_store={}))
+    assert said and "NOTES_DB" not in said

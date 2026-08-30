@@ -1018,6 +1018,49 @@ def _files(root: Path) -> list[BundleFileV2]:
     return records
 
 
+def _warn_if_tool_calls_are_unobservable(contract_body: dict[str, Any]) -> str:
+    """Say so when nothing this run does can be graded on what the agent's tools did.
+
+    A chat agent is graded on tool calls only when it hands them back for the harness to execute
+    against the leased world. An agent that runs its own tools against its own store delegates
+    nothing, so the world records no calls and its state never moves, and a sub-goal asking
+    "was delete_note called" fails for every scenario however correctly the agent behaved. The
+    conversation-only sub-goals still pass, which is what makes this so easy to misread: the run
+    looks like a partial success and reports the agent as at fault.
+
+    Not fatal, because the conversation-only half is real and worth having, and refusing would
+    throw it away. Returned as well as logged so a caller can put it somewhere durable.
+    """
+    runtime = contract_body.get("runtime")
+    interface = runtime.get("interface") if isinstance(runtime, dict) else None
+    if not isinstance(interface, dict) or interface.get("include_tools", True):
+        return ""
+    entrypoints = contract_body.get("tool_entrypoints") or []
+    owns_its_tools = any(
+        isinstance(entry, dict) and entry.get("mode") in {"import", "construct", "service"}
+        for entry in entrypoints
+    )
+    if not owns_its_tools:
+        return ""
+    store = contract_body.get("data_store")
+    configured_by = str((store or {}).get("configured_by") or "").strip()
+    message = (
+        "this agent runs its own tools against its own store and the contract sets "
+        "include_tools=false, so it hands no tool call back for the harness to execute. The "
+        "leased world will record no calls and its state will not move, and any sub-goal that "
+        "asks what a tool did will fail for every scenario however the agent behaves. Only "
+        "sub-goals judged from the conversation can pass."
+    )
+    if configured_by:
+        message += (
+            f" The contract names {configured_by!r} as what configures its store; nothing on "
+            "this path sets it, so the agent reads its own empty database rather than the world "
+            "that was just seeded."
+        )
+    logger.warning("%s", message)
+    return message
+
+
 def author_bundle_v2(
     *,
     source: str | Path,
@@ -1044,6 +1087,7 @@ def author_bundle_v2(
         runtime_body = contract_body.get("runtime")
         if isinstance(runtime_body, dict):
             contract_runtime = runtime_body
+        _warn_if_tool_calls_are_unobservable(contract_body)
     plan = resolve_environment_plan(
         source_root,
         job,
