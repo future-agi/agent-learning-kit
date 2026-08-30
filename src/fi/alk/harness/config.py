@@ -124,7 +124,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     return env
 
 
-def working_session(
+def read_only_session(
     *,
     system_prompt: str,
     cwd: str | Path,
@@ -133,28 +133,24 @@ def working_session(
     max_turns: int = 40,
     model: str | None = None,
 ) -> SessionSpec:
-    """A session that can read, write and run things.
+    """A session that reads its subject and reports on it, and cannot change it.
 
-    A stage that has to work out what an unfamiliar agent is, build the infrastructure it talks
-    to, and prove that infrastructure answers, is doing engineering, and engineering needs a shell
-    and an editor. Withholding them did not make the work safer, it made the stage unable to
-    finish it and left the finishing to a person reading logs. What bounds it is this grant,
-    enforced on every call, and not the sandbox: the sandbox is only there in the hosted lane.
+    This is the stage that runs with cwd on the customer's own source, and reading an agent is
+    characterisation rather than engineering: everything it establishes leaves through
+    submit_contract, and nothing it needs requires editing the thing it is describing. Handed an
+    editor and a shell it could tidy an import or run a formatter while reading, and the contract
+    would then describe an agent nobody shipped. Every later stage is built from that contract,
+    and nothing anywhere would record that the subject had been touched. It is the one stage
+    where mutating its input silently invalidates all of the work that follows.
+
+    A source that genuinely needs more says so through ``extra_builtins``, per source and visible
+    at the call, rather than every agent we ever read being handed a shell.
     """
     return SessionSpec(
         system_prompt=system_prompt,
         servers=dict(servers or {}),
         builtins=tuple(
-            dict.fromkeys(
-                [
-                    *_READ_ONLY_TOOLS,
-                    "Write",
-                    "Edit",
-                    "Bash",
-                    "AskUserQuestion",
-                    *extra_builtins,
-                ]
-            )
+            dict.fromkeys([*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_builtins])
         ),
         cwd=str(cwd),
         max_turns=max_turns,

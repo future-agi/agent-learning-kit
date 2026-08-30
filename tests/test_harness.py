@@ -4236,14 +4236,9 @@ def _stage_sessions():
     import ast
     import importlib
 
-    from fi.alk.harness.config import SKILLS_ROOT, working_session
+    from fi.alk.harness.config import SKILLS_ROOT
 
     root = SKILLS_ROOT.parent
-    # What working_session hands out, taken from the function rather than restated.
-    baseline = set(
-        working_session(system_prompt="", cwd=".", max_turns=1).builtins
-    )
-
     found = []
     for path in sorted(root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -4251,10 +4246,13 @@ def _stage_sessions():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            func = node.func
-            name = getattr(func, "id", None) or getattr(func, "attr", None)
-            if name not in {"SessionSpec", "working_session"}:
+            keywords = {kw.arg: kw.value for kw in node.keywords}
+            # Anything that builds a session, recognised by the argument every one of them takes
+            # rather than by a list of names. A named list is how the last drift arrived: the
+            # helper was renamed and rewritten in one commit, and nothing was watching the name.
+            if "system_prompt" not in keywords:
                 continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
             # Which skill, if any, this session is built around.
             skills = {
                 inner.args[0].id
@@ -4273,13 +4271,20 @@ def _stage_sessions():
                 .replace("/", ".")
             )
             module = module or importlib.import_module(dotted)
-            keywords = {kw.arg: kw.value for kw in node.keywords}
-            if name == "working_session":
-                granted = set(baseline)
-                extra = keywords.get("extra_builtins")
-                granted |= _literal_strings(extra, module)
+            if "builtins" in keywords:
+                granted = _literal_strings(keywords["builtins"], module)
             else:
-                granted = _literal_strings(keywords.get("builtins"), module)
+                # A helper builds the spec. Call it and read what it hands out, rather than
+                # restating it here where it would go stale the next time one is rewritten.
+                from fi.alk.harness import config as harness_config
+
+                helper = getattr(harness_config, name or "", None)
+                assert callable(helper), (
+                    f"{path.name}:{node.lineno} builds a session without naming builtins and "
+                    f"{name!r} is not a config helper this can resolve"
+                )
+                granted = set(helper(system_prompt="", cwd=".", max_turns=1).builtins)
+                granted |= _literal_strings(keywords.get("extra_builtins"), module)
             for skill in skills:
                 found.append(
                     (f"{path.name}:{node.lineno}", getattr(module, skill), granted)
@@ -4326,6 +4331,30 @@ def test_a_stage_offered_reference_files_can_open_them():
             f"{where} injects the {skill!r} skill, whose catalogue tells the model to read a "
             f"reference file, but grants {sorted(granted)}"
         )
+
+
+def test_the_stage_that_reads_an_agent_cannot_change_it():
+    """understand runs with cwd on the customer's own source, and it is the only stage whose input
+    is the thing every later stage is built from. Given an editor or a shell it could tidy an
+    import or run a formatter while characterising the agent, and the contract would then describe
+    something nobody shipped, with nothing anywhere recording that the subject was touched.
+
+    This arrived as drift rather than a decision: the read-only helper was renamed and widened in
+    one commit to give the build stage a shell, except build constructs its own session, so the
+    only stage that actually received the shell was this one. Asserted on the grant rather than on
+    which helper is called, so swapping the helper again cannot reintroduce it quietly."""
+    can_change_things = {"Write", "Edit", "NotebookEdit", "Bash"}
+
+    checked = 0
+    for where, skill, granted in _stage_sessions():
+        if skill != "understand-agent":
+            continue
+        checked += 1
+        assert not (granted & can_change_things), (
+            f"{where} reads an agent's source and was granted "
+            f"{sorted(granted & can_change_things)}"
+        )
+    assert checked, "found no understand-agent session, so this guard proves nothing"
 
 
 def test_a_stage_is_granted_every_tool_its_own_words_name():

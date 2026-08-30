@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import artifact_dir, load_skill, working_session
+from .config import artifact_dir, load_skill, read_only_session
 from .contract import AgentContract
 from .session import Stage
 from .sources import AgentSource
@@ -31,7 +31,7 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live understand-the-agent stage, and where it will write."""
     destination = out or artifact_dir(source.name)
-    spec = working_session(
+    spec = read_only_session(
         system_prompt=f"{load_skill(SKILL)}\n\n## This agent\n\n{source.briefing()}",
         cwd=source.workdir(),
         servers={**source.servers(), CONTRACT_SERVER: contract_tools(destination)},

@@ -790,6 +790,43 @@ read as "ok", and catching the exception one layer up reintroduces that at the s
 an unverifiable world should fault its scenario is a policy decision about run resilience rather
 than a defect, so it is the coordinator's call, the same as the CUA precedence question.
 
+## The stage that reads the customer's agent had been given a shell
+
+Not deliberate, and the history says so plainly. `e53b800` renamed `read_only_session` to
+`working_session` and widened it in the same commit. The diff to `understand.py` is nothing but
+the rename:
+
+    -from .config import artifact_dir, load_skill, read_only_session
+    +from .config import artifact_dir, load_skill, working_session
+
+The shell was meant for the build stage. Build constructs its own `SessionSpec` and never calls
+the helper, so the only stage that actually received `Write`, `Edit` and `Bash` was the one stage
+that must not have them. The docstring I wrote to justify the grant describes a stage that builds
+infrastructure and proves it answers, and that caller does not exist.
+
+`understand` runs with cwd on the customer's own source, and its skill never asks for any of it:
+160 lines, one `submit_contract` at the end, and the single mention of running a command is
+reading an install command out of a lockfile to record it. With an editor there it could tidy an
+import or run a formatter while characterising the agent, and the contract would then describe
+something nobody shipped. Every later stage is built from that contract and nothing anywhere
+records that the subject was touched. It is the one stage where mutating its input silently
+invalidates all the work that follows.
+
+Reverted: the helper is `read_only_session` again, narrowed to the read-only three plus the
+question, and the docstring now describes the stage that actually calls it. A source needing more
+still says so through `extra_builtins`, per source and visible at the call. Nothing was using that
+for anything mutating, so nothing broke.
+
+This is my own argument from the pass before, one file over. I wrote that the grant is the
+boundary and not the sandbox, which means a grant wider than the stage's own skill is the entire
+exposure, and I had left the widest one on the stage whose input everything else depends on.
+
+The guard is on the grant rather than on which helper is called, because a name is what failed
+here. The sweep now recognises a session by the `system_prompt` argument every builder takes
+instead of by a list of names, so the same drift cannot arrive again behind a rename. Three
+mutations, all caught: widen the helper, grant `Bash` inline at the call, and swap `understand`
+onto a brand new wide helper added by somebody else.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
