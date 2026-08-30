@@ -94,3 +94,44 @@ def test_check_ready_reports_bare_false_as_broken() -> None:
         Scenario(name="s", ready_code="def ready(world):\n    return False\n"), None
     )
     assert not outcome.ok and outcome.broken
+
+
+# --- a displayed label has to keep the part that identifies what it points at ------------------
+
+
+def test_a_shortened_path_keeps_the_end_that_names_the_file():
+    """Cutting the end off a path keeps what every path shares and discards what distinguishes it.
+    Every skill file under one stage shares a prefix well past the limit, so a run recorded three
+    reads of `.../skills/write-scenar...` and could not say whether the model opened the skill body
+    or one of its references -- which is the question of whether the reference catalogue is used at
+    all, left unanswerable by a display format."""
+    from fi.alk.harness.session import _elided
+
+    prefix = "/opt/alk-venv/lib/python3.12/site-packages/fi/alk/harness/"
+    shown = {
+        _elided(prefix + name)
+        for name in (
+            "skills/write-scenarios/SKILL.md",
+            "skills/write-scenarios/references/_authoring-code.md",
+            "skills/write-scenarios/references/chat.md",
+        )
+    }
+    assert len(shown) == 3, f"two paths render identically: {shown}"
+    assert all(len(one) <= 80 for one in shown)
+    assert any(one.endswith("_authoring-code.md") for one in shown)
+
+
+def test_a_short_path_is_left_alone():
+    from fi.alk.harness.session import _elided
+
+    assert _elided("world/tools.py") == "world/tools.py"
+
+
+def test_a_long_value_that_is_not_a_path_still_truncates_at_the_end():
+    """Only paths carry their identity at the tail. A prose label reads from the front."""
+    from fi.alk.harness.session import _elided
+
+    shortened = _elided("word " * 40)
+    assert len(shortened) == 80
+    assert shortened.startswith("word word")
+    assert shortened.endswith("...")
