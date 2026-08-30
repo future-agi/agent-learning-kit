@@ -1020,8 +1020,8 @@ them true.
 **This does not make an arbitrary chat agent testable and should not be described as if it does.**
 It converts a late, confusing failure into an early, actionable one. The adapter that would
 actually close it is a contract schema extension plus a branch in a shared SDK module, which is
-Karthik's call and not mine to take in an experiment branch; it is written up with the exact seam
-in `_work/plans/2026-08-30-single-harness-loop.md`.
+a product decision rather than one to take in an experiment branch. The exact seam is written
+up separately for review.
 
 ## My own guard cried wolf, and I dodged it before I fixed it
 
@@ -1078,7 +1078,7 @@ runtime-tool gate saying ok when it had proven nothing, one level up and pointed
 Shipped: the configuration says so at bundle time instead of being discovered from the verdict.
 Not fatal, because the conversation-judged half is a real pass and refusing would throw it away.
 Closing it properly is a design decision between leasing the agent its own engine and giving the
-chat path a tool trace, written up in `_work/plans/2026-08-30-single-harness-loop.md`.
+chat path a tool trace, written up separately for review.
 
 ## The runner reference named everything except the one thing its example needs
 
