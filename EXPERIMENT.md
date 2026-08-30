@@ -878,8 +878,14 @@ Honest list. Each item says why it is still there and what would remove it.
 5. **The five non-voice build references are shallow.** They route correctly and carry selection
    checks, but only `voice-livekit.md` has the depth (170 lines, real code, footguns with symptoms)
    that makes a skill usable by a cold model.
-6. **Nothing here has been exercised by a live run.** The shell, the transport resolution, the
-   receipt boundary and the runtime-tool gate are all statically verified and unit-tested only.
+6. **~~Nothing here has been exercised by a live run.~~ Corrected 2026-08-30.** Job `2b213927`
+   ran this branch end to end on the hosted lane: queued through generating_environment,
+   generating_scenarios and running to completed, with a receipt carrying 14 turns, 138657ms, a
+   transcript, four recordings and `failure=null`. Nine of ten sub-goals held; the one that did
+   not, `sends_confirmation_sms`, is a real gap in the agent under test rather than a harness
+   fault, which is the outcome this whole apparatus exists to produce. What remains unproven is
+   narrower: the shell has still not been exercised by a model writing a runner for a transport
+   nobody has implemented, and the five non-voice build references remain unexercised.
 
 ## For the operator to check on the next run
 
