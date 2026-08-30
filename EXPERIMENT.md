@@ -558,6 +558,61 @@ Two things worth recording:
   I done these in the other order, the scenario stage would have been denied the very file it is
   instructed to open.
 
+## The postgres entry: the comment was wrong, but so was calling it a no-op
+
+Asked which it was, a comment overstating a symptom or a live bug it was masking. Neither, and
+the third answer is the interesting one.
+
+There is no live postgres bug. `for_contract` is the only consumer that takes a store name;
+`probe.py` calls `resolve("sqlite")` as a literal and `supported_kinds` is exported but never
+consumed. So nothing was masked and there is nothing to hunt.
+
+But the entry was not inert either. `for_contract` checks the registry, then a no-store list,
+then **modality**, then falls back to sqlite. Registry membership therefore decides whether the
+modality branch is reached at all:
+
+    store=postgres modality=chat      before=SqliteWorld   after=SqliteWorld
+    store=postgres modality=browser   before=BrowserWorld  after=SqliteWorld
+
+So for voice and chat the change really was a no-op, which is most cases and is why it reads as
+one. For a browser or computer-use agent it silently flipped which world gets built. The comment
+describes a symptom that could not have happened, and misses the effect that did.
+
+Following that through found the actual defect, which is bigger than the entry: whether a store
+was *named in the registry* decided how a browser agent was inspected.
+
+    store=postgres modality=browser  ->  SqliteWorld
+    store=mysql    modality=browser  ->  BrowserWorld
+
+Same agent, same shape of state, different world, because one engine had been added by hand and
+the other had not. Adding one alias fixed one name and deepened the inconsistency for every name
+still missing.
+
+Fixed by registering the row engines as a set rather than as a special case, so postgres,
+postgresql, mysql, mariadb and clickhouse are all the same kind, and by making the fallback say
+what it assumed. An unrecognised store still gets a world, because refusing to build over a name
+would be worse than inspecting it imperfectly, but it now names the store, names the shape it
+assumed, and names `register_kind` as the way out. A document or key-value store inspected as
+rows reports state shaped like the question rather than like the store, and that reads as a real
+answer, which is the same failure mode as everything else on this branch.
+
+What I did **not** do is reorder the precedence so the store always beats modality. The module
+says the store is the honest source, and taken literally that means a CUA agent with any declared
+store should be inspected as rows, which would change behaviour for every browser agent that
+declares one. That is a design decision about what a CUA world is for, not a defect, and it is
+the coordinator's call. Left as is, and recorded here.
+
+One test of mine was weak and mutation testing caught it: the row-store parametrize drew its
+cases from `ROW_STORES`, the constant under test, so shrinking the constant deleted the coverage
+instead of failing it. Reverting to the postgres-only registry passed 12 tests happily. The names
+are written out literally now, and the same revert fails on exactly the browser and cua cases.
+
+`HOW-IT-WORKS.md` still documented `write_env_file` / `run_env_command`, removed when the build
+stage got a real shell, and still claimed sixteen tools and "no file access at all" when there
+are twenty-one and a shell. Corrected, and there is now a guard that reads the `| Tool |` tables
+and checks every name against the real servers. It is scoped to those tables rather than every
+backticked word because the same document tabulates contract fields, which are not tools.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
