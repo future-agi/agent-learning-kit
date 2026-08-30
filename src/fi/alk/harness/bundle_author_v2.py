@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import re
 import shutil
 import sqlite3
@@ -491,6 +492,104 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
+# Conventional single-file entrypoints, in the order a reader would try them. This list is the
+# fallback for a repository that declares nothing; it is never consulted when the contract records
+# a run command, because a convention must not outrank a statement of fact.
+_ENTRYPOINT_NAMES = ("agent.py", "main.py", "app.py", "__main__.py", "server.py", "run.py")
+
+
+def _venv_argv(argv: list[str], root: Path) -> list[str]:
+    """A declared command, rewritten to run inside the environment the build actually created.
+
+    The submitted command is written for the repository's own machine, where its dependencies are
+    on PATH. Here they are in a project venv that `uv sync` or `python -m venv` just made, so an
+    unqualified `uvicorn` resolves to nothing.
+    """
+    if not argv:
+        return argv
+    head = argv[0]
+    if (root / "pyproject.toml").is_file():
+        # Built with `uv sync`, so the project's console scripts live in uv's environment and
+        # `uv run` is the only thing that knows where that is.
+        return ["uv", "run", "--no-sync", *argv]
+    if (root / "requirements.txt").is_file():
+        if head in {"python", "python3"} or head.startswith("python3."):
+            return [".venv/bin/python", *argv[1:]]
+        if "/" not in head:
+            return [f".venv/bin/{head}", *argv[1:]]
+    return list(argv)
+
+
+def _generated_entrypoint(
+    root: Path, runtime: dict[str, Any] | None
+) -> tuple[Path, str, list[str] | None]:
+    """Where to run the submitted agent from, and what to run.
+
+    The contract is asked first and is authoritative. The understand stage reads the repository
+    and records `runtime.command`, and `Runtime.command`'s own definition already says the
+    conventional-filename search is what happens *when no command was proven* -- so globbing for
+    `agent.py` while holding an exact, executable command inverts the documented precedence. It
+    also contradicts what this harness tells an operator: the environment stage asks them to
+    expose an importable callable or an HTTP service, and nothing anywhere asks for a filename.
+    """
+    runtime = runtime or {}
+    workdir = str(runtime.get("workdir") or "").strip().strip("/")
+    component = (root / workdir) if workdir else root
+    if workdir and not component.is_dir():
+        raise BundleAuthorError(
+            f"component_missing: the contract records runtime.workdir={workdir!r}, "
+            f"which does not exist in the submitted source"
+        )
+
+    command = runtime.get("command") or []
+    if isinstance(command, str):
+        command = shlex.split(command)
+    command = [str(item) for item in command if str(item).strip()]
+    if command:
+        entry = next((item for item in command if item.endswith(".py")), "")
+        return component, entry, _venv_argv(command, component)
+
+    for name in _ENTRYPOINT_NAMES:
+        if (component / name).is_file():
+            return component, name, None
+
+    found: list[Path] = []
+    for name in _ENTRYPOINT_NAMES:
+        found.extend(sorted(component.glob(f"**/{name}")))
+    if len(found) == 1:
+        script = found[0]
+        # The directory that owns the dependencies, not the one that happens to hold the script:
+        # a package layout puts app.py under a package while the manifest sits at the root, and
+        # building from the package directory would find no manifest at all.
+        owner = next(
+            (
+                parent
+                for parent in [script.parent, *script.parents]
+                if parent.is_relative_to(component)
+                and (
+                    (parent / "pyproject.toml").is_file()
+                    or (parent / "requirements.txt").is_file()
+                )
+            ),
+            script.parent,
+        )
+        return owner, script.relative_to(owner).as_posix(), None
+
+    if not found:
+        raise BundleAuthorError(
+            "entrypoint_undeclared: the contract records no runtime.command and the source "
+            f"contains none of {', '.join(_ENTRYPOINT_NAMES)}. Declare how the agent starts as "
+            "runtime.command in the contract (an argv vector, with runtime.workdir if it does "
+            "not start from the repository root)."
+        )
+    raise BundleAuthorError(
+        "entrypoint_ambiguous: the contract records no runtime.command and the source contains "
+        f"{len(found)} possible entrypoints ("
+        + ", ".join(one.relative_to(component).as_posix() for one in found[:8])
+        + "). Declare which one starts the agent as runtime.command in the contract."
+    )
+
+
 def _managed_world_db() -> ManagedProcess:
     return ManagedProcess(
         name="world-db",
@@ -522,6 +621,7 @@ def resolve_environment_plan(
     job: HarnessJob,
     *,
     contract_modality: str | None = None,
+    contract_runtime: dict[str, Any] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -732,16 +832,7 @@ def resolve_environment_plan(
             )
         packaging = "compose"
     else:
-        entry = "agent.py"
-        if not (root / entry).is_file():
-            candidates = sorted(root.glob("**/agent.py"))
-            if len(candidates) != 1:
-                raise BundleAuthorError(
-                    "component_ambiguous: expected exactly one agent.py"
-                )
-            component = candidates[0].parent
-        else:
-            component = root
+        component, entry, declared_run = _generated_entrypoint(root, contract_runtime)
         control_name = "agent"
         port = None if is_livekit else 8080
         environment = (
@@ -764,7 +855,7 @@ def resolve_environment_plan(
             port=port,
             environment=environment,
             livekit_download=is_livekit,
-            run_override=_dockerfile_run(component),
+            run_override=declared_run or _dockerfile_run(component),
         )
         if is_livekit:
             process = process.model_copy(
@@ -884,6 +975,7 @@ def author_bundle_v2(
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     contract_modality: str | None = None
+    contract_runtime: dict[str, Any] | None = None
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -895,10 +987,14 @@ def author_bundle_v2(
         if not isinstance(contract_body, dict):
             raise BundleAuthorError("contract_invalid: contract.json must be an object")
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
+        runtime_body = contract_body.get("runtime")
+        if isinstance(runtime_body, dict):
+            contract_runtime = runtime_body
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
+        contract_runtime=contract_runtime,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(

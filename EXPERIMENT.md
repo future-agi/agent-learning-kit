@@ -890,6 +890,59 @@ separately left `main()`'s wiring uncovered, so "the stage declined and nobody l
 decline" passed clean. That is the same silence the fix exists to remove, reproduced inside my own
 test suite. Three tests now cover the wiring.
 
+## The generate path required a file called agent.py
+
+From the first successful generate-path build (job `93400f09`). The harness authored a contract,
+built a world for an agent shipping no Compose file, no Dockerfile and no data store, seeded it,
+drove the repository's real code (`get_note: refused - this note is not yours`, the fixture's own
+ownership rule executing), rejected a vacuous check for grading nothing, and reached a 14-check
+catalogue. Then the bundler killed it, because the repository had no `agent.py`.
+
+    entry = "agent.py"
+    if not (root / entry).is_file():
+        candidates = sorted(root.glob("**/agent.py"))
+        if len(candidates) != 1:
+            raise BundleAuthorError("component_ambiguous: expected exactly one agent.py")
+
+Two stages disagreeing about what a runnable agent is. When the environment stage refuses it tells
+the operator to "expose the real implementation as an importable callable or an HTTP service" --
+a statement about seams. Nothing anywhere asks for a filename, and no skill documents one. It is
+also the single convention that most undermines "a new agent type is a skill file, not a code
+change": a repository can satisfy every documented requirement and fail on a name.
+
+The contract already had the answer. That run's `runtime` block carried
+
+    command   = ["uvicorn", "notesagent.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    interface = {kind: http, port: 8080, path: /chat, health_path: /health}
+    install   = "pip install -e .", language = "python", version = ">=3.11"
+
+`Runtime.command`'s own definition says it "is optional when one conventional entrypoint can be
+proven from source" -- the precedence was documented and inverted. So this was not a design
+question, it was a lookup that should never have existed.
+
+Worth checking rather than assuming, and the answers changed the size of the job in both
+directions: `resolve_environment_plan` did **not** receive the contract, only a `contract_modality`
+string, which is why it globbed. But its only production caller already parses the whole
+`contract.json` and keeps one field of it, so threading the runtime through was one argument, not
+a refactor. And nothing downstream needs `component` to contain `agent.py`: it is the working
+directory for build and run, so it needs the dependency manifest, not a named script.
+
+Now: a declared command wins and is rewritten into the environment the build actually creates
+(`uv run --no-sync` for a uv-synced project, `.venv/bin/...` for a requirements one, because the
+submitted command assumes its own machine where its dependencies are on PATH). The filename search
+survives as what it always should have been, a fallback, widened past `agent.py` and resolving the
+component to the directory owning the manifest rather than the one holding the script, since a
+package layout separates them.
+
+The eleventh instance of the one shape came with it: `len(candidates) != 1` reported **zero**
+candidates as `component_ambiguous`, telling an operator to disambiguate something that does not
+exist. Split into `entrypoint_undeclared` and `entrypoint_ambiguous`, both naming `runtime.command`
+as the remedy.
+
+And the skill now requires what the bundler consumes. It asked for the *install* command, the
+language and the ingress, but never the *start* command; the model recorded one anyway on this
+run, so nothing guaranteed it. Five mutations caught, including reverting to the glob.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

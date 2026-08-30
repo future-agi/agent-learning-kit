@@ -86,7 +86,16 @@ Find, in roughly this order:
 
 9. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
+   Its own Dockerfile is used in preference to anything written for it.
+
+   **Record how it starts, as `runtime.command`**, an argv vector exactly as the repository runs
+   it (`["uvicorn", "pkg.app:app", "--host", "0.0.0.0", "--port", "8080"]`), with `runtime.workdir`
+   when it does not start from the repository root. Read it out of the README, the Dockerfile
+   `CMD`, a Procfile, a `[project.scripts]` entry or the module that calls `main()`. A repository
+   shipping no Compose file and no Dockerfile has nothing else that says how to start it: without
+   this the packaging step falls back to looking for a conventionally named single-file
+   entrypoint, and a package layout has none, so the run fails after the world has already been
+   built and paid for. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
