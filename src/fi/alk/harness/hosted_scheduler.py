@@ -298,10 +298,20 @@ class CallEvidenceMissing(RuntimeError):
 
     Raised rather than passed on, because a receipt that is silently incomplete is indistinguishable
     from a run that went fine and had nothing to say.
+
+    `outcome` carries what the runner did return, under the same rule as `CallAborted.partial`:
+    the receipt's `call` field must not be null once the call has genuinely started
+    (outbound-channels.md Channel 2, "errored receipt body"). This is the stronger case of the
+    two. An aborted call may legitimately have no partial, whereas everything raised here has a
+    complete outcome in hand and is refused only for a missing evidence field, so reporting no
+    call would say the call never happened while the message says it produced the wrong thing.
     """
 
-    def __init__(self, faults: list[str]) -> None:
+    def __init__(
+        self, faults: list[str], *, outcome: CallOutcome | None = None
+    ) -> None:
         self.faults = faults
+        self.outcome = outcome
         super().__init__(
             "the call runner produced an outcome the platform cannot render. Fix these and "
             "return the outcome again:\n  - " + "\n  - ".join(faults)
@@ -335,7 +345,7 @@ async def _run_call(
     )
     faults = call_evidence_faults(outcome, requires)
     if faults:
-        raise CallEvidenceMissing(faults)
+        raise CallEvidenceMissing(faults, outcome=outcome)
     return outcome
 
 
@@ -2057,13 +2067,19 @@ class HostedScheduler:
             # cannot render" and "the call machinery crashed" are different problems with
             # different fixes, and a run stops being diagnosable the moment two causes arrive
             # under one label.
+            #
+            # The outcome still goes on the receipt. What was rejected is incomplete, not absent,
+            # and the turns and timing it did produce are what separate "the runner forgot to
+            # upload" from "the runner is broken and produced nothing". The fault text asks for
+            # the outcome to be returned again, so dropping the one in hand would withhold the
+            # evidence needed to act on it.
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
                 _failure("call_evidence_missing", str(exc)),
                 sub_goals=_unjudged(scenario.sub_goals),
-                call=None,
+                call=self._call_summary(exc.outcome),
             )
         except Exception as exc:  # noqa: BLE001
             # B3: the call runner crashing outright (not a `CallAborted` it chose to raise) is the

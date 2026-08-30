@@ -2541,3 +2541,122 @@ def test_a_retry_reseeds_the_rng_identically() -> None:
         await pool.close()
 
     asyncio.run(scenario())
+
+
+# --- the evidence gate rejects an outcome; the receipt still reports what the call did ----------
+
+
+def _incomplete_voice_outcome() -> "hs.CallOutcome":
+    """Six turns, ninety seconds, and no transcript: rejected, but plainly a call that happened."""
+    return hs.CallOutcome(
+        calls=(),
+        turns=6,
+        started_at="2026-08-25T00:00:00.000Z",
+        ended_at="2026-08-25T00:01:30.000Z",
+        duration_ms=90_000,
+        transcript_artifact=None,
+        recording_artifacts=(),
+    )
+
+
+def test_an_outcome_rejected_by_the_evidence_gate_is_still_reported() -> None:
+    """CallAborted and CallEvidenceMissing are one rule: the receipt's `call` must not be null once
+    the call has genuinely started. This is the stronger case of the two, because an aborted call
+    may legitimately have no partial while this one always has a complete outcome in hand and is
+    refused only for a missing field.
+
+    Reporting null here says the call never happened while the failure message says it produced
+    the wrong thing, and it discards exactly the evidence that separates "the runner forgot to
+    upload the transcript" from "the runner is broken and produced nothing" -- which is the
+    difference between a one-line fix and a rewrite."""
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                return _incomplete_voice_outcome()
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+            call_evidence_requires=("turns", "transcript", "timing"),
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+
+        assert receipt.status == "errored"
+        # The distinct code stays: "produced the wrong shape" is not "the machinery crashed".
+        assert receipt.failure.code == "call_evidence_missing"
+        assert "transcript" in receipt.failure.message
+        # And the call it did make is on the receipt, not thrown away.
+        assert receipt.call is not None, "the call happened; the receipt must not say otherwise"
+        assert receipt.call.turns == 6
+        assert receipt.call.duration_ms == 90_000
+        assert receipt.call.started_at == "2026-08-25T00:00:00.000Z"
+        # The thing it was rejected for is still reported as absent, not papered over.
+        assert receipt.call.transcript_artifact is None
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_both_call_failures_carry_their_evidence_under_the_same_rule() -> None:
+    """Named together deliberately. The two handlers sit next to each other and are bound by one
+    rule, so a test naming only one of them invites the next person to fix one and not the other."""
+
+    async def scenario() -> None:
+        started = "2026-08-25T00:00:00.000Z"
+
+        for raising, expected_code in (
+            (
+                lambda: hs.CallAborted(
+                    "livekit room dropped", partial=_incomplete_voice_outcome()
+                ),
+                "call_failed",
+            ),
+            (
+                lambda: hs.CallEvidenceMissing(
+                    ["no transcript_artifact"], outcome=_incomplete_voice_outcome()
+                ),
+                "call_evidence_missing",
+            ),
+        ):
+            outbound = FakeOutbound()
+            pool, _ = _pool(2, outbound=outbound)
+            await pool.start()
+
+            class Runner:
+                async def run(
+                    self, scenario: FakeScenario, runtime: EnvironmentRuntime
+                ) -> hs.CallOutcome:
+                    raise raising()
+
+            scheduler = hs.HostedScheduler(
+                pool=pool,
+                world_factory=FakeWorldFactory(),
+                call_runner=Runner(),
+                outbound=outbound,
+                job_seed=1,
+            )
+            result = await scheduler.run(
+                [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+            )
+            receipt = result.receipts[0]
+            assert receipt.failure.code == expected_code
+            assert receipt.call is not None, f"{expected_code} dropped its evidence"
+            assert receipt.call.turns == 6
+            assert receipt.call.started_at == started
+            await pool.close()
+
+    asyncio.run(scenario())

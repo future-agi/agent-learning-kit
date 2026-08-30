@@ -693,6 +693,44 @@ and it never needs to ask, but reaching for a tool it was not given is refused r
 ignored, and it should keep its work inside the run's own directories because this stage is not
 always inside a sandbox.
 
+## The evidence gate threw away the evidence
+
+Live defect, and the same family as `305fdf9`: the diagnosis is discarded at the moment it
+becomes useful.
+
+`CallEvidenceMissing` carried only `faults`. `_run_call` had the complete `CallOutcome` in hand
+when it raised, and dropped it, so the handler reported `call=None`. A voice runner returning six
+turns, ninety seconds and four tool calls but no transcript produced a receipt saying the call
+did not happen, next to a message saying the call produced the wrong thing. The fault text asks
+the author to "return the outcome again" while withholding the outcome that would show what was
+returned.
+
+The sibling handler one block up already had this right: `CallAborted` carries `partial`, and its
+docstring states the rule both are bound by, that the receipt's `call` must not be null once the
+call has genuinely started. This is the **stronger** instance of that rule. An aborted call may
+legitimately have no partial. Everything raised here has a complete outcome and is refused for a
+single missing field, so it was the one case guaranteed to have evidence and the only one
+reporting none.
+
+What it cost is the distinction between "the runner forgot to upload the transcript" and "the
+runner is broken and produced nothing" -- a one-line fix versus a rewrite, and the turns and
+timing that tell them apart were exactly what got dropped.
+
+Fixed by mirroring `CallAborted`: `outcome` alongside `faults`, passed at the raise, and
+`call=self._call_summary(exc.outcome)` in the handler. `_call_summary` already returned None for
+None, so no new null handling. The separate failure code stays untouched.
+
+Two tests, and the second is paired on purpose: the handlers sit next to each other under one
+rule, so a test naming only `CallEvidenceMissing` invites the next person to fix one and not the
+other. That paid off immediately -- of the four mutations, dropping `CallAborted`'s partial is
+caught **only** by the paired test. The others: restoring `call=None`, dropping the outcome at
+the raise site, and collapsing the distinct failure code.
+
+Seventh in a row of one shape. Worth being precise about the variant, though, because it is not
+quite "fails open" like the others: this one fails *closed* and then discards the reason. The
+receipt is correctly marked errored. What is lost is the evidence that makes the error
+actionable, which is the same harm arriving by the opposite route.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
