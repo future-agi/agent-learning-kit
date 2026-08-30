@@ -296,3 +296,40 @@ def test_an_unresolvable_transport_says_nothing_will_be_checked(tmp_path, caplog
     with caplog.at_level(logging.WARNING, logger=he.__name__):
         assert he._transport_requires(context=_context(root)) == ()
     assert "nothing a call returns will be checked" in caplog.text
+
+
+def test_an_unreadable_declaration_is_not_the_same_as_no_declaration(tmp_path, caplog):
+    """`is_file` already separates "nothing declared" from this, so reaching the parse failure
+    means a declaration exists and could not be read. Silently returning {} makes it read as the
+    first: the runner the build stage wrote is ignored, resolution falls through to recognition or
+    fails naming no declaration, and the evidence contract goes with it."""
+    import logging
+
+    root = _bundle(tmp_path, "broken", GOOD.replace("{tag}", "x"))
+    (root / "transport.json").write_text('{"transport": "livekit",', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger=transports.__name__):
+        assert transports.declared(root) == {}
+    assert "could not be read" in caplog.text
+    assert "declared nothing" in caplog.text
+
+
+def test_a_declaration_that_is_not_an_object_says_so(tmp_path, caplog):
+    import logging
+
+    root = _bundle(tmp_path, "listy", GOOD.replace("{tag}", "x"))
+    (root / "transport.json").write_text('["livekit"]', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger=transports.__name__):
+        assert transports.declared(root) == {}
+    assert "not an object" in caplog.text
+
+
+def test_a_missing_declaration_is_silent(tmp_path, caplog):
+    """The ordinary case. A warning that fires when nothing is wrong is one people learn to
+    ignore, which would cost the two above their meaning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger=transports.__name__):
+        assert transports.declared(_bundle(tmp_path, "bare", GOOD)) == {}
+    assert caplog.text == ""

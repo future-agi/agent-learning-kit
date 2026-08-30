@@ -159,7 +159,18 @@ def peek_secret_values(secrets_path: Path) -> tuple[str, ...]:
     to scrub, matching `redact_outbound_text`'s own `extra_secret_values=()` default."""
     try:
         raw = json.loads(secrets_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as broke:
+        # An absent file genuinely means no extra values to scrub. A present one that will not
+        # parse means there are values and we cannot read them, and the two produce the same
+        # empty tuple here, so the second silently weakens redaction rather than disabling a
+        # feature. Said out loud because the cost is a secret appearing in an event or a log.
+        logger.warning(
+            "%s could not be read (%s: %s); outbound redaction will run without the resolved "
+            "secret values it holds.",
+            secrets_path,
+            type(broke).__name__,
+            broke,
+        )
         return ()
     if not isinstance(raw, dict):
         return ()

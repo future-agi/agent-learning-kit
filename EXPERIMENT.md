@@ -731,6 +731,65 @@ quite "fails open" like the others: this one fails *closed* and then discards th
 receipt is correctly marked errored. What is lost is the evidence that makes the error
 actionable, which is the same harm arriving by the opposite route.
 
+## A crashed review returned the value that means "approved"
+
+The cleanest instance of the pattern, because here the empty value is the *documented* success
+signal. `submit_gaps` asks for an empty list when the suite covers what it should, so `[]` means
+"reviewed, and this suite is complete". The exception handler returned exactly that, and logged
+nothing.
+
+The caller makes it concrete. The top-up loop runs only while the suite is below target, so
+review is the mechanism for reaching `wanted`:
+
+    missing = await gaps_in(...)
+    if not missing:
+        break
+
+Ask for 20, have the slices produce 12, and let the review session hit a transient model error:
+`gaps_in` returns `[]`, the loop breaks, and a 12-scenario suite is saved and reported as the
+finished product. No warning, no event, nothing anywhere saying the review never happened. The
+operator concludes the writers found only 12 worth writing. That lands directly on the open work
+to get suites to 20-30.
+
+Fixed with a `SuiteReview` carrying `reviewed` and `gaps`, which is `RuntimeToolVerdict` again in
+a file that did not have it, down to the `complete` property existing so that "no gaps" cannot be
+read without also asking whether anyone looked. The intent behind the original catch is preserved
+exactly: the suite as written is still kept and a failed review still does not take the run down.
+What changed is that it no longer counts as approval, and the remaining rounds are tried rather
+than abandoned, which folds in the retry the review suggested at no extra cost since the loop was
+already bounded. The empty-suite early return is the same state and now says so too.
+
+Five mutations, all caught, including the exact revert asked for and one on `complete` itself.
+
+## Sweeping the other twelve
+
+Assessed each against the one question worth asking: can a caller tell this apart from the
+success value? Two are genuine, both now fixed to say what happened without changing behaviour:
+
+- `transports.declared` returned `{}` for a `transport.json` that exists and will not parse,
+  which is identical to no declaration at all. After the last two passes that costs more than it
+  used to: the runner the build stage wrote is silently ignored, resolution falls through to
+  recognition or fails naming no declaration, and the evidence contract goes with it. `is_file`
+  has already separated the two states by the time the parse fails, so nothing was ambiguous
+  except the return value.
+- `peek_secret_values` returned `()` for an unreadable secrets file, the same value as "no extra
+  values to scrub". The cost is not a disabled feature but a quietly weaker one: outbound
+  redaction runs without the values it was supposed to strip, so the failure mode is a secret in
+  an event or a log.
+
+The rest I am satisfied with. `:516` and `:593` already warn. `:916`/`:922` record the channel
+error before returning None, so nothing is lost. `:183`, `:491` and `:1477` conflate absent with
+malformed, but each degrades into a typed failure or a normal default downstream rather than into
+a false success, and warning on all of them would dilute the two above. `probe_voice_providers`
+returning 0 is a probe reporting an unreachable host, which is what its caller reads it as.
+
+One I am flagging rather than changing: `hosted_scheduler.py:1542` returns `""`, meaning "no
+fault", when `verify_runtime_tools` raises, and marks the world verified so it is never
+re-checked. It does log. But `RuntimeToolVerdict` exists precisely so that "not checked" cannot
+read as "ok", and catching the exception one layer up reintroduces that at the scheduler. Whether
+an unverifiable world should fault its scenario is a policy decision about run resilience rather
+than a defect, so it is the coordinator's call, the same as the CUA precedence question.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

@@ -94,9 +94,27 @@ def declared(bundle_dir: Path | None) -> dict[str, Any]:
         return {}
     try:
         body = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as broke:
+        # `is_file` already separated "nothing was declared" from this, so reaching here means a
+        # declaration exists and could not be read. Returning {} silently makes it read as the
+        # first: the runner the build stage wrote is ignored, resolution falls through to
+        # recognition or fails naming no declaration, and the evidence contract goes with it.
+        logger.warning(
+            "%s exists but could not be read (%s: %s), so it is being treated as if the "
+            "environment declared nothing about how its agent is reached.",
+            path,
+            type(broke).__name__,
+            broke,
+        )
         return {}
-    return body if isinstance(body, dict) else {}
+    if not isinstance(body, dict):
+        logger.warning(
+            "%s is a %s, not an object, so nothing in it is being used.",
+            path,
+            type(body).__name__,
+        )
+        return {}
+    return body
 
 
 def _bundle_namespace(bundle_dir: Path | None) -> str:
