@@ -260,8 +260,10 @@ sandbox, and you are expected to use them like an engineer would:
 - `Write` and `Edit` put files wherever the environment needs them: a Dockerfile, a compose file,
   a schema, an entrypoint, a seed script.
 - `Bash` runs anything. Bring services up, install what they need, call them, read the error and
-  fix it. There is no allowlist. The sandbox is the boundary, so a mistake costs this run and
-  nothing else.
+  fix it. No command is filtered and you never need to ask before running one. What is bounded is
+  which tools this stage holds, and reaching for one it was not given is refused rather than
+  silently ignored, so build with the ones listed here. Keep your work inside the run's own
+  directories: this stage is not always inside a sandbox.
 - `Read`, `Glob` and `Grep` are how you work out what the submitted repository actually needs
   before you build anything for it.
 

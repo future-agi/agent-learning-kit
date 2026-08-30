@@ -654,6 +654,45 @@ Four mutations, all caught: delete the inheritance, treat `[]` as unset, silence
 The pattern holds for the sixth time. Every one of these is a gate that fails open, and in this
 case the gate was written specifically to catch this class and had been disabled for it.
 
+## The permission tests never presented a harness tool to the gate
+
+Not a defect: the wiring is right. `allowed` is builtins plus the qualified server tools, and the
+same list reaches `gate_hooks`. But every one of the seven tests used a bare builtin, and the
+harness's own tools arrive as `mcp__{server}__{tool}`, so nothing held the part that matters.
+
+Substituting `gate_hooks(spec.builtins)` for `gate_hooks(allowed)` reads like a tidy-up, since
+`builtins` is the natural phrase for what a stage was given. It denies every harness tool call in
+every stage, and all seven tests still passed under it. The build stage would have died on its
+first `save_world`, minutes into a real run, having passed the whole suite.
+
+    a harness tool is named: mcp__environment-world__save_world
+    gate_hooks(allowed)       -> allow
+    gate_hooks(spec.builtins) -> deny
+
+Two tests now, driven through the options the backend actually builds rather than a hook
+constructed in the test, so they pin the wiring and not just `gate_hooks`. The second checks that
+qualifying a name does not make it safe: a stage holding the world server is still refused the run
+server's tools. Three mutations caught, including the exact substitution above.
+
+Worth naming the pattern, because it is the same one as the write-scenarios grant: the mechanism
+was asserted and the thing it exists for was not. A gate tested only against tools no stage uses
+is a gate tested against nothing.
+
+## "The sandbox is the boundary" was in three places, one of them a prompt
+
+The review named `build.py`. It was also in `config.py`'s `working_session` docstring and, worse,
+in `build-environment/SKILL.md`, which tells the model **"There is no allowlist."** That is now
+false, and it is false in a prompt: the model is told it may reach for anything while the restored
+gate refuses what the stage was not granted. Same defect as the scenario catalogue, inverted.
+Prompt text asserting a permission model the code does not implement is not a stale comment, it is
+an instruction to try things that will be refused.
+
+All three corrected. The grant is the boundary and it is the same in both lanes; the sandbox is
+only present hosted. The skill now tells the model what is actually true: no command is filtered
+and it never needs to ask, but reaching for a tool it was not given is refused rather than
+ignored, and it should keep its work inside the run's own directories because this stage is not
+always inside a sandbox.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

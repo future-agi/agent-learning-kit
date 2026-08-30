@@ -240,7 +240,9 @@ def open_stage(
         servers={WORLD_SERVER: server},
         # A shell, a file editor and the repository. This stage builds infrastructure for an
         # agent it has never seen, so the work is engineering rather than form filling: read the
-        # code, write what it needs, run it, read the error, fix it. The sandbox is the boundary.
+        # code, write what it needs, run it, read the error, fix it. This grant is the boundary,
+        # and it is the same one hosted and locally: a sandbox contains the hosted lane, but the
+        # same stage runs in-process on an operator's machine, where nothing contains a shell.
         builtins=(
             "AskUserQuestion",
             "Read",

@@ -98,3 +98,64 @@ def test_an_ungated_stage_is_left_alone():
     options = ClaudeBackend().create(SessionSpec(system_prompt="x", gated=False))._options
     assert options.can_use_tool is None
     assert not options.hooks
+
+
+def _stage_with_a_harness_tool():
+    """A stage as the harness actually builds one: a couple of builtins and its own tool server."""
+    from fi.alk.harness.backends.base import ToolServer, ToolSpec
+
+    server = ToolServer(
+        name="environment-world",
+        version="0.1.0",
+        tools=[
+            ToolSpec(
+                name="save_world",
+                description="freeze the world",
+                input_schema={},
+                handler=lambda **kwargs: None,
+            )
+        ],
+    )
+    return SessionSpec(
+        system_prompt="x",
+        builtins=("AskUserQuestion", "Read"),
+        servers={"environment-world": server},
+    )
+
+
+def test_a_stage_may_call_its_own_harness_tools():
+    """The tools that matter most to a stage are the harness's own, and those arrive qualified as
+    mcp__{server}__{tool}, never as a bare name. Every other case here uses a builtin, so nothing
+    would notice if the gate were built from `spec.builtins` instead of the full grant. That reads
+    like a tidy-up, `builtins` being the natural phrase for what a stage was given, and it would
+    deny every harness tool call in every stage: the build stage would die on its first
+    save_world, minutes into a real run, having passed the whole suite.
+
+    Exercised through the options the backend actually built rather than a hook constructed here,
+    so this pins the wiring and not just gate_hooks' own logic."""
+    from claude_agent_sdk.types import PermissionResultAllow
+
+    from fi.alk.harness.backends.base import qualified
+
+    name = qualified("environment-world", "save_world")
+    options = ClaudeBackend().create(_stage_with_a_harness_tool())._options
+
+    assert name in options.allowed_tools
+    # The hook is consulted on every call, so it is the one that has to know the name.
+    hook = options.hooks["PreToolUse"][0].hooks[0]
+    assert asyncio.run(hook({"tool_name": name}, None, None)) == {}
+    # And the callback, which sees anything the allowlist did not auto-approve.
+    assert isinstance(
+        asyncio.run(options.can_use_tool(name, {}, None)), PermissionResultAllow
+    )
+
+
+def test_a_harness_tool_from_a_server_this_stage_does_not_have_is_still_refused():
+    """The grant is per stage, not per shape of name: qualifying a tool does not make it safe.
+    A stage holding the world server may not reach the run server's tools."""
+    options = ClaudeBackend().create(_stage_with_a_harness_tool())._options
+    hook = options.hooks["PreToolUse"][0].hooks[0]
+    denied = asyncio.run(
+        hook({"tool_name": "mcp__run-scenarios__run_scenario"}, None, None)
+    )
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"

@@ -135,10 +135,11 @@ def working_session(
 ) -> SessionSpec:
     """A session that can read, write and run things.
 
-    The sandbox is the boundary. A stage that has to work out what an unfamiliar agent is, build
-    the infrastructure it talks to, and prove that infrastructure answers, is doing engineering,
-    and engineering needs a shell and an editor. Withholding them did not make the work safer, it
-    made the stage unable to finish it and left the finishing to a person reading logs.
+    A stage that has to work out what an unfamiliar agent is, build the infrastructure it talks
+    to, and prove that infrastructure answers, is doing engineering, and engineering needs a shell
+    and an editor. Withholding them did not make the work safer, it made the stage unable to
+    finish it and left the finishing to a person reading logs. What bounds it is this grant,
+    enforced on every call, and not the sandbox: the sandbox is only there in the hosted lane.
     """
     return SessionSpec(
         system_prompt=system_prompt,
