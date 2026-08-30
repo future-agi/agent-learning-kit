@@ -465,6 +465,58 @@ answer and pasted-content injection; browser use has an interface that is not a 
 actions that cannot be undone; and a coding agent can see and modify its own grader, which is why
 gaming verification is its dominant harm class.
 
+## The scenario stage was told to read a file it could not open
+
+Found by review, not by a run, and it could not have been found by a run either: nothing errors.
+
+`sub_skills()` appends a catalogue of reference files to every stage prompt, ending with the
+instruction to pick one and "read that file with the Read tool". Both scenario writers were
+granted `("AskUserQuestion",)` and `()` respectively. So the stage was handed an index of six
+files, told to choose one and read it, and could open none of them. It would have proceeded on
+the prompt alone or invented what the reference said, which is the failure that same paragraph
+warns about in its own words, one step worse: not reading the wrong file, reading none.
+
+The whole per-modality generality of scenario writing, the voice/chat/cua/coding split I had
+just spent a commit deepening, was inert. That is the uncomfortable part. I thickened those
+files without checking that anything could open them.
+
+Two things made it survive a green suite:
+
+- The tests assert the catalogue string renders. Rendering is not honouring. A prompt naming a
+  tool and a session granting one live in different files, and both halves were individually
+  valid.
+- There was already a guard, `test_a_skill_only_names_tools_its_stage_actually_has`, and it
+  checks the exact complement of this. Its pattern is `` `[a-z_]... ``, lowercase-initial, so
+  CapitalCase builtins never match it; it reads only `SKILL.md`, never `references/`; and it
+  compares against the MCP server's tools, not `builtins` at all. It even whitelists
+  `AskUserQuestion` explicitly. A guard aimed one field over from the hole.
+
+Fixed by granting both writers `("Read", "Glob", "Grep", "AskUserQuestion")` through one shared
+`WRITER_BUILTINS`, matching `reception.py`. Read-only plus the question is the right grant:
+`Glob`/`Grep` because the catalogue says to decide "from the evidence in the repository", which
+is a search instruction, and no `Write`/`Edit`/`Bash` because what a writer must not do is save
+the suite behind its own back, and that stays withheld structurally by leaving `save_scenarios`
+out of the slice writer's server.
+
+The review spec was reported as a third instance and is not one: it never calls `load_skill`,
+its prompt names no tool, and granting it `Read` would be the same error inverted, handing a
+session a tool its prompt does not assume.
+
+The guard is an AST sweep over the package rather than a list of the three specs that exist
+today: it finds every `SessionSpec`/`working_session` call, resolves which skill it injects and
+what it grants (following `builtins=WRITER_BUILTINS` back to the constant), and asserts both
+that a stage offered references can `Read`, and that every builtin the stage's text names is
+granted. It discovers five sessions across four files. Mutation-tested three ways, including
+removing `Read` from `build-environment`, a stage I did not touch, to show it is not a spot
+check. The second assertion covers `references/` too, which is safe only because builtins are a
+closed set of CapitalCase names; I deliberately did not extend the older MCP-name guard the same
+way, because references legitimately backtick field names, transport names and failure codes, so
+it would need an ignore list wide enough to stop guarding anything.
+
+This is the fifth defect in a row of one shape: a safety mechanism that fails open. The gate that
+returned nothing, the loader that cached across worlds, the boundary that masked its diagnosis,
+the cache keyed by position, and now an instruction that cannot be obeyed. None of them raise.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

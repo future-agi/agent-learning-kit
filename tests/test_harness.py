@@ -4226,6 +4226,133 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         )
 
 
+def _stage_sessions():
+    """Every session this package constructs, paired with the skill it injects.
+
+    Discovered by walking the source rather than listed here, so a stage added later is covered
+    without anyone remembering to add it. That matters more than usual: the bug this guards
+    against is invisible at runtime, so a stage that slipped the list would look fine forever.
+    """
+    import ast
+    import importlib
+
+    from fi.alk.harness.config import SKILLS_ROOT, working_session
+
+    root = SKILLS_ROOT.parent
+    # What working_session hands out, taken from the function rather than restated.
+    baseline = set(
+        working_session(system_prompt="", cwd=".", max_turns=1).builtins
+    )
+
+    found = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        module = None
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if name not in {"SessionSpec", "working_session"}:
+                continue
+            # Which skill, if any, this session is built around.
+            skills = {
+                inner.args[0].id
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Call)
+                and getattr(inner.func, "id", None) == "load_skill"
+                and inner.args
+                and isinstance(inner.args[0], ast.Name)
+            }
+            if not skills:
+                continue
+            dotted = (
+                path.relative_to(root.parent.parent.parent)
+                .with_suffix("")
+                .as_posix()
+                .replace("/", ".")
+            )
+            module = module or importlib.import_module(dotted)
+            keywords = {kw.arg: kw.value for kw in node.keywords}
+            if name == "working_session":
+                granted = set(baseline)
+                extra = keywords.get("extra_builtins")
+                granted |= _literal_strings(extra, module)
+            else:
+                granted = _literal_strings(keywords.get("builtins"), module)
+            for skill in skills:
+                found.append(
+                    (f"{path.name}:{node.lineno}", getattr(module, skill), granted)
+                )
+    return found
+
+
+def _literal_strings(node, module):
+    """The strings a builtins= argument resolves to, whether written inline or as a constant."""
+    import ast
+
+    if node is None:
+        return set()
+    if isinstance(node, ast.Name):
+        return set(getattr(module, node.id, ()) or ())
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return {
+            element.value
+            for element in node.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+    return set()
+
+
+def test_a_stage_offered_reference_files_can_open_them():
+    """The catalogue tells the model to read the reference matching this agent. Told that with no
+    Read tool, it does not error: it proceeds on the prompt alone or invents what the file would
+    have said, which is the failure the catalogue itself warns about, one step worse. Asserted
+    over every stage rather than the three that exist today, because the next stage to grow a
+    references/ directory is the one that will repeat it."""
+    from fi.alk.harness.config import sub_skills
+
+    sessions = _stage_sessions()
+    assert sessions, "found no sessions to check, so this guard proves nothing"
+    assert {skill for _, skill, _ in sessions} >= {
+        "write-scenarios",
+        "build-environment",
+    }, "the two stages known to ship references are not being checked"
+
+    for where, skill, granted in sessions:
+        if not sub_skills(skill):
+            continue
+        assert "Read" in granted, (
+            f"{where} injects the {skill!r} skill, whose catalogue tells the model to read a "
+            f"reference file, but grants {sorted(granted)}"
+        )
+
+
+def test_a_stage_is_granted_every_tool_its_own_words_name():
+    """Same defect, stated generally: prompt text and tool grants live in different files, so a
+    skill can name a tool the session never got. Nothing errors, which is what makes it survive.
+    Covers the catalogue and the references too, not just SKILL.md, because write-scenarios named
+    no tool of its own and was still broken by the paragraph appended to it."""
+    import re
+
+    from fi.alk.harness.config import SKILLS_ROOT, load_skill
+
+    builtin = r"Read|Write|Edit|Bash|Glob|Grep|AskUserQuestion|WebFetch|WebSearch"
+    # How a skill refers to a tool: `Read`, or "the Read tool".
+    pattern = re.compile(rf"`({builtin})`|\b({builtin}) tool\b")
+
+    for where, skill, granted in _stage_sessions():
+        text = load_skill(skill)
+        for reference in sorted((SKILLS_ROOT / skill / "references").glob("*.md")):
+            text += "\n" + reference.read_text(encoding="utf-8")
+        named = {match[0] or match[1] for match in pattern.findall(text)}
+        missing = named - granted
+        assert not missing, (
+            f"{where} injects {skill!r}, whose text tells the model to use "
+            f"{sorted(missing)}, but the session grants {sorted(granted)}"
+        )
+
+
 def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
     """The world is built from data_schema and base_environment. Without them the build stage has
     no schema to create and no rows to seed, so every tool call it makes refuses — and that looks

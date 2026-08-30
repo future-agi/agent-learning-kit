@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
 
+# Both writers are handed the skill, and the skill carries a catalogue of reference files that
+# tells the model to read the one matching this agent and to ask the operator when the evidence
+# does not settle it. Naming a tool the session was never granted fails silently: the model
+# proceeds on the prompt alone, or invents what the file would have said, and nothing errors.
+# Read-only plus the question, deliberately: what a writer must not do is save the suite behind
+# its own back, and that is withheld by leaving save_scenarios out of the slice writer's server.
+WRITER_BUILTINS = ("Read", "Glob", "Grep", "AskUserQuestion")
+
 # The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
 # only report gaps and never submit or save a scenario itself.
 REVIEW_SERVER = "suite-review"
@@ -88,7 +96,7 @@ def open_stage(
             )
         ),
         servers={SCENARIO_SERVER: server},
-        builtins=("AskUserQuestion",),
+        builtins=WRITER_BUILTINS,
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
@@ -387,6 +395,7 @@ async def _write_slice(
                 tools=[spec for spec in server.tools if spec.name != "save_scenarios"],
             )
         },
+        builtins=WRITER_BUILTINS,
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=turns_for(mine.count),
         model=chosen_model(),
