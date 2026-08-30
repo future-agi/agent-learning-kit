@@ -148,7 +148,13 @@ class ClaudeBackend:
         return "claude" in (model or "").lower()
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
-        from ..config import operator_ask, provider_env, thinking_config
+        from ..config import (
+            UNWANTED,
+            gate_hooks,
+            permission_gate,
+            provider_env,
+            thinking_config,
+        )
 
         allowed = [
             *spec.builtins,
@@ -173,10 +179,22 @@ class ClaudeBackend:
         if spec.cwd is not None:
             options.cwd = spec.cwd
         if spec.gated:
-            # Kept only to route the model's questions to a human when one is attached. There is
-            # no denial here any more: a stage runs with the tools it was given, in a sandbox.
+            # Not acceptEdits: that auto-approves Edit and Write before the permission callback
+            # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
+            # whole job is to validate that change.
             options.permission_mode = "default"
-            options.can_use_tool = spec.permission_override or operator_ask(spec.ask)
+            # Deny only what this stage was not granted. A stage that asks for Bash or Write
+            # means it, and a blanket denial here would silently outrank its own tool list.
+            options.disallowed_tools = [
+                name for name in UNWANTED if name not in set(allowed)
+            ]
+            # The hook is the enforcement; the callback is the backstop and the question route.
+            # allowed_tools shadows the callback for everything granted, so the hook is the only
+            # thing consulted on every call.
+            options.hooks = gate_hooks(allowed)
+            options.can_use_tool = spec.permission_override or permission_gate(
+                spec.ask, allowed
+            )
         if spec.thinking:
             options.thinking = thinking_config()
         return ClaudeSession(options)

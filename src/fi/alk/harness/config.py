@@ -162,11 +162,95 @@ def working_session(
     )
 
 
-def operator_ask(ask: Any | None = None) -> Any:
-    """Route the model's questions to whoever is running this, and allow everything else.
+# Host tools no stage is given. Denying them at the gate works and is the backstop, but a denial
+# still costs the turn that discovered it, and these get reached for in almost every stage. Naming
+# them as disallowed keeps them out of the tool list the model is shown, so the turn is never
+# spent. A stage that was granted one of these keeps it: the list is filtered against the grant.
+UNWANTED = (
+    "ToolSearch",
+    "Bash",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+)
 
-    What used to be here also denied by default. That gate is gone: a stage is now trusted with
-    the tools it was given, and the sandbox is what stands between a mistake and anything real.
+
+def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
+    """Deny anything a stage was not given, at the point the SDK actually asks.
+
+    ``can_use_tool`` alone does not do this, and the SDK is explicit about why: an
+    ``allowed_tools`` entry auto-approves that tool before the callback is consulted, so the
+    callback is shadowed for everything we granted, and it never sees them. What it does see are
+    the tools we did not grant, which is why an allow-everything callback is not a neutral
+    default but an open door: it approves precisely the host extras the harness never offered.
+    A host ``ToolSearch`` once reached every stage, returned nothing, and cost a turn each time.
+
+    A PreToolUse hook is consulted for every call, which is what makes the deny-by-default rule
+    true rather than intended.
+    """
+    from claude_agent_sdk.types import HookMatcher
+
+    permitted = {*granted, "AskUserQuestion"}
+
+    async def refuse(
+        payload: dict[str, Any], _tool_use_id: Any, _context: Any
+    ) -> dict[str, Any]:
+        name = str(payload.get("tool_name") or "")
+        if not name or name in permitted:
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"{name} is not part of this stage. You have "
+                    f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
+                    "produce goes through those, because those are what check it."
+                ),
+            }
+        }
+
+    return {"PreToolUse": [HookMatcher(hooks=[refuse])]}
+
+
+def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
+    """Decide what a stage may do: nothing it was not given.
+
+    Deny by default, not deny-a-list. A session is offered whatever tools its host happens to
+    expose, and anything not named here is by definition not part of how this stage works.
+
+    The sandbox is not the answer to this on its own. It is the boundary for the hosted lane, but
+    the same stages run in-process on an operator's machine, where cwd does not confine a shell,
+    and a grant that means one thing there and another thing hosted stops the local run being a
+    rehearsal of the hosted one. The grant means the same in both.
+    """
+    permitted = set(granted)
+
+    async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
+        from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
+        if tool_name == "AskUserQuestion" and ask is not None:
+            return await ask(tool_name, payload, context)
+        if tool_name in permitted:
+            return PermissionResultAllow(updated_input=payload)
+        return PermissionResultDeny(
+            message=(
+                f"{tool_name} is not part of this stage. You have "
+                f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
+                "produce goes through those, because those are what check it."
+            )
+        )
+
+    return gate
+
+
+def operator_ask(ask: Any | None = None) -> Any:
+    """Route the model's questions to whoever is running this.
+
+    This is the operator callback a stage carries in ``ask``, not a permission decision: what a
+    stage may do is decided by ``permission_gate`` and ``gate_hooks``.
     """
 
     async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:

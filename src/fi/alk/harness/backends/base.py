@@ -102,9 +102,9 @@ class SessionSpec:
     ``builtins`` are host tools by bare name (``Read``, ``Glob``, ``Grep``,
     ``AskUserQuestion``); ``servers`` are the harness's own tools. ``ask`` is the operator
     callback consulted when the model asks a question; None means the run is unattended.
-    ``gated`` selects the deny-by-default permission regime every tool-bearing stage runs
-    under; the one stage that runs bare (the simulated customer, which has no tools) turns it
-    off to keep its behaviour byte-identical.
+    ``gated`` selects the deny-by-default regime a tool-bearing stage runs under: the tools it
+    was granted, and nothing the host happens to also expose. The one stage that runs bare (the
+    simulated customer, which has no tools) turns it off to keep its behaviour byte-identical.
     ``thinking`` opts into the harness's thinking policy (config.thinking_config); stages that
     never set one keep their backend's default.
     """

@@ -517,6 +517,47 @@ This is the fifth defect in a row of one shape: a safety mechanism that fails op
 returned nothing, the loader that cached across worlds, the boundary that masked its diagnosis,
 the cache keyed by position, and now an instruction that cannot be obeyed. None of them raise.
 
+## The grant meant nothing, because the gate under it was removed
+
+Second review finding, and the more serious of the two. I had removed the deny-by-default
+permission regime in `e53b800`, on the premise that "a stage runs with the tools it was given, in
+a sandbox". Two things are wrong with that.
+
+The first is mechanical, and the SDK settles it rather than my reading of it. `allowed_tools` is
+an auto-approval list, not an exposure list. `claude_agent_sdk.types` says the callback is "used
+solely for tools outside allowed_tools", and ships a `CanUseToolShadowedWarning` for exactly this
+configuration. So `can_use_tool` is consulted only for the tools the harness did NOT grant, and
+`operator_ask` returned Allow for all of them. The grant was not narrowing anything: the run
+stage, holding `("AskUserQuestion",)`, could call `Bash`. Every stage could call anything the
+host exposed. That is the opposite of what the code read as, and it is the precise hole the old
+docstring said the gate was added to close after a host search tool cost a stage its turn budget.
+
+The second is the premise. The sandbox is the boundary for the hosted lane. `agent-harness build`
+runs the same stages in-process on the operator's machine, where `cwd` does not confine a shell,
+and this checkout sits next to ones holding live provider keys. So the reasoning held for one
+lane and I applied it to both.
+
+I restored the regime rather than gating it per lane. A lane-dependent grant would mean the local
+run is no longer a rehearsal of the hosted one, and the whole value of running locally first is
+that it is the same thing. The grant now means the same in both places, and the build stage keeps
+the shell it earned, because the hidden list is filtered against the grant rather than applied
+over it.
+
+Enforcement is the `PreToolUse` hook, not the callback, for the reason above: the callback is
+shadowed for everything granted, so it is structurally incapable of being the gate. The callback
+stays as the backstop and the operator-question route.
+
+Two things worth recording:
+
+- The removal commit touched **no test file**. That is why deleting a security boundary left the
+  suite green, and it is the same shape as every other defect on this branch: nothing errored.
+  There are now seven tests on it, mutation-checked three ways.
+- The two findings interlock. With the gate restored and the scenario stage still holding
+  `("AskUserQuestion",)`, `Read` is now a hard `PermissionResultDeny` rather than a silent
+  no-op. Fixing the catalogue grant first was a precondition for restoring the gate at all; had
+  I done these in the other order, the scenario stage would have been denied the very file it is
+  instructed to open.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything
