@@ -131,12 +131,25 @@ Being honest about this, because none of it has run in anger:
   (`ClientHttpProxyError: 502`, `172.20.0.1:18080`). Whether that is still live is unknown: it has
   not been retried since roughly 2026-08-29, and nothing here should be read as saying it is
   fixed.
-- **`verify_runtime_tools` is written and imports, but is not wired into the hosted pipeline.**
-  The scheduler does not carry the contract, and `HostedWorld` exposes only the database surface:
-  it has neither an agent-tool endpoint map nor a worker invocation/evidence bridge. Calling it
-  safely needs all three, not a generic HTTP request guessed from a tool name. Until that contract
-  and bridge exist, the behavioural gate is a function nobody calls. **This is the most important
-  gap: the autonomy is in and the gate that makes it safe is not.**
+- **`verify_runtime_tools` is wired and called, and on the hosted lane it still proves nothing.**
+  Corrected 2026-08-30, having been settled against the artefacts of run `fe0d2397` rather than by
+  reading. The scheduler carries the contract now and `_verify_world` runs, but two halves of the
+  chain are missing and either one alone is enough:
+
+  - `HostedWorld` has no `forward` seam, so nothing can be called from the scheduler.
+  - The bundle the hosted lane compiles ships thirteen files -- `contract.json`, a tool proxy,
+    the scenario checks, `seed/world.sql`, the simulator prompt -- and the world snapshot manifest
+    is not among them. `runtime_tools` lives in that manifest (`world/snapshot.py:149`), so the
+    leased world could not name its runtime tools even if it could call them.
+
+  Until 2026-08-30 this reported as a **pass**. `verify_runtime_tools` asked "do you declare any
+  runtime tools" before "can you call anything", and a hosted world answers "none" to the first
+  because the attribute is absent, which returned `checked=True` with no faults. That is the
+  verdict type's own definition of ok, and `_verify_world` said nothing on that path, so three
+  live runs read as clean. Both halves are fixed: the seam question is asked first, and every
+  outcome now logs a distinct line. **The gap itself is unchanged and is still the most important
+  one: the autonomy is in and the gate that would make it safe cannot reach the agent's tools.**
+  What changed is that it now says so instead of reporting success.
 - **The world handle (`reset -> step -> reward`) is not implemented.** Downstream still reaches
   for stores directly, and `world/snapshot.py` still decides "is there a world" by looking for a
   file called `world.sqlite`.

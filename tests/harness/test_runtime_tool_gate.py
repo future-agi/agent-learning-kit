@@ -86,10 +86,23 @@ def test_a_world_with_no_seam_is_not_checked_and_never_reads_as_ok():
     assert "forward" in verdict.reason
 
 
-def test_a_world_declaring_no_runtime_tools_is_trivially_fine():
-    verdict = verify_runtime_tools(SimpleNamespace(), _contract())
+def test_a_world_that_can_call_and_declares_nothing_is_trivially_fine():
+    """Vacuously true, and only for a world that could have answered. This test used to pass a
+    bare SimpleNamespace, which has no forward seam either, and asserted it was a pass: it was
+    asserting the defect. A world that cannot call anything has not verified nothing, it has
+    verified nothing *and cannot say so*, which is the case the verdict type exists to keep
+    apart. See test_a_world_that_cannot_call_anything_is_not_a_pass."""
+
+    class Empty:
+        runtime_tools: set[str] = set()
+
+        def forward(self, endpoint, arguments, *, record=False):
+            raise AssertionError("nothing to call")
+
+    verdict = verify_runtime_tools(Empty(), _contract())
     assert verdict.checked is True
     assert verdict.ok is True
+    assert verdict.reason == "no runtime tools declared"
 
 
 # --- the scheduler's use of it ----------------------------------------------------------------
@@ -429,3 +442,109 @@ def test_verification_is_tracked_per_index_not_globally():
         )
     )
     assert seen == ["w0", "w1"]
+
+
+# --- every outcome has to be observable, and each a different observation ----------------------
+#
+# Three live hosted runs read as clean because the success path logged nothing. "Verified 20
+# tools" and "there was nothing to verify" were the same silence from outside, which is this
+# verdict type's own conflation moved out of the return value and into the logging.
+
+
+class _HostedLike:
+    """`HostedWorld`: no forward seam, and no runtime_tools attribute either.
+
+    Both are absent through ordinary AttributeError, which is what the real handle's __getattr__
+    is careful to preserve, so `getattr(world, "runtime_tools", set())` answers "none declared"
+    for a world that was never able to answer at all.
+    """
+
+    def __getattr__(self, name):
+        raise AttributeError(name)
+
+
+def _verify_log(world, caplog):
+    import fi.alk.harness.hosted_scheduler as hs
+
+    scheduler = _scheduler(_contract("book_ride"))
+    with caplog.at_level(logging.WARNING, logger=hs.__name__):
+        fault = asyncio.run(
+            scheduler._verify_world(world, SimpleNamespace(tag="r"), 0)
+        )
+    return fault, caplog.text
+
+
+def test_a_world_that_cannot_call_anything_is_not_a_pass(caplog):
+    """The defect underneath the silence, and the reason it was invisible: emptiness was checked
+    before the seam was. A hosted world has neither attribute, so "which tools do you declare"
+    answered "none", the function returned checked=True with no faults, and that is this type's
+    definition of a pass. The gate has therefore been a no-op on the whole hosted lane."""
+    verdict = verify_runtime_tools(_HostedLike(), _contract("book_ride"))
+    assert verdict.checked is False, "a world with no seam proved nothing"
+    assert verdict.ok is False
+    assert "no forward seam" in verdict.reason
+
+    fault, said = _verify_log(_HostedLike(), caplog)
+    # It still does not fail the run: this reports truthfully, it does not change the verdict.
+    assert fault == ""
+    assert "NOT verified" in said
+    assert "could not say which tools it has" in said
+
+
+def test_a_verified_world_says_what_it_proved(caplog):
+    fault, said = _verify_log(
+        _Reachable({"book_ride": Call(name="book_ride", arguments={}, ok=True)}), caplog
+    )
+    assert fault == ""
+    assert "verified 1 runtime tools" in said
+    assert "book_ride" in said
+
+
+def test_a_world_with_nothing_to_verify_says_that_instead(caplog):
+    """Truthful, and a different sentence. A world that genuinely declares no runtime tools is a
+    vacuous pass, and reporting it in the same words as a real one is what hid the hosted no-op."""
+
+    class Empty:
+        runtime_tools: set[str] = set()
+
+        def forward(self, endpoint, arguments, *, record=False):
+            raise AssertionError("nothing to call")
+
+    fault, said = _verify_log(Empty(), caplog)
+    assert fault == ""
+    assert "no runtime tools declared, nothing verified" in said
+    assert "verified 1" not in said
+
+
+def test_the_four_outcomes_are_four_distinguishable_observations(caplog):
+    """The invariant, stated once. If any two of these produce the same observable result then an
+    operator reading a run cannot tell them apart, which is how three runs passed review."""
+    import fi.alk.harness.hosted_scheduler as hs
+
+    class Empty:
+        runtime_tools: set[str] = set()
+
+        def forward(self, endpoint, arguments, *, record=False):
+            raise AssertionError("nothing to call")
+
+    seen = []
+    for world in (
+        _Reachable({"book_ride": Call(name="book_ride", arguments={}, ok=True)}),
+        Empty(),
+        _HostedLike(),
+        _Reachable(
+            {"book_ride": Call(name="book_ride", arguments={}, ok=False, error="boom")}
+        ),
+    ):
+        caplog.clear()
+        scheduler = _scheduler(_contract("book_ride"))
+        with caplog.at_level(logging.WARNING, logger=hs.__name__):
+            fault = asyncio.run(
+                scheduler._verify_world(world, SimpleNamespace(tag="r"), 0)
+            )
+        seen.append((fault, caplog.text.strip()))
+
+    assert len(set(seen)) == 4, (
+        "two outcomes are indistinguishable from outside:\n"
+        + "\n".join(f"  fault={f!r} log={t!r}" for f, t in seen)
+    )

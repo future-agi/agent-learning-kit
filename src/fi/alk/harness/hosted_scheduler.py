@@ -1543,13 +1543,35 @@ class HostedScheduler:
         self._verified_runtimes[world_index] = runtime
         if verdict.broken:
             return "runtime tools did not answer: " + "; ".join(verdict.broken)
-        if not verdict.checked and verdict.tools:
+        # Every outcome says something, and each says a different thing. Silence on the success
+        # path made "verified 20 tools" and "there was nothing to verify" the same observation
+        # from outside, which is the conflation this verdict type exists to prevent, moved out of
+        # the return value and into the logging. Three live runs read as clean on that silence.
+        #
+        # All at WARNING deliberately: the hosted guest only emits WARNING and above, so an INFO
+        # line here is indistinguishable from no line at all and would rebuild the same hole.
+        if not verdict.checked:
             logger.warning(
-                "world %s: %d runtime tools go ungraded (%s): %s",
+                "world %s: runtime tools NOT verified (%s); %s",
+                world_index,
+                verdict.reason or "no reason given",
+                (
+                    f"{len(verdict.tools)} go ungraded: "
+                    + ", ".join(sorted(verdict.tools))
+                    if verdict.tools
+                    else "the world could not say which tools it has"
+                ),
+            )
+        elif verdict.tools:
+            logger.warning(
+                "world %s: verified %d runtime tools: %s",
                 world_index,
                 len(verdict.tools),
-                verdict.reason,
                 ", ".join(sorted(verdict.tools)),
+            )
+        else:
+            logger.warning(
+                "world %s: no runtime tools declared, nothing verified", world_index
             )
         return ""
 

@@ -462,8 +462,12 @@ def verify_runtime_tools(world: Any, contract: Any) -> RuntimeToolVerdict:
     forward = getattr(world, "forward", None)
     endpoints = getattr(world, "endpoint_for", {}) or {}
     runtime_tools = set(getattr(world, "runtime_tools", set()))
-    if not runtime_tools:
-        return RuntimeToolVerdict(checked=True, reason="no runtime tools declared")
+    # The seam is asked about first, and the order is the whole point. A world that cannot call
+    # anything proves nothing about the tools it holds, and it also cannot say which tools those
+    # are: `HostedWorld` has neither `forward` nor `runtime_tools`, so asking what it declares
+    # answers "none" for a world that was never able to answer at all. Checking emptiness first
+    # turned that into `checked=True` with no faults, which is this type's own definition of a
+    # pass, and made the gate a silent no-op on the entire hosted lane.
     if not callable(forward):
         return RuntimeToolVerdict(
             checked=False,
@@ -473,6 +477,8 @@ def verify_runtime_tools(world: Any, contract: Any) -> RuntimeToolVerdict:
             ),
             tools=declared,
         )
+    if not runtime_tools:
+        return RuntimeToolVerdict(checked=True, reason="no runtime tools declared")
     broken: list[str] = []
     for tool in getattr(contract, "tools", []):
         if tool.name not in runtime_tools:
