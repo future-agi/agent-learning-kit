@@ -985,6 +985,66 @@ and is updated.
 
 Five mutations caught, including the per-column revert and losing the key's declared order.
 
+## An HTTP agent had to speak one of two envelopes and was never told either
+
+Job `618736c1` reached a real conversation, and both scenarios failed on the fixture's own 422,
+`user and message are both required`, surfaced as `chat_target_failed`. The agent takes
+`{user, message}`. The simulator sends one of two fixed shapes.
+
+The sharp part is not that it guessed wrong. `submit_contract`'s schema offered the understand
+stage an enum of exactly `["fi.alk", "openai_chat"]`, so an agent implementing neither had **no way
+to record the truth**. The stage read the repository correctly, found an HTTP chat ingress, and
+was handed a form with no correct box to tick. It ticked one, and nothing objected until the first
+turn of a conversation, by which point a world had been built, scenarios written and validation
+passed. `RuntimeInterface`'s own docstring promises the harness "never adds an endpoint the
+repository does not already implement" -- it did not, but it assumed an envelope, which is the
+same promise broken one level down.
+
+Answering the question that was asked rather than guessed at: the shapes are built in
+`fi/simulate/agent/wrappers/http.py:120-144`, in the simulate SDK rather than in ALK.
+
+    fi.alk       -> {thread_id, execution_id, turn_index, scenario_name, persona, situation,
+                     expected_outcome, messages, new_message, tools, metadata}
+                    reply read from `content` or `message`
+    openai_chat  -> Chat Completions {model, messages[, tools, tool_choice]}
+                    reply read from choices[0].message
+
+Shipped: the truth is recordable as `custom`; a bare `http` no longer aliases to `fi.alk`, because
+that turns a statement about transport into an unverified claim about the body by a shorter route;
+`validate_contract` refuses an unsupported envelope **at contract time** with both shapes spelled
+out and what to do about it; and the understand skill documents them, since they were written down
+nowhere a repository author would look. A test asserts the documented shapes still match what the
+builder actually sends, because the two live in different packages and nothing structural keeps
+them true.
+
+**This does not make an arbitrary chat agent testable and should not be described as if it does.**
+It converts a late, confusing failure into an early, actionable one. The adapter that would
+actually close it is a contract schema extension plus a branch in a shared SDK module, which is
+Karthik's call and not mine to take in an experiment branch; it is written up with the exact seam
+in `_work/plans/2026-08-30-single-harness-loop.md`.
+
+## My own guard cried wolf, and I dodged it before I fixed it
+
+Documenting the envelopes tripped `test_a_skill_only_names_tools_its_stage_actually_has` on
+`content`, `custom`, `message`, `openai_chat` -- a protocol value and three wire fields, none of
+them tools. My first move was to reword the documentation until the guard went quiet. That is the
+wrong order: it distorts a skill to satisfy a test, and it was the second time I had done it, the
+Credentials section being the first. Two is a pattern.
+
+Both suggested repairs turned out to be wrong, and measuring is what showed it. Restricting
+extraction to known tool names makes the guard vacuous by construction. Requiring the prose to
+frame a token as a call ("call `x`", "use the `x` tool") sounds right and is not: across the four
+skills, 43 real tool mentions are framed **twice**. That rule would have retired the guard while
+appearing to sharpen it.
+
+Fixed at the ignore set instead, and derived rather than hand-kept: every enum value in the
+`submit_contract` schema is walked out of the schema itself, so a skill documenting what to put in
+a constrained field can name its values, and `Runtime`/`RuntimeInterface` fields join the other
+models. The wire-envelope keys are an explicit short list, because they are ordinary English words
+and derivable from nothing. Then the documentation was restored to the wording it should always
+have had, and the guard proved it still catches what it is for: renaming `save_world` to
+`freeze_world` fires, and re-adding `write_env_file`/`run_env_command` fires.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

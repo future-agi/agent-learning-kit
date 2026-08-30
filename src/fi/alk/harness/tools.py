@@ -566,9 +566,19 @@ def contract_tools(destination: Path) -> Any:
                                 },
                                 "protocol": {
                                     "type": "string",
-                                    "enum": ["fi.alk", "openai_chat"],
-                                    "description": "The submitted endpoint's request/response "
-                                    "envelope. openai_chat means Chat Completions-compatible.",
+                                    "enum": ["fi.alk", "openai_chat", "custom"],
+                                    "description": "The envelope the submitted endpoint actually "
+                                    "accepts, read from its handler, not assumed. fi.alk takes "
+                                    "{thread_id, execution_id, turn_index, scenario_name, "
+                                    "persona, situation, expected_outcome, messages, "
+                                    "new_message, tools, metadata} and replies with `content` or "
+                                    "`message`. openai_chat takes Chat Completions "
+                                    "{model, messages[, tools, tool_choice]} and replies with "
+                                    "choices[0].message. Answer `custom` when the endpoint takes "
+                                    "neither, whatever else it does: that is a real answer and "
+                                    "the harness acts on it, whereas naming an envelope the code "
+                                    "does not implement fails in the middle of a conversation "
+                                    "with the agent's own error.",
                                 },
                                 "port": {
                                     "type": "integer",

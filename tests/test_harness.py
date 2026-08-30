@@ -8,6 +8,7 @@ rather than half-works, and the submit gate returns its problems instead of writ
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 import re
 
@@ -4200,15 +4201,51 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario
 
+    from fi.alk.harness.contract import Runtime, RuntimeInterface
+
     fields = set()
-    for model in (AgentContract, ToolSpec, Scenario, Persona, SubGoal):
+    for model in (
+        AgentContract,
+        ToolSpec,
+        Scenario,
+        Persona,
+        SubGoal,
+        Runtime,
+        RuntimeInterface,
+    ):
         fields |= set(model.model_fields)
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import MODALITIES
 
+    # The allowed VALUES of every constrained contract field, taken from the submit_contract
+    # schema rather than restated. A skill that documents what to put in a field necessarily
+    # writes its values down, and those look exactly like tool names.
+    from fi.alk.harness.tools import contract_tools
+
+    def _enum_values(node: object) -> set[str]:
+        found: set[str] = set()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "enum" and isinstance(value, list):
+                    found |= {str(one) for one in value}
+                else:
+                    found |= _enum_values(value)
+        elif isinstance(node, list):
+            for item in node:
+                found |= _enum_values(item)
+        return found
+
+    schema_values = set()
+    for spec in contract_tools(Path(tempfile.mkdtemp())).tools:
+        schema_values |= _enum_values(spec.input_schema)
+
     ignore = (
         fields
         | set(MODALITIES)
+        | schema_values
+        # The wire envelope's own keys. A skill documenting a request or response shape has to
+        # name them, and they are ordinary English words rather than anything derivable.
+        | {"content", "message", "messages", "role", "model", "choices"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
     )
 

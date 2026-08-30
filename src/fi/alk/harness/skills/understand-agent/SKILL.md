@@ -97,9 +97,24 @@ Find, in roughly this order:
    entrypoint, and a package layout has none, so the run fails after the world has already been
    built and paid for. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
-   callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
-   existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   callable; its exact port and path; and any existing health path. Do not invent an endpoint.
+   Without a real ingress the runtime may be startable but the simulator cannot honestly claim to
+   have exercised it.
+
+   **Read the handler and record which envelope it accepts.** There are two the simulator can
+   send, and the answer is in the request model or the first few lines of the handler, not in the
+   fact that it is HTTP:
+
+   - `fi.alk` accepts `{thread_id, execution_id, turn_index, scenario_name, persona, situation,
+     expected_outcome, messages, new_message, tools, metadata}` and returns the reply in
+     `content` or `message`.
+   - `openai_chat` accepts Chat Completions `{model, messages[, tools, tool_choice]}` and returns
+     it in `choices[0].message`.
+
+   If the endpoint takes neither, say `custom`. That is a real answer and the harness acts on it
+   immediately. Naming an envelope the code does not implement is the expensive mistake: nothing
+   objects until the agent rejects the first turn with its own error, by which point a world has
+   been built and scenarios written against it.
 
 10. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
