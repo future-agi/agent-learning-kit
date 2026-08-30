@@ -851,6 +851,45 @@ instead of by a list of names, so the same drift cannot arrive again behind a re
 mutations, all caught: widen the helper, grant `Bash` inline at the call, and swap `understand`
 onto a brand new wide helper added by somebody else.
 
+## A principled refusal reported as a crashed sandbox
+
+Found on the first ever run of the generate path (job `3a86806e`, archive source). The environment
+stage declined to build, correctly and with the best failure message this system produces: one
+line per tool naming what the repository must expose. It reached the control plane as
+
+    code = "guest_crashed", domain = "infrastructure"
+
+Neither is true. Nothing crashed; the guest reasoned, declined, explained and stopped cleanly. And
+the domain is the submitted agent, whose repository ships no runnable seam.
+
+The mechanism runs through both repos. `require_buildable` raised a bare `RuntimeError`;
+`cli._build` caught it, printed it and returned `1`, and from that point the reason existed only
+as an exit status. The guest runs `authoring && bundle && run` as one shell chain, so a non-zero
+authoring exit short-circuits it and `hosted_entrypoint`, the only component holding an outbound
+channel, never starts. No terminal event is ever sent, and the gateway synthesises
+`guest_crashed`/`infrastructure` from the exit code alone.
+
+**The cost is not only the label.** Defaults are `retryable_domains = ["infrastructure",
+"connectivity"]` and `max_infrastructure_attempts = 2`, so a refusal that will be identical every
+time gets a second sandbox to re-derive it. Confirmed by reading `_should_retry`, which is only
+reachable on the three `not terminal_event_received` paths. So delivering a terminal event fixes
+the label and the retry together, with no separate retry change: `agent` is not in the retryable
+set.
+
+Fixed entirely inside ALK. `EnvironmentNotBuildable` carries its problems as data; the refusal is
+recorded to `environment-refusal.json` because the deciding stage and the reporting process are
+different processes with only an exit status between them; and the authoring entrypoint builds an
+outbound channel and emits the terminal event itself, since nothing downstream will.
+
+One contract detail worth knowing: `TerminalFailure` is `{domain, stage, code, message}` with
+`extra="forbid"`, so there is no `details` to put the remedy in. It travels in `message` or it
+does not reach the operator.
+
+Five mutations caught; one survived first time and mattered. Testing the emitter and the recorder
+separately left `main()`'s wiring uncovered, so "the stage declined and nobody looked for the
+decline" passed clean. That is the same silence the fix exists to remove, reproduced inside my own
+test suite. Three tests now cover the wiring.
+
 ## Credentials, and a risk this experiment created
 
 Granting the build stage a shell was only safe to reason about while it could not read anything

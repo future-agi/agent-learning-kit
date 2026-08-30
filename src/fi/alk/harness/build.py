@@ -11,6 +11,8 @@ is the next thing said, and the tool is re-run on the spot.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +24,8 @@ from .contract import AgentContract
 from .session import Stage
 from .world.snapshot import saved as world_saved
 from .world.tools import WORLD_SERVER, world_tools
+
+logger = logging.getLogger(__name__)
 
 SKILL = "build-environment"
 
@@ -80,13 +84,60 @@ def blockers(contract: AgentContract, source_root: str = "") -> list[str]:
     return problems
 
 
-def require_buildable(contract: AgentContract, source_root: str = "") -> None:
-    problems = blockers(contract, source_root)
-    if problems:
-        raise RuntimeError(
+REFUSAL_DOCUMENT = "environment-refusal.json"
+
+
+class EnvironmentNotBuildable(RuntimeError):
+    """The repository does not ship a seam the environment could be built against.
+
+    Its own type, and carrying its problems as data rather than only as a formatted message,
+    because this is the refusal an operator can actually act on: every entry names one tool and
+    what the repository must expose for it. Flattened into a string it becomes a log line
+    somebody has to go looking for, and the process that has to report it upward sees only an
+    exit code, which is indistinguishable from the harness falling over.
+    """
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = list(problems)
+        super().__init__(
             "Cannot create a truthful test environment without reimplementing agent behavior:\n"
             "  - " + "\n  - ".join(problems)
         )
+
+
+def record_refusal(destination: Path, problems: list[str]) -> Path:
+    """Leave the refusal where the process that must report it can find it.
+
+    The stage that decides this and the process that reports it upward are different processes,
+    and what crosses that boundary is an exit status. A non-zero exit is read by everything above
+    as "the guest crashed", so the reason has to travel as a document or it does not travel.
+    """
+    path = destination / REFUSAL_DOCUMENT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"problems": list(problems)}, indent=2) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def refusal_at(destination: Path) -> list[str]:
+    """The recorded refusal, or nothing. Unreadable is not the same as absent, and says so."""
+    path = destination / REFUSAL_DOCUMENT
+    if not path.is_file():
+        return []
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as broke:
+        logger.warning("%s exists but could not be read: %s", path, broke)
+        return []
+    problems = body.get("problems") if isinstance(body, dict) else None
+    return [str(one) for one in problems] if isinstance(problems, list) else []
+
+
+def require_buildable(contract: AgentContract, source_root: str = "") -> None:
+    problems = blockers(contract, source_root)
+    if problems:
+        raise EnvironmentNotBuildable(problems)
 
 
 def turns_for(contract: AgentContract) -> int:

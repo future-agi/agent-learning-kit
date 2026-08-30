@@ -19,7 +19,7 @@ from typing import Any
 
 from .build import open_stage as build_stage
 from .build import opening as build_opening
-from .build import require_buildable
+from .build import EnvironmentNotBuildable, record_refusal, require_buildable
 from .chat import open_conversation
 from .config import (
     artifact_dir,
@@ -225,6 +225,13 @@ async def _build(args: argparse.Namespace) -> int:
     source_root = _source_root(destination, args.path or "")
     try:
         require_buildable(contract, source_root)
+    except EnvironmentNotBuildable as refused:
+        # Recorded, not just printed. The process that has to report this upward sees only an
+        # exit status, and a non-zero exit reads everywhere above as "the guest crashed", which
+        # sends an operator to look at the sandbox when the answer is in their own repository.
+        record_refusal(destination, refused.problems)
+        print(str(refused), file=sys.stderr)
+        return 1
     except RuntimeError as failed:
         print(str(failed), file=sys.stderr)
         return 1
