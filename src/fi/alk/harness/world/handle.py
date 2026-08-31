@@ -155,11 +155,12 @@ class HostedWorld:
 
         `key` exists only to keep this signature a superset of `GeneratedWorld.put`; a hosted
         table already knows its own key — the column its own migrations gave it. Scenario
-        authoring has historically emitted ``key=<primary-key column>`` for table-backed
-        worlds, however, while ``GeneratedWorld`` harmlessly ignores that hint. Accept that
-        one redundant, unambiguous spelling when the record contains the same single-column
-        primary key. Continue rejecting key values and non-primary columns so a mapping-style
-        setup cannot silently acquire different semantics after moving to hosted Postgres.
+        authoring has emitted both ``key=<primary-key column>`` and
+        ``key=<primary-key value>`` for table-backed worlds, while ``GeneratedWorld`` harmlessly
+        ignores either hint. Accept both redundant spellings only when the table has one primary
+        key and the record contains it; the value spelling must exactly equal the record's key.
+        Continue rejecting arbitrary values and non-primary columns so a mapping-style setup
+        cannot silently acquire different semantics after moving to hosted Postgres.
         """
         self._reject_reserved(collection)
         if collection not in self._visible_tables():
@@ -169,11 +170,18 @@ class HostedWorld:
             )
         if key:
             primary_key = self._primary_key_order(collection)
-            if primary_key != [key] or key not in record:
+            primary_key_column = primary_key[0] if len(primary_key) == 1 else ""
+            names_primary_key = key == primary_key_column and key in record
+            matches_primary_key_value = (
+                bool(primary_key_column)
+                and primary_key_column in record
+                and key == str(record[primary_key_column])
+            )
+            if not (names_primary_key or matches_primary_key_value):
                 raise WorldUsageError(
                     "a hosted table's key is the table's own; key= is accepted only when it "
-                    "names the table's single-column primary key and that column is present "
-                    "in the record."
+                    "names the table's single-column primary key or exactly matches that key's "
+                    "value in the record."
                 )
         return self._store.add(collection, dict(record))
 

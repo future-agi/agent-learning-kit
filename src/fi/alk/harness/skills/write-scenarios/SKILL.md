@@ -438,14 +438,14 @@ def setup(world):
 **Otherwise change the world directly**, in collections and records:
 
 ```python
-world.put(collection, record, key=...)  # add one record
+world.put(collection, record)  # add one table record; the table already owns its primary key
 world.change(collection, key, changes, by=...)  # change one record
 world.drop(collection, key, by=...)  # remove one, or all of them with no key
 ```
 
-The keyed-on argument names the column a table is keyed on, and is not needed for a collection
-that is keyed already. `world.state()` shows you every collection and what is in it, which is how you find out
-which you are dealing with.
+Only use `world.put(..., key=...)` for an in-memory mapping that is not a table. A table's primary
+key is already present in the record and must not be repeated as `key=`. `world.state()` shows you
+every collection and what is in it, which is how you find out which you are dealing with.
 
 ```python
 def setup(world):

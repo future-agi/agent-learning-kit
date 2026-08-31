@@ -356,6 +356,30 @@ def test_put_accepts_redundant_single_primary_key_column_hint() -> None:
     assert stored["name"] == "ana"
 
 
+def test_put_accepts_redundant_single_primary_key_value_hint() -> None:
+    """Generated table scenarios commonly spell key= as the record key's value."""
+    world = _world(
+        {"customers": []},
+        primary_keys={"customers": ["customer_id"]},
+        columns={"customers": {"customer_id", "name"}},
+    )
+    stored = world.put(
+        "customers", {"customer_id": "c1", "name": "ana"}, key="c1"
+    )
+    assert stored["customer_id"] == "c1"
+    assert stored["name"] == "ana"
+
+
+def test_put_rejects_key_value_that_does_not_match_the_record_primary_key() -> None:
+    world = _world(
+        {"customers": []},
+        primary_keys={"customers": ["customer_id"]},
+        columns={"customers": {"customer_id", "name"}},
+    )
+    with pytest.raises(WorldUsageError):
+        world.put("customers", {"customer_id": "c1", "name": "ana"}, key="c2")
+
+
 def test_put_rejects_non_primary_column_hint() -> None:
     world = _world(
         {"customers": []},
