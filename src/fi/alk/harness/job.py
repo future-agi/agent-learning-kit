@@ -180,9 +180,17 @@ class HarnessJob(BaseModel):
             if self.artifacts.level is ArtifactLevel.LOCAL_ONLY:
                 raise ValueError("local_only_not_hosted")
             for alias, reference in self.agent.secret_refs.items():
-                if reference.manager != "platform-vault":
+                expected_manager = (
+                    "platform-config"
+                    if reference.purpose == "simulator_provider"
+                    else "platform-vault"
+                )
+                if reference.manager != expected_manager:
                     raise ValueError(f"hosted_secret_manager_unsupported: {alias}")
-                if reference.purpose != "target_provider":
+                if reference.purpose not in {
+                    "target_provider",
+                    "simulator_provider",
+                }:
                     raise ValueError(f"hosted_secret_purpose_invalid: {alias}")
             if self.security.allow_privileged:
                 raise ValueError("hosted_privileged_execution_forbidden")

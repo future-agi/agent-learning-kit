@@ -44,7 +44,11 @@ def _base_manifest_body() -> dict[str, Any]:
     return {
         "schema_version": BUNDLE_V2_SCHEMA_VERSION,
         "name": "demo",
-        "runtime": {"kind": "process", "control_service": "agent", "evidence_seam": "http_tool"},
+        "runtime": {
+            "kind": "process",
+            "control_service": "agent",
+            "evidence_seam": "http_tool",
+        },
         "processes": [
             {
                 "name": "postgres",
@@ -78,7 +82,9 @@ def _base_manifest_body() -> dict[str, Any]:
         },
         "readiness": [],
         "provenance": {
-            "source_kind": "repository", "repository": "org/repo", "source_digest": "c" * 64
+            "source_kind": "repository",
+            "repository": "org/repo",
+            "source_digest": "c" * 64,
         },
         "metadata": {},
     }
@@ -110,13 +116,21 @@ def _build_bundle(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         files.append(
-            {"path": relative, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
         )
     body["files"] = files
 
     if include_seed:
         digest = compute_inputs_digest(
-            root, ["db/schema.sql"], ["db/seed.sql"], engine=ManagedEngine.POSTGRES, version="16"
+            root,
+            ["db/schema.sql"],
+            ["db/seed.sql"],
+            engine=ManagedEngine.POSTGRES,
+            version="16",
         )
         body["seed"] = {
             "stores": [
@@ -124,8 +138,14 @@ def _build_bundle(
                     "capability": "database",
                     "migrations": ["db/schema.sql"],
                     "seed_files": ["db/seed.sql"],
-                    "baseline": {"strategy": "template_database", "inputs_digest": digest},
-                    "sentinel": {"query": "SELECT count(*) FROM riders", "expected": "1"},
+                    "baseline": {
+                        "strategy": "template_database",
+                        "inputs_digest": digest,
+                    },
+                    "sentinel": {
+                        "query": "SELECT count(*) FROM riders",
+                        "expected": "1",
+                    },
                 }
             ]
         }
@@ -195,7 +215,9 @@ def test_a_symlink_anywhere_under_the_bundle_is_rejected(tmp_path: Path) -> None
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_the_root_manifest_json_itself_being_a_symlink_is_rejected(tmp_path: Path) -> None:
+def test_the_root_manifest_json_itself_being_a_symlink_is_rejected(
+    tmp_path: Path,
+) -> None:
     """N3 (p4-round2-review): the root `manifest.json` is exempt from the listing check (a
     manifest cannot list itself), but that exemption must not extend to its symlink status — a
     symlinked root manifest was previously read straight through by `_verify_digest` and
@@ -209,7 +231,9 @@ def test_the_root_manifest_json_itself_being_a_symlink_is_rejected(tmp_path: Pat
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_a_file_present_on_disk_but_not_listed_in_files_is_rejected(tmp_path: Path) -> None:
+def test_a_file_present_on_disk_but_not_listed_in_files_is_rejected(
+    tmp_path: Path,
+) -> None:
     """F1 (p4-round1-review): a bundle directory containing a file the producer never hashed into
     `files[]` was invisible to both the digest check and the secret scan — this is the case that
     previously slipped a `.env` through undetected. `extra_files` (used by the item-3 tests below)
@@ -228,9 +252,12 @@ def test_a_dotenv_file_in_the_bundle_is_rejected(tmp_path: Path) -> None:
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_high_entropy_secret_content_in_a_bundle_file_is_rejected(tmp_path: Path) -> None:
+def test_high_entropy_secret_content_in_a_bundle_file_is_rejected(
+    tmp_path: Path,
+) -> None:
     manifest = _build_bundle(
-        tmp_path, extra_files={"db/notes.sql": b"-----BEGIN RSA PRIVATE KEY-----\nabc\n"}
+        tmp_path,
+        extra_files={"db/notes.sql": b"-----BEGIN RSA PRIVATE KEY-----\nabc\n"},
     )
     with pytest.raises(PreflightError, match="secret_in_bundle"):
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
@@ -239,7 +266,9 @@ def test_high_entropy_secret_content_in_a_bundle_file_is_rejected(tmp_path: Path
 # --- item 4: unknown-field translation ------------------------------------------------------------
 
 
-def test_an_unknown_field_added_to_the_manifest_on_disk_is_rejected(tmp_path: Path) -> None:
+def test_an_unknown_field_added_to_the_manifest_on_disk_is_rejected(
+    tmp_path: Path,
+) -> None:
     """The `manifest` argument is already-parsed and therefore already clean; this proves the
     translation fires against the bytes on disk, which is what a drifted or hand-edited
     `manifest.json` would look like to a fresh `EnvironmentBundleV2.model_validate` call."""
@@ -273,7 +302,9 @@ def test_an_unreadable_manifest_json_on_disk_is_rejected(tmp_path: Path) -> None
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_a_non_extra_forbidden_model_rejection_surfaces_its_own_code(tmp_path: Path) -> None:
+def test_a_non_extra_forbidden_model_rejection_surfaces_its_own_code(
+    tmp_path: Path,
+) -> None:
     """F13/F18 (p4-round1-review): `_translate_validation_error`'s fallback path was untested. A
     malformed on-disk `digest` (item 1 never reads it — only the `manifest` argument's own valid
     digest and file hashes, which are untouched here) reaches item 4's re-validation and raises
@@ -313,7 +344,9 @@ def test_kind_compose_is_rejected(tmp_path: Path) -> None:
 # seed_missing, reserved names, build_requires_root, seed files on disk+listed ---------------------
 
 
-def test_a_placeholder_outside_the_closed_vocabulary_is_rejected(tmp_path: Path) -> None:
+def test_a_placeholder_outside_the_closed_vocabulary_is_rejected(
+    tmp_path: Path,
+) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["FOO"] = "{{NOT_A_REAL_TOKEN}}"
         return body
@@ -323,7 +356,9 @@ def test_a_placeholder_outside_the_closed_vocabulary_is_rejected(tmp_path: Path)
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_a_port_placeholder_naming_an_unknown_process_is_rejected(tmp_path: Path) -> None:
+def test_a_port_placeholder_naming_an_unknown_process_is_rejected(
+    tmp_path: Path,
+) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["PEER_PORT"] = "{{PORT_ghost-service}}"
         return body
@@ -340,6 +375,7 @@ def test_a_port_placeholder_with_an_empty_name_falls_through_to_unknown_placehol
     `PORT_`/`HOST_`, so `{{PORT_}}` does not match the named-placeholder pattern at all — it falls
     through to the configuration-name set, misses, and is rejected as `unknown_placeholder`. A
     plausible regression target if `(.+)` is ever relaxed to `(.*)`."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["EMPTY"] = "{{PORT_}}"
         return body
@@ -357,6 +393,7 @@ def test_a_token_naming_a_capability_with_no_configuration_name_is_capability_un
     slug, the real problem is the capability's missing name, not an unrecognized token, so this is
     reported `capability_unresolved` naming the capability rather than the generic
     `unknown_placeholder`."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["capabilities"]["cache"] = {"protocol": "http", "service": "postgres"}
         body["processes"][1]["environment"]["FOO"] = "{{cache}}"
@@ -367,10 +404,13 @@ def test_a_token_naming_a_capability_with_no_configuration_name_is_capability_un
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_build_environment_rejects_any_placeholder_even_a_legal_one(tmp_path: Path) -> None:
+def test_build_environment_rejects_any_placeholder_even_a_legal_one(
+    tmp_path: Path,
+) -> None:
     """F6 (p4-round1-review): §2b's `build_environment` takes NO placeholders at all — this uses
     `{{WORLD_DIR}}`, a perfectly legal token in `environment`, specifically because that is the
     case a naive "scan against the same vocabulary" implementation would wave through."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["build_environment"] = {"TMPDIR": "{{WORLD_DIR}}"}
         return body
@@ -383,6 +423,7 @@ def test_build_environment_rejects_any_placeholder_even_a_legal_one(tmp_path: Pa
 def test_the_fixed_and_named_placeholders_are_accepted(tmp_path: Path) -> None:
     """`{{WORLD_INDEX}}`/`{{WORLD_DIR}}`/`{{DB_NAME}}` need no lookup; `{{PORT_<name>}}` and
     `{{HOST_<name>}}` need only a real process name — neither needs a capability."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["SCRATCH"] = "{{WORLD_DIR}}"
         body["processes"][1]["environment"]["DB"] = "{{DB_NAME}}"
@@ -404,10 +445,13 @@ def test_a_build_command_requiring_root_is_rejected(tmp_path: Path) -> None:
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_a_build_command_with_sudo_anywhere_in_the_step_is_rejected(tmp_path: Path) -> None:
+def test_a_build_command_with_sudo_anywhere_in_the_step_is_rejected(
+    tmp_path: Path,
+) -> None:
     """F18 (p4-round1-review): only `apt-get` as argv[0] was exercised before — `"sudo" in step`
     is exact-token list membership, not a substring match, so `sudo` appearing anywhere in the
     argv list (not just as argv[0]) must trip it too."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["build_commands"] = [["scripts/setup.sh", "--with-sudo", "sudo"]]
         return body
@@ -427,7 +471,22 @@ def test_a_target_provider_ref_no_process_lists_is_rejected(tmp_path: Path) -> N
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_a_listed_secret_purpose_with_no_supplying_ref_is_rejected(tmp_path: Path) -> None:
+def test_customer_process_cannot_claim_simulator_provider_secrets(
+    tmp_path: Path,
+) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["secret_purposes"].append("simulator_provider")
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    refs = {**TARGET_PROVIDER_REFS, "SIMULATOR_DEEPGRAM_API_KEY": "simulator_provider"}
+    with pytest.raises(PreflightError, match="secret_purpose_forbidden"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=refs)
+
+
+def test_a_listed_secret_purpose_with_no_supplying_ref_is_rejected(
+    tmp_path: Path,
+) -> None:
     manifest = _build_bundle(tmp_path)
     with pytest.raises(PreflightError, match="secret_missing"):
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs={})
@@ -453,7 +512,10 @@ def test_an_unrecognized_secret_purpose_value_is_rejected(tmp_path: Path) -> Non
     manifest = _build_bundle(tmp_path)
     with pytest.raises(ValueError, match="not a SecretPurpose"):
         preflight_bundle(
-            tmp_path, manifest, parallelism=1, secret_refs={"LIVEKIT_API_KEY": "target-provider"}
+            tmp_path,
+            manifest,
+            parallelism=1,
+            secret_refs={"LIVEKIT_API_KEY": "target-provider"},
         )
 
 
@@ -489,9 +551,7 @@ def test_an_engine_version_outside_the_catalog_pin_is_rejected(tmp_path: Path) -
 
 
 @pytest.mark.parametrize("colliding_port", [14000, 14099, 15000, 15799])
-def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(
-    tmp_path: Path, colliding_port: int
-) -> None:
+def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(tmp_path: Path, colliding_port: int) -> None:
     """F11, p5-round1-review: `fixed_port` forces effective parallelism to 1, but the literal
     value was never checked against the provisioner's own port-formula bands — a bundle declaring
     `fixed_port: 14000` collides with a job-shared engine at ordinal 0, and the failure mode is an
@@ -532,9 +592,7 @@ def test_a_fixed_port_outside_both_bands_is_accepted(tmp_path: Path) -> None:
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
-    assert preflight_bundle(
-        tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
-    ) is None
+    assert preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS) is None
 
 
 def test_a_postgres_capability_with_no_store_entry_is_rejected(tmp_path: Path) -> None:
@@ -562,7 +620,11 @@ def _reseal_schema_sql(tmp_path: Path, content: bytes) -> EnvironmentBundleV2:
             record["sha256"] = hashlib.sha256(content).hexdigest()
             record["size"] = len(content)
     raw["seed"]["stores"][0]["baseline"]["inputs_digest"] = compute_inputs_digest(
-        tmp_path, ["db/schema.sql"], ["db/seed.sql"], engine=ManagedEngine.POSTGRES, version="16"
+        tmp_path,
+        ["db/schema.sql"],
+        ["db/seed.sql"],
+        engine=ManagedEngine.POSTGRES,
+        version="16",
     )
     raw["digest"] = "sha256:" + "0" * 64
     normalized = EnvironmentBundleV2.model_validate(raw)
@@ -571,14 +633,18 @@ def _reseal_schema_sql(tmp_path: Path, content: bytes) -> EnvironmentBundleV2:
     return EnvironmentBundleV2.model_validate(raw)
 
 
-def test_the_reserved_conformance_name_in_migration_content_is_rejected(tmp_path: Path) -> None:
+def test_the_reserved_conformance_name_in_migration_content_is_rejected(
+    tmp_path: Path,
+) -> None:
     _build_bundle(tmp_path)
     manifest = _reseal_schema_sql(tmp_path, b"CREATE TABLE _alk_conformance (id int);\n")
     with pytest.raises(PreflightError, match="reserved_name"):
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_the_reserved_conformance_name_is_matched_case_insensitively(tmp_path: Path) -> None:
+def test_the_reserved_conformance_name_is_matched_case_insensitively(
+    tmp_path: Path,
+) -> None:
     """F9 (p4-round1-review): postgres folds an unquoted identifier to lower case, so
     `CREATE TABLE _ALK_CONFORMANCE` creates the reserved table under its lower-case name — a
     case-sensitive scan would miss exactly the evasion this exists to catch."""
@@ -598,8 +664,7 @@ def test_a_similarly_named_table_and_a_comment_mentioning_the_reserved_name_are_
     _build_bundle(tmp_path)
     manifest = _reseal_schema_sql(
         tmp_path,
-        b"CREATE TABLE alk_conformance_backup (id int);\n"
-        b"-- never create _alk_conformance here\n",
+        b"CREATE TABLE alk_conformance_backup (id int);\n-- never create _alk_conformance here\n",
     )
     result = preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
     assert result is None
@@ -610,6 +675,7 @@ def test_a_migration_path_not_listed_in_files_is_rejected(tmp_path: Path) -> Non
     the same "on disk but not in files[]" condition — item 2's bundle-wide walk now runs first and
     always wins this exact scenario, which is why this asserts the earlier-numbered item's code
     rather than the one this test used to name before F1 closed item 2's gap."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["seed"]["stores"][0]["migrations"] = ["db/schema.sql", "db/extra.sql"]
         return body
@@ -621,7 +687,9 @@ def test_a_migration_path_not_listed_in_files_is_rejected(tmp_path: Path) -> Non
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
 
 
-def test_a_seed_file_path_that_does_not_exist_on_disk_is_rejected(tmp_path: Path) -> None:
+def test_a_seed_file_path_that_does_not_exist_on_disk_is_rejected(
+    tmp_path: Path,
+) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["seed"]["stores"][0]["seed_files"] = ["db/seed.sql", "db/ghost.sql"]
         return body
@@ -637,6 +705,7 @@ def test_a_recorded_inputs_digest_that_does_not_match_the_seed_files_is_rejected
     """F14 (p4-round1-review): §2c makes `inputs_digest` the baseline identity attempt-retry reuse
     trusts absolutely — nothing on either side of the seam validated it before. `engine`/`version`
     come from the store's capability's own backing `ManagedProcess` (postgres/16 here)."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["seed"]["stores"][0]["baseline"]["inputs_digest"] = "sha256:" + "f" * 64
         return body
@@ -649,10 +718,13 @@ def test_a_recorded_inputs_digest_that_does_not_match_the_seed_files_is_rejected
 # --- item 6: no_sql_store ------------------------------------------------------------------------
 
 
-def test_a_process_bundle_with_no_postgres_capability_is_rejected(tmp_path: Path) -> None:
+def test_a_process_bundle_with_no_postgres_capability_is_rejected(
+    tmp_path: Path,
+) -> None:
     """Keeps the `database` capability (so the `{{DATABASE_URL}}` placeholder in `agent`'s
     environment still resolves) and only changes its protocol away from postgres, isolating this
     from the placeholder-vocabulary check that would otherwise fire first."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["capabilities"]["database"]["protocol"] = "http"
         body["seed"] = None
@@ -692,7 +764,10 @@ def test_parallelism_outside_1_to_8_is_rejected(tmp_path: Path, parallelism: int
     manifest = _build_bundle(tmp_path)
     with pytest.raises(PreflightError, match="parallelism_out_of_range"):
         preflight_bundle(
-            tmp_path, manifest, parallelism=parallelism, secret_refs=TARGET_PROVIDER_REFS
+            tmp_path,
+            manifest,
+            parallelism=parallelism,
+            secret_refs=TARGET_PROVIDER_REFS,
         )
 
 
@@ -705,6 +780,7 @@ def test_a_secret_file_and_an_unknown_placeholder_together_report_the_earlier_nu
     tmp_path: Path,
 ) -> None:
     """Item 3 (secret scan) before item 5 (placeholder vocabulary)."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["FOO"] = "{{NOT_A_REAL_TOKEN}}"
         return body
@@ -730,6 +806,7 @@ def test_a_placeholder_and_bad_parallelism_together_report_the_earlier_numbered_
     tmp_path: Path,
 ) -> None:
     """Item 5 (placeholder vocabulary) before item 7 (resource sanity)."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["FOO"] = "{{NOT_A_REAL_TOKEN}}"
         return body
@@ -899,31 +976,71 @@ def _raised_codes(source_text: str, callee_name: str, *, whole_first_argument: b
 # §2e's closed failure-code table (v1.9), transcribed verbatim — the single source of truth every
 # raised code is checked against. Split exactly as the contract text splits it, purely for
 # reviewability against the spec; the test below treats it as one flat set.
-_SECTION_2E_CONTRACT_RULE_CODES = frozenset({
-    "compose_not_hosted", "engine_unsupported", "no_sql_store", "seed_missing",
-    "seed_strategy_unsupported", "sentinel_shape_mismatch", "store_protocol_unsupported",
-    "capability_engine_mismatch", "store_service_not_managed", "reserved_name",
-    "unknown_placeholder", "unknown_field", "secret_in_bundle", "secret_unclaimed",
-    "secret_missing", "build_requires_root", "user_assignment_invalid",
-    "configuration_name_duplicate", "configuration_name_required",
-    "configuration_name_reserved", "sentinel_shape_invalid", "capability_unresolved",
-    "service_unresolved", "control_service_unresolved", "process_name_duplicate",
-    "inputs_digest_mismatch",
-    "fixed_port_reserved",  # §2e, v1.9.
-})
-_SECTION_2E_MECHANICAL_CODES = frozenset({
-    "bundle_schema_unsupported", "bundle_manifest_invalid", "bundle_manifest_drifted",
-    "bundle_digest_mismatch", "bundle_digest_invalid", "inputs_digest_invalid",
-    "file_sha256_invalid", "source_digest_invalid", "bundle_file_missing",
-    "bundle_file_changed", "bundle_file_unlisted", "bundle_symlink_forbidden",
-    "bundle_path_unsafe", "depends_on_unresolved", "depends_on_cycle", "seed_file_missing",
-    "seed_file_unlisted", "process_count_exceeded", "parallelism_out_of_range",
-    "evidence_seam_required", "processes_required", "processes_and_seed_forbidden",
-    "document_only_for_compose", "compose_runtime_requires_document",
-    "build_command_step_empty", "started_check_requires_exactly_one_of_port_or_log_marker",
-    "resolved_secret_forbidden", "capability_slug_invalid",
-    "process_name_invalid",  # §0/§2b v1.8: the process-`name` pattern rule.
-})
+_SECTION_2E_CONTRACT_RULE_CODES = frozenset(
+    {
+        "compose_not_hosted",
+        "engine_unsupported",
+        "no_sql_store",
+        "seed_missing",
+        "seed_strategy_unsupported",
+        "sentinel_shape_mismatch",
+        "store_protocol_unsupported",
+        "capability_engine_mismatch",
+        "store_service_not_managed",
+        "reserved_name",
+        "unknown_placeholder",
+        "unknown_field",
+        "secret_in_bundle",
+        "secret_unclaimed",
+        "secret_missing",
+        "secret_purpose_forbidden",
+        "build_requires_root",
+        "user_assignment_invalid",
+        "configuration_name_duplicate",
+        "configuration_name_required",
+        "configuration_name_reserved",
+        "sentinel_shape_invalid",
+        "capability_unresolved",
+        "service_unresolved",
+        "control_service_unresolved",
+        "process_name_duplicate",
+        "inputs_digest_mismatch",
+        "fixed_port_reserved",  # §2e, v1.9.
+    }
+)
+_SECTION_2E_MECHANICAL_CODES = frozenset(
+    {
+        "bundle_schema_unsupported",
+        "bundle_manifest_invalid",
+        "bundle_manifest_drifted",
+        "bundle_digest_mismatch",
+        "bundle_digest_invalid",
+        "inputs_digest_invalid",
+        "file_sha256_invalid",
+        "source_digest_invalid",
+        "bundle_file_missing",
+        "bundle_file_changed",
+        "bundle_file_unlisted",
+        "bundle_symlink_forbidden",
+        "bundle_path_unsafe",
+        "depends_on_unresolved",
+        "depends_on_cycle",
+        "seed_file_missing",
+        "seed_file_unlisted",
+        "process_count_exceeded",
+        "parallelism_out_of_range",
+        "evidence_seam_required",
+        "processes_required",
+        "processes_and_seed_forbidden",
+        "document_only_for_compose",
+        "compose_runtime_requires_document",
+        "build_command_step_empty",
+        "started_check_requires_exactly_one_of_port_or_log_marker",
+        "resolved_secret_forbidden",
+        "capability_slug_invalid",
+        "process_name_invalid",  # §0/§2b v1.8: the process-`name` pattern rule.
+    }
+)
 _SECTION_2E_CODES = _SECTION_2E_CONTRACT_RULE_CODES | _SECTION_2E_MECHANICAL_CODES
 
 
@@ -931,18 +1048,23 @@ def test_every_code_these_modules_can_raise_is_in_the_closed_section_2e_table() 
     raised: set[str] = set()
     raised |= _raised_codes(
         Path(inspect.getfile(process_preflight_module)).read_text(encoding="utf-8"),
-        "PreflightError", whole_first_argument=True,
+        "PreflightError",
+        whole_first_argument=True,
     )
     raised |= _raised_codes(
         Path(inspect.getfile(bundle_v2_module)).read_text(encoding="utf-8"),
-        "ValueError", whole_first_argument=False,
+        "ValueError",
+        whole_first_argument=False,
     )
     raised |= _raised_codes(
-        inspect.getsource(bundle_module._safe_relative), "ValueError", whole_first_argument=False
+        inspect.getsource(bundle_module._safe_relative),
+        "ValueError",
+        whole_first_argument=False,
     )
     raised |= _raised_codes(
         inspect.getsource(bundle_module._reject_secret_values),
-        "ValueError", whole_first_argument=False,
+        "ValueError",
+        whole_first_argument=False,
     )
     unlisted = raised - _SECTION_2E_CODES
     assert not unlisted, f"raised but not in §2e's table: {sorted(unlisted)}"
@@ -954,21 +1076,26 @@ def test_the_extraction_itself_finds_a_nonempty_set_in_every_source() -> None:
     contribute at least one code, not just the union as a whole."""
     preflight_codes = _raised_codes(
         Path(inspect.getfile(process_preflight_module)).read_text(encoding="utf-8"),
-        "PreflightError", whole_first_argument=True,
+        "PreflightError",
+        whole_first_argument=True,
     )
     bundle_v2_codes = _raised_codes(
         Path(inspect.getfile(bundle_v2_module)).read_text(encoding="utf-8"),
-        "ValueError", whole_first_argument=False,
+        "ValueError",
+        whole_first_argument=False,
     )
     assert "unknown_field" in preflight_codes  # the `return`-not-`raise` case (see module note).
     assert "compose_not_hosted" in preflight_codes
     assert len(bundle_v2_codes) > 10
     assert "bundle_path_unsafe" in _raised_codes(
-        inspect.getsource(bundle_module._safe_relative), "ValueError", whole_first_argument=False
+        inspect.getsource(bundle_module._safe_relative),
+        "ValueError",
+        whole_first_argument=False,
     )
     assert "resolved_secret_forbidden" in _raised_codes(
         inspect.getsource(bundle_module._reject_secret_values),
-        "ValueError", whole_first_argument=False,
+        "ValueError",
+        whole_first_argument=False,
     )
 
 
@@ -1000,41 +1127,51 @@ def _raised_codes_at_index(source_text: str, callee_name: str, *, index: int) ->
 
 
 # §2f's closed table (v1.8), transcribed verbatim, plus v1.10's two additions below.
-_SECTION_2F_CODES = frozenset({
-    "source_tree_unavailable", "build_failed", "runtime_unsupported", "spawn_failed",
-    "depends_on_timeout", "unsupported_capability_protocol",
-    # `seed_failed` (v1.10, §2f): a §2c migration/seed step exited nonzero against the freshly
-    # started store — customer-authored content, deterministic, `environment` domain (never
-    # retried). Landed in the frozen table this version; no longer an out-of-vocabulary flag.
-    "seed_failed",
-    # `store_statement_failed` (v1.10, §2f): a managed store errored or rejected a provisioner-
-    # ISSUED statement (CREATE/DROP/ALTER DATABASE, sentinel or canary probe) after passing
-    # readiness — the harness's own statements, so a deterministic failure here is a harness/
-    # engine fault, `infrastructure` domain (retryable), never `seed_failed` (that code is
-    # reserved for the customer's own migration/seed content).
-    "store_statement_failed",
-})
+_SECTION_2F_CODES = frozenset(
+    {
+        "source_tree_unavailable",
+        "build_failed",
+        "runtime_unsupported",
+        "spawn_failed",
+        "depends_on_timeout",
+        "unsupported_capability_protocol",
+        # `seed_failed` (v1.10, §2f): a §2c migration/seed step exited nonzero against the freshly
+        # started store — customer-authored content, deterministic, `environment` domain (never
+        # retried). Landed in the frozen table this version; no longer an out-of-vocabulary flag.
+        "seed_failed",
+        # `store_statement_failed` (v1.10, §2f): a managed store errored or rejected a provisioner-
+        # ISSUED statement (CREATE/DROP/ALTER DATABASE, sentinel or canary probe) after passing
+        # readiness — the harness's own statements, so a deterministic failure here is a harness/
+        # engine fault, `infrastructure` domain (retryable), never `seed_failed` (that code is
+        # reserved for the customer's own migration/seed content).
+        "store_statement_failed",
+    }
+)
 # `ProcessRuntimeError` also raises codes that are deliberately INTERNAL-only — each marks a
 # precondition `preflight_bundle` should already have made impossible (a placeholder token or a
 # missing credential preflight itself should have caught), so by the module's own docstring these
 # "never cross the outbound seam directly" and have no §2f entry to begin with. Excluded from
 # CONTAINMENT, not from extraction — a genuinely new internal code still surfaces in the raised
 # set for a human to classify, since only these documented names are exempted.
-_INTERNAL_ONLY_RUNTIME_CODES = frozenset({
-    "internal_unknown_placeholder", "internal_missing_credentials",
-    # Phase 6: marks a bundle-shape/state invariant an earlier layer (the model layer, or this
-    # module's own baseline-freeze-before-clone ordering) should already guarantee — e.g.
-    # `reset()` called before `provision()`, or a store's backing service turning out not to be a
-    # `ManagedProcess` despite `bundle_v2`'s `store_service_not_managed` check. A bug to fix here,
-    # never a bundle defect the outbound seam needs a name for — same status as the other two.
-    "internal_invariant_violated",
-})
+_INTERNAL_ONLY_RUNTIME_CODES = frozenset(
+    {
+        "internal_unknown_placeholder",
+        "internal_missing_credentials",
+        # Phase 6: marks a bundle-shape/state invariant an earlier layer (the model layer, or this
+        # module's own baseline-freeze-before-clone ordering) should already guarantee — e.g.
+        # `reset()` called before `provision()`, or a store's backing service turning out not to be a
+        # `ManagedProcess` despite `bundle_v2`'s `store_service_not_managed` check. A bug to fix here,
+        # never a bundle defect the outbound seam needs a name for — same status as the other two.
+        "internal_invariant_violated",
+    }
+)
 
 
 def test_every_section_2f_code_process_runtime_raises_is_in_the_closed_table() -> None:
     raised = _raised_codes_at_index(
         Path(inspect.getfile(process_runtime_module)).read_text(encoding="utf-8"),
-        "ProcessRuntimeError", index=1,
+        "ProcessRuntimeError",
+        index=1,
     )
     # `process_name_invalid` (F3's defense-in-depth path-containment check, `_ensure_within`) is
     # not a NEW §2f code — it deliberately reuses the EXISTING §2e model-layer code as a backstop
@@ -1042,15 +1179,15 @@ def test_every_section_2f_code_process_runtime_raises_is_in_the_closed_table() -
     # just §2f's own six entries.
     unlisted = raised - _SECTION_2F_CODES - _SECTION_2E_CODES - _INTERNAL_ONLY_RUNTIME_CODES
     assert not unlisted, (
-        f"raised but not in §2f's table (nor §2e's, nor a documented internal-only code): "
-        f"{sorted(unlisted)}"
+        f"raised but not in §2f's table (nor §2e's, nor a documented internal-only code): {sorted(unlisted)}"
     )
 
 
 def test_the_section_2f_extraction_itself_finds_a_nonempty_set() -> None:
     raised = _raised_codes_at_index(
         Path(inspect.getfile(process_runtime_module)).read_text(encoding="utf-8"),
-        "ProcessRuntimeError", index=1,
+        "ProcessRuntimeError",
+        index=1,
     )
     assert "build_failed" in raised
     assert "spawn_failed" in raised

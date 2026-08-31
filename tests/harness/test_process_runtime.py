@@ -701,6 +701,22 @@ def test_select_process_secrets_hard_excludes_source_checkout_even_if_claimed() 
     assert selected == {"A": "target-provider-value"}
 
 
+def test_select_process_secrets_hard_excludes_simulator_provider_even_if_claimed() -> (
+    None
+):
+    """Untrusted bundle processes must never receive Future AGI simulator credentials."""
+    process = _source_process(secret_purposes=["target_provider", "simulator_provider"])
+    selected = pr.select_process_secrets(
+        process,
+        secret_values={"AGENT_KEY": "customer", "SIM_KEY": "futureagi"},
+        secret_purposes={
+            "AGENT_KEY": "target_provider",
+            "SIM_KEY": "simulator_provider",
+        },
+    )
+    assert selected == {"AGENT_KEY": "customer"}
+
+
 # --- env construction (F12/F14) -----------------------------------------------------------------
 
 

@@ -165,12 +165,14 @@ def peek_secret_values(secrets_path: Path) -> tuple[str, ...]:
     return tuple(str(value) for value in raw.values() if value)
 
 
-def peek_target_provider_secret_values(
-    secrets_path: Path, secret_purposes: dict[str, str]
+def peek_secret_values_for_purpose(
+    secrets_path: Path,
+    secret_purposes: dict[str, str],
+    purpose: str,
 ) -> dict[str, str]:
     """The same non-destructive, no-unlink read as `peek_secret_values` (same file, same timing
     constraint -- called BEFORE `pool.start()`, which is what actually deletes the file), but
-    ALIAS-preserving and filtered to `purpose: target_provider` -- `peek_secret_values` throws the
+    ALIAS-preserving and filtered to one explicit purpose -- `peek_secret_values` throws the
     alias away, which is fine for outbound redaction (it only needs the raw values) but useless for
     the real `CallRunner`, which needs to pick e.g. `LIVEKIT_API_KEY` out of the map by name. Never
     fatal: a missing/malformed file just means no target-provider secrets are available yet,
@@ -185,8 +187,24 @@ def peek_target_provider_secret_values(
     return {
         str(alias): str(value)
         for alias, value in raw.items()
-        if secret_purposes.get(str(alias)) == "target_provider"
+        if secret_purposes.get(str(alias)) == purpose
     }
+
+
+def peek_target_provider_secret_values(
+    secrets_path: Path, secret_purposes: dict[str, str]
+) -> dict[str, str]:
+    return peek_secret_values_for_purpose(
+        secrets_path, secret_purposes, "target_provider"
+    )
+
+
+def peek_simulator_provider_secret_values(
+    secrets_path: Path, secret_purposes: dict[str, str]
+) -> dict[str, str]:
+    return peek_secret_values_for_purpose(
+        secrets_path, secret_purposes, "simulator_provider"
+    )
 
 
 # =================================================================================================
@@ -235,6 +253,7 @@ _SECTION_2E_CODES = frozenset(
         "secret_in_bundle",
         "secret_unclaimed",
         "secret_missing",
+        "secret_purpose_forbidden",
         "build_requires_root",
         "user_assignment_invalid",
         "configuration_name_duplicate",
@@ -505,9 +524,7 @@ def _default_build_call_runner(
     the contract itself calls it "a follow-up, not shipped with this text")."""
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
-    if connector == _LIVEKIT_CONNECTOR or (
-        connector == "auto" and modality == "voice"
-    ):
+    if connector == _LIVEKIT_CONNECTOR or (connector == "auto" and modality == "voice"):
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
@@ -1216,15 +1233,18 @@ class OutboundAdapter:
             if build_path.is_file()
             else b'{"status":"build metadata unavailable"}\n'
         )
-        result = json.dumps(
-            {
-                "stage": stage.value,
-                "failure": failure,
-                "scenario_counts": self.scenario_counts,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        result = (
+            json.dumps(
+                {
+                    "stage": stage.value,
+                    "failure": failure,
+                    "scenario_counts": self.scenario_counts,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         log = (
             f"hosted harness terminal stage={stage.value}; "
             f"scenario_counts={json.dumps(self.scenario_counts, sort_keys=True)}\n"
@@ -1475,6 +1495,11 @@ class HostedEntrypointDeps:
         self, secret_purposes: dict[str, str]
     ) -> dict[str, str]:
         return peek_target_provider_secret_values(self.secrets_path, secret_purposes)
+
+    def peek_simulator_provider_secret_values(
+        self, secret_purposes: dict[str, str]
+    ) -> dict[str, str]:
+        return peek_simulator_provider_secret_values(self.secrets_path, secret_purposes)
 
 
 # =================================================================================================
@@ -1775,6 +1800,9 @@ async def run_job(
         target_provider_secret_values = deps.peek_target_provider_secret_values(
             secret_purposes
         )
+        simulator_provider_secret_values = deps.peek_simulator_provider_secret_values(
+            secret_purposes
+        )
         adapter.configure_artifacts(
             job.artifacts
         )  # level table + budget, now that job.json is known.
@@ -2034,6 +2062,7 @@ async def run_job(
             work_directory=work_directory,
             evidence_seam=manifest.runtime.evidence_seam,
             target_provider_secret_values=target_provider_secret_values,
+            simulator_provider_secret_values=simulator_provider_secret_values,
             attempt_number=capabilities.attempt_number,
             source_directory=source,
         )
