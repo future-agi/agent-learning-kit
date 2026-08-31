@@ -78,6 +78,8 @@ GOOGLE_CLOUD_PROJECT_ALIAS = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
 OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
+VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
+RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
 SIMULATOR_LLM_MODEL_ALIAS = "SIMULATOR_LLM_MODEL"
 SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
@@ -197,6 +199,11 @@ def _check_config(
     ).lower()
 
     required = [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS]
+    connector = job.agent.connector.strip().lower()
+    if connector == "vapi":
+        required.append(VAPI_API_KEY_ALIAS)
+    elif connector == "retell":
+        required.append(RETELL_API_KEY_ALIAS)
     if "deepgram" in {stt_provider, tts_provider}:
         required.append(DEEPGRAM_API_KEY_ALIAS)
     missing_aliases = [
@@ -410,7 +417,9 @@ def _build_spec(
     *,
     run_id: str,
     room_name: str,
-    agent_name: str,
+    connector: str,
+    agent_name: str | None,
+    provider_target_id: str | None,
     doc: Mapping[str, Any],
     livekit_url: str,
     call_timeout_seconds: float,
@@ -436,12 +445,67 @@ def _build_spec(
         # liveness guard, but align it with the engine's 60-second conversation-silence backstop.
         "agent_first_silence_timeout_seconds": 60.0,
     }
-    agent = simulate.AgentDefinition(
-        name="harness-livekit-target",
-        agent_name=agent_name,
-        system_prompt=doc["instruction"],
-        transport={"kind": "webrtc"},
-    )
+    connector = connector.strip().lower()
+    if connector == "vapi":
+        if not provider_target_id:
+            raise ValueError("vapi_target_id_unavailable")
+        agent = simulate.AgentDefinition(
+            name="harness-vapi-target",
+            system_prompt=str(
+                simulator_config.get("target_system_prompt")
+                or "Provider-hosted Vapi target under test."
+            ),
+            target={
+                "provider": "vapi",
+                "assistant_id": provider_target_id,
+                "api_base_url": str(
+                    simulator_config.get("vapi_api_base_url") or "https://api.vapi.ai"
+                ),
+                "api_key_env": VAPI_API_KEY_ALIAS,
+            },
+            transport={"kind": "vapi_websocket"},
+            provider_evidence={
+                "provider": "vapi",
+                "call_id_source": "originator_response",
+            },
+        )
+    elif connector == "retell":
+        if not provider_target_id:
+            raise ValueError("retell_target_id_unavailable")
+        agent = simulate.AgentDefinition(
+            name="harness-retell-target",
+            system_prompt=str(
+                simulator_config.get("target_system_prompt")
+                or "Provider-hosted Retell target under test."
+            ),
+            target={
+                "provider": "retell",
+                "agent_id": provider_target_id,
+                "api_url": str(
+                    simulator_config.get("retell_api_url")
+                    or "https://api.retellai.com/v2/create-web-call"
+                ),
+                "livekit_url": str(
+                    simulator_config.get("retell_livekit_url")
+                    or "wss://retell-ai-4ihahnq7.livekit.cloud"
+                ),
+                "api_key_env": RETELL_API_KEY_ALIAS,
+            },
+            transport={"kind": "retell_webcall"},
+            provider_evidence={
+                "provider": "retell",
+                "call_id_source": "originator_response",
+            },
+        )
+    else:
+        if not agent_name:
+            raise ValueError("livekit_agent_name_unavailable")
+        agent = simulate.AgentDefinition(
+            name="harness-livekit-target",
+            agent_name=agent_name,
+            system_prompt=doc["instruction"],
+            transport={"kind": "webrtc"},
+        )
     runtime_spec = simulate.LiveKitSimulatorRuntime(
         url=livekit_url,
         room_name=room_name,
@@ -732,6 +796,8 @@ class CallRunnerImpl:
             GOOGLE_CLOUD_LOCATION_ALIAS,
             GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
             OPENAI_API_KEY_ALIAS,
+            VAPI_API_KEY_ALIAS,
+            RETELL_API_KEY_ALIAS,
             SIMULATOR_LLM_PROVIDER_ALIAS,
             SIMULATOR_LLM_MODEL_ALIAS,
             SIMULATOR_STT_PROVIDER_ALIAS,
@@ -786,8 +852,9 @@ class CallRunnerImpl:
             # job-level voice config gap).
             raise CallAborted(self._missing_config.message())
 
-        agent_name = _dispatch_agent_name(runtime)
-        if agent_name is None:
+        connector = self._context.job.agent.connector.strip().lower()
+        agent_name = _dispatch_agent_name(runtime) if connector == "livekit" else None
+        if connector == "livekit" and agent_name is None:
             raise CallAborted(
                 "voice_dispatch_identity_unavailable: runtime.metadata['livekit_agent_name'] is "
                 f"not set for world {runtime.world_index}"
@@ -825,10 +892,28 @@ class CallRunnerImpl:
             + _RUN_SECONDS_PAD_SECONDS
         )
 
+        provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
+            connector
+        )
+        provider_target_id = (
+            str(self._context.job.agent.config.get(provider_target_key) or "").strip()
+            if provider_target_key
+            else None
+        )
+        if provider_target_key and not provider_target_id:
+            dynamic_target = runtime.metadata.get("provider_target_id")
+            provider_target_id = (
+                dynamic_target.strip()
+                if isinstance(dynamic_target, str) and dynamic_target.strip()
+                else None
+            )
+
         spec = _build_spec(
             run_id=new_run_id(),
             room_name=room_name,
+            connector=connector,
             agent_name=agent_name,
+            provider_target_id=provider_target_id,
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=self._environ,

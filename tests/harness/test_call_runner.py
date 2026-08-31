@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from fi.alk.harness import call_runner as cr
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
@@ -536,6 +538,47 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
     assert (
         spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
     )
+
+
+@pytest.mark.parametrize(
+    ("connector", "target_key", "target_id", "provider_key", "transport"),
+    [
+        ("vapi", "assistant_id", "assistant-123", "VAPI_API_KEY", "vapi_websocket"),
+        ("retell", "agent_id", "agent-123", "RETELL_API_KEY", "retell_webcall"),
+    ],
+)
+def test_provider_connect_only_builds_direct_target_spec(
+    tmp_path: Path,
+    connector: str,
+    target_key: str,
+    target_id: str,
+    provider_key: str,
+    transport: str,
+) -> None:
+    secrets = {**_ALL_SECRETS, provider_key: "provider-key"}
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector=connector,
+        config={
+            cr.LIVEKIT_URL_CONFIG_KEY: "wss://custom.livekit.cloud",
+            target_key: target_id,
+        },
+        secrets=secrets,
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="provider-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(runner, _FakeScenario("provider-call"), _runtime())
+
+    definition = captured["spec"].environment.config["agent_definition"]
+    assert definition["target"][target_key] == target_id
+    assert definition["target"]["provider"] == connector
+    assert definition["transport"]["kind"] == transport
 
 
 def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(

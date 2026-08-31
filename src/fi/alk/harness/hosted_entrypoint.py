@@ -477,7 +477,7 @@ class NotWiredCallRunner:
         )
 
 
-_LIVEKIT_CONNECTOR = "livekit"
+_VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
 
 
 def _bundle_contract_modality(bundle_dir: Path) -> str | None:
@@ -505,9 +505,7 @@ def _default_build_call_runner(
     the contract itself calls it "a follow-up, not shipped with this text")."""
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
-    if connector == _LIVEKIT_CONNECTOR or (
-        connector == "auto" and modality == "voice"
-    ):
+    if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
@@ -1216,15 +1214,18 @@ class OutboundAdapter:
             if build_path.is_file()
             else b'{"status":"build metadata unavailable"}\n'
         )
-        result = json.dumps(
-            {
-                "stage": stage.value,
-                "failure": failure,
-                "scenario_counts": self.scenario_counts,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        result = (
+            json.dumps(
+                {
+                    "stage": stage.value,
+                    "failure": failure,
+                    "scenario_counts": self.scenario_counts,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         log = (
             f"hosted harness terminal stage={stage.value}; "
             f"scenario_counts={json.dumps(self.scenario_counts, sort_keys=True)}\n"
@@ -1398,6 +1399,55 @@ def default_install_sigterm_handler(cancel_state: CancelState) -> Callable[[], N
     return install_sigterm_handler(cancel_state)
 
 
+def _resolve_hosted_public_url(
+    capabilities: ob.HostedCapabilities,
+    transport: ob.Transport,
+    *,
+    port: int,
+    expires_in_seconds: int,
+) -> str:
+    endpoint = capabilities.endpoints.ingress
+    if not endpoint:
+        raise ProcessRuntimeError(
+            "provider_lifecycle",
+            "spawn_failed",
+            "the platform did not grant an ingress capability for provider webhooks",
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    try:
+        response = transport.request(
+            "POST",
+            endpoint,
+            headers=capabilities.auth_headers(),
+            json_body={
+                "port": port,
+                "expires_in_seconds": expires_in_seconds,
+            },
+            timeout=30.0,
+        )
+    except ob.TransportError as exc:
+        raise ProcessRuntimeError(
+            "provider_lifecycle",
+            "spawn_failed",
+            f"platform ingress request failed: {exc}",
+            domain=FailureDomain.INFRASTRUCTURE,
+        ) from exc
+    body = response.body or {}
+    url = body.get("url")
+    if (
+        response.status_code != 200
+        or not isinstance(url, str)
+        or not url.startswith("https://")
+    ):
+        raise ProcessRuntimeError(
+            "provider_lifecycle",
+            "spawn_failed",
+            f"platform ingress request was rejected with HTTP {response.status_code}",
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    return url
+
+
 # =================================================================================================
 # Dependency injection -- every seam a test needs to replace with a fake, gathered in one place so
 # `run_job` itself stays pure orchestration.
@@ -1418,9 +1468,17 @@ class HostedEntrypointDeps:
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
     # users (the model validates them); they are simply not enforced at runtime here.
-    build_provider: Callable[[], WorldProvisioner] = field(
-        default=lambda: ProcessRuntimeProvider(
-            user_resolver=lambda _name: None, require_declared_user=False
+    build_provider: Callable[
+        [ob.HostedCapabilities, ob.Transport], WorldProvisioner
+    ] = field(
+        default=lambda capabilities, transport: ProcessRuntimeProvider(
+            user_resolver=lambda _name: None,
+            require_declared_user=False,
+            public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
+                capabilities, transport, port=port, expires_in_seconds=ttl
+            ),
+            provider_attempt_id=capabilities.attempt_id,
+            provider_expires_at=capabilities.expires_at,
         )
     )
     # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that
@@ -1826,7 +1884,7 @@ async def run_job(
         # opt-out is a construction-site concern, not this module's). §4.5b's provider mutex is
         # `WorldPool`'s own `_provider_lock` now (mutation-verified: it serializes
         # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
-        provider = deps.build_provider()
+        provider = deps.build_provider(capabilities, transport)
         pool = WorldPool(
             provider,
             bundle=manifest,

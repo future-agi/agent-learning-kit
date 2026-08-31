@@ -79,8 +79,43 @@ class RepositorySource(BaseModel):
 
 class AgentConnection(BaseModel):
     connector: str
+    mode: "ProviderExecutionMode | None" = None
     config: dict[str, JsonValue] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _provider_mode_is_explicit_and_safe(self) -> "AgentConnection":
+        connector = self.connector.strip().lower()
+        if self.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
+            if connector not in {"vapi", "retell"}:
+                raise ValueError("environment_backed_requires_vapi_or_retell")
+            manifest = str(self.config.get("lifecycle_manifest") or "alk.yaml")
+            if manifest.startswith("/") or ".." in manifest.split("/"):
+                raise ValueError("provider_lifecycle_manifest_must_be_source_relative")
+            forbidden = {"assistant_id", "agent_id"} & set(self.config)
+            if forbidden:
+                raise ValueError(
+                    "environment_backed_target_is_provision_output: "
+                    + ", ".join(sorted(forbidden))
+                )
+        elif self.mode is ProviderExecutionMode.CONNECT_ONLY:
+            target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(connector)
+            if target_key and not str(self.config.get(target_key) or "").strip():
+                raise ValueError(f"connect_only_requires_{target_key}")
+        elif self.mode is not None and connector not in {"vapi", "retell"}:
+            raise ValueError("provider_mode_only_supported_for_vapi_or_retell")
+        return self
+
+
+class ProviderExecutionMode(str, Enum):
+    """How a provider-hosted target enters a harness run.
+
+    ``None`` on :class:`AgentConnection` preserves existing LiveKit/HTTP jobs and legacy
+    connector-only payloads. New Vapi/Retell submissions must choose one of these modes.
+    """
+
+    CONNECT_ONLY = "connect_only"
+    ENVIRONMENT_BACKED = "environment_backed"
 
 
 class ArtifactLevel(str, Enum):
@@ -180,13 +215,9 @@ class HarnessJob(BaseModel):
                 raise ValueError("local_only_not_hosted")
             for alias, reference in self.agent.secret_refs.items():
                 if reference.manager != "platform-vault":
-                    raise ValueError(
-                        f"hosted_secret_manager_unsupported: {alias}"
-                    )
+                    raise ValueError(f"hosted_secret_manager_unsupported: {alias}")
                 if reference.purpose != "target_provider":
-                    raise ValueError(
-                        f"hosted_secret_purpose_invalid: {alias}"
-                    )
+                    raise ValueError(f"hosted_secret_purpose_invalid: {alias}")
             if self.security.allow_privileged:
                 raise ValueError("hosted_privileged_execution_forbidden")
             if self.security.allow_host_runtime_control:

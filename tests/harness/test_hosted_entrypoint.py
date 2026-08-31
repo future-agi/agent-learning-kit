@@ -717,7 +717,7 @@ def _build_harness(
             else FakeScenarioSource(scenarios)
         ),
         build_transport=lambda: transport,
-        build_provider=lambda: provisioner,
+        build_provider=lambda _capabilities, _transport: provisioner,
         build_call_runner=build_call_runner,
         build_world_factory=lambda work_directory: FakeWorldFactory(),
         cancel_path=cancel_path,
@@ -912,22 +912,25 @@ def _call_runner_context(
     )
 
 
-def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector() -> (
-    None
-):
-    # `_job()`'s own default is `connector="vapi"` -- out of this worker's mission, by design.
+def test_default_build_call_runner_returns_real_runner_for_vapi() -> None:
     runner = he._default_build_call_runner(
         mock.Mock(), _call_runner_context(job=_job(connector="vapi"))
     )
+    assert isinstance(runner, he.CallRunnerImpl)
+
+
+def test_default_build_call_runner_returns_real_runner_for_retell() -> None:
+    runner = he._default_build_call_runner(
+        mock.Mock(), _call_runner_context(job=_job(connector="retell"))
+    )
+    assert isinstance(runner, he.CallRunnerImpl)
+
+
+def test_default_build_call_runner_returns_notwired_for_unresolved_auto() -> None:
+    runner = he._default_build_call_runner(
+        mock.Mock(), _call_runner_context(job=_job(connector="auto"))
+    )
     assert isinstance(runner, he.NotWiredCallRunner)
-
-
-def test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto() -> None:
-    for connector in ("retell", "auto"):
-        runner = he._default_build_call_runner(
-            mock.Mock(), _call_runner_context(job=_job(connector=connector))
-        )
-        assert isinstance(runner, he.NotWiredCallRunner)
 
 
 def test_default_build_call_runner_resolves_auto_voice_contract_to_livekit() -> None:
@@ -990,8 +993,8 @@ def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_eviden
     harness.deps.secrets_path.write_text(
         json.dumps({TARGET_PROVIDER_ALIAS: "lk-secret-value"}), encoding="utf-8"
     )
-    harness.deps.build_provider = lambda: SecretDeletingProvisioner(
-        instances=1, secrets_path=harness.deps.secrets_path
+    harness.deps.build_provider = lambda _capabilities, _transport: (
+        SecretDeletingProvisioner(instances=1, secrets_path=harness.deps.secrets_path)
     )
 
     captured: dict[str, he.CallRunnerContext] = {}
@@ -1827,7 +1830,9 @@ def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -
                 )
 
         harness = _build_harness(scenarios=[], instances=1)
-        harness.deps.build_provider = lambda: RaisingProvisioner(instances=1)
+        harness.deps.build_provider = lambda _capabilities, _transport: (
+            RaisingProvisioner(instances=1)
+        )
         result = await he.run_job(
             harness.job_path, harness.source, harness.output, deps=harness.deps
         )
@@ -1966,7 +1971,7 @@ def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
             bundle_source=he.DefaultBundleSource(),
             scenario_source=FakeScenarioSource([]),
             build_transport=lambda: transport,
-            build_provider=lambda: provisioner,
+            build_provider=lambda _capabilities, _transport: provisioner,
             build_world_factory=lambda work_directory: FakeWorldFactory(),
             cancel_path=tmp / "cancel.json",
             secrets_path=tmp / "secrets.json",
@@ -2716,7 +2721,9 @@ def test_pre_run_provision_failure_emits_the_terminal_before_closing_the_pool() 
         harness = _build_harness(scenarios=[], instances=1)
         transport = OrderTrackingTransport()
         harness.deps.build_transport = lambda: transport
-        harness.deps.build_provider = lambda: FailingProvisioner(instances=1)
+        harness.deps.build_provider = lambda _capabilities, _transport: (
+            FailingProvisioner(instances=1)
+        )
         code = await he.run_job(
             harness.job_path, harness.source, harness.output, deps=harness.deps
         )
@@ -3598,8 +3605,9 @@ TESTS = [
     test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias,
     test_peek_target_provider_secret_values_missing_file_is_empty,
     test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry,
-    test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector,
-    test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto,
+    test_default_build_call_runner_returns_real_runner_for_vapi,
+    test_default_build_call_runner_returns_real_runner_for_retell,
+    test_default_build_call_runner_returns_notwired_for_unresolved_auto,
     test_default_build_call_runner_resolves_auto_voice_contract_to_livekit,
     test_default_build_call_runner_returns_a_real_call_runner_impl_for_livekit,
     test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_evidence_seam,

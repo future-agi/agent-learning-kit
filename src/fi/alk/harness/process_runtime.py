@@ -40,6 +40,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
@@ -61,6 +62,15 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .job import FailureDomain
+from .provider_lifecycle import (
+    ProviderContext,
+    ProviderLifecycleError,
+    ProviderLifecycleSpec,
+    ProviderProvisionReceipt,
+    build_lifecycle_invocation,
+    run_lifecycle_invocation,
+    validate_provision_receipt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -4359,6 +4369,9 @@ class ProcessRuntimeProvider:
         close_wait_timeout_seconds: float = _TERMINATE_WAIT_SECONDS,
         secret_purpose_map: dict[str, str] | None = None,
         require_declared_user: bool = True,
+        public_url_resolver: Callable[[int, int], str] | None = None,
+        provider_attempt_id: str | None = None,
+        provider_expires_at: datetime | None = None,
     ) -> None:
         self._runner = runner
         self._sync_run = sync_run
@@ -4390,6 +4403,9 @@ class ProcessRuntimeProvider:
         # a null user_resolver to run every process uniformly, since setuid/chown to svc-* is
         # impossible there.
         self._require_declared_user = require_declared_user
+        self._public_url_resolver = public_url_resolver
+        self._provider_attempt_id = provider_attempt_id
+        self._provider_expires_at = provider_expires_at
 
         self._manifest: EnvironmentBundleV2 | None = None
         self._bundle_digest: str | None = None
@@ -4407,6 +4423,8 @@ class ProcessRuntimeProvider:
         self._secret_values: dict[str, str] = {}
         self._secret_purposes: dict[str, str] = {}
         self._secrets_loaded = False
+        self._provider_receipts: dict[int, ProviderProvisionReceipt] = {}
+        self._provider_contexts: dict[int, ProviderContext] = {}
 
     async def provision(
         self,
@@ -4634,7 +4652,170 @@ class ProcessRuntimeProvider:
                     RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
                 )
 
+        for world_index in range(effective):
+            runtime = self._runtimes[world_index]
+            if runtime.state is RuntimeState.READY:
+                self._ensure_provider_target(world_index, runtime)
+
         return [self._runtimes[index] for index in range(effective)]
+
+    def _provider_spec(self) -> ProviderLifecycleSpec | None:
+        if self._manifest is None:
+            return None
+        raw = self._manifest.metadata.get("provider_lifecycle")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return ProviderLifecycleSpec.model_validate(raw)
+        except ValueError as exc:
+            raise ProcessRuntimeError(
+                "provider_lifecycle",
+                "build_failed",
+                f"provider lifecycle metadata is invalid: {exc}",
+                domain=FailureDomain.ENVIRONMENT,
+            ) from exc
+
+    def _ensure_provider_target(
+        self, world_index: int, runtime: EnvironmentRuntime
+    ) -> None:
+        spec = self._provider_spec()
+        if spec is None or world_index in self._provider_receipts:
+            return
+        if self._context is None or self._manifest is None:
+            raise ProcessRuntimeError(
+                "provider_lifecycle",
+                _INTERNAL_INVARIANT_VIOLATED,
+                "provider lifecycle ran before process runtime context existed",
+            )
+        endpoint = runtime.endpoints.get(spec.public_capability)
+        if endpoint is None or endpoint.protocol != CapabilityProtocol.HTTP.value:
+            raise ProcessRuntimeError(
+                "provider_lifecycle",
+                "build_failed",
+                f"public capability {spec.public_capability!r} must resolve to HTTP",
+                domain=FailureDomain.ENVIRONMENT,
+            )
+        port = urlsplit(endpoint.address).port
+        if not port or self._public_url_resolver is None:
+            raise ProcessRuntimeError(
+                "provider_lifecycle",
+                "spawn_failed",
+                "a hosted public URL resolver is required for provider webhooks and tools",
+                domain=FailureDomain.INFRASTRUCTURE,
+            )
+        public_base_url = self._public_url_resolver(port, 7200).rstrip("/")
+        process_name = spec.process or self._manifest.runtime.control_service
+        process = next(
+            (entry for entry in self._manifest.processes if entry.name == process_name),
+            None,
+        )
+        if not isinstance(process, SourceProcess):
+            raise ProcessRuntimeError(
+                "provider_lifecycle",
+                "build_failed",
+                f"provider lifecycle process {process_name!r} is not a source process",
+                domain=FailureDomain.ENVIRONMENT,
+            )
+        lifecycle_directory = (
+            self._context.work_directory / "provider" / f"w{world_index}"
+        )
+        lifecycle_directory.mkdir(parents=True, exist_ok=True)
+        context = ProviderContext(
+            attempt_id=self._provider_attempt_id or self._context.job_id,
+            world_id=str(world_index),
+            provider=spec.type,
+            public_base_url=public_base_url,
+            event_url=public_base_url + spec.event_path,
+            tool_base_url=public_base_url + spec.tool_path,
+            provider_resource_prefix=f"alk-{self._context.job_id[:12]}-w{world_index}",
+            idempotency_key=f"{self._context.job_id}:{self._bundle_digest}:w{world_index}",
+            expires_at=self._provider_expires_at
+            or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
+        )
+        context_path = lifecycle_directory / "context.json"
+        context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+        context_path.chmod(0o600)
+        secret_values = {
+            name: self._secret_values.get(name, "") for name in spec.required_secrets
+        }
+        invocation = build_lifecycle_invocation(
+            command=spec.provision,
+            source_directory=world_scratch_dir(
+                self._context.work_directory, world_index, process_name
+            ),
+            lifecycle_directory=lifecycle_directory,
+            context_path=context_path,
+            context=context,
+            required_secret_values=secret_values,
+            output_relative_path=spec.output,
+        )
+        try:
+            returncode = run_lifecycle_invocation(
+                invocation,
+                log_path=lifecycle_directory / "provision.log",
+                run=self._sync_run,
+            )
+            if returncode != 0:
+                raise ProviderLifecycleError(
+                    f"provider_provision_failed: command exited {returncode}"
+                )
+            receipt = validate_provision_receipt(
+                invocation.output_path,
+                context=context,
+                secret_values=secret_values,
+            )
+        except ProviderLifecycleError as exc:
+            raise ProcessRuntimeError(
+                "provider_lifecycle",
+                "spawn_failed",
+                str(exc),
+                process=process_name,
+                domain=FailureDomain.ENVIRONMENT,
+            ) from exc
+        self._provider_receipts[world_index] = receipt
+        self._provider_contexts[world_index] = context
+        runtime.metadata["provider_target_id"] = receipt.target.id
+        runtime.metadata["provider_target_kind"] = receipt.target.kind
+
+    def _destroy_provider_target(self, world_index: int) -> None:
+        receipt = self._provider_receipts.pop(world_index, None)
+        context = self._provider_contexts.pop(world_index, None)
+        spec = self._provider_spec()
+        if receipt is None or context is None or spec is None or self._context is None:
+            return
+        process_name = spec.process or self._manifest.runtime.control_service
+        lifecycle_directory = (
+            self._context.work_directory / "provider" / f"w{world_index}"
+        )
+        invocation = build_lifecycle_invocation(
+            command=spec.destroy,
+            source_directory=world_scratch_dir(
+                self._context.work_directory, world_index, process_name
+            ),
+            lifecycle_directory=lifecycle_directory,
+            context_path=lifecycle_directory / "context.json",
+            context=context,
+            required_secret_values={
+                name: self._secret_values.get(name, "")
+                for name in spec.required_secrets
+            },
+            output_relative_path=spec.output,
+            receipt_path=lifecycle_directory / spec.output,
+        )
+        try:
+            returncode = run_lifecycle_invocation(
+                invocation,
+                log_path=lifecycle_directory / "destroy.log",
+                run=self._sync_run,
+            )
+            if returncode != 0:
+                logger.error(
+                    "provider cleanup failed for world %s: exit %s",
+                    world_index,
+                    returncode,
+                )
+        except ProviderLifecycleError as exc:
+            logger.error("provider cleanup failed for world %s: %s", world_index, exc)
 
     def _ensure_world(self, world_index: int) -> None:
         """§4 rule 1: "completes or replaces partial/unhealthy worlds and never duplicates." A
@@ -4822,6 +5003,7 @@ class ProcessRuntimeProvider:
                 )
 
     def _teardown_world(self, world_index: int) -> None:
+        self._destroy_provider_target(world_index)
         handles = self._world_handles.pop(world_index, {})
         # N12, p6-review-r2 (MINOR): reversed — `handles`' insertion order is `spawn_world`'s own
         # `_topological_order` (dependencies first), so terminating it forward sends SIGTERM to a
@@ -4937,6 +5119,9 @@ class ProcessRuntimeProvider:
         steps (clearing this instance's own dicts) ever ran, so the second `close()` §4.4 requires
         to be a no-op was no longer one. Logged, never raised, so cleanup always reaches the end.
         """
+        for world_index in list(self._provider_receipts):
+            self._destroy_provider_target(world_index)
+
         # N12, p6-review-r2 (MINOR): reversed per world (dependents before the engine they depend
         # on — see `_teardown_world`'s own note) and bounded by `self._close_wait_timeout_seconds`
         # so `close()` can keep itself inside §0.7's 120s flush window regardless of how many
@@ -4965,7 +5150,7 @@ class ProcessRuntimeProvider:
         for runtime in self._runtimes.values():
             runtime.state = RuntimeState.STOPPED
 
-        for directory_name in ("build", "worlds", "managed"):
+        for directory_name in ("build", "worlds", "managed", "provider"):
             directory = work_directory / directory_name
             try:
                 if directory.exists():
@@ -4977,6 +5162,8 @@ class ProcessRuntimeProvider:
         self._world_handles = {}
         self._runtimes = {}
         self._conformance_checked = False
+        self._provider_receipts = {}
+        self._provider_contexts = {}
 
     def _close_sync(self, work_directory: Path) -> None:
         """§4 rule 4: idempotent hard-clean of everything — processes, data directories, build

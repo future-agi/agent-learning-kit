@@ -200,6 +200,80 @@ def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
     assert "target_provider" in manifest
 
 
+def test_environment_backed_vapi_lifecycle_is_sealed_into_bundle_metadata(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "vapi-source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8"
+    )
+    (source / "requirements.txt").write_text("fastapi==0.116.1\n", encoding="utf-8")
+    (source / "alk.yaml").write_text(
+        """
+schema_version: "1"
+provider:
+  type: vapi
+  scope: world
+  process: agent
+  public_capability: target_http
+  event_path: /provider/events
+  tool_path: /provider/tools
+  required_secrets: [VAPI_API_KEY]
+  provision: {command: [python, provider_target.py, provision]}
+  destroy: {command: [python, provider_target.py, destroy]}
+""",
+        encoding="utf-8",
+    )
+    (source / "provider_target.py").write_text("pass\n", encoding="utf-8")
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "job-vapi-v2",
+            "run_id": "run-vapi-v2",
+            "execution": "hosted",
+            "source": {"kind": "archive", "archive_artifact_id": "source-1"},
+            "agent": {
+                "connector": "vapi",
+                "mode": "environment_backed",
+                "config": {"lifecycle_manifest": "alk.yaml"},
+                "secret_refs": {
+                    "VAPI_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "vapi-key",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+    output = tmp_path / "vapi-bundle"
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=job,
+        authoring=_authoring(tmp_path),
+        output=output,
+    )
+
+    lifecycle = bundle.metadata["provider_lifecycle"]
+    assert lifecycle["type"] == "vapi"
+    assert lifecycle["required_secrets"] == ["VAPI_API_KEY"]
+    assert lifecycle["public_capability"] == "target_http"
+    preflight_bundle(
+        output,
+        bundle,
+        parallelism=1,
+        secret_refs={"VAPI_API_KEY": "target_provider"},
+    )
+
+
 def test_bundle_limits_authoring_scenarios_to_requested_count(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

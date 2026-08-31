@@ -49,8 +49,10 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .job import HarnessJob
+from .job import ProviderExecutionMode
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
+from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 
 
 class BundleAuthorError(RuntimeError):
@@ -528,6 +530,15 @@ def resolve_environment_plan(
     if not root.is_dir():
         raise BundleAuthorError(f"source_unavailable: {root}")
     connector = job.agent.connector.lower()
+    if job.agent.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
+        declaration = load_provider_manifest(
+            root, str(job.agent.config.get("lifecycle_manifest") or "alk.yaml")
+        )
+        if declaration.provider.type.value != connector:
+            raise BundleAuthorError(
+                "provider_lifecycle_connector_mismatch: "
+                f"job={connector}, manifest={declaration.provider.type.value}"
+            )
     # Hosted repository submissions normally arrive as ``connector=auto``.  In the unified
     # Daytona lane the contract is authored *after* dispatch, so the control plane cannot rewrite
     # that field before this compiler runs.  The frozen contract is therefore the authoritative
@@ -946,6 +957,20 @@ def author_bundle_v2(
                 expected="ready",
             ),
         )
+        provider_manifest: ProviderRepositoryManifest | None = None
+        if job.agent.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
+            provider_manifest = load_provider_manifest(
+                source_root,
+                str(job.agent.config.get("lifecycle_manifest") or "alk.yaml"),
+            )
+            declared = set(provider_manifest.provider.required_secrets)
+            supplied = set(job.agent.secret_refs)
+            missing = sorted(declared - supplied)
+            if missing:
+                raise BundleAuthorError(
+                    "provider_lifecycle_secrets_missing: " + ", ".join(missing)
+                )
+
         manifest = EnvironmentBundleV2(
             schema_version=BUNDLE_V2_SCHEMA_VERSION,
             digest="sha256:" + "0" * 64,
@@ -973,6 +998,15 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **(
+                    {
+                        "provider_lifecycle": provider_manifest.provider.model_dump(
+                            mode="json"
+                        )
+                    }
+                    if provider_manifest is not None
+                    else {}
+                ),
                 "environment_plan_hash": hashlib.sha256(
                     json.dumps(
                         {
