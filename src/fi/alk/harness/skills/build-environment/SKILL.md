@@ -19,6 +19,72 @@ short — they can see every tool you call and what it answered.
 Ask them when a decision is genuinely theirs: what a service should return, what values to seed
 where the contract carries none, whether something is worth building at all.
 
+## Credentials: never print one, ever
+
+You have a shell in a sandbox that holds live secrets: `/run/futureagi/secrets.json`, plus
+`LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`, and a Google
+service-account JSON containing a private key.
+
+**The symptom that makes this absolute: anything you print reaches the guest log, and the guest log
+is captured into the run artifacts, which outlive the sandbox and are mirrored to disk. A single
+debug print therefore leaks a live key permanently, into a file nobody thinks to check. There is
+no undo, only rotation.**
+
+So:
+
+1. **Never print, echo, dump, log or write a credential value.** Not to stdout, not into a file,
+   not into generated config, not into a scenario, a receipt, an artifact or a commit message.
+2. **Read a credential at the point of use and pass it on by reference.** Never copy one into
+   generated code, a compose file, a fixture or a seed.
+3. **Never write a credential into the built world or its database.** A seeded key is in the
+   baseline, and the baseline is an artifact.
+4. **Report the variable and the symptom, never the value.** `CARTESIA_API_KEY returned 402` is a
+   correct bug report. Echoing the key to see whether it looks right is not, and it does not tell
+   you anything the status code did not.
+5. **Code you write must read from the environment at runtime.** No inlined literal, not even a
+   placeholder shaped like a real key, because placeholders get replaced with real values by the
+   next person and the shape is what makes that feel safe.
+6. **If a diagnostic needs a key, copy the shape of `scripts/probe_voice_providers.py`.** It reads
+   from `os.environ`, sends the request, and prints only a status code and a note. It deliberately
+   does not bind the response body, because a provider error can quote the credential you sent it.
+
+Debugging a credential is exactly when the temptation to print one is strongest, and exactly when
+the cost is highest. The status code is the evidence; the value never is.
+
+## Work out what kind of agent this is, before you build anything
+
+Nothing tells you which references apply. Decide it yourself, from evidence, in this order. Doing
+it the other way round is the expensive mistake: a reference chosen before you have read the
+repository will be plausible, you will follow it confidently, and nothing will error until a
+hosted run has already spent its twenty-five minutes.
+
+1. **Gather evidence.** Read the dependency manifest, the entrypoint, the tool registrations, the
+   configuration and the contract. Establish: is there an agent process in this repository at all,
+   or only endpoints something else calls? What does it talk to, and over what?
+2. **State your conclusion and the evidence for it**, in one or two sentences, before you act.
+   "This repository ships its own LiveKit worker: livekit-agents is a dependency and
+   `agent/agent.py` registers an rtc_session entrypoint." A wrong turn stated out loud is visible
+   in the log; a wrong turn taken silently is only visible in the outcome, an hour later.
+3. **Read the matching reference** from the list at the end of this skill. Each opens with a
+   selection check that restates the evidence justifying it. If that check does not describe what
+   you found, you are in the wrong file: go back to step 1 rather than adapting the file to fit.
+4. **Then build.**
+
+### When the evidence does not settle it, ask
+
+`AskUserQuestion` is available to you. Use it. Guessing wrong costs an entire run, and the
+operator can answer in seconds. Ask when:
+
+- there is no agent process in the repository **and** no platform credentials, so you cannot tell
+  what would place the call
+- two transports are both plausible, for example a LiveKit worker present alongside Vapi keys
+- the repository references a datastore it never configures, so you cannot tell whether to stand
+  one up or point at theirs
+- a credential, endpoint or account id you need is simply absent
+
+Ask a specific question with the options you are choosing between and what each would mean. Do not
+ask what you could establish by reading one more file.
+
 ## What you are building
 
 **1. The world.** Whatever this agent acts on. For an agent with records and a catalogue, a
@@ -185,18 +251,21 @@ tools are bound, their state is loaded, and the world is done. Say so rather tha
 something unnecessary.
 
 Where the agent's tools do talk to a store or a service, that has to exist before they can answer,
-and it must not be installed on the machine this is running on. Build it, in containers, with
-`write_env_file` and `run_env_command`.
+and it must not be installed on the machine this is running on. Build it, in containers.
 
 You decide what that means for this agent. Nothing here is prescribed, because prescribing it
-would mean guessing for an agent nobody has read yet. What you have is somewhere to write files
-and a way to run container commands from there:
+would mean guessing for an agent nobody has read yet. You have a shell and an editor, in a
+sandbox, and you are expected to use them like an engineer would:
 
-- `write_env_file` puts a file into the environment directory: a Dockerfile, a compose file, a
-  schema, an entrypoint. Anything the environment is built from.
-- `run_env_command` runs one docker or docker compose command from that directory and gives you
-  the exit code and the output. Only container commands run, so whatever the environment needs
-  belongs in a file it builds from rather than in a command.
+- `Write` and `Edit` put files wherever the environment needs them: a Dockerfile, a compose file,
+  a schema, an entrypoint, a seed script.
+- `Bash` runs anything. Bring services up, install what they need, call them, read the error and
+  fix it. No command is filtered and you never need to ask before running one. What is bounded is
+  which tools this stage holds, and reaching for one it was not given is refused rather than
+  silently ignored, so build with the ones listed here. Keep your work inside the run's own
+  directories: this stage is not always inside a sandbox.
+- `Read`, `Glob` and `Grep` are how you work out what the submitted repository actually needs
+  before you build anything for it.
 
 Some things worth knowing before you start:
 
@@ -440,7 +509,7 @@ Never work around a contract you believe is wrong. Everything after you inherits
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
 8. `add_sub_goal` for each thing worth checking, with its check in code.
-9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
+9. `Write` and `Bash`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.
 11. `check_world`, fix what it names, repeat.

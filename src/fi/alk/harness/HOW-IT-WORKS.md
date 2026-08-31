@@ -99,8 +99,10 @@ migrations, seed process and tool code run in an isolated environment. A call fo
 is not there is refused by the submitted implementation, not by a mock or a rewritten handler.
 
 It builds three things, all shared by every scenario: **the world**, **the simulator prompt** for
-a conversational agent, and **the sub-goal catalogue**. The stage has sixteen tools and no file
-access at all:
+a conversational agent, and **the sub-goal catalogue**. The stage has twenty-one tools, and a
+shell and an editor besides: building infrastructure and proving it answers is engineering, and
+withholding those did not make it safer, only unable to finish. What it may use is still only
+what it was granted, which is enforced on every call rather than assumed:
 
 | Tool | Does |
 |---|---|
@@ -108,12 +110,15 @@ access at all:
 | `seed` | Insert rows — the agent's real catalogue |
 | `change_data` | One UPDATE or DELETE, for fixing a row put in wrong |
 | `adopt_tool` | Bind and smoke-test the agent's own implementation |
-| `write_env_file` / `run_env_command` | Container orchestration only; never agent behavior |
+| `adopt_store` / `adopt_state` | Bind the store or in-process state the repository already has |
+| `write_store_ops` | Write the read and write operations the world is driven through |
 | `run_tool` | Call a defined tool and see what the world does |
 | `declare_sequence` / `drop_sequence` | A series of calls whose end state must hold |
 | `inspect_world` | Look at what is in the world |
 | `amend_contract`, `add_rule`, `drop_rule`, `fix_tool` | Correct the contract |
 | `check_world` | Run every probe, report without saving |
+| `set_modality` / `write_simulator_prompt` | How the agent is reached, and the caller it faces |
+| `add_sub_goal` / `add_world_check` | What a run has to achieve, and what must hold after it |
 | `save_world` | Freeze it — refused unless it holds up |
 
 Bindings are small adapters to the callable the repository ships. There is no generated-handler

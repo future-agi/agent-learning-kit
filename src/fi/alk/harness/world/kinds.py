@@ -12,9 +12,12 @@ is a class and a registration; nothing in the gate changes.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from .runtime import GeneratedWorld
+
+logger = logging.getLogger(__name__)
 
 
 def _rows(collection: Any) -> list[Any]:
@@ -79,7 +82,12 @@ class WorldKind(Protocol):
 
 
 class SqliteWorld:
-    """A world whose state is rows in tables. Tool APIs, and anything with a data store."""
+    """A world whose state is rows in tables. Tool APIs, and anything with a data store.
+
+    The name says SQLite for history; what this actually describes is the shape of the state, not
+    the engine holding it. Everything here reads ``world.state()``, so Postgres, and any other
+    row store a world is built on, are the same kind of world to look at.
+    """
 
     key = "sqlite"
     label = "a database behind the agent's tools"
@@ -150,8 +158,27 @@ class InProcessWorld:
         return ", ".join(f"{name}: {count}" for name, count in sorted(counts.items()))
 
 
+# Engines whose state is rows in tables. SqliteWorld is named for the engine it was written
+# against, but what it describes is the shape of the state: everything it does reads
+# ``world.state()``, so any row store is the same kind of world to look at. Registering them by
+# name is not cosmetic. An unregistered store falls through to the modality check below, so
+# whether a store is named here decides whether a browser-modality agent is inspected as rows or
+# as a page. Listing the row engines together is what keeps that consistent.
+ROW_STORES = (
+    "postgres",
+    "postgresql",
+    "mysql",
+    "mariadb",
+    "clickhouse",
+)
+
+BROWSER_MODALITIES = ("browser", "computer_use", "cua")
+
+NO_STORE = ("in_process", "memory", "in-memory", "none", "")
+
 _REGISTRY: dict[str, Callable[[], WorldKind]] = {
     SqliteWorld.key: SqliteWorld,
+    **{name: SqliteWorld for name in ROW_STORES},
     BrowserWorld.key: BrowserWorld,
     InProcessWorld.key: InProcessWorld,
 }
@@ -187,10 +214,22 @@ def for_contract(contract: Any) -> WorldKind:
     named = str(getattr(store, "kind", "") or "").lower()
     if named in _REGISTRY:
         return resolve(named)
-    if named in ("in_process", "memory", "in-memory", "none", ""):
+    if named in NO_STORE:
         if named:
             return resolve("in_process")
     modality = str(getattr(contract, "modality", "") or "").lower()
-    if modality in ("browser", "computer_use", "cua"):
-        return resolve("browser")
-    return resolve("sqlite")
+    chosen = "browser" if modality in BROWSER_MODALITIES else "sqlite"
+    if named:
+        # A store this build has no kind for still gets a world, because refusing to build over
+        # a name would be worse than inspecting it imperfectly. But which world is now an
+        # assumption, and an unannounced assumption is the thing that makes a wrong result look
+        # like a right one: a document or key-value store inspected as rows reports state that
+        # is shaped like the question rather than like the store. Saying so is the whole point.
+        logger.warning(
+            "no world kind registered for data store %r; inspecting it as %s. Register it with "
+            "register_kind(%r, ...) if that is the wrong shape.",
+            named,
+            "a page" if chosen == "browser" else "rows",
+            named,
+        )
+    return resolve(chosen)

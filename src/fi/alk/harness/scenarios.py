@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,14 @@ from .tools import schema
 logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
+
+# Both writers are handed the skill, and the skill carries a catalogue of reference files that
+# tells the model to read the one matching this agent and to ask the operator when the evidence
+# does not settle it. Naming a tool the session was never granted fails silently: the model
+# proceeds on the prompt alone, or invents what the file would have said, and nothing errors.
+# Read-only plus the question, deliberately: what a writer must not do is save the suite behind
+# its own back, and that is withheld by leaving save_scenarios out of the slice writer's server.
+WRITER_BUILTINS = ("Read", "Glob", "Grep", "AskUserQuestion")
 
 # The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
 # only report gaps and never submit or save a scenario itself.
@@ -88,7 +96,7 @@ def open_stage(
             )
         ),
         servers={SCENARIO_SERVER: server},
-        builtins=("AskUserQuestion",),
+        builtins=WRITER_BUILTINS,
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
@@ -387,6 +395,7 @@ async def _write_slice(
                 tools=[spec for spec in server.tools if spec.name != "save_scenarios"],
             )
         },
+        builtins=WRITER_BUILTINS,
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=turns_for(mine.count),
         model=chosen_model(),
@@ -443,6 +452,27 @@ def _suite_summary(suite: list[Scenario]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class SuiteReview:
+    """What a review pass established about a suite.
+
+    An empty ``gaps`` list is how a reviewer says the suite is complete: the prompt asks for one
+    when the suite is covering what it should. So a review that never ran must not produce one.
+    ``reviewed`` false does not mean "nothing is missing", it means nobody looked, and a caller
+    reading those as the same thing turns one transient model error into a suite reported as
+    finished when it was never inspected.
+    """
+
+    reviewed: bool
+    gaps: list[Slice] = field(default_factory=list)
+    reason: str = ""
+
+    @property
+    def complete(self) -> bool:
+        """Somebody looked, and found nothing missing. The only reading that ends the top-up."""
+        return self.reviewed and not self.gaps
+
+
 async def gaps_in(
     contract: AgentContract,
     suite: list[Scenario],
@@ -450,7 +480,7 @@ async def gaps_in(
     destination: Path,
     wanted: int,
     ask: Callable[..., Any] | None = None,
-) -> list[Slice]:
+) -> SuiteReview:
     """What the finished suite is missing, as slices that would fill it.
 
     Nobody looks at a suite written in parallel. Each writer sees its own slice and the merge
@@ -459,7 +489,7 @@ async def gaps_in(
     one pass that reads the suite as a whole.
     """
     if not suite:
-        return []
+        return SuiteReview(reviewed=False, reason="there is no suite to review")
     found: list[Slice] = []
 
     @tool(
@@ -540,9 +570,13 @@ async def gaps_in(
                 "Say what it is missing, then submit_gaps. Submit an empty list if it is "
                 "covering what it should."
             )
-    except Exception:  # noqa: BLE001 - a review that fails leaves the suite as written
-        return []
-    return found
+    except Exception as broke:  # noqa: BLE001 - a review that fails leaves the suite as written
+        # Reported, never returned as an empty gap list. The suite as written is still worth
+        # keeping, which is why this is caught at all, but "the reviewer found nothing missing"
+        # is the one thing this cannot claim: nobody read it.
+        logger.warning("suite review failed, nothing was inspected: %s", broke)
+        return SuiteReview(reviewed=False, reason=f"{type(broke).__name__}: {broke}")
+    return SuiteReview(reviewed=True, gaps=found)
 
 
 async def write_in_parallel(
@@ -616,10 +650,23 @@ async def write_in_parallel(
     for _ in range(max(0, rounds)):
         if len(suite) >= wanted:
             break
-        missing = await gaps_in(
+        review = await gaps_in(
             contract, suite, destination=destination, wanted=wanted, ask=ask
         )
-        missing = missing[: max(0, wanted - len(suite))]
+        if not review.reviewed:
+            # A review that did not happen is not an approval. Carrying on costs another round
+            # against a bounded budget; treating it as "nothing missing" silently ships a suite
+            # short of its target and tells the operator the writers found no more worth writing.
+            logger.warning(
+                "suite review did not run (%s); %s of %s written, trying again",
+                review.reason,
+                len(suite),
+                wanted,
+            )
+            if on_event:
+                on_event({"type": "review_failed", "why": review.reason})
+            continue
+        missing = review.gaps[: max(0, wanted - len(suite))]
         if not missing:
             break
         if on_event:

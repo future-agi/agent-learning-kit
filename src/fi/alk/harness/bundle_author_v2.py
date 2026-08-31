@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import shlex
 import re
 import shutil
 import sqlite3
@@ -214,6 +216,36 @@ def _sqlite_value(value: Any, sql_type: str) -> Any:
     return value
 
 
+logger = logging.getLogger(__name__)
+
+
+# Defaults SQLite stores as text that Postgres reads the same way. Anything else is a SQLite
+# expression whose meaning does not carry, and guessing at a translation would put a value in the
+# world that the real schema never produces.
+_PORTABLE_DEFAULTS = {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "NULL", "TRUE", "FALSE"}
+
+
+def _postgres_default(raw: Any, *, table: str, column: str) -> str | None:
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return None
+    if text.upper() in _PORTABLE_DEFAULTS:
+        return text.upper()
+    if re.fullmatch(r"-?\d+(\.\d+)?", text) or re.fullmatch(r"'[^']*'", text):
+        return text
+    # Dropped rather than mistranslated, and said out loud: a column that silently loses its
+    # default gives the agent a world that fills in something different from the one it runs
+    # against, which is the same class of wrong as losing the constraint entirely.
+    logger.warning(
+        "%s.%s has default %r, which does not translate to Postgres; the column is being "
+        "created without it",
+        table,
+        column,
+        text,
+    )
+    return None
+
+
 def _sqlite_sql(path: Path) -> str:
     statements: list[str] = []
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -234,16 +266,39 @@ def _sqlite_sql(path: Path) -> str:
             definitions: list[str] = []
             columns: list[str] = []
             column_types: list[str] = []
+            # PRAGMA table_info's `pk` is the column's 1-based POSITION in the key, not a flag.
+            # Read as a boolean it makes every column of a composite key its own PRIMARY KEY, and
+            # Postgres rejects the table outright ("multiple primary keys ... are not allowed").
+            # The position matters as well as the membership: a key is ordered.
+            key: list[tuple[int, str]] = []
             for row in info:
                 name = str(row[1])
                 sql_type = _sqlite_json_type(
                     [record[name] for record in selected],
                     _sqlite_type(str(row[2] or "")),
                 )
-                suffix = " PRIMARY KEY" if int(row[5] or 0) else ""
-                definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
+                column = [f"{_identifier(name)} {sql_type}"]
+                # NOT NULL and DEFAULT are part of what the agent's own code runs against. A world
+                # that accepts a row the real schema rejects grades behaviour the agent could not
+                # actually produce, which is the thing this whole translation exists to avoid.
+                if int(row[3] or 0):
+                    column.append("NOT NULL")
+                default = _postgres_default(row[4], table=table, column=name)
+                if default is not None:
+                    column.append(f"DEFAULT {default}")
+                definitions.append(" ".join(column))
+                if int(row[5] or 0):
+                    key.append((int(row[5]), name))
                 columns.append(name)
                 column_types.append(sql_type)
+            if key:
+                # One table-level constraint, for a single-column key as well as a composite one:
+                # valid Postgres either way, and one form is one thing to get right.
+                definitions.append(
+                    "PRIMARY KEY ("
+                    + ", ".join(_identifier(name) for _, name in sorted(key))
+                    + ")"
+                )
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
             )
@@ -491,6 +546,104 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
+# Conventional single-file entrypoints, in the order a reader would try them. This list is the
+# fallback for a repository that declares nothing; it is never consulted when the contract records
+# a run command, because a convention must not outrank a statement of fact.
+_ENTRYPOINT_NAMES = ("agent.py", "main.py", "app.py", "__main__.py", "server.py", "run.py")
+
+
+def _venv_argv(argv: list[str], root: Path) -> list[str]:
+    """A declared command, rewritten to run inside the environment the build actually created.
+
+    The submitted command is written for the repository's own machine, where its dependencies are
+    on PATH. Here they are in a project venv that `uv sync` or `python -m venv` just made, so an
+    unqualified `uvicorn` resolves to nothing.
+    """
+    if not argv:
+        return argv
+    head = argv[0]
+    if (root / "pyproject.toml").is_file():
+        # Built with `uv sync`, so the project's console scripts live in uv's environment and
+        # `uv run` is the only thing that knows where that is.
+        return ["uv", "run", "--no-sync", *argv]
+    if (root / "requirements.txt").is_file():
+        if head in {"python", "python3"} or head.startswith("python3."):
+            return [".venv/bin/python", *argv[1:]]
+        if "/" not in head:
+            return [f".venv/bin/{head}", *argv[1:]]
+    return list(argv)
+
+
+def _generated_entrypoint(
+    root: Path, runtime: dict[str, Any] | None
+) -> tuple[Path, str, list[str] | None]:
+    """Where to run the submitted agent from, and what to run.
+
+    The contract is asked first and is authoritative. The understand stage reads the repository
+    and records `runtime.command`, and `Runtime.command`'s own definition already says the
+    conventional-filename search is what happens *when no command was proven* -- so globbing for
+    `agent.py` while holding an exact, executable command inverts the documented precedence. It
+    also contradicts what this harness tells an operator: the environment stage asks them to
+    expose an importable callable or an HTTP service, and nothing anywhere asks for a filename.
+    """
+    runtime = runtime or {}
+    workdir = str(runtime.get("workdir") or "").strip().strip("/")
+    component = (root / workdir) if workdir else root
+    if workdir and not component.is_dir():
+        raise BundleAuthorError(
+            f"component_missing: the contract records runtime.workdir={workdir!r}, "
+            f"which does not exist in the submitted source"
+        )
+
+    command = runtime.get("command") or []
+    if isinstance(command, str):
+        command = shlex.split(command)
+    command = [str(item) for item in command if str(item).strip()]
+    if command:
+        entry = next((item for item in command if item.endswith(".py")), "")
+        return component, entry, _venv_argv(command, component)
+
+    for name in _ENTRYPOINT_NAMES:
+        if (component / name).is_file():
+            return component, name, None
+
+    found: list[Path] = []
+    for name in _ENTRYPOINT_NAMES:
+        found.extend(sorted(component.glob(f"**/{name}")))
+    if len(found) == 1:
+        script = found[0]
+        # The directory that owns the dependencies, not the one that happens to hold the script:
+        # a package layout puts app.py under a package while the manifest sits at the root, and
+        # building from the package directory would find no manifest at all.
+        owner = next(
+            (
+                parent
+                for parent in [script.parent, *script.parents]
+                if parent.is_relative_to(component)
+                and (
+                    (parent / "pyproject.toml").is_file()
+                    or (parent / "requirements.txt").is_file()
+                )
+            ),
+            script.parent,
+        )
+        return owner, script.relative_to(owner).as_posix(), None
+
+    if not found:
+        raise BundleAuthorError(
+            "entrypoint_undeclared: the contract records no runtime.command and the source "
+            f"contains none of {', '.join(_ENTRYPOINT_NAMES)}. Declare how the agent starts as "
+            "runtime.command in the contract (an argv vector, with runtime.workdir if it does "
+            "not start from the repository root)."
+        )
+    raise BundleAuthorError(
+        "entrypoint_ambiguous: the contract records no runtime.command and the source contains "
+        f"{len(found)} possible entrypoints ("
+        + ", ".join(one.relative_to(component).as_posix() for one in found[:8])
+        + "). Declare which one starts the agent as runtime.command in the contract."
+    )
+
+
 def _managed_world_db() -> ManagedProcess:
     return ManagedProcess(
         name="world-db",
@@ -522,6 +675,7 @@ def resolve_environment_plan(
     job: HarnessJob,
     *,
     contract_modality: str | None = None,
+    contract_runtime: dict[str, Any] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -732,16 +886,7 @@ def resolve_environment_plan(
             )
         packaging = "compose"
     else:
-        entry = "agent.py"
-        if not (root / entry).is_file():
-            candidates = sorted(root.glob("**/agent.py"))
-            if len(candidates) != 1:
-                raise BundleAuthorError(
-                    "component_ambiguous: expected exactly one agent.py"
-                )
-            component = candidates[0].parent
-        else:
-            component = root
+        component, entry, declared_run = _generated_entrypoint(root, contract_runtime)
         control_name = "agent"
         port = None if is_livekit else 8080
         environment = (
@@ -764,7 +909,7 @@ def resolve_environment_plan(
             port=port,
             environment=environment,
             livekit_download=is_livekit,
-            run_override=_dockerfile_run(component),
+            run_override=declared_run or _dockerfile_run(component),
         )
         if is_livekit:
             process = process.model_copy(
@@ -873,6 +1018,49 @@ def _files(root: Path) -> list[BundleFileV2]:
     return records
 
 
+def _warn_if_tool_calls_are_unobservable(contract_body: dict[str, Any]) -> str:
+    """Say so when nothing this run does can be graded on what the agent's tools did.
+
+    A chat agent is graded on tool calls only when it hands them back for the harness to execute
+    against the leased world. An agent that runs its own tools against its own store delegates
+    nothing, so the world records no calls and its state never moves, and a sub-goal asking
+    "was delete_note called" fails for every scenario however correctly the agent behaved. The
+    conversation-only sub-goals still pass, which is what makes this so easy to misread: the run
+    looks like a partial success and reports the agent as at fault.
+
+    Not fatal, because the conversation-only half is real and worth having, and refusing would
+    throw it away. Returned as well as logged so a caller can put it somewhere durable.
+    """
+    runtime = contract_body.get("runtime")
+    interface = runtime.get("interface") if isinstance(runtime, dict) else None
+    if not isinstance(interface, dict) or interface.get("include_tools", True):
+        return ""
+    entrypoints = contract_body.get("tool_entrypoints") or []
+    owns_its_tools = any(
+        isinstance(entry, dict) and entry.get("mode") in {"import", "construct", "service"}
+        for entry in entrypoints
+    )
+    if not owns_its_tools:
+        return ""
+    store = contract_body.get("data_store")
+    configured_by = str((store or {}).get("configured_by") or "").strip()
+    message = (
+        "this agent runs its own tools against its own store and the contract sets "
+        "include_tools=false, so it hands no tool call back for the harness to execute. The "
+        "leased world will record no calls and its state will not move, and any sub-goal that "
+        "asks what a tool did will fail for every scenario however the agent behaves. Only "
+        "sub-goals judged from the conversation can pass."
+    )
+    if configured_by:
+        message += (
+            f" The contract names {configured_by!r} as what configures its store; nothing on "
+            "this path sets it, so the agent reads its own empty database rather than the world "
+            "that was just seeded."
+        )
+    logger.warning("%s", message)
+    return message
+
+
 def author_bundle_v2(
     *,
     source: str | Path,
@@ -884,6 +1072,7 @@ def author_bundle_v2(
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     contract_modality: str | None = None
+    contract_runtime: dict[str, Any] | None = None
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -895,10 +1084,15 @@ def author_bundle_v2(
         if not isinstance(contract_body, dict):
             raise BundleAuthorError("contract_invalid: contract.json must be an object")
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
+        runtime_body = contract_body.get("runtime")
+        if isinstance(runtime_body, dict):
+            contract_runtime = runtime_body
+        _warn_if_tool_calls_are_unobservable(contract_body)
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
+        contract_runtime=contract_runtime,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(

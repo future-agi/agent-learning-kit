@@ -153,6 +153,24 @@ def readable(tool_name: str) -> str:
     return bare.replace("_", " ")
 
 
+def _elided(value: str, limit: int = 80) -> str:
+    """Shorten a label without throwing away the part that identifies it.
+
+    Cutting the end off a path keeps the part every path shares and discards the part that says
+    which file it was. Every skill file under one stage shares a prefix well past 77 characters,
+    so a run's logs recorded three reads of `.../skills/write-scenar...` and could not say whether
+    the model had opened the skill body or one of its references. That is a question about whether
+    the reference catalogue is used at all, and the display format was the only thing preventing
+    it being answered from a log we already had.
+    """
+    if len(value) <= limit:
+        return value
+    if "/" not in value:
+        return value[: limit - 3] + "..."
+    head = 24
+    return value[:head] + "..." + value[-(limit - head - 3) :]
+
+
 def _target(payload: Any) -> str:
     """A short label for what a tool call was aimed at, for display only."""
     if not isinstance(payload, dict):
@@ -160,7 +178,7 @@ def _target(payload: Any) -> str:
     for key in _TARGET_KEYS:
         value = payload.get(key)
         if isinstance(value, str) and value:
-            return value if len(value) <= 80 else value[:77] + "..."
+            return _elided(value)
     return ""
 
 

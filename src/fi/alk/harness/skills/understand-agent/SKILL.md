@@ -86,11 +86,35 @@ Find, in roughly this order:
 
 9. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
+   Its own Dockerfile is used in preference to anything written for it.
+
+   **Record how it starts, as `runtime.command`**, an argv vector exactly as the repository runs
+   it (`["uvicorn", "pkg.app:app", "--host", "0.0.0.0", "--port", "8080"]`), with `runtime.workdir`
+   when it does not start from the repository root. Read it out of the README, the Dockerfile
+   `CMD`, a Procfile, a `[project.scripts]` entry or the module that calls `main()`. A repository
+   shipping no Compose file and no Dockerfile has nothing else that says how to start it: without
+   this the packaging step falls back to looking for a conventionally named single-file
+   entrypoint, and a package layout has none, so the run fails after the world has already been
+   built and paid for. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
-   callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
-   existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   callable; its exact port and path; and any existing health path. Do not invent an endpoint.
+   Without a real ingress the runtime may be startable but the simulator cannot honestly claim to
+   have exercised it.
+
+   **Read the handler and record which envelope it accepts.** There are two the simulator can
+   send, and the answer is in the request model or the first few lines of the handler, not in the
+   fact that it is HTTP:
+
+   - `fi.alk` accepts `{thread_id, execution_id, turn_index, scenario_name, persona, situation,
+     expected_outcome, messages, new_message, tools, metadata}` and returns the reply in
+     `content` or `message`.
+   - `openai_chat` accepts Chat Completions `{model, messages[, tools, tool_choice]}` and returns
+     it in `choices[0].message`.
+
+   If the endpoint takes neither, say `custom`. That is a real answer and the harness acts on it
+   immediately. Naming an envelope the code does not implement is the expensive mistake: nothing
+   objects until the agent rejects the first turn with its own error, by which point a world has
+   been built and scenarios written against it.
 
 10. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say

@@ -8,6 +8,7 @@ rather than half-works, and the submit gate returns its problems instead of writ
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 import re
 
@@ -1819,27 +1820,10 @@ def test_an_amendment_that_makes_no_sense_is_refused(tmp_path, overrides, expect
 # --- what a stage is allowed to do ---------------------------------------------------
 
 
-def test_a_stage_may_use_nothing_it_was_not_given():
-    """Deny by default, not deny-a-list. A session is offered whatever its host exposes, and an
-    allow-by-default gate let a host search tool through that cost a stage its whole budget."""
-    import asyncio
-
-    from fi.alk.harness.config import permission_gate
-
-    gate = permission_gate(granted=["Read", "Glob"])
-    for refused in ("Write", "Edit", "Bash", "Task", "ToolSearch", "WebFetch"):
-        verdict = asyncio.run(gate(refused, {}, None))
-        assert type(verdict).__name__ == "PermissionResultDeny"
-        assert "not part of this stage" in verdict.message
-
-    allowed = asyncio.run(gate("Read", {"file_path": "a.py"}, None))
-    assert type(allowed).__name__ == "PermissionResultAllow"
-
-
 def test_a_question_still_reaches_the_operator():
     import asyncio
 
-    from fi.alk.harness.config import permission_gate
+    from fi.alk.harness.config import operator_ask
 
     asked = {}
 
@@ -1847,7 +1831,7 @@ def test_a_question_still_reaches_the_operator():
         asked["tool"] = tool_name
         return "answered"
 
-    assert asyncio.run(permission_gate(ask)("AskUserQuestion", {}, None)) == "answered"
+    assert asyncio.run(operator_ask(ask)("AskUserQuestion", {}, None)) == "answered"
     assert asked["tool"] == "AskUserQuestion"
 
 
@@ -3955,46 +3939,6 @@ def test_a_run_result_survives_being_written_and_read(tmp_path):
     assert load_results(tmp_path) == [record]
 
 
-def test_a_tool_a_stage_was_not_given_is_denied_by_the_hook():
-    """can_use_tool alone does not do this. An allowed_tools entry approves its tools before the
-    callback runs, and the SDK warns the callback is shadowed; a host ToolSearch reached every
-    stage, returned nothing and cost a turn. The PreToolUse hook is consulted for every call."""
-    import asyncio
-
-    from fi.alk.harness.config import gate_hooks
-
-    hooks = gate_hooks(["mcp__world__seed"])
-    refuse = hooks["PreToolUse"][0].hooks[0]
-
-    granted = asyncio.run(refuse({"tool_name": "mcp__world__seed"}, None, None))
-    assert granted == {}
-
-    asked = asyncio.run(refuse({"tool_name": "AskUserQuestion"}, None, None))
-    assert asked == {}
-
-    denied = asyncio.run(refuse({"tool_name": "ToolSearch"}, None, None))
-    said = denied["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
-    assert "ToolSearch is not part of this stage" in said["permissionDecisionReason"]
-    assert "mcp__world__seed" in said["permissionDecisionReason"]
-
-
-def test_every_stage_gates_with_the_hook_not_only_the_callback():
-    """One stage left on the callback alone is one stage a host tool still reaches."""
-    import inspect
-
-    from fi.alk.harness.run import grade, stage, targets
-
-    from fi.alk.harness import build, reception, scenarios
-
-    for module in (build, reception, scenarios, stage, targets, grade):
-        source = inspect.getsource(module)
-        if "permission_gate(" in source:
-            assert "gate_hooks(allowed)" in source, (
-                f"{module.__name__} has no hook gate"
-            )
-
-
 def test_writing_new_results_keeps_the_ones_not_rerun(tmp_path):
     """The live stage and the local suite share runs.json. Re-running one scenario must not
     erase the record of another, whichever writer gets there second."""
@@ -4082,40 +4026,6 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     second = asyncio.run(call(dict(payload)))
     assert "Accepted" in second
     assert (tmp_path / "contract.json").exists()
-
-
-def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
-    """A grant has to reach the permission gate, not only the tool list. The gate is built
-    from the spec when the backend opens the session, so a tool granted to the spec must be
-    permitted by the hooks of a session built afterwards."""
-    import asyncio
-
-    from fi.alk.harness.backends import SessionSpec, ToolSpec, ToolServer
-    from fi.alk.harness.backends.claude import ClaudeBackend
-    from fi.alk.harness.session import Stage
-
-    spec = SessionSpec(system_prompt="x", builtins=("Read",), max_turns=1)
-    stage = Stage(spec, name="t")
-
-    async def hand(_args):
-        return {"content": [{"type": "text", "text": "ok"}]}
-
-    server = ToolServer(
-        name="flow",
-        tools=[ToolSpec("hand_to_next_stage", "hand over", {"request": str}, hand)],
-    )
-    stage.grant("flow", server, ["hand_to_next_stage"])
-    assert "mcp__flow__hand_to_next_stage" in spec.granted()
-
-    options = ClaudeBackend().create(spec)._options
-    assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
-    refuse = options.hooks["PreToolUse"][0].hooks[0]
-    granted = asyncio.run(
-        refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None)
-    )
-    assert granted == {}
-    denied = asyncio.run(refuse({"tool_name": "Bash"}, None, None))
-    assert denied != {}
 
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
@@ -4291,15 +4201,51 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.scenario import Persona, Scenario
 
+    from fi.alk.harness.contract import Runtime, RuntimeInterface
+
     fields = set()
-    for model in (AgentContract, ToolSpec, Scenario, Persona, SubGoal):
+    for model in (
+        AgentContract,
+        ToolSpec,
+        Scenario,
+        Persona,
+        SubGoal,
+        Runtime,
+        RuntimeInterface,
+    ):
         fields |= set(model.model_fields)
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import MODALITIES
 
+    # The allowed VALUES of every constrained contract field, taken from the submit_contract
+    # schema rather than restated. A skill that documents what to put in a field necessarily
+    # writes its values down, and those look exactly like tool names.
+    from fi.alk.harness.tools import contract_tools
+
+    def _enum_values(node: object) -> set[str]:
+        found: set[str] = set()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "enum" and isinstance(value, list):
+                    found |= {str(one) for one in value}
+                else:
+                    found |= _enum_values(value)
+        elif isinstance(node, list):
+            for item in node:
+                found |= _enum_values(item)
+        return found
+
+    schema_values = set()
+    for spec in contract_tools(Path(tempfile.mkdtemp())).tools:
+        schema_values |= _enum_values(spec.input_schema)
+
     ignore = (
         fields
         | set(MODALITIES)
+        | schema_values
+        # The wire envelope's own keys. A skill documenting a request or response shape has to
+        # name them, and they are ordinary English words rather than anything derivable.
+        | {"content", "message", "messages", "role", "model", "choices"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
     )
 
@@ -4314,6 +4260,162 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         }
         assert not unknown, (
             f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"
+        )
+
+
+def _stage_sessions():
+    """Every session this package constructs, paired with the skill it injects.
+
+    Discovered by walking the source rather than listed here, so a stage added later is covered
+    without anyone remembering to add it. That matters more than usual: the bug this guards
+    against is invisible at runtime, so a stage that slipped the list would look fine forever.
+    """
+    import ast
+    import importlib
+
+    from fi.alk.harness.config import SKILLS_ROOT
+
+    root = SKILLS_ROOT.parent
+    found = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        module = None
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            keywords = {kw.arg: kw.value for kw in node.keywords}
+            # Anything that builds a session, recognised by the argument every one of them takes
+            # rather than by a list of names. A named list is how the last drift arrived: the
+            # helper was renamed and rewritten in one commit, and nothing was watching the name.
+            if "system_prompt" not in keywords:
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            # Which skill, if any, this session is built around.
+            skills = {
+                inner.args[0].id
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Call)
+                and getattr(inner.func, "id", None) == "load_skill"
+                and inner.args
+                and isinstance(inner.args[0], ast.Name)
+            }
+            if not skills:
+                continue
+            dotted = (
+                path.relative_to(root.parent.parent.parent)
+                .with_suffix("")
+                .as_posix()
+                .replace("/", ".")
+            )
+            module = module or importlib.import_module(dotted)
+            if "builtins" in keywords:
+                granted = _literal_strings(keywords["builtins"], module)
+            else:
+                # A helper builds the spec. Call it and read what it hands out, rather than
+                # restating it here where it would go stale the next time one is rewritten.
+                from fi.alk.harness import config as harness_config
+
+                helper = getattr(harness_config, name or "", None)
+                assert callable(helper), (
+                    f"{path.name}:{node.lineno} builds a session without naming builtins and "
+                    f"{name!r} is not a config helper this can resolve"
+                )
+                granted = set(helper(system_prompt="", cwd=".", max_turns=1).builtins)
+                granted |= _literal_strings(keywords.get("extra_builtins"), module)
+            for skill in skills:
+                found.append(
+                    (f"{path.name}:{node.lineno}", getattr(module, skill), granted)
+                )
+    return found
+
+
+def _literal_strings(node, module):
+    """The strings a builtins= argument resolves to, whether written inline or as a constant."""
+    import ast
+
+    if node is None:
+        return set()
+    if isinstance(node, ast.Name):
+        return set(getattr(module, node.id, ()) or ())
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return {
+            element.value
+            for element in node.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+    return set()
+
+
+def test_a_stage_offered_reference_files_can_open_them():
+    """The catalogue tells the model to read the reference matching this agent. Told that with no
+    Read tool, it does not error: it proceeds on the prompt alone or invents what the file would
+    have said, which is the failure the catalogue itself warns about, one step worse. Asserted
+    over every stage rather than the three that exist today, because the next stage to grow a
+    references/ directory is the one that will repeat it."""
+    from fi.alk.harness.config import sub_skills
+
+    sessions = _stage_sessions()
+    assert sessions, "found no sessions to check, so this guard proves nothing"
+    assert {skill for _, skill, _ in sessions} >= {
+        "write-scenarios",
+        "build-environment",
+    }, "the two stages known to ship references are not being checked"
+
+    for where, skill, granted in sessions:
+        if not sub_skills(skill):
+            continue
+        assert "Read" in granted, (
+            f"{where} injects the {skill!r} skill, whose catalogue tells the model to read a "
+            f"reference file, but grants {sorted(granted)}"
+        )
+
+
+def test_the_stage_that_reads_an_agent_cannot_change_it():
+    """understand runs with cwd on the customer's own source, and it is the only stage whose input
+    is the thing every later stage is built from. Given an editor or a shell it could tidy an
+    import or run a formatter while characterising the agent, and the contract would then describe
+    something nobody shipped, with nothing anywhere recording that the subject was touched.
+
+    This arrived as drift rather than a decision: the read-only helper was renamed and widened in
+    one commit to give the build stage a shell, except build constructs its own session, so the
+    only stage that actually received the shell was this one. Asserted on the grant rather than on
+    which helper is called, so swapping the helper again cannot reintroduce it quietly."""
+    can_change_things = {"Write", "Edit", "NotebookEdit", "Bash"}
+
+    checked = 0
+    for where, skill, granted in _stage_sessions():
+        if skill != "understand-agent":
+            continue
+        checked += 1
+        assert not (granted & can_change_things), (
+            f"{where} reads an agent's source and was granted "
+            f"{sorted(granted & can_change_things)}"
+        )
+    assert checked, "found no understand-agent session, so this guard proves nothing"
+
+
+def test_a_stage_is_granted_every_tool_its_own_words_name():
+    """Same defect, stated generally: prompt text and tool grants live in different files, so a
+    skill can name a tool the session never got. Nothing errors, which is what makes it survive.
+    Covers the catalogue and the references too, not just SKILL.md, because write-scenarios named
+    no tool of its own and was still broken by the paragraph appended to it."""
+    import re
+
+    from fi.alk.harness.config import SKILLS_ROOT, load_skill
+
+    builtin = r"Read|Write|Edit|Bash|Glob|Grep|AskUserQuestion|WebFetch|WebSearch"
+    # How a skill refers to a tool: `Read`, or "the Read tool".
+    pattern = re.compile(rf"`({builtin})`|\b({builtin}) tool\b")
+
+    for where, skill, granted in _stage_sessions():
+        text = load_skill(skill)
+        for reference in sorted((SKILLS_ROOT / skill / "references").glob("*.md")):
+            text += "\n" + reference.read_text(encoding="utf-8")
+        named = {match[0] or match[1] for match in pattern.findall(text)}
+        missing = named - granted
+        assert not missing, (
+            f"{where} injects {skill!r}, whose text tells the model to use "
+            f"{sorted(missing)}, but the session grants {sorted(granted)}"
         )
 
 

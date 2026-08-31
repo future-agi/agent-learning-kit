@@ -63,6 +63,7 @@ from .world.errors import (
     WorldUnavailable,
     WorldUsageError,
 )
+from .world.probe import verify_runtime_tools
 from .world.runtime import Call
 
 logger = logging.getLogger(__name__)
@@ -235,11 +236,94 @@ class CallRunner(Protocol):
     ) -> CallOutcome: ...
 
 
+def call_evidence_faults(
+    outcome: "CallOutcome", requires: Sequence[str] = ()
+) -> list[str]:
+    """What a runner failed to produce, phrased so it can be repaired.
+
+    The build stage can now write its own runner, so nothing guarantees a new one emits what the
+    platform renders. This is the same treatment `submit_scenario` gives a scenario: the shape is
+    fixed because something downstream depends on it, the implementation behind it is free.
+
+    Every check here is a thing that has actually been rendered wrong. A transcript whose messages
+    carry no speech timing produces a conversation view where talk ratio, words per minute and
+    latency are all zero, and nothing errors, so nobody discovers it until a customer asks why the
+    metrics are empty.
+
+    There is deliberately no turn floor. A one-turn call where the agent answered and the caller
+    rang off is a real call, and whether a conversation went far enough to judge is what sub-goal
+    grading already decides. A floor here would only duplicate that, and would misreport the
+    shortest real calls as broken receipts.
+    """
+    wanted = set(requires)
+    if not wanted:
+        # Nothing was promised, so there is nothing to hold the runner to. A transport declares
+        # what it owes; a caller that declares nothing is exercising the scheduler, not shipping
+        # a receipt.
+        return []
+    if outcome.turns == 0:
+        # A zero-turn outcome is a DIAGNOSIS, not a receipt claiming a completed call. The voice
+        # runner deliberately maps the engine's "agent joined but never spoke" codes
+        # (`no_conversation`, `conversation_silence_timeout`, and only at zero turns) to a normal
+        # CallOutcome precisely so the scheduler's own coverage rule can report it as
+        # `evidence_missing`/simulator -- which is what tells an operator the agent was silent or
+        # the caller's speech never rendered. Policing it here would replace that precise finding
+        # with "the runner produced an unrenderable outcome", which is the misleading-message
+        # failure this contract exists to prevent, not to cause.
+        return []
+    faults: list[str] = []
+    if "transcript" in wanted and not outcome.transcript_artifact:
+        faults.append(
+            "no transcript_artifact: the platform has nothing to show and no evaluation can read "
+            "what was said. Upload the transcript and put its digest here"
+        )
+    if "recordings" in wanted and not outcome.recording_artifacts:
+        faults.append(
+            "no recording_artifacts: nobody can listen back to the call. Upload the audio and "
+            "list the digests here"
+        )
+    if "timing" in wanted and outcome.duration_ms <= 0:
+        faults.append(
+            f"duration_ms={outcome.duration_ms}: measure the call, do not report zero"
+        )
+    if "timing" in wanted and (not outcome.started_at or not outcome.ended_at):
+        faults.append(
+            "started_at/ended_at missing: the platform orders and groups calls by these"
+        )
+    return faults
+
+
+class CallEvidenceMissing(RuntimeError):
+    """A runner returned an outcome the platform cannot display.
+
+    Raised rather than passed on, because a receipt that is silently incomplete is indistinguishable
+    from a run that went fine and had nothing to say.
+
+    `outcome` carries what the runner did return, under the same rule as `CallAborted.partial`:
+    the receipt's `call` field must not be null once the call has genuinely started
+    (outbound-channels.md Channel 2, "errored receipt body"). This is the stronger case of the
+    two. An aborted call may legitimately have no partial, whereas everything raised here has a
+    complete outcome in hand and is refused only for a missing evidence field, so reporting no
+    call would say the call never happened while the message says it produced the wrong thing.
+    """
+
+    def __init__(
+        self, faults: list[str], *, outcome: CallOutcome | None = None
+    ) -> None:
+        self.faults = faults
+        self.outcome = outcome
+        super().__init__(
+            "the call runner produced an outcome the platform cannot render. Fix these and "
+            "return the outcome again:\n  - " + "\n  - ".join(faults)
+        )
+
+
 async def _run_call(
     runner: CallRunner,
     scenario: Scenario,
     runtime: EnvironmentRuntime,
     world: World,
+    requires: Sequence[str] = (),
 ) -> CallOutcome:
     """Pass the world to text runners while preserving older two-argument integrations.
 
@@ -254,9 +338,15 @@ async def _run_call(
         parameter.name == "world" or parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in parameters
     )
-    if accepts_world:
-        return await run(scenario, runtime, world=world)
-    return await run(scenario, runtime)
+    outcome = (
+        await run(scenario, runtime, world=world)
+        if accepts_world
+        else await run(scenario, runtime)
+    )
+    faults = call_evidence_faults(outcome, requires)
+    if faults:
+        raise CallEvidenceMissing(faults, outcome=outcome)
+    return outcome
 
 
 # --- receipts (outbound-channels.md Channel 2; envelope fields — job_id/attempt_id/digest/etc —
@@ -352,6 +442,11 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "ready_broken": FailureDomain.SIMULATOR,
     "check_broken": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
+    # The runner returned something the platform cannot render. Simulator domain because it is our
+    # own runner at fault, not the agent under test and not the infrastructure. Deliberately not
+    # retryable: a runner that omits a transcript will omit it again, so a retry spends a world to
+    # learn nothing.
+    "call_evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -1392,6 +1487,8 @@ class HostedScheduler:
         outbound: OutboundPort,
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
+        contract: Any | None = None,
+        call_evidence_requires: Sequence[str] = (),
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1400,6 +1497,83 @@ class HostedScheduler:
         self._job_seed = job_seed
         self._cancel_requested = cancel_requested or (lambda: False)
         self._executor: ThreadPoolExecutor | None = None
+        # The agent's own declared tools, so a world can be made to prove it answers them before
+        # it is trusted to grade anybody. Optional: a job with no contract simply skips the gate.
+        self._contract = contract
+        # What the resolved transport promised the platform. Empty when nothing was declared, in
+        # which case the runner is held to nothing.
+        self._call_evidence_requires = tuple(call_evidence_requires)
+        # Verified once per world, not per scenario -- calling every declared tool before each of
+        # ten scenarios would triple a run's tool traffic to re-establish the same fact.
+        #
+        # Keyed by the runtime OBJECT, not by its index. An index is a position in the pool and is
+        # reused: reconcile replaces a demoted world with a fresh one at the same index, and that
+        # replacement is exactly when checking matters most, because the world it replaced may have
+        # been demoted by this gate. `lease()` compares identity for the same reason. The verified
+        # runtime is held rather than its `id()`, so a freed object's address cannot be recycled
+        # into a false match.
+        self._verified_runtimes: dict[int, Any] = {}
+
+    async def _verify_world(self, world: Any, runtime: Any, world_index: int) -> str:
+        """Make a freshly built world answer the agent's own tools, once, before it grades.
+
+        Returns a cause when the world must not be used, empty when it may. An unverifiable world
+        is reported and allowed through: the hosted lane has no seam to call these tools yet
+        (`HostedWorld.call` raises by design), and failing every hosted run over a missing seam
+        would be a worse lie than the silence it replaces. What it must never do is pass quietly,
+        so the tools that go ungraded are named.
+        """
+        if self._contract is None:
+            return ""
+        if self._verified_runtimes.get(world_index) is runtime:
+            return ""
+        try:
+            verdict = await asyncio.to_thread(
+                verify_runtime_tools, world, self._contract
+            )
+        except Exception as exc:  # noqa: BLE001 - verification must never take the run down
+            logger.warning(
+                "world %s: could not verify runtime tools: %s: %s",
+                world_index,
+                type(exc).__name__,
+                exc,
+            )
+            self._verified_runtimes[world_index] = runtime
+            return ""
+        self._verified_runtimes[world_index] = runtime
+        if verdict.broken:
+            return "runtime tools did not answer: " + "; ".join(verdict.broken)
+        # Every outcome says something, and each says a different thing. Silence on the success
+        # path made "verified 20 tools" and "there was nothing to verify" the same observation
+        # from outside, which is the conflation this verdict type exists to prevent, moved out of
+        # the return value and into the logging. Three live runs read as clean on that silence.
+        #
+        # All at WARNING deliberately: the hosted guest only emits WARNING and above, so an INFO
+        # line here is indistinguishable from no line at all and would rebuild the same hole.
+        if not verdict.checked:
+            logger.warning(
+                "world %s: runtime tools NOT verified (%s); %s",
+                world_index,
+                verdict.reason or "no reason given",
+                (
+                    f"{len(verdict.tools)} go ungraded: "
+                    + ", ".join(sorted(verdict.tools))
+                    if verdict.tools
+                    else "the world could not say which tools it has"
+                ),
+            )
+        elif verdict.tools:
+            logger.warning(
+                "world %s: verified %d runtime tools: %s",
+                world_index,
+                len(verdict.tools),
+                ", ".join(sorted(verdict.tools)),
+            )
+        else:
+            logger.warning(
+                "world %s: no runtime tools declared, nothing verified", world_index
+            )
+        return ""
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -1674,14 +1848,26 @@ class HostedScheduler:
                     mark_unhealthy=True,
                 )
             else:
-                outcome = await self._execute(
-                    scenario,
-                    world,
-                    runtime,
-                    world_index,
-                    attempt=attempt,
-                    context=context,
-                )
+                # The gate that earns the build stage its shell: a world that cannot answer the
+                # agent's own tools is not allowed to grade anyone, because every sub-goal it
+                # judged would be measuring the world's gap rather than the agent.
+                unusable = await self._verify_world(world, runtime, world_index)
+                if unusable:
+                    outcome = _Retry(
+                        _failure("runtime_tools_broken", unusable),
+                        sub_goals=_unjudged(scenario.sub_goals),
+                        call=None,
+                        mark_unhealthy=True,
+                    )
+                else:
+                    outcome = await self._execute(
+                        scenario,
+                        world,
+                        runtime,
+                        world_index,
+                        attempt=attempt,
+                        context=context,
+                    )
 
             if isinstance(outcome, _Retry):
                 # R6: `mark_unhealthy()` itself emits `world_unhealthy` now (every demotion path
@@ -1874,7 +2060,13 @@ class HostedScheduler:
             )
 
         try:
-            call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
+            call_outcome = await _run_call(
+                self._call_runner,
+                scenario,
+                runtime,
+                world,
+                self._call_evidence_requires,
+            )
         except WorldUnavailable as exc:
             return _Retry(
                 _failure("world_unavailable", str(exc)),
@@ -1891,6 +2083,25 @@ class HostedScheduler:
                 _failure("call_failed", str(exc)),
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=call,
+            )
+        except CallEvidenceMissing as exc:
+            # Its own code, never the generic one. "The runner returned something the platform
+            # cannot render" and "the call machinery crashed" are different problems with
+            # different fixes, and a run stops being diagnosable the moment two causes arrive
+            # under one label.
+            #
+            # The outcome still goes on the receipt. What was rejected is incomplete, not absent,
+            # and the turns and timing it did produce are what separate "the runner forgot to
+            # upload" from "the runner is broken and produced nothing". The fault text asks for
+            # the outcome to be returned again, so dropping the one in hand would withhold the
+            # evidence needed to act on it.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("call_evidence_missing", str(exc)),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=self._call_summary(exc.outcome),
             )
         except Exception as exc:  # noqa: BLE001
             # B3: the call runner crashing outright (not a `CallAborted` it chose to raise) is the

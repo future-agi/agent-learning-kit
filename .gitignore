@@ -21,3 +21,6 @@ examples/artifacts/
 
 # Daytona snapshot SDK venv (scripts/daytona-snapshot.sh)
 .venv-daytona/
+
+# Local test-suite output, regenerated on every run.
+recordings/

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
 from . import outbound as ob
+from . import transports
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -158,7 +159,18 @@ def peek_secret_values(secrets_path: Path) -> tuple[str, ...]:
     to scrub, matching `redact_outbound_text`'s own `extra_secret_values=()` default."""
     try:
         raw = json.loads(secrets_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as broke:
+        # An absent file genuinely means no extra values to scrub. A present one that will not
+        # parse means there are values and we cannot read them, and the two produce the same
+        # empty tuple here, so the second silently weakens redaction rather than disabling a
+        # feature. Said out loud because the cost is a secret appearing in an event or a log.
+        logger.warning(
+            "%s could not be read (%s: %s); outbound redaction will run without the resolved "
+            "secret values it holds.",
+            secrets_path,
+            type(broke).__name__,
+            broke,
+        )
         return ()
     if not isinstance(raw, dict):
         return ()
@@ -494,29 +506,131 @@ def _bundle_contract_modality(bundle_dir: Path) -> str | None:
     return value or None
 
 
-def _default_build_call_runner(
-    adapter: "OutboundAdapter", context: CallRunnerContext
-) -> CallRunner:
-    """The real factory: `NotWiredCallRunner` stays exactly as documented for every connector
-    outside the LiveKit-dispatched voice path; a `"livekit"` job gets a real `CallRunnerImpl`,
-    whose OWN pre-dial validation (`call_runner._check_config`) is what surfaces an
-    incomplete-but-present config as a typed `call_failed`/infrastructure retry --
-    `capability_unavailable` stays unreachable from this seam (would require a scheduler edit;
-    the contract itself calls it "a follow-up, not shipped with this text")."""
-    connector = context.job.agent.connector.lower()
-    modality = _bundle_contract_modality(context.bundle_dir)
-    if connector == _LIVEKIT_CONNECTOR or (
-        connector == "auto" and modality == "voice"
-    ):
-        return CallRunnerImpl(adapter, context)
-    # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
-    # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
-    # NotWired path and is deliberately not inferred as repository chat.
-    if (context.bundle_dir / "contract.json").is_file():
+def _bundle_contract(bundle_dir: Path) -> Any | None:
+    """The frozen contract, for the gate that makes a world prove it answers the agent's tools.
+
+    Best effort by design: a bundle without a readable contract loses the gate, not the run.
+    """
+    path = bundle_dir / "contract.json"
+    if not path.is_file():
+        return None
+    try:
+        from .contract import AgentContract
+
+        return AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - an unreadable contract must not take the job down
+        logger.warning(
+            "contract.json could not be read for runtime-tool verification: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+def _register_builtin_transports() -> None:
+    """The two ways of reaching an agent this repo implements, each recognising itself.
+
+    These used to be an if/elif in the factory below, which meant an agent nobody had anticipated
+    could not run however well the environment for it had been built. The logic is unchanged; what
+    changed is where it lives, so that a transport arriving later is a declaration rather than an
+    edit here.
+    """
+    if transports.supported():
+        return
+
+    def livekit_claims(evidence: transports.Evidence) -> bool:
+        return evidence.connector == _LIVEKIT_CONNECTOR or (
+            evidence.connector == "auto" and evidence.modality == "voice"
+        )
+
+    def chat_claims(evidence: transports.Evidence) -> bool:
+        # A repository-hosted text target advertises its concrete HTTP interface in the frozen
+        # contract adopted into Bundle V2.
+        return evidence.has("contract.json")
+
+    def build_chat(adapter: Any, context: Any) -> CallRunner:
         from .chat_call_runner import HostedChatCallRunner
 
         return HostedChatCallRunner(adapter, context)
-    return NotWiredCallRunner()
+
+    transports.register(
+        transports.Transport(
+            key=_LIVEKIT_CONNECTOR,
+            build=lambda adapter, context: CallRunnerImpl(adapter, context),
+            claims=livekit_claims,
+            summary="the agent joins a LiveKit room and talks",
+            requires=("turns", "transcript", "recordings", "timing"),
+        )
+    )
+    transports.register(
+        transports.Transport(
+            key="repository_chat",
+            build=build_chat,
+            claims=chat_claims,
+            summary="a text agent this repository serves over HTTP",
+            # No recordings: a text conversation has no audio, and demanding some would reject a
+            # correct runner.
+            requires=("turns", "transcript", "timing"),
+        )
+    )
+
+
+def _transport_requires(*, context: CallRunnerContext) -> tuple[str, ...]:
+    """What the resolved transport owes the platform, so the scheduler can hold a runner to it.
+
+    Resolved rather than assumed: a runner the build stage wrote for a transport nobody has seen
+    still promises whatever its declaration says, and a text agent is not delinquent for having no
+    audio.
+    """
+    _register_builtin_transports()
+    try:
+        transport = transports.resolve(
+            transports.Evidence(
+                connector=context.job.agent.connector.lower(),
+                modality=_bundle_contract_modality(context.bundle_dir) or "",
+                bundle_dir=context.bundle_dir,
+            )
+        )
+    except transports.TransportUnresolved as unresolved:
+        # Reached when the caller supplied its own call runner, since building one is what would
+        # otherwise have resolved this first. There is then no declaration to hold anyone to and
+        # an empty tuple is the only truthful answer, but it is indistinguishable from a runner
+        # that genuinely owes nothing, so it is said out loud rather than returned quietly.
+        logger.warning(
+            "no transport resolved for this run (%s), so nothing a call returns will be checked. "
+            "Declare transport.json in the bundle to have its evidence held to a contract.",
+            unresolved,
+        )
+        return ()
+    declaration = transports.declared(context.bundle_dir)
+    stated = declaration.get("requires")
+    # An empty list is a declaration, not an absence: an author who writes `"requires": []` has
+    # said this runner owes nothing and is held to exactly that. Only an absent key inherits.
+    if isinstance(stated, list):
+        return tuple(str(item) for item in stated)
+    return transport.requires
+
+
+def _default_build_call_runner(
+    adapter: "OutboundAdapter", context: CallRunnerContext
+) -> CallRunner:
+    """The runner that executes every scenario of this run, resolved from what was declared.
+
+    Resolution order is the environment's declaration first, then a transport recognising itself.
+    A run that resolves nothing raises here, before any world is leased, rather than handing back
+    a runner that refuses once per scenario: the operator needs to know what to declare, and a
+    typed failure tens of minutes into a run does not tell them.
+    """
+    _register_builtin_transports()
+    return transports.build_runner(
+        adapter,
+        context,
+        transports.Evidence(
+            connector=context.job.agent.connector.lower(),
+            modality=_bundle_contract_modality(context.bundle_dir) or "",
+            bundle_dir=context.bundle_dir,
+        ),
+    )
 
 
 # =================================================================================================
@@ -1216,15 +1330,18 @@ class OutboundAdapter:
             if build_path.is_file()
             else b'{"status":"build metadata unavailable"}\n'
         )
-        result = json.dumps(
-            {
-                "stage": stage.value,
-                "failure": failure,
-                "scenario_counts": self.scenario_counts,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        result = (
+            json.dumps(
+                {
+                    "stage": stage.value,
+                    "failure": failure,
+                    "scenario_counts": self.scenario_counts,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         log = (
             f"hosted harness terminal stage={stage.value}; "
             f"scenario_counts={json.dumps(self.scenario_counts, sort_keys=True)}\n"
@@ -2045,6 +2162,8 @@ async def run_job(
             outbound=adapter,
             job_seed=job_seed,
             cancel_requested=cancel_requested,
+            contract=_bundle_contract(bundle_dir),
+            call_evidence_requires=_transport_requires(context=call_runner_context),
         )
         result: RunResult = await scheduler.run(scenarios)
 

@@ -225,6 +225,13 @@ class Scenario(BaseModel):
     # twice; a coin flip here made a seeded run unreproducible.
     background_noise: bool | str = ""
 
+    # Anything this particular agent needs that the fields above have no name for. The platform
+    # renders the named fields and ignores this, so a second speaker, a browser journey or a
+    # retrieval corpus can be carried here and read again downstream without the display
+    # contract changing shape. Extend here; do not redefine what is above, because that is what
+    # the platform draws and what every scenario is validated against.
+    extras: dict[str, Any] = Field(default_factory=dict)
+
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
     RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")

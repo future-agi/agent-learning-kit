@@ -244,7 +244,10 @@ class RuntimeInterface(BaseModel):
             "openai": "openai_chat",
             "openai_compatible": "openai_chat",
             "chat_completions": "openai_chat",
-            "http": "fi.alk",
+            # Deliberately NOT mapped to fi.alk. "http" says how the endpoint is reached; it says
+            # nothing about the shape of the body, and silently turning one into the other is the
+            # same unverified claim by a shorter route.
+            "http": "custom",
         }
         return aliases.get(normalized, normalized)
 
@@ -264,9 +267,16 @@ class RuntimeInterface(BaseModel):
             if not self.path:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_path")
         if self.kind == "http":
-            if self.protocol not in {"fi.alk", "openai_chat"}:
+            # `custom` is legal to RECORD and is refused later, by validate_contract, with the
+            # envelopes spelled out. Those are different jobs: an agent whose endpoint matches
+            # neither shape is a true fact about the repository, and a contract that cannot
+            # express it forces the stage to claim one anyway. That is what happened -- the
+            # submit_contract enum offered exactly two values, the stage picked one, and the
+            # first thing that noticed was the agent's own 422 in the middle of a conversation,
+            # after a world had been built and scenarios written against it.
+            if self.protocol not in {"fi.alk", "openai_chat", "custom"}:
                 raise ValueError(
-                    "runtime_http_protocol_unsupported: expected fi.alk or openai_chat"
+                    "runtime_http_protocol_unsupported: expected fi.alk, openai_chat or custom"
                 )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
@@ -599,6 +609,21 @@ def validate_contract(contract: AgentContract) -> list[str]:
     operator's job, which is why the harness surfaces the contract for review.
     """
     problems: list[str] = []
+    interface = getattr(contract.runtime, "interface", None) if contract.runtime else None
+    if interface is not None and interface.kind == "http" and interface.protocol == "custom":
+        # Refused here rather than at the first turn. The run cannot succeed, and everything
+        # between this point and the call -- the world, the scenarios, the validation gates -- is
+        # work that will be thrown away. The two envelopes are spelled out because they are not
+        # written down anywhere else a repository author would look.
+        problems.append(
+            "runtime.interface:unsupported-envelope: this agent's endpoint speaks neither "
+            "envelope the simulator can send, so a conversation cannot be held with it. "
+            "fi.alk POSTs {thread_id, execution_id, turn_index, scenario_name, persona, "
+            "situation, expected_outcome, messages, new_message, tools, metadata} and reads the "
+            "reply from `content` or `message`. openai_chat POSTs Chat Completions "
+            "{model, messages[, tools, tool_choice]} and reads choices[0].message. Point the "
+            "contract at an endpoint implementing one of those, or add one to the repository."
+        )
     if not contract.agent.strip():
         problems.append("empty:agent")
     if not contract.tools:

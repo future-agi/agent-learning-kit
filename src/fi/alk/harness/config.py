@@ -54,11 +54,7 @@ def chosen_model(model: str | None = None) -> str:
     With nothing named anywhere, the selected backend's own default runs, so switching
     ``ALK_HARNESS`` never sends one vendor's model name to another vendor's loop.
     """
-    return (
-        model
-        or os.environ.get("ALK_HARNESS_MODEL")
-        or resolve().default_model
-    )
+    return model or os.environ.get("ALK_HARNESS_MODEL") or resolve().default_model
 
 
 def thinking_config() -> dict[str, Any]:
@@ -137,11 +133,18 @@ def read_only_session(
     max_turns: int = 40,
     model: str | None = None,
 ) -> SessionSpec:
-    """A session that may read the agent under test but never write to it.
+    """A session that reads its subject and reports on it, and cannot change it.
 
-    The agent under test is somebody's real repository. The harness reads it and writes its own
-    artifacts elsewhere, so the built-in write tools are simply not granted; the only way this
-    session can produce anything is by calling one of ours.
+    This is the stage that runs with cwd on the customer's own source, and reading an agent is
+    characterisation rather than engineering: everything it establishes leaves through
+    submit_contract, and nothing it needs requires editing the thing it is describing. Handed an
+    editor and a shell it could tidy an import or run a formatter while reading, and the contract
+    would then describe an agent nobody shipped. Every later stage is built from that contract,
+    and nothing anywhere would record that the subject had been touched. It is the one stage
+    where mutating its input silently invalidates all of the work that follows.
+
+    A source that genuinely needs more says so through ``extra_builtins``, per source and visible
+    at the call, rather than every agent we ever read being handed a shell.
     """
     return SessionSpec(
         system_prompt=system_prompt,
@@ -156,10 +159,10 @@ def read_only_session(
     )
 
 
-# Tools the host offers every session that no stage of this harness has any use for. Denying
-# them at the gate works and is the backstop, but a denial still costs the turn that discovered
-# it — and these get reached for in almost every stage. Naming them as disallowed keeps them out
-# of the tool list the model is shown, so the turn is never spent.
+# Host tools no stage is given. Denying them at the gate works and is the backstop, but a denial
+# still costs the turn that discovered it, and these get reached for in almost every stage. Naming
+# them as disallowed keeps them out of the tool list the model is shown, so the turn is never
+# spent. A stage that was granted one of these keeps it: the list is filtered against the grant.
 UNWANTED = (
     "ToolSearch",
     "Bash",
@@ -174,14 +177,15 @@ UNWANTED = (
 def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
     """Deny anything a stage was not given, at the point the SDK actually asks.
 
-    ``can_use_tool`` alone does not do this. An ``allowed_tools`` entry approves those tools
-    before the callback is consulted, and the SDK then warns that the callback is shadowed — so
-    the gate never runs for the tools we granted, and in practice does not stop the ones we did
-    not either. A host ``ToolSearch`` reached every stage, returned nothing, and cost a turn each
-    time.
+    ``can_use_tool`` alone does not do this, and the SDK is explicit about why: an
+    ``allowed_tools`` entry auto-approves that tool before the callback is consulted, so the
+    callback is shadowed for everything we granted, and it never sees them. What it does see are
+    the tools we did not grant, which is why an allow-everything callback is not a neutral
+    default but an open door: it approves precisely the host extras the harness never offered.
+    A host ``ToolSearch`` once reached every stage, returned nothing, and cost a turn each time.
 
-    A PreToolUse hook is consulted for every call, which is what the deny-by-default rule needed
-    in order to be true rather than intended.
+    A PreToolUse hook is consulted for every call, which is what makes the deny-by-default rule
+    true rather than intended.
     """
     from claude_agent_sdk.types import HookMatcher
 
@@ -212,12 +216,12 @@ def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
     """Decide what a stage may do: nothing it was not given.
 
     Deny by default, not deny-a-list. A session is offered whatever tools its host happens to
-    expose, and anything not named here is by definition not part of how this stage works. An
-    allow-by-default gate let a host search tool through, which returned nothing useful and cost
-    a stage its entire turn budget looping on it; the same hole would let a file write through.
+    expose, and anything not named here is by definition not part of how this stage works.
 
-    Tools granted through ``allowed_tools`` are approved before this is consulted, so this only
-    ever sees the ones that were not.
+    The sandbox is not the answer to this on its own. It is the boundary for the hosted lane, but
+    the same stages run in-process on an operator's machine, where cwd does not confine a shell,
+    and a grant that means one thing there and another thing hosted stops the local run being a
+    rehearsal of the hosted one. The grant means the same in both.
     """
     permitted = set(granted)
 
@@ -235,6 +239,23 @@ def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
                 "produce goes through those, because those are what check it."
             )
         )
+
+    return gate
+
+
+def operator_ask(ask: Any | None = None) -> Any:
+    """Route the model's questions to whoever is running this.
+
+    This is the operator callback a stage carries in ``ask``, not a permission decision: what a
+    stage may do is decided by ``permission_gate`` and ``gate_hooks``.
+    """
+
+    async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
+        from claude_agent_sdk.types import PermissionResultAllow
+
+        if tool_name == "AskUserQuestion" and ask is not None:
+            return await ask(tool_name, payload, context)
+        return PermissionResultAllow(updated_input=payload)
 
     return gate
 
@@ -268,6 +289,9 @@ def load_skill(name: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"no skill at {path}")
     stage = path.read_text(encoding="utf-8")
+    catalogue = sub_skills(name)
+    if catalogue:
+        stage = f"{stage}\n\n{catalogue}"
     if not HARNESS.exists():
         return stage
     return (
@@ -276,3 +300,64 @@ def load_skill(name: str) -> str:
         "# The stage you are in now\n\n"
         f"{stage}"
     )
+
+
+def _summarise(entry: Path) -> str:
+    """One line describing a sub-skill, for the catalogue the model chooses from.
+
+    A skill states when it applies, and when it does not, in its frontmatter `description` -- that
+    is the field written to be read by whoever is deciding. Falling back to the first line of prose
+    would otherwise summarise a skill as `---`, and a catalogue that describes nothing is a
+    catalogue nobody can choose from.
+    """
+    text = entry.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            for line in text[3:end].splitlines():
+                if line.strip().startswith("description:"):
+                    value = line.split(":", 1)[1].strip()
+                    return value.strip('"').strip("'")
+    for line in text.splitlines():
+        if line.strip() and not line.startswith("#") and not line.startswith("---"):
+            return line.strip()
+    return ""
+
+
+def sub_skills(name: str) -> str:
+    """The per-kind guidance available inside a stage, for the model to choose between.
+
+    A stage skill says how the stage works for any agent. What differs between a LiveKit voice
+    agent, a Vapi assistant reached only by webhook, and a browser agent is method, not stage, so
+    that belongs in a sub-skill the model selects after it has read the contract rather than in a
+    constant chosen before anyone has looked at the repository.
+
+    Every ``*.md`` under the stage's ``references/`` is offered, name and description only. The
+    body stays on disk until the model asks for it, so a stage carries the index of everything it
+    could do at a fraction of the cost of carrying all of it. Adding support for a new kind of
+    agent is a file in that directory, not a release.
+    """
+    directory = SKILLS_ROOT / name / "references"
+    found = sorted(directory.glob("*.md")) if directory.is_dir() else []
+    if not found:
+        return ""
+    lines = [
+        "## References available to you",
+        "",
+        "Each line is a file you may read, and the text after the name states the evidence that",
+        "makes it the right one. Nothing selects for you: gather the evidence first, then choose.",
+        "Using none of them is a legitimate answer for an agent none of them describes, and asking",
+        "the operator is the right move when the evidence does not settle it.",
+        "",
+    ]
+    for entry in found:
+        lines.append(f"- `{entry.name}`: {_summarise(entry) or 'no summary line'}")
+    lines.append("")
+    lines.append(
+        f"They are in `{directory}`. Decide from the evidence in the repository and the contract "
+        "which one describes the agent in front of you, say what you concluded and why, then read "
+        "that file with the Read tool before you rely on it. A description that does not match "
+        "what you found is the wrong file: reading it anyway produces confident, plausible work "
+        "against the wrong shape of agent, and nothing will error."
+    )
+    return "\n".join(lines)
