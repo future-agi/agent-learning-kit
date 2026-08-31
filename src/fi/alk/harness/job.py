@@ -18,6 +18,7 @@ from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, Secr
 from .github import parse_github_location
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
+MAX_HOSTED_SCENARIO_COUNT = 200
 
 
 class ExecutionMode(str, Enum):
@@ -170,7 +171,7 @@ class HarnessJob(BaseModel):
                 raise ValueError("image_source_not_hosted")
             if self.source.kind is SourceKind.GITHUB and not self.source.commit_sha:
                 raise ValueError("github_commit_sha_required")
-            if self.scenario_count > 10:
+            if self.scenario_count > MAX_HOSTED_SCENARIO_COUNT:
                 raise ValueError("hosted_scenario_count_out_of_range")
             if self.runtime.isolation is not RuntimeIsolation.DEDICATED_VM:
                 raise ValueError("hosted_isolation_must_be_dedicated_vm")
@@ -180,13 +181,9 @@ class HarnessJob(BaseModel):
                 raise ValueError("local_only_not_hosted")
             for alias, reference in self.agent.secret_refs.items():
                 if reference.manager != "platform-vault":
-                    raise ValueError(
-                        f"hosted_secret_manager_unsupported: {alias}"
-                    )
+                    raise ValueError(f"hosted_secret_manager_unsupported: {alias}")
                 if reference.purpose != "target_provider":
-                    raise ValueError(
-                        f"hosted_secret_purpose_invalid: {alias}"
-                    )
+                    raise ValueError(f"hosted_secret_purpose_invalid: {alias}")
             if self.security.allow_privileged:
                 raise ValueError("hosted_privileged_execution_forbidden")
             if self.security.allow_host_runtime_control:

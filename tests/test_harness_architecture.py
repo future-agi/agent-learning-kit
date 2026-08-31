@@ -673,6 +673,21 @@ def test_local_and_hosted_jobs_reject_the_other_sides_source() -> None:
         )
 
 
+def test_hosted_job_accepts_two_hundred_scenarios_and_rejects_more() -> None:
+    common = {
+        "job_id": "job",
+        "run_id": "run",
+        "execution": "hosted",
+        "source": {"kind": "archive", "archive_artifact_id": "source-id"},
+        "agent": {"connector": "auto"},
+        "runtime": {"isolation": "dedicated_vm"},
+    }
+
+    assert HarnessJob(**common, scenario_count=200).scenario_count == 200
+    with pytest.raises(ValueError, match="hosted_scenario_count_out_of_range"):
+        HarnessJob(**common, scenario_count=201)
+
+
 def test_job_carries_references_but_rejects_resolved_secrets() -> None:
     job = HarnessJob(
         job_id="job",
