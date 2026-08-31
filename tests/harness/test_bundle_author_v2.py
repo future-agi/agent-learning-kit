@@ -68,6 +68,25 @@ def _write_voice_contract(authoring: Path) -> None:
     )
 
 
+def _write_callable_contract(authoring: Path) -> None:
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "python",
+                    "interface": {
+                        "kind": "callable",
+                        "protocol": "fi.alk",
+                        "include_tools": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()
@@ -88,6 +107,67 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
+
+
+def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) -> None:
+    source = tmp_path / "ava"
+    app = source / "app"
+    app.mkdir(parents=True)
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text(
+        "async def agent_callback(input):\n"
+        "    return {'content': input.new_message['content']}\n\n"
+        "if __name__ == '__main__':\n"
+        "    print(input('you> '))\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_callable_contract(authoring)
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", with_secrets=True),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.build_commands[1][-1] == "requirements.txt"
+    assert agent.run_command[:2] == [".venv/bin/python", "-c"]
+    assert "ThreadingHTTPServer" in agent.run_command[2]
+    assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert bundle.capabilities["target_http"].service == "agent"
+    assert any(probe.capability == "target_http" for probe in bundle.readiness)
+    preflight_bundle(
+        tmp_path / "bundle",
+        bundle,
+        parallelism=1,
+        secret_refs={
+            alias: ref.purpose
+            for alias, ref in _job(
+                connector="auto", with_secrets=True
+            ).agent.secret_refs.items()
+        },
+    )
+
+
+def test_callable_contract_rejects_missing_callback(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('cli only')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_callable_contract(authoring)
+
+    with pytest.raises(Exception, match="callback_entrypoint_missing"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto"),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
 
 
 @pytest.mark.parametrize(

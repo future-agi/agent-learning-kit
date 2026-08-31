@@ -149,7 +149,7 @@ def _tool_call(call: dict[str, Any], index: int) -> tuple[str, dict[str, Any], s
 
 
 class HostedChatCallRunner:
-    """Drive an OpenAI-compatible repository HTTP endpoint inside its leased world."""
+    """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
         self._adapter = adapter
@@ -177,9 +177,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind != "http":
+        if interface is None or interface.kind not in {"http", "callable"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP runtime interface is required"
+                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
@@ -197,11 +197,15 @@ class HostedChatCallRunner:
             runtime,
             self._context.source_directory,
         )
+        adapter_path = "/invoke" if interface.kind == "callable" else interface.path
+        adapter_protocol = (
+            "fi.alk" if interface.kind == "callable" else interface.protocol
+        )
         wrapper = HTTPAgentWrapper(
             endpoint=urljoin(
-                endpoint.address.rstrip("/") + "/", interface.path.lstrip("/")
+                endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
             ),
-            protocol=interface.protocol,
+            protocol=adapter_protocol,
             include_tools=interface.include_tools,
             timeout=30.0,
             metadata={
@@ -259,6 +263,19 @@ class HostedChatCallRunner:
                             else f"no such tool {name}",
                         }
                     )
+                provided_ids = {
+                    str(item.get("tool_call_id") or "")
+                    for item in response.tool_responses or []
+                    if isinstance(item, dict)
+                }
+                returned_ids = {
+                    _tool_call(call, index)[2]
+                    for index, call in enumerate(returned, start=1)
+                }
+                if returned_ids and returned_ids.issubset(provided_ids):
+                    answer = response.content.strip()
+                    messages.append({"role": "assistant", "content": answer})
+                    break
             else:
                 raise CallAborted("chat_target_failed: exceeded 8 tool continuations")
         except CallAborted:
