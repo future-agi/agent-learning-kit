@@ -1855,6 +1855,16 @@ class HostedScheduler:
                 sub_goals=_unjudged(scenario.sub_goals),
             )
         if not verdict.held:
+            # The verdict says the precondition did not hold, never whether the setup that was
+            # supposed to establish it ran. Without that, a scenario that never dials looks the
+            # same whether its setup failed or its check is wrong.
+            logger.warning(
+                "scenario %s not ready on world %s: %s (setup reported: %s)",
+                scenario.scenario_key,
+                world_index,
+                verdict.reason or "no reason given",
+                getattr(setup, "value", None),
+            )
             return self._fault(
                 scenario,
                 world_index,

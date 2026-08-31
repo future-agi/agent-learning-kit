@@ -17,7 +17,7 @@ from .config import artifact_dir, load_skill, read_only_session
 from .contract import AgentContract
 from .session import Stage
 from .sources import AgentSource
-from .tools import CONTRACT_SERVER, contract_tools, qualified
+from .tools import CONTRACT_SERVER, contract_tools
 
 SKILL = "understand-agent"
 
@@ -31,19 +31,16 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live understand-the-agent stage, and where it will write."""
     destination = out or artifact_dir(source.name)
-    options = read_only_session(
+    spec = read_only_session(
         system_prompt=f"{load_skill(SKILL)}\n\n## This agent\n\n{source.briefing()}",
         cwd=source.workdir(),
-        mcp_servers={**source.servers(), CONTRACT_SERVER: contract_tools(destination)},
-        extra_tools=[
-            *source.builtin_tools(),
-            qualified(CONTRACT_SERVER, "submit_contract"),
-        ],
+        servers={**source.servers(), CONTRACT_SERVER: contract_tools(destination)},
+        extra_builtins=source.builtin_tools(),
         max_turns=max_turns,
     )
     if ask is not None:
-        options.can_use_tool = ask
-    return Stage(options, name=SKILL), destination
+        spec.permission_override = ask
+    return Stage(spec, name=SKILL), destination
 
 
 def opening(source: AgentSource) -> str:

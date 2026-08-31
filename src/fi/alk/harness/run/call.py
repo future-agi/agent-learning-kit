@@ -107,7 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         # about how a simulated caller behaves is decided twice.
         os.environ["HARNESS_INSTRUCTION"] = instruction
         os.environ["HARNESS_SCENARIO"] = scenario.name
-        os.environ["HARNESS_OUTCOME"] = scenario.tests
+        # The caller prompt is a template the harness fills, never prose it composes, so
+        # the generated template travels to the call with everything else.
+        # The caller is never handed the grader's pass question. `tests` is written about
+        # the agent in the third person, so as an objective it reads as a rubric rather
+        # than a motive. What this person wants is already in the instruction.
+        os.environ.pop("HARNESS_OUTCOME", None)
         os.environ["HARNESS_PERSONA"] = json.dumps(
             scenario.persona.model_dump(exclude_none=True)
             if scenario.persona is not None

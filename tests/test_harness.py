@@ -1856,6 +1856,9 @@ def test_a_question_still_reaches_the_operator():
 
 def _request_handler(instance, method):
     """Bridge the MCP 1.27 handler map and the older SDK helper used by this suite."""
+    # Stages describe tools neutrally now, so a caller may hand us the ToolServer rather than
+    # the MCP server a backend builds from it. Adapt here so every call site does not have to.
+    instance = _instance(instance)
     legacy = getattr(instance, "get_request_handler", None)
     if legacy is not None:
         return legacy(method)
@@ -1875,13 +1878,27 @@ def _request_handler(instance, method):
     return Handler()
 
 
+def _instance(server):
+    """The in-process MCP server behind whatever shape a stage handed us.
+
+    Stages now describe tools neutrally (ToolServer); the Claude backend is what turns that
+    into a real MCP server. Routing through the adapter here keeps these tests about what is
+    *actually published*, adapter included, not about the description."""
+    from fi.alk.harness.backends import ToolServer
+    from fi.alk.harness.backends.claude import _sdk_server
+
+    if isinstance(server, ToolServer):
+        server = _sdk_server(server)
+    return server.get("instance") if isinstance(server, dict) else server
+
+
 def _published(server):
     """The tool names an in-process MCP server really exposes."""
     import asyncio
 
     from mcp.types import PaginatedRequestParams
 
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def ask():
         handler = _request_handler(instance, "tools/list")
@@ -2158,7 +2175,7 @@ def test_a_row_put_in_wrong_can_be_taken_out_again(tmp_path):
     async def call(name, payload):
         from mcp.types import CallToolRequestParams
 
-        instance = server.get("instance") if isinstance(server, dict) else server
+        instance = _instance(server)
         handler = _request_handler(instance, "tools/call")
         result = await handler.handler(
             None, CallToolRequestParams(name=name, arguments=payload)
@@ -2506,6 +2523,35 @@ def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_pat
     text = said["content"][0]["text"]
     assert "reference solution does not pass" in text
     assert "refused by the world" in text and "sushi" in text
+
+
+def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
+    """A hosted lane has no endpoint yet, so the step is recorded ok without ever running.
+
+    That silence is what let a scenario be kept on a solution nothing executed, so the warning
+    naming the tool is the only signal that the proof below it covers less than it appears to.
+    """
+    import logging
+
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld()
+    world.runtime_tools = {"lookup_rider_by_phone"}
+    world.endpoint_for = {}
+    try:
+        with caplog.at_level(logging.WARNING, logger="fi.alk.harness.prove"):
+            call = play_reference_step(
+                world, Step(tool="lookup_rider_by_phone", arguments={"phone": "+14155550101"})
+            )
+    finally:
+        world.close()
+
+    assert call.ok is True
+    assert call.result is None
+    assert "assumed rather than executed" in caplog.text
+    assert "lookup_rider_by_phone" in caplog.text
 
 
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
@@ -3867,6 +3913,7 @@ def test_sdk_voice_spec_keeps_canonical_and_engine_direction_aligned(monkeypatch
     assert spec.environment.config["params"]["conversation_direction"] == "agent_first"
 
 
+
 def test_each_source_worker_lifetime_gets_a_unique_dispatch_name():
     from fi.alk.harness.run.live import scoped_agent_name
 
@@ -3977,7 +4024,7 @@ def test_submit_contract_schema_teaches_and_leaves_gating_to_the_gate(tmp_path):
     from mcp.types import PaginatedRequestParams
 
     server = contract_tools(tmp_path)
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def schema_of():
         handler = _request_handler(instance, "tools/list")
@@ -4010,7 +4057,7 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
     from fi.alk.harness.tools import contract_tools
 
     server = contract_tools(tmp_path)
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def call(payload):
         from mcp.types import CallToolRequestParams
@@ -4038,32 +4085,37 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
 
 
 def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
-    """The hook closes over the granted set when the stage is built, so appending to
-    allowed_tools alone leaves the new tool denied. grant() must rebuild all three."""
+    """A grant has to reach the permission gate, not only the tool list. The gate is built
+    from the spec when the backend opens the session, so a tool granted to the spec must be
+    permitted by the hooks of a session built afterwards."""
     import asyncio
 
-    from claude_agent_sdk import ClaudeAgentOptions
-    from fi.alk.harness.config import gate_hooks
+    from fi.alk.harness.backends import SessionSpec, ToolSpec, ToolServer
+    from fi.alk.harness.backends.claude import ClaudeBackend
     from fi.alk.harness.session import Stage
 
-    allowed = ["Read"]
-    options = ClaudeAgentOptions(
-        system_prompt="x",
-        allowed_tools=allowed,
-        permission_mode="default",
-        setting_sources=[],
-        max_turns=1,
-    )
-    options.hooks = gate_hooks(allowed)
-    stage = Stage(options, name="t")
-    stage.grant("flow", object(), ["hand_to_next_stage"])
+    spec = SessionSpec(system_prompt="x", builtins=("Read",), max_turns=1)
+    stage = Stage(spec, name="t")
 
+    async def hand(_args):
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    server = ToolServer(
+        name="flow",
+        tools=[ToolSpec("hand_to_next_stage", "hand over", {"request": str}, hand)],
+    )
+    stage.grant("flow", server, ["hand_to_next_stage"])
+    assert "mcp__flow__hand_to_next_stage" in spec.granted()
+
+    options = ClaudeBackend().create(spec)._options
     assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
     refuse = options.hooks["PreToolUse"][0].hooks[0]
     granted = asyncio.run(
         refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None)
     )
     assert granted == {}
+    denied = asyncio.run(refuse({"tool_name": "Bash"}, None, None))
+    assert denied != {}
 
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
@@ -4076,7 +4128,15 @@ def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkey
     )
     assert turns_for(contract) == 200
     assert environment_turns_for(contract, deferred_runtime=False) == 200
-    assert environment_turns_for(contract, deferred_runtime=True) == 80
+    # An agent this size is bounded by the ceiling rather than starved by it.
+    assert environment_turns_for(contract, deferred_runtime=True) == 200
+
+    larger = AgentContract(
+        agent="larger-agent",
+        tools=[ToolSpec(name=f"tool_{index}") for index in range(40)],
+    )
+    assert turns_for(larger) == 360
+    assert environment_turns_for(larger, deferred_runtime=True) == 200
 
     monkeypatch.setenv("ALK_HOSTED_ENVIRONMENT_MAX_TURNS", "40")
     assert environment_turns_for(contract, deferred_runtime=True) == 40
@@ -4093,7 +4153,7 @@ def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
     conversation = Conversation(source=None, out=tmp_path, workspace=tmp_path)
     conversation.stage_name = "understand"
     server = conversation._flow_server()
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def call():
         handler = _request_handler(instance, "tools/call")
@@ -4266,7 +4326,7 @@ def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
     from fi.alk.harness.tools import contract_tools
 
     server = contract_tools(tmp_path)
-    instance = server.get("instance") if isinstance(server, dict) else server
+    instance = _instance(server)
 
     async def call(payload):
         from mcp.types import CallToolRequestParams
@@ -4562,33 +4622,22 @@ def test_only_a_tool_that_says_it_saved_reports_an_artifact():
     """Matching any path-shaped token in any result meant reading a file announced itself as an
     artifact: the stage looks like it is producing output while it is still only looking around,
     and a front end reloads its panes on every read."""
-    from dataclasses import dataclass
-
+    from fi.alk.harness.backends.claude import _flattened
     from fi.alk.harness.session import _saved_path
 
-    @dataclass
-    class Block:
-        content: object
-        is_error: bool = False
-
     # a read
-    assert (
-        _saved_path(Block("     1\timport json\n     2\tfrom pathlib import Path"))
-        == ""
-    )
-    assert _saved_path(Block("/some/agent/envs/retail/__init__.py")) == ""
+    assert _saved_path("     1\timport json\n     2\tfrom pathlib import Path") == ""
+    assert _saved_path("/some/agent/envs/retail/__init__.py") == ""
     # a write
     assert (
-        _saved_path(Block("Accepted and saved to out/contract.json."))
-        == "out/contract.json"
+        _saved_path("Accepted and saved to out/contract.json.") == "out/contract.json"
     )
     assert (
-        _saved_path(Block("Saved 3 scenarios to out/scenarios.json."))
-        == "out/scenarios.json"
+        _saved_path("Saved 3 scenarios to out/scenarios.json.") == "out/scenarios.json"
     )
-    # list-shaped content, as the SDK sometimes gives it
+    # list-shaped content, as the SDK sometimes gives it, flattened by the backend
     assert (
-        _saved_path(Block([{"text": "Saved to artifacts/x/world.sqlite"}]))
+        _saved_path(_flattened([{"text": "Saved to artifacts/x/world.sqlite"}]))
         == "artifacts/x/world.sqlite"
     )
 
@@ -6085,14 +6134,26 @@ def test_a_target_refuses_a_model_it_cannot_drive():
     """
     from fi.alk.harness.run.targets import _drivable
 
-    # What it runs on.
+    # What the default backend runs on. Gemini is the default, so a Claude model is the one
+    # this target has to refuse until ALK_HARNESS names the backend that serves it.
     _drivable(None)
-    _drivable("claude-sonnet-4-6")
-    _drivable("anthropic/claude-opus-4-7")
+    _drivable("gemini-3.7-flash")
 
     with pytest.raises(RuntimeError) as refused:
-        _drivable("vertex_ai/gemini-2.5-flash")
+        _drivable("claude-sonnet-4-6")
     assert "cannot run" in str(refused.value)
+    # Naming the backend that does serve it is enough; the model does not have to change.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    try:
+        from fi.alk.harness import backends
+
+        backends._LIVE.clear()
+        _drivable("claude-sonnet-4-6")
+        _drivable("anthropic/claude-opus-4-7")
+    finally:
+        monkeypatch.undo()
+        backends._LIVE.clear()
     # And it says where to go instead, rather than only saying no.
     assert "endpoint adapters" in str(refused.value)
 
@@ -6909,6 +6970,70 @@ def test_new_platform_execution_preserves_submitted_scenario_order():
     assert reported.calls == {"a": "ce-a", "b": "ce-b"}
 
 
+def test_scenario_carries_the_identity_the_hosted_scheduler_reads():
+    """The guest scheduler reads ``scenario_key`` and ``scenario_id`` off every scenario.
+
+    Both are plain attributes rather than optional extras: a pydantic model raises AttributeError
+    for a field it never declared, so a missing one fails at the first read rather than degrading.
+    """
+    one = Scenario(name="dana-books-uberx-saved-card")
+    assert one.scenario_key == "dana-books-uberx-saved-card"
+    # Assigned by the platform at pre-allocation, never written at generation.
+    assert one.scenario_id == ""
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("Dana Books - Café", "dana-books-caf"),
+        ("already-a-slug", "already-a-slug"),
+        ("  Spaced  Out  ", "spaced-out"),
+    ],
+)
+def test_scenario_key_is_ascii_and_slugged(name, expected):
+    assert Scenario(name=name).scenario_key == expected
+
+
+def test_scenario_key_never_empties_onto_a_shared_idempotency_key():
+    """A name with nothing ASCII in it still gets its own key rather than an empty one."""
+    keys = {Scenario(name=name).scenario_key for name in ("日本語", "中文", "한국어")}
+    assert all(key.startswith("scenario-") for key in keys)
+    assert len(keys) == 3
+
+
+def test_background_noise_is_decided_the_same_way_twice():
+    """A coin flip here made a seeded run unreproducible; the name decides it instead."""
+    assert Scenario(name="a-b-c").background_noise == Scenario(name="a-b-c").background_noise
+    assert Scenario(name="x", background_noise="street").background_noise == "street"
+
+
+def test_background_noise_needs_opting_in(monkeypatch):
+    """Silence is what a run with no environment set falls into: noise shortens calls, so it is
+    asked for rather than escaped. Anything unrecognised stays silent instead of turning it on."""
+    from fi.alk.harness.background_noise import enabled
+
+    monkeypatch.delenv("ALK_BACKGROUND_NOISE", raising=False)
+    assert enabled() is False
+    for off in ("", "0", "off", "false", "no", "ture"):
+        monkeypatch.setenv("ALK_BACKGROUND_NOISE", off)
+        assert enabled() is False, off
+    for on in ("1", "on", "TRUE", "yes"):
+        monkeypatch.setenv("ALK_BACKGROUND_NOISE", on)
+        assert enabled() is True, on
+
+
+def test_a_transcript_line_keeps_one_speaker_not_two():
+    """``agent: assistant: ...`` reached the judges as two speakers deep for every turn."""
+    from fi.alk.harness.run.simulation import _said
+
+    def said(line):
+        turn = _said(line)
+        return turn.speaker, turn.text
+
+    assert said("assistant: Hi Dana.") == ("agent", "Hi Dana.")
+    assert said("user: I need a ride.") == ("customer", "I need a ride.")
+    # A colon inside speech is not a speaker label.
+    assert said("assistant: Call at 3:30 PM.") == ("agent", "Call at 3:30 PM.")
 def test_platform_call_start_uses_existing_ongoing_status_flow():
     from fi.alk.harness import platform
 

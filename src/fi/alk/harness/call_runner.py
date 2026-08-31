@@ -6,11 +6,12 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
 1. **Placing the call.** The customer agent is already running INSIDE the Daytona sandbox, as a
    world process the bundle's provisioner spawned (`process_runtime.py`) and registered with
    LiveKit cloud under `LIVEKIT_AGENT_NAME=agent-w{WORLD_INDEX}`-style identity. This runner never
-   starts or manages that process — it drives `SimulationRunner` IN-PROCESS with a directly-built
-   `SimulationSpec` that dials the already-registered identity, mirroring `run/sdk_voice.py::
-   build_spec` field-for-field but sourcing values from job config and the bundle's own scenario
-   document instead of `HARNESS_*` env vars (the local-only webhook/subprocess plumbing
-   `run/call.py`/`run/live.py` use is neither available nor appropriate in the guest).
+   starts or manages that process. It drives `SimulationRunner` IN-PROCESS with a
+   `SimulationSpec` built by `simulator_voice.simulation_spec`, the same builder the local lane
+   uses; only the value lookup differs, resolving from job config and the bundle's scenario
+   document rather than `HARNESS_*` env vars. Do not rebuild the spec here: the two lanes drifted
+   for exactly that reason. The local-only webhook/subprocess plumbing `run/call.py` and
+   `run/live.py` use is neither available nor appropriate in the guest.
 2. **Collecting evidence.** The bundle declares exactly one `runtime.evidence_seam`:
    `http_tool` or `tool_trace`. `http_tool` has NO guest-side capture surface anywhere in this
    repo today (see `_collect_http_tool_calls`'s docstring — a verified finding, not an assumption)
@@ -39,26 +40,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from fi import simulate
 from fi.simulate.runtime import (
-    AgentEndpointSpec,
-    EnvironmentSpec,
-    ExecutionPolicy,
     SimulationSpec,
-    SimulatorPolicySpec,
-    TimeoutPolicy,
     new_run_id,
 )
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
+from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import HarnessJob
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .simulator_voice import (
+    CLEANUP_TIMEOUT_SECONDS,
+    CONNECT_TIMEOUT_SECONDS,
+    READINESS_TIMEOUT_SECONDS,
+    caller_scenario,
+    simulation_spec,
+    simulator_definition,
+)
 from .world.errors import WorldUnavailable
 from .world.runtime import Call
 
@@ -70,6 +74,7 @@ LIVEKIT_API_KEY_ALIAS = "LIVEKIT_API_KEY"
 LIVEKIT_API_SECRET_ALIAS = "LIVEKIT_API_SECRET"
 LIVEKIT_URL_ALIAS = "LIVEKIT_URL"
 DEEPGRAM_API_KEY_ALIAS = "DEEPGRAM_API_KEY"
+CARTESIA_API_KEY_ALIAS = "CARTESIA_API_KEY"
 GEMINI_API_KEY_ALIAS = "GEMINI_API_KEY"
 GOOGLE_API_KEY_ALIAS = "GOOGLE_API_KEY"
 GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
@@ -91,9 +96,6 @@ _DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
-_CONNECT_TIMEOUT_SECONDS = 60.0
-_READINESS_TIMEOUT_SECONDS = 120.0
-_CLEANUP_TIMEOUT_SECONDS = 30.0
 _RUN_SECONDS_PAD_SECONDS = 60.0
 # Headroom beyond `spec.execution.timeout.run_seconds` -- SimulationRunner.run() already wraps
 # `plugin.run(...)` in its OWN `asyncio.wait_for(..., timeout=spec.execution.timeout.run_seconds)`
@@ -301,109 +303,8 @@ def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
     return max(0, int((ended_at - started_at).total_seconds() * 1000))
 
 
-# --- SimulationSpec construction (mirrors run/sdk_voice.py::build_spec field-for-field; values
-# come from job config / the re-read scenario document instead of HARNESS_* env vars) ---------
-
-
-def _simulator_definition(
-    config: Mapping[str, Any],
-    environ: Mapping[str, str],
-) -> Any:
-    """Build the caller from provider-neutral job configuration.
-
-    Lowercase job config wins; provider environment aliases are accepted for compatibility.
-    Defaults match the shipped voice runner, but no target-agent or domain-specific behavior is
-    encoded here.
-    """
-    llm_provider = str(
-        config.get("simulator_llm_provider")
-        or environ.get("SIMULATOR_LLM_PROVIDER")
-        or "google"
-    )
-    stt_provider = str(
-        config.get("simulator_stt_provider")
-        or environ.get("SIMULATOR_STT_PROVIDER")
-        or "deepgram"
-    )
-    tts_provider = str(
-        config.get("simulator_tts_provider")
-        or environ.get("SIMULATOR_TTS_PROVIDER")
-        or "deepgram"
-    )
-    default_models = {
-        "llm": {"google": "gemini-2.5-flash-lite", "openai": "gpt-4o-mini"},
-        "stt": {"deepgram": "nova-2", "google": "chirp_2"},
-        "tts": {"deepgram": "aura-asteria-en", "google": "en-US-Chirp3-HD-Aoede"},
-    }
-    llm_model = str(
-        config.get("simulator_llm_model")
-        or environ.get("SIMULATOR_LLM_MODEL")
-        or default_models["llm"].get(llm_provider, "")
-    )
-    stt_model = str(
-        config.get("simulator_stt_model")
-        or environ.get("SIMULATOR_STT_MODEL")
-        or default_models["stt"].get(stt_provider, "")
-    )
-    tts_model = str(
-        config.get("simulator_tts_model")
-        or environ.get("SIMULATOR_TTS_MODEL")
-        or default_models["tts"].get(tts_provider, "")
-    )
-    return simulate.SimulatorAgentDefinition(
-        llm={"provider": llm_provider, "model": llm_model, "temperature": 0.35},
-        stt={"provider": stt_provider, "model": stt_model, "language": "en"},
-        tts={"provider": tts_provider, "model": tts_model, "voice": tts_model},
-        instructions=(
-            "Act as the customer described by the scenario. Speak naturally and briefly. "
-            "Use only the supplied facts and never invent account, address, payment, or "
-            "verification data. Do not volunteer private data: agree when asked whether a "
-            "verification code should be sent, and disclose the actual code only after the "
-            "agent says it was sent and explicitly asks you to read it. Answer repair questions "
-            "with the missing fact, not by restarting the request. Never repeat the same answer "
-            "more than twice. When the requested outcome is complete, thank the agent and end "
-            "the call."
-        ),
-        allow_interruptions=True,
-    )
-
-
-def _scenario_spec(doc: Mapping[str, Any]) -> Any:
-    """Mirrors `sdk_voice.py::_scenario()`'s own transformation exactly, sourced from the re-read
-    scenario document instead of `HARNESS_*` env vars."""
-    fixture = doc.get("fixture") if isinstance(doc.get("fixture"), dict) else {}
-    persona = dict(doc.get("persona") or {})
-    persona["role"] = "customer"
-    metadata = dict(persona.get("metadata") or {})
-    if fixture.get("phone"):
-        metadata["caller_phone"] = str(fixture["phone"])
-    persona["metadata"] = metadata
-    knowledge = [
-        {
-            "key": str(key),
-            "value": json.dumps(value, ensure_ascii=False, default=str),
-            "disclosure": "on_request",
-        }
-        for key, value in fixture.items()
-        if key != "origin"
-    ]
-    persona_model = simulate.Persona(
-        persona=persona,
-        situation=doc["instruction"],
-        outcome=(
-            doc.get("tests") or "Complete the requested task and close naturally."
-        ),
-        knowledge=knowledge,
-        behavior_policy={
-            "disclosure_policy": 0.72,
-            "cooperation_bounds": 0.9,
-            "repair_propensity": 0.85,
-        },
-    )
-    return simulate.Scenario(
-        name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
-        dataset=[persona_model],
-    )
+# --- SimulationSpec construction. Shared with the local lane through simulator_voice; only the
+# value lookup is lane-specific. ---------------------------------------------------------------
 
 
 def _build_spec(
@@ -419,56 +320,39 @@ def _build_spec(
     simulator_config: Mapping[str, Any],
     environ: Mapping[str, str],
 ) -> SimulationSpec:
-    recording_dir = recordings_root / run_id / "recordings"
-    params = {
-        "record_audio": True,
-        "recording_root": str(recording_dir),
-        "recording_case_directory": str(recording_dir),
-        "min_turn_messages": 6,
-        "max_seconds": call_timeout_seconds,
-        "connect_timeout": _CONNECT_TIMEOUT_SECONDS,
-        "readiness_timeout": _READINESS_TIMEOUT_SECONDS,
-        "cleanup_timeout": _CLEANUP_TIMEOUT_SECONDS,
-        "conversation_direction": "agent_first",
+    """The hosted lane: values come from job config and the bundle's scenario document.
+
+    Lowercase job config wins; provider environment aliases are accepted for compatibility.
+    """
+
+    def setting(name: str) -> str:
+        return str(simulator_config.get(name.lower()) or environ.get(name) or "")
+
+    simulator = simulator_definition(setting, doc.get("persona"))
+    return simulation_spec(
+        run_id=run_id,
+        room_name=room_name,
+        agent_name=agent_name,
+        system_prompt=doc["instruction"],
+        livekit_url=livekit_url,
+        recording_dir=recordings_root / run_id / "recordings",
+        scenario=caller_scenario(
+            name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
+            persona=doc.get("persona"),
+            situation=doc["instruction"],
+            fixture=doc.get("fixture"),
+            tts_provider=simulator.tts.provider,
+        ),
+        simulator=simulator,
+        direction="agent_first",
+        max_seconds=call_timeout_seconds,
+        min_turn_messages=6,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
         # round-trip after the conversation has begun.  The previous 45-second value terminated
         # an otherwise healthy LiveKit call at exactly the watchdog boundary.  Keep a finite
         # liveness guard, but align it with the engine's 60-second conversation-silence backstop.
-        "agent_first_silence_timeout_seconds": 60.0,
-    }
-    agent = simulate.AgentDefinition(
-        name="harness-livekit-target",
-        agent_name=agent_name,
-        system_prompt=doc["instruction"],
-        transport={"kind": "webrtc"},
-    )
-    runtime_spec = simulate.LiveKitSimulatorRuntime(
-        url=livekit_url,
-        room_name=room_name,
-        room_mode="managed",
-    )
-    return SimulationSpec(
-        run_id=run_id,
-        environment=EnvironmentSpec(
-            adapter="voice",
-            world_kind="voice_telephony",
-            config={
-                "agent_definition": agent.model_dump(mode="json", exclude_none=True),
-                "livekit_runtime": runtime_spec.model_dump(
-                    mode="json", exclude_none=True
-                ),
-                "simulator": _simulator_definition(
-                    simulator_config, environ
-                ).model_dump(mode="json", exclude_none=True),
-                "params": params,
-            },
-        ),
-        target=AgentEndpointSpec(adapter="webrtc"),
-        simulator=SimulatorPolicySpec(adapter="livekit_simulator"),
-        scenario=_scenario_spec(doc),
-        execution=ExecutionPolicy(
-            direction="agent_first", timeout=TimeoutPolicy(run_seconds=run_seconds)
-        ),
+        agent_first_silence_seconds=60.0,
+        run_seconds=run_seconds,
     )
 
 
@@ -725,6 +609,7 @@ class CallRunnerImpl:
             LIVEKIT_API_SECRET_ALIAS,
             LIVEKIT_URL_ALIAS,
             DEEPGRAM_API_KEY_ALIAS,
+            CARTESIA_API_KEY_ALIAS,
             GEMINI_API_KEY_ALIAS,
             GOOGLE_API_KEY_ALIAS,
             GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
@@ -819,11 +704,23 @@ class CallRunnerImpl:
         )
         run_seconds = (
             call_timeout_seconds
-            + _CONNECT_TIMEOUT_SECONDS
-            + _READINESS_TIMEOUT_SECONDS
-            + _CLEANUP_TIMEOUT_SECONDS
+            + CONNECT_TIMEOUT_SECONDS
+            + READINESS_TIMEOUT_SECONDS
+            + CLEANUP_TIMEOUT_SECONDS
             + _RUN_SECONDS_PAD_SECONDS
         )
+
+        # The engine reads this from the environment at call time, so it is set per
+        # scenario and cleared otherwise rather than leaking into the next call.
+        noise = scenario_source(
+            doc.get("background_noise"),
+            doc.get("fixture"),
+            seed=str(doc.get("name") or ""),
+        )
+        if noise:
+            self._environ["HARNESS_BACKGROUND_NOISE"] = noise
+        else:
+            self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
 
         spec = _build_spec(
             run_id=new_run_id(),

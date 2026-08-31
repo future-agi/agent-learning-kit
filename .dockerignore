@@ -12,3 +12,9 @@ node_modules
 *.log
 *.pyc
 __pycache__
+
+# SDK trees the hosted image never copies. They are ~90% of the build context and
+# uploading them makes the Daytona build time out.
+python
+typescript
+examples

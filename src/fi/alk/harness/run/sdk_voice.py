@@ -8,22 +8,22 @@ LiveKit room, simulated caller, transcript, recordings, and terminal status.
 from __future__ import annotations
 
 import argparse
+import logging
 import asyncio
 import json
 import os
 from pathlib import Path
 
-from fi import simulate
-from fi.simulate.runtime import (
-    AgentEndpointSpec,
-    EnvironmentSpec,
-    ExecutionPolicy,
-    SimulationSpec,
-    SimulatorPolicySpec,
-    TimeoutPolicy,
-    new_run_id,
-)
+from fi.simulate.runtime import SimulationSpec, new_run_id
 from fi.simulate.runtime.runner import SimulationRunner
+
+from fi.alk.harness.simulator_voice import (
+    caller_scenario,
+    simulation_spec,
+    simulator_definition,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _required(name: str) -> str:
@@ -31,6 +31,10 @@ def _required(name: str) -> str:
     if not value:
         raise RuntimeError(f"missing environment variable: {name}")
     return value
+
+
+def _env(name: str) -> str:
+    return os.environ.get(name, "")
 
 
 def _json_env(name: str, default):
@@ -41,152 +45,37 @@ def _json_env(name: str, default):
     return parsed
 
 
-def _simulator() -> simulate.SimulatorAgentDefinition:
-    llm_provider = os.environ.get("SIMULATOR_LLM_PROVIDER", "google")
-    stt_provider = os.environ.get("SIMULATOR_STT_PROVIDER", "deepgram")
-    tts_provider = os.environ.get("SIMULATOR_TTS_PROVIDER", "deepgram")
-    defaults = {
-        "llm": {"google": "gemini-2.5-flash-lite", "openai": "gpt-4o-mini"},
-        "stt": {"deepgram": "nova-2", "google": "chirp_2"},
-        "tts": {"deepgram": "aura-asteria-en", "google": "en-US-Chirp3-HD-Aoede"},
-    }
-
-    def model(kind: str, provider: str) -> str:
-        return os.environ.get(
-            f"SIMULATOR_{kind.upper()}_MODEL", ""
-        ).strip() or defaults[kind].get(
-            provider.lower(), next(iter(defaults[kind].values()))
-        )
-
-    return simulate.SimulatorAgentDefinition(
-        llm={
-            "provider": llm_provider,
-            "model": model("llm", llm_provider),
-            "temperature": float(os.environ.get("SIMULATOR_LLM_TEMPERATURE", "0.35")),
-        },
-        stt={
-            "provider": stt_provider,
-            "model": model("stt", stt_provider),
-            "language": os.environ.get("SIMULATOR_STT_LANGUAGE", "en"),
-        },
-        tts={
-            "provider": tts_provider,
-            "model": model("tts", tts_provider),
-            "voice": os.environ.get("SIMULATOR_TTS_VOICE", "aura-asteria-en"),
-        },
-        instructions=(
-            "Act as the customer described by the scenario. Speak naturally and briefly. "
-            "Use only the supplied facts and never invent account, address, payment, or "
-            "verification data. Do not volunteer private data: agree when asked whether a "
-            "verification code should be sent, and disclose the actual code only after the "
-            "agent says it was sent and explicitly asks you to read it. Answer repair questions "
-            "with the missing fact, not by restarting the request. Never repeat the same answer "
-            "more than twice. When the requested outcome is complete, thank the agent and end "
-            "the call."
-        ),
-        allow_interruptions=True,
-    )
-
-
-def _scenario() -> simulate.Scenario:
-    fixture = _json_env("HARNESS_FIXTURE", {})
-    persona = _json_env("HARNESS_PERSONA", {"name": "customer"})
-    persona = dict(persona) if isinstance(persona, dict) else {"name": "customer"}
-    persona["role"] = "customer"
-    metadata = dict(persona.get("metadata") or {})
-    if isinstance(fixture, dict) and fixture.get("phone"):
-        # LiveKit exposes this as participant metadata/attributes. A target can
-        # hydrate the correct seeded caller without knowing scenario internals.
-        metadata["caller_phone"] = str(fixture["phone"])
-    persona["metadata"] = metadata
-    initial = os.environ.get("HARNESS_INITIAL_MESSAGE", "").strip()
-    if initial:
-        persona["initial_message"] = initial
-    knowledge = [
-        {
-            "key": str(key),
-            "value": json.dumps(value, ensure_ascii=False),
-            "disclosure": "on_request",
-        }
-        for key, value in (fixture.items() if isinstance(fixture, dict) else [])
-        if key != "origin"
-    ]
-    return simulate.Scenario(
-        name=os.environ.get("HARNESS_SCENARIO", "harness-voice"),
-        dataset=[
-            simulate.Persona(
-                persona=persona,
-                situation=_required("HARNESS_INSTRUCTION"),
-                outcome=os.environ.get(
-                    "HARNESS_OUTCOME",
-                    "Complete the requested task and close naturally.",
-                ),
-                knowledge=knowledge,
-                behavior_policy={
-                    "disclosure_policy": 0.72,
-                    "cooperation_bounds": 0.9,
-                    "repair_propensity": 0.85,
-                },
-            )
-        ],
-    )
-
-
 def build_spec(run_id: str) -> SimulationSpec:
+    """The local lane: every value comes from a HARNESS_* environment variable."""
+    persona = _json_env("HARNESS_PERSONA", {"name": "customer"})
+    simulator = simulator_definition(_env, persona)
     direction = os.environ.get("HARNESS_CONVERSATION_DIRECTION", "agent_first")
     max_seconds = float(os.environ.get("VOICE_MAX_SECONDS", "300"))
-    params = {
-        "record_audio": True,
-        "recording_root": str(_output_root() / run_id / "1.1.2" / "recordings"),
-        "recording_case_directory": str(
-            _output_root() / run_id / "1.1.2" / "recordings"
-        ),
-        "min_turn_messages": int(os.environ.get("VOICE_MIN_TURN_MESSAGES", "6")),
-        "max_seconds": max_seconds,
-        "connect_timeout": 60,
-        "readiness_timeout": 120,
-        "cleanup_timeout": 30,
-        "conversation_direction": direction,
-        "agent_first_silence_timeout_seconds": float(
-            os.environ.get("VOICE_AGENT_FIRST_SILENCE_SECONDS", "45")
-        ),
-    }
-    agent = simulate.AgentDefinition(
-        name="harness-livekit-target",
+    recording_dir = _output_root() / run_id / "1.1.2" / "recordings"
+    return simulation_spec(
+        run_id=run_id,
+        room_name=f"harness-{run_id}",
         agent_name=_required("LIVEKIT_TARGET_AGENT_NAME"),
         system_prompt=_required("LIVEKIT_TARGET_SYSTEM_PROMPT"),
-        transport={"kind": "webrtc"},
-    )
-    runtime = simulate.LiveKitSimulatorRuntime(
-        url=os.environ.get("ACCEPTANCE_LIVEKIT_URL") or _required("LIVEKIT_URL"),
-        room_name=f"harness-{run_id}",
-        room_mode="managed",
-    )
-    run_seconds = max(300.0, max_seconds + 60 + 120 + 30 + 60)
-    return SimulationSpec(
-        run_id=run_id,
-        environment=EnvironmentSpec(
-            adapter="voice",
-            world_kind="voice_telephony",
-            config={
-                "agent_definition": agent.model_dump(mode="json", exclude_none=True),
-                "livekit_runtime": runtime.model_dump(mode="json", exclude_none=True),
-                "simulator": _simulator().model_dump(mode="json", exclude_none=True),
-                "params": params,
-            },
+        livekit_url=os.environ.get("ACCEPTANCE_LIVEKIT_URL") or _required("LIVEKIT_URL"),
+        recording_dir=recording_dir,
+        scenario=caller_scenario(
+            name=os.environ.get("HARNESS_SCENARIO", "harness-voice"),
+            persona=persona,
+            situation=_required("HARNESS_INSTRUCTION"),
+            fixture=_json_env("HARNESS_FIXTURE", {}),
+            tts_provider=simulator.tts.provider,
+            outcome=os.environ.get("HARNESS_OUTCOME", ""),
+            initial_message=os.environ.get("HARNESS_INITIAL_MESSAGE", ""),
         ),
-        target=AgentEndpointSpec(adapter="webrtc"),
-        simulator=SimulatorPolicySpec(adapter="livekit_simulator"),
-        scenario=_scenario(),
-        # Keep the canonical execution policy and the voice engine parameters
-        # aligned. Dev's typed runner exposes direction at the spec level even
-        # though the voice adapter currently hydrates the engine from params;
-        # disagreement here makes planners and future adapters see the opposite
-        # call direction from the engine that actually runs.
-        execution=ExecutionPolicy(
-            direction=direction,
-            timeout=TimeoutPolicy(run_seconds=run_seconds),
+        simulator=simulator,
+        direction=direction,
+        max_seconds=max_seconds,
+        min_turn_messages=int(os.environ.get("VOICE_MIN_TURN_MESSAGES", "6")),
+        agent_first_silence_seconds=float(
+            os.environ.get("VOICE_AGENT_FIRST_SILENCE_SECONDS", "45")
         ),
+        run_seconds=max(300.0, max_seconds + 60 + 120 + 30 + 60),
     )
 
 
