@@ -2760,6 +2760,7 @@ class ArtifactKind(str, Enum):
     RECORDING_ASSISTANT = "recording_assistant"
     TRANSCRIPT = "transcript"
     TOOL_TRACE = "tool_trace"
+    EVIDENCE = "evidence"
     RESULT = "result"
     BUILD = "build"
     TRACE = "trace"
@@ -2772,6 +2773,7 @@ _RESERVED_ARTIFACT_KINDS = frozenset(
         ArtifactKind.BUILD,
         ArtifactKind.TRANSCRIPT,
         ArtifactKind.TOOL_TRACE,
+        ArtifactKind.EVIDENCE,
         ArtifactKind.RESULT,
     }
 )
@@ -2939,6 +2941,7 @@ _DEFAULT_ARTIFACT_CONTENT_TYPES: dict[ArtifactKind, str] = {
     ArtifactKind.RECORDING_CUSTOMER: "video/mp4",
     ArtifactKind.RECORDING_ASSISTANT: "video/mp4",
     ArtifactKind.TRANSCRIPT: "application/json",
+    ArtifactKind.EVIDENCE: "application/json",
     ArtifactKind.RESULT: "application/json",
 }
 
