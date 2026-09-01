@@ -72,8 +72,14 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260829-visible-diagnostics-r12
+ARG ALK_HOSTED_SOURCE_REVISION=20260901-grid-skill-r1
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
+
+# The scenarios stage plans its own suite and fans writing out across parallel
+# writer sessions; these enable that path and size its batches.
+ENV HARNESS_PARALLEL_SCENARIOS=1 \
+    HARNESS_SUITE_BATCH=100 \
+    HARNESS_WRITERS_AT_ONCE=8
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
