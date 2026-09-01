@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -1417,9 +1418,43 @@ def test_default_process_runner_forwards_user_and_group_to_popen(
     )
     assert captured["user"] == 1234
     assert captured["group"] == 5678
+    assert captured["start_new_session"] is True
     # The log file the harness creates (before the child's privilege drop) is chowned to match —
     # otherwise nothing running as the child's own user could ever open it fresh afterward.
     assert chowned == [(str(tmp_path / "x.log"), 1234, 5678)]
+
+
+def test_popen_process_signals_the_owned_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakePopen:
+        pid = 4321
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("must signal the complete process group")
+
+        def send_signal(self, _signum: int) -> None:
+            raise AssertionError("must signal the complete process group")
+
+        def kill(self) -> None:
+            raise AssertionError("must signal the complete process group")
+
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(pr.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+    handle = pr.PopenProcess(popen=FakePopen(), log_path=tmp_path / "process.log")
+
+    handle.interrupt()
+    handle.terminate()
+    handle.kill()
+
+    assert signals == [
+        (4321, signal.SIGINT),
+        (4321, signal.SIGTERM),
+        (4321, signal.SIGKILL),
+    ]
 
 
 def test_default_process_runner_does_not_chown_the_log_when_no_user_is_given(

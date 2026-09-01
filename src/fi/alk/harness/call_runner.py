@@ -179,48 +179,59 @@ class _MissingVoiceConfig:
 
 
 def _check_config(
-    job: HarnessJob, target_provider_secret_values: Mapping[str, str]
+    job: HarnessJob,
+    target_provider_secret_values: Mapping[str, str],
+    simulator_values: Mapping[str, str] | None = None,
 ) -> _MissingVoiceConfig | None:
+    simulator_values = simulator_values or {}
+
+    def simulator_value(alias: str) -> str | None:
+        # Hosted runs supply platform-owned simulator credentials in the control process.  The
+        # target-provider value remains a backwards-compatible fallback for local SDK callers.
+        return simulator_values.get(alias) or target_provider_secret_values.get(alias)
+
     config = job.agent.config
     llm_provider = str(
         config.get("simulator_llm_provider")
-        or target_provider_secret_values.get(SIMULATOR_LLM_PROVIDER_ALIAS)
+        or simulator_value(SIMULATOR_LLM_PROVIDER_ALIAS)
         or "google"
     ).lower()
     stt_provider = str(
         config.get("simulator_stt_provider")
-        or target_provider_secret_values.get(SIMULATOR_STT_PROVIDER_ALIAS)
+        or simulator_value(SIMULATOR_STT_PROVIDER_ALIAS)
         or "deepgram"
     ).lower()
     tts_provider = str(
         config.get("simulator_tts_provider")
-        or target_provider_secret_values.get(SIMULATOR_TTS_PROVIDER_ALIAS)
+        or simulator_value(SIMULATOR_TTS_PROVIDER_ALIAS)
         or "deepgram"
     ).lower()
 
     required = [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS]
     if "deepgram" in {stt_provider, tts_provider}:
-        required.append(DEEPGRAM_API_KEY_ALIAS)
+        if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
+            required.append(DEEPGRAM_API_KEY_ALIAS)
     missing_aliases = [
         alias for alias in required if not target_provider_secret_values.get(alias)
     ]
 
     if llm_provider == "google":
         has_api_key = bool(
-            target_provider_secret_values.get(GEMINI_API_KEY_ALIAS)
-            or target_provider_secret_values.get(GOOGLE_API_KEY_ALIAS)
+            simulator_value(GEMINI_API_KEY_ALIAS)
+            or simulator_value(GOOGLE_API_KEY_ALIAS)
         )
         has_vertex_adc = bool(
-            target_provider_secret_values.get(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
-            and target_provider_secret_values.get(GOOGLE_CLOUD_PROJECT_ALIAS)
+            (
+                simulator_value(GOOGLE_APPLICATION_CREDENTIALS_ALIAS)
+                or simulator_value(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
+            )
+            and simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
         )
         if not has_api_key and not has_vertex_adc:
             missing_aliases.append(
                 f"{GEMINI_API_KEY_ALIAS}_or_{GOOGLE_API_KEY_ALIAS}_or_VERTEX_ADC"
             )
-    elif llm_provider == "openai" and not target_provider_secret_values.get(
-        OPENAI_API_KEY_ALIAS
-    ):
+    elif llm_provider == "openai" and not simulator_value(OPENAI_API_KEY_ALIAS):
         missing_aliases.append(OPENAI_API_KEY_ALIAS)
 
     has_livekit_url = bool(
@@ -608,6 +619,11 @@ class CallRunnerImpl:
             LIVEKIT_API_KEY_ALIAS,
             LIVEKIT_API_SECRET_ALIAS,
             LIVEKIT_URL_ALIAS,
+        ):
+            value = context.target_provider_secret_values.get(alias)
+            if value:
+                target_environ[alias] = value
+        for alias in (
             DEEPGRAM_API_KEY_ALIAS,
             CARTESIA_API_KEY_ALIAS,
             GEMINI_API_KEY_ALIAS,
@@ -626,7 +642,9 @@ class CallRunnerImpl:
         ):
             value = context.target_provider_secret_values.get(alias)
             if value:
-                target_environ[alias] = value
+                # Platform-owned simulator credentials already present in the hosted control
+                # process win.  Target credentials are retained only as the local-SDK fallback.
+                target_environ.setdefault(alias, value)
         self._environ = target_environ
         self._adc_path = _materialize_vertex_adc(
             context.target_provider_secret_values,
@@ -640,7 +658,7 @@ class CallRunnerImpl:
             or ""
         )
         self._missing_config = _check_config(
-            context.job, context.target_provider_secret_values
+            context.job, context.target_provider_secret_values, target_environ
         )
         self._scenario_attempt_counts: dict[str, int] = {}
 
