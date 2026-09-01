@@ -1097,3 +1097,27 @@ def test_construction_never_exports_secrets_outside_the_target_provider_map(
     _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
     cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
     assert "UNRELATED_ALIAS" not in fake_environ
+
+
+def test_platform_simulator_credentials_win_without_replacing_target_livekit(
+    tmp_path: Path,
+) -> None:
+    fake_environ = {
+        DEEPGRAM_API_KEY: "platform-deepgram",
+        GEMINI_API_KEY: "platform-gemini",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/run/futureagi/platform-vertex.json",
+        "GOOGLE_CLOUD_PROJECT": "platform-project",
+    }
+    _job_obj, context = _context(tmp_path=tmp_path)
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+
+    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
+    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram"
+    assert fake_environ[GEMINI_API_KEY] == "platform-gemini"
+    assert (
+        fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
+        == "/run/futureagi/platform-vertex.json"
+    )
+    assert runner._missing_config is None
