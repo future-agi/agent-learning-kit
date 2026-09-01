@@ -6,11 +6,12 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
 1. **Placing the call.** The customer agent is already running INSIDE the Daytona sandbox, as a
    world process the bundle's provisioner spawned (`process_runtime.py`) and registered with
    LiveKit cloud under `LIVEKIT_AGENT_NAME=agent-w{WORLD_INDEX}`-style identity. This runner never
-   starts or manages that process — it drives `SimulationRunner` IN-PROCESS with a directly-built
-   `SimulationSpec` that dials the already-registered identity, mirroring `run/sdk_voice.py::
-   build_spec` field-for-field but sourcing values from job config and the bundle's own scenario
-   document instead of `HARNESS_*` env vars (the local-only webhook/subprocess plumbing
-   `run/call.py`/`run/live.py` use is neither available nor appropriate in the guest).
+   starts or manages that process. It drives `SimulationRunner` IN-PROCESS with a
+   `SimulationSpec` built by `simulator_voice.simulation_spec`, the same builder the local lane
+   uses; only the value lookup differs, resolving from job config and the bundle's scenario
+   document rather than `HARNESS_*` env vars. Do not rebuild the spec here: the two lanes drifted
+   for exactly that reason. The local-only webhook/subprocess plumbing `run/call.py` and
+   `run/live.py` use is neither available nor appropriate in the guest.
 2. **Collecting evidence.** The bundle declares exactly one `runtime.evidence_seam`:
    `http_tool` or `tool_trace`. `http_tool` has NO guest-side capture surface anywhere in this
    repo today (see `_collect_http_tool_calls`'s docstring — a verified finding, not an assumption)
@@ -34,31 +35,35 @@ import logging
 import os
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from fi import simulate
 from fi.simulate.runtime import (
-    AgentEndpointSpec,
-    EnvironmentSpec,
-    ExecutionPolicy,
     SimulationSpec,
-    SimulatorPolicySpec,
-    TimeoutPolicy,
     new_run_id,
 )
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
+from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import HarnessJob
+from .job import ExecutionMode, HarnessJob
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .simulator_voice import (
+    CLEANUP_TIMEOUT_SECONDS,
+    CONNECT_TIMEOUT_SECONDS,
+    READINESS_TIMEOUT_SECONDS,
+    caller_scenario,
+    simulation_spec,
+    simulator_definition,
+)
 from .world.errors import WorldUnavailable
 from .world.runtime import Call
 
@@ -70,6 +75,7 @@ LIVEKIT_API_KEY_ALIAS = "LIVEKIT_API_KEY"
 LIVEKIT_API_SECRET_ALIAS = "LIVEKIT_API_SECRET"
 LIVEKIT_URL_ALIAS = "LIVEKIT_URL"
 DEEPGRAM_API_KEY_ALIAS = "DEEPGRAM_API_KEY"
+CARTESIA_API_KEY_ALIAS = "CARTESIA_API_KEY"
 GEMINI_API_KEY_ALIAS = "GEMINI_API_KEY"
 GOOGLE_API_KEY_ALIAS = "GOOGLE_API_KEY"
 GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
@@ -89,13 +95,24 @@ SIMULATOR_TTS_MODEL_ALIAS = "SIMULATOR_TTS_MODEL"
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
+_SIMULATOR_PLATFORM_ALIAS_MAP = {
+    "SIMULATOR_DEEPGRAM_API_KEY": DEEPGRAM_API_KEY_ALIAS,
+    "SIMULATOR_CARTESIA_API_KEY": CARTESIA_API_KEY_ALIAS,
+    "SIMULATOR_GEMINI_API_KEY": GEMINI_API_KEY_ALIAS,
+    "SIMULATOR_GOOGLE_API_KEY": GOOGLE_API_KEY_ALIAS,
+    "SIMULATOR_GOOGLE_APPLICATION_CREDENTIALS_JSON": (
+        GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS
+    ),
+    "SIMULATOR_GOOGLE_CLOUD_PROJECT": GOOGLE_CLOUD_PROJECT_ALIAS,
+    "SIMULATOR_GOOGLE_CLOUD_LOCATION": GOOGLE_CLOUD_LOCATION_ALIAS,
+    "SIMULATOR_GOOGLE_GENAI_USE_VERTEXAI": GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+    "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
+}
+
 _DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
-_CONNECT_TIMEOUT_SECONDS = 60.0
-_READINESS_TIMEOUT_SECONDS = 120.0
-_CLEANUP_TIMEOUT_SECONDS = 30.0
 _RUN_SECONDS_PAD_SECONDS = 60.0
 # Headroom beyond `spec.execution.timeout.run_seconds` -- SimulationRunner.run() already wraps
 # `plugin.run(...)` in its OWN `asyncio.wait_for(..., timeout=spec.execution.timeout.run_seconds)`
@@ -159,6 +176,7 @@ class CallRunnerContext:
     target_provider_secret_values: Mapping[str, str]
     attempt_number: int
     source_directory: Path | None = None
+    simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -179,22 +197,35 @@ class _MissingVoiceConfig:
 
 
 def _check_config(
-    job: HarnessJob, target_provider_secret_values: Mapping[str, str]
+    job: HarnessJob,
+    target_provider_secret_values: Mapping[str, str],
+    simulator_values: Mapping[str, str] | None = None,
 ) -> _MissingVoiceConfig | None:
+    simulator_values = simulator_values or {}
+
+    def simulator_value(alias: str) -> str | None:
+        # Hosted runs supply platform-owned simulator credentials in the control process.  The
+        # target-provider value remains a backwards-compatible fallback for local SDK callers.
+        return simulator_values.get(alias) or (
+            target_provider_secret_values.get(alias)
+            if job.execution is ExecutionMode.LOCAL
+            else None
+        )
+
     config = job.agent.config
     llm_provider = str(
         config.get("simulator_llm_provider")
-        or target_provider_secret_values.get(SIMULATOR_LLM_PROVIDER_ALIAS)
+        or simulator_value(SIMULATOR_LLM_PROVIDER_ALIAS)
         or "google"
     ).lower()
     stt_provider = str(
         config.get("simulator_stt_provider")
-        or target_provider_secret_values.get(SIMULATOR_STT_PROVIDER_ALIAS)
+        or simulator_value(SIMULATOR_STT_PROVIDER_ALIAS)
         or "deepgram"
     ).lower()
     tts_provider = str(
         config.get("simulator_tts_provider")
-        or target_provider_secret_values.get(SIMULATOR_TTS_PROVIDER_ALIAS)
+        or simulator_value(SIMULATOR_TTS_PROVIDER_ALIAS)
         or "deepgram"
     ).lower()
 
@@ -205,27 +236,41 @@ def _check_config(
     elif connector == "retell":
         required.append(RETELL_API_KEY_ALIAS)
     if "deepgram" in {stt_provider, tts_provider}:
-        required.append(DEEPGRAM_API_KEY_ALIAS)
+        if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
+            required.append(DEEPGRAM_API_KEY_ALIAS)
     missing_aliases = [
-        alias for alias in required if not target_provider_secret_values.get(alias)
+        alias
+        for alias in required
+        if not (
+            target_provider_secret_values.get(alias)
+            if alias
+            in {
+                LIVEKIT_API_KEY_ALIAS,
+                LIVEKIT_API_SECRET_ALIAS,
+                VAPI_API_KEY_ALIAS,
+                RETELL_API_KEY_ALIAS,
+            }
+            else simulator_value(alias)
+        )
     ]
 
     if llm_provider == "google":
         has_api_key = bool(
-            target_provider_secret_values.get(GEMINI_API_KEY_ALIAS)
-            or target_provider_secret_values.get(GOOGLE_API_KEY_ALIAS)
+            simulator_value(GEMINI_API_KEY_ALIAS)
+            or simulator_value(GOOGLE_API_KEY_ALIAS)
         )
         has_vertex_adc = bool(
-            target_provider_secret_values.get(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
-            and target_provider_secret_values.get(GOOGLE_CLOUD_PROJECT_ALIAS)
+            (
+                simulator_value(GOOGLE_APPLICATION_CREDENTIALS_ALIAS)
+                or simulator_value(GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS)
+            )
+            and simulator_value(GOOGLE_CLOUD_PROJECT_ALIAS)
         )
         if not has_api_key and not has_vertex_adc:
             missing_aliases.append(
                 f"{GEMINI_API_KEY_ALIAS}_or_{GOOGLE_API_KEY_ALIAS}_or_VERTEX_ADC"
             )
-    elif llm_provider == "openai" and not target_provider_secret_values.get(
-        OPENAI_API_KEY_ALIAS
-    ):
+    elif llm_provider == "openai" and not simulator_value(OPENAI_API_KEY_ALIAS):
         missing_aliases.append(OPENAI_API_KEY_ALIAS)
 
     has_livekit_url = bool(
@@ -236,6 +281,14 @@ def _check_config(
     if not missing_aliases and not missing_config_keys:
         return None
     return _MissingVoiceConfig(tuple(missing_aliases), tuple(missing_config_keys))
+
+
+def _canonical_simulator_secrets(values: Mapping[str, str]) -> dict[str, str]:
+    """Translate platform-only aliases into the names expected by simulator plugins."""
+    return {
+        _SIMULATOR_PLATFORM_ALIAS_MAP.get(alias, alias): value
+        for alias, value in values.items()
+    }
 
 
 def _dispatch_agent_name(runtime: EnvironmentRuntime) -> str | None:
@@ -308,118 +361,15 @@ def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
     return max(0, int((ended_at - started_at).total_seconds() * 1000))
 
 
-# --- SimulationSpec construction (mirrors run/sdk_voice.py::build_spec field-for-field; values
-# come from job config / the re-read scenario document instead of HARNESS_* env vars) ---------
-
-
-def _simulator_definition(
-    config: Mapping[str, Any],
-    environ: Mapping[str, str],
-) -> Any:
-    """Build the caller from provider-neutral job configuration.
-
-    Lowercase job config wins; provider environment aliases are accepted for compatibility.
-    Defaults match the shipped voice runner, but no target-agent or domain-specific behavior is
-    encoded here.
-    """
-    llm_provider = str(
-        config.get("simulator_llm_provider")
-        or environ.get("SIMULATOR_LLM_PROVIDER")
-        or "google"
-    )
-    stt_provider = str(
-        config.get("simulator_stt_provider")
-        or environ.get("SIMULATOR_STT_PROVIDER")
-        or "deepgram"
-    )
-    tts_provider = str(
-        config.get("simulator_tts_provider")
-        or environ.get("SIMULATOR_TTS_PROVIDER")
-        or "deepgram"
-    )
-    default_models = {
-        "llm": {"google": "gemini-2.5-flash-lite", "openai": "gpt-4o-mini"},
-        "stt": {"deepgram": "nova-2", "google": "chirp_2"},
-        "tts": {"deepgram": "aura-asteria-en", "google": "en-US-Chirp3-HD-Aoede"},
-    }
-    llm_model = str(
-        config.get("simulator_llm_model")
-        or environ.get("SIMULATOR_LLM_MODEL")
-        or default_models["llm"].get(llm_provider, "")
-    )
-    stt_model = str(
-        config.get("simulator_stt_model")
-        or environ.get("SIMULATOR_STT_MODEL")
-        or default_models["stt"].get(stt_provider, "")
-    )
-    tts_model = str(
-        config.get("simulator_tts_model")
-        or environ.get("SIMULATOR_TTS_MODEL")
-        or default_models["tts"].get(tts_provider, "")
-    )
-    return simulate.SimulatorAgentDefinition(
-        llm={"provider": llm_provider, "model": llm_model, "temperature": 0.35},
-        stt={"provider": stt_provider, "model": stt_model, "language": "en"},
-        tts={"provider": tts_provider, "model": tts_model, "voice": tts_model},
-        instructions=(
-            "Act as the customer described by the scenario. Speak naturally and briefly. "
-            "Use only the supplied facts and never invent account, address, payment, or "
-            "verification data. Do not volunteer private data: agree when asked whether a "
-            "verification code should be sent, and disclose the actual code only after the "
-            "agent says it was sent and explicitly asks you to read it. Answer repair questions "
-            "with the missing fact, not by restarting the request. Never repeat the same answer "
-            "more than twice. When the requested outcome is complete, thank the agent and end "
-            "the call."
-        ),
-        allow_interruptions=True,
-    )
-
-
-def _scenario_spec(doc: Mapping[str, Any]) -> Any:
-    """Mirrors `sdk_voice.py::_scenario()`'s own transformation exactly, sourced from the re-read
-    scenario document instead of `HARNESS_*` env vars."""
-    fixture = doc.get("fixture") if isinstance(doc.get("fixture"), dict) else {}
-    persona = dict(doc.get("persona") or {})
-    persona["role"] = "customer"
-    metadata = dict(persona.get("metadata") or {})
-    if fixture.get("phone"):
-        metadata["caller_phone"] = str(fixture["phone"])
-    persona["metadata"] = metadata
-    knowledge = [
-        {
-            "key": str(key),
-            "value": json.dumps(value, ensure_ascii=False, default=str),
-            "disclosure": "on_request",
-        }
-        for key, value in fixture.items()
-        if key != "origin"
-    ]
-    persona_model = simulate.Persona(
-        persona=persona,
-        situation=doc["instruction"],
-        outcome=(
-            doc.get("tests") or "Complete the requested task and close naturally."
-        ),
-        knowledge=knowledge,
-        behavior_policy={
-            "disclosure_policy": 0.72,
-            "cooperation_bounds": 0.9,
-            "repair_propensity": 0.85,
-        },
-    )
-    return simulate.Scenario(
-        name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
-        dataset=[persona_model],
-    )
+# --- SimulationSpec construction. Shared with the local lane through simulator_voice; only the
+# value lookup is lane-specific. ---------------------------------------------------------------
 
 
 def _build_spec(
     *,
     run_id: str,
     room_name: str,
-    connector: str,
     agent_name: str | None,
-    provider_target_id: str | None,
     doc: Mapping[str, Any],
     livekit_url: str,
     call_timeout_seconds: float,
@@ -427,29 +377,24 @@ def _build_spec(
     recordings_root: Path,
     simulator_config: Mapping[str, Any],
     environ: Mapping[str, str],
+    connector: str = "livekit",
+    provider_target_id: str | None = None,
 ) -> SimulationSpec:
-    recording_dir = recordings_root / run_id / "recordings"
-    params = {
-        "record_audio": True,
-        "recording_root": str(recording_dir),
-        "recording_case_directory": str(recording_dir),
-        "min_turn_messages": 6,
-        "max_seconds": call_timeout_seconds,
-        "connect_timeout": _CONNECT_TIMEOUT_SECONDS,
-        "readiness_timeout": _READINESS_TIMEOUT_SECONDS,
-        "cleanup_timeout": _CLEANUP_TIMEOUT_SECONDS,
-        "conversation_direction": "agent_first",
-        # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
-        # round-trip after the conversation has begun.  The previous 45-second value terminated
-        # an otherwise healthy LiveKit call at exactly the watchdog boundary.  Keep a finite
-        # liveness guard, but align it with the engine's 60-second conversation-silence backstop.
-        "agent_first_silence_timeout_seconds": 60.0,
-    }
+    """The hosted lane: values come from job config and the bundle's scenario document.
+
+    Lowercase job config wins; provider environment aliases are accepted for compatibility.
+    """
+
+    def setting(name: str) -> str:
+        return str(simulator_config.get(name.lower()) or environ.get(name) or "")
+
+    simulator = simulator_definition(setting, doc.get("persona"))
     connector = connector.strip().lower()
+    provider_agent: simulate.AgentDefinition | None = None
     if connector == "vapi":
         if not provider_target_id:
             raise ValueError("vapi_target_id_unavailable")
-        agent = simulate.AgentDefinition(
+        provider_agent = simulate.AgentDefinition(
             name="harness-vapi-target",
             system_prompt=str(
                 simulator_config.get("target_system_prompt")
@@ -472,7 +417,7 @@ def _build_spec(
     elif connector == "retell":
         if not provider_target_id:
             raise ValueError("retell_target_id_unavailable")
-        agent = simulate.AgentDefinition(
+        provider_agent = simulate.AgentDefinition(
             name="harness-retell-target",
             system_prompt=str(
                 simulator_config.get("target_system_prompt")
@@ -497,42 +442,31 @@ def _build_spec(
                 "call_id_source": "originator_response",
             },
         )
-    else:
-        if not agent_name:
-            raise ValueError("livekit_agent_name_unavailable")
-        agent = simulate.AgentDefinition(
-            name="harness-livekit-target",
-            agent_name=agent_name,
-            system_prompt=doc["instruction"],
-            transport={"kind": "webrtc"},
-        )
-    runtime_spec = simulate.LiveKitSimulatorRuntime(
-        url=livekit_url,
-        room_name=room_name,
-        room_mode="managed",
-    )
-    return SimulationSpec(
+    return simulation_spec(
         run_id=run_id,
-        environment=EnvironmentSpec(
-            adapter="voice",
-            world_kind="voice_telephony",
-            config={
-                "agent_definition": agent.model_dump(mode="json", exclude_none=True),
-                "livekit_runtime": runtime_spec.model_dump(
-                    mode="json", exclude_none=True
-                ),
-                "simulator": _simulator_definition(
-                    simulator_config, environ
-                ).model_dump(mode="json", exclude_none=True),
-                "params": params,
-            },
+        room_name=room_name,
+        agent_name=agent_name,
+        system_prompt=doc["instruction"],
+        livekit_url=livekit_url,
+        recording_dir=recordings_root / run_id / "recordings",
+        scenario=caller_scenario(
+            name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
+            persona=doc.get("persona"),
+            situation=doc["instruction"],
+            fixture=doc.get("fixture"),
+            tts_provider=simulator.tts.provider,
         ),
-        target=AgentEndpointSpec(adapter="webrtc"),
-        simulator=SimulatorPolicySpec(adapter="livekit_simulator"),
-        scenario=_scenario_spec(doc),
-        execution=ExecutionPolicy(
-            direction="agent_first", timeout=TimeoutPolicy(run_seconds=run_seconds)
-        ),
+        simulator=simulator,
+        direction="agent_first",
+        max_seconds=call_timeout_seconds,
+        min_turn_messages=6,
+        # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
+        # round-trip after the conversation has begun.  The previous 45-second value terminated
+        # an otherwise healthy LiveKit call at exactly the watchdog boundary.  Keep a finite
+        # liveness guard, but align it with the engine's 60-second conversation-silence backstop.
+        agent_first_silence_seconds=60.0,
+        run_seconds=run_seconds,
+        agent_definition=provider_agent,
     )
 
 
@@ -776,6 +710,34 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call or _default_place_call
+        simulator_secret_values = _canonical_simulator_secrets(
+            context.simulator_provider_secret_values
+        )
+        # Local SDK runs remain BYOK and historically carry simulator keys in the one local
+        # target map. Hosted runs deliberately do not fall back: their simulator credentials must
+        # come from platform configuration and must not be confused with customer-agent keys.
+        if context.job.execution is ExecutionMode.LOCAL:
+            for alias in (
+                DEEPGRAM_API_KEY_ALIAS,
+                CARTESIA_API_KEY_ALIAS,
+                GEMINI_API_KEY_ALIAS,
+                GOOGLE_API_KEY_ALIAS,
+                GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
+                GOOGLE_CLOUD_PROJECT_ALIAS,
+                GOOGLE_CLOUD_LOCATION_ALIAS,
+                GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+                OPENAI_API_KEY_ALIAS,
+                SIMULATOR_LLM_PROVIDER_ALIAS,
+                SIMULATOR_LLM_MODEL_ALIAS,
+                SIMULATOR_STT_PROVIDER_ALIAS,
+                SIMULATOR_STT_MODEL_ALIAS,
+                SIMULATOR_TTS_PROVIDER_ALIAS,
+                SIMULATOR_TTS_MODEL_ALIAS,
+            ):
+                if alias not in simulator_secret_values:
+                    value = context.target_provider_secret_values.get(alias)
+                    if value:
+                        simulator_secret_values[alias] = value
         # WHY: the underlying LiveKit engine reads these directly via `os.environ.get(...)` deep
         # inside `engines/livekit.py` / `livekit_models.py` -- they are NOT `SimulationSpec`
         # fields, so there is no other way to hand them over. Exported ONCE here, at construction,
@@ -788,7 +750,15 @@ class CallRunnerImpl:
             LIVEKIT_API_KEY_ALIAS,
             LIVEKIT_API_SECRET_ALIAS,
             LIVEKIT_URL_ALIAS,
+            VAPI_API_KEY_ALIAS,
+            RETELL_API_KEY_ALIAS,
+        ):
+            value = context.target_provider_secret_values.get(alias)
+            if value:
+                target_environ[alias] = value
+        for alias in (
             DEEPGRAM_API_KEY_ALIAS,
+            CARTESIA_API_KEY_ALIAS,
             GEMINI_API_KEY_ALIAS,
             GOOGLE_API_KEY_ALIAS,
             GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
@@ -796,8 +766,6 @@ class CallRunnerImpl:
             GOOGLE_CLOUD_LOCATION_ALIAS,
             GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
             OPENAI_API_KEY_ALIAS,
-            VAPI_API_KEY_ALIAS,
-            RETELL_API_KEY_ALIAS,
             SIMULATOR_LLM_PROVIDER_ALIAS,
             SIMULATOR_LLM_MODEL_ALIAS,
             SIMULATOR_STT_PROVIDER_ALIAS,
@@ -805,12 +773,14 @@ class CallRunnerImpl:
             SIMULATOR_TTS_PROVIDER_ALIAS,
             SIMULATOR_TTS_MODEL_ALIAS,
         ):
-            value = context.target_provider_secret_values.get(alias)
+            value = simulator_secret_values.get(alias)
             if value:
-                target_environ[alias] = value
+                # Platform-owned simulator credentials already present in the hosted control
+                # process win.  Target credentials are retained only as the local-SDK fallback.
+                target_environ.setdefault(alias, value)
         self._environ = target_environ
         self._adc_path = _materialize_vertex_adc(
-            context.target_provider_secret_values,
+            simulator_secret_values,
             context.work_directory,
             target_environ,
         )
@@ -821,7 +791,7 @@ class CallRunnerImpl:
             or ""
         )
         self._missing_config = _check_config(
-            context.job, context.target_provider_secret_values
+            context.job, context.target_provider_secret_values, target_environ
         )
         self._scenario_attempt_counts: dict[str, int] = {}
 
@@ -886,11 +856,23 @@ class CallRunnerImpl:
         )
         run_seconds = (
             call_timeout_seconds
-            + _CONNECT_TIMEOUT_SECONDS
-            + _READINESS_TIMEOUT_SECONDS
-            + _CLEANUP_TIMEOUT_SECONDS
+            + CONNECT_TIMEOUT_SECONDS
+            + READINESS_TIMEOUT_SECONDS
+            + CLEANUP_TIMEOUT_SECONDS
             + _RUN_SECONDS_PAD_SECONDS
         )
+
+        # The engine reads this from the environment at call time, so it is set per
+        # scenario and cleared otherwise rather than leaking into the next call.
+        noise = scenario_source(
+            doc.get("background_noise"),
+            doc.get("fixture"),
+            seed=str(doc.get("name") or ""),
+        )
+        if noise:
+            self._environ["HARNESS_BACKGROUND_NOISE"] = noise
+        else:
+            self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector

@@ -1408,6 +1408,91 @@ def test_agent_first_silence_after_terminal_exchange_is_completed(
     }
 
 
+def test_farewell_only_turns_are_recognised_as_a_closing_loop() -> None:
+    # Shape taken from a call that ran 76 turns trading goodbyes and cost the job its worlds.
+    assert livekit._is_closing_only("Goodbye.")
+    assert livekit._is_closing_only("Alright, thanks, bye!")
+    assert livekit._is_closing_only("Have a great day!")
+
+
+def test_a_turn_carrying_content_is_not_a_closing() -> None:
+    # A farewell that also asks something is still live conversation.
+    assert not livekit._is_closing_only("Goodbye, but can you resend the receipt first?")
+    assert not livekit._is_closing_only("Yes, please book it.")
+    assert not livekit._is_closing_only("")
+
+
+def test_closing_loop_reports_the_call_as_completed() -> None:
+    outcome = livekit._conversation_outcome(
+        "closing_loop",
+        [
+            {"role": "assistant", "content": "Your ride is booked."},
+            {"role": "user", "content": "Thanks, bye!"},
+            {"role": "assistant", "content": "Goodbye!"},
+            {"role": "user", "content": "Goodbye."},
+            {"role": "assistant", "content": "Goodbye!"},
+            {"role": "user", "content": "Goodbye."},
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+
+
+def test_silence_with_untimed_caller_turns_names_the_synthesis() -> None:
+    # Shape taken from a run whose speech synthesis was out of credit: the caller's line reaches
+    # the transcript, but nothing was ever spoken, so the agent's silence is not the agent's fault.
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi Dana, where should the driver pick you up?",
+                "started_speaking_at": 100.0,
+                "stopped_speaking_at": 104.0,
+            },
+            {
+                "role": "user",
+                "content": "Hi, I'd like to book a ride from 88 King Street.",
+                "started_speaking_at": None,
+                "stopped_speaking_at": None,
+            },
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "simulator_tts_silent"
+    assert outcome.failure.retryable is False
+
+
+def test_silence_with_audible_caller_turns_still_reports_a_stall() -> None:
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi Dana, where should the driver pick you up?",
+                "started_speaking_at": 100.0,
+                "stopped_speaking_at": 104.0,
+            },
+            {
+                "role": "user",
+                "content": "I'm at 333 O'Farrell Street.",
+                "started_speaking_at": 105.0,
+                "stopped_speaking_at": 109.0,
+            },
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "conversation_silence_timeout"
+
+
 def test_unsupported_provider_lists_supported_options() -> None:
     from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
 

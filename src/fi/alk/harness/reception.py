@@ -16,19 +16,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+from .backends import SessionSpec, tool, tool_server
 
 from .config import (
-    UNWANTED,
     artifact_dir,
     chosen_model,
-    gate_hooks,
-    permission_gate,
-    provider_env,
 )
 from .session import Stage
 from .sources import AgentSource, clone_github_repository, resolve, supported
-from .tools import qualified, schema
+from .tools import schema
 
 RECEPTION_SERVER = "agent"
 TOOL_NAMES = ("point_at_agent",)
@@ -123,34 +119,20 @@ def open_stage(
             Path(source_dir) if source_dir else None,
         )
 
-    server = create_sdk_mcp_server(
+    server = tool_server(
         name=RECEPTION_SERVER, version="0.1.0", tools=[point_at_agent]
     )
-    allowed = [
-        "Read",
-        "Glob",
-        "Grep",
-        "AskUserQuestion",
-        *(qualified(RECEPTION_SERVER, name) for name in TOOL_NAMES),
-    ]
-    options = ClaudeAgentOptions(
+    spec = SessionSpec(
         system_prompt=_INSTRUCTIONS.strip(),
-        allowed_tools=allowed,
-        mcp_servers={RECEPTION_SERVER: server},
-        # Not acceptEdits: that auto-approves Edit and Write before the permission callback is
-        # consulted, so a stage can rewrite an artifact by hand and skip the tool whose
-        # whole job is to validate that change.
-        permission_mode="default",
+        servers={RECEPTION_SERVER: server},
+        builtins=("Read", "Glob", "Grep", "AskUserQuestion"),
         cwd=str(cwd or Path.cwd()),
-        setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(),
-        env=provider_env(),
+        ask=ask,
+        thinking=True,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(ask, allowed)
-    return Stage(options, name="reception"), found
+    return Stage(spec, name="reception"), found
 
 
 def opening() -> str:

@@ -13,14 +13,14 @@ same way, and it needs no model to do it.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
-import random
 import re
 from collections import Counter
 from math import ceil
-from typing import Any
+from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .catalogue import Catalogue
 from .simulator import variables_in
@@ -149,11 +149,35 @@ class Persona(BaseModel):
         return "\n".join(parts)
 
 
+def _slug(name: str) -> str:
+    """An ASCII key for ``name``, safe to send as a header value.
+
+    Falls back to a digest rather than an empty string: an empty key would collapse every
+    scenario in a job onto one idempotency key on the receiving side.
+    """
+    cleaned = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return cleaned or "scenario-" + hashlib.sha256(name.encode()).hexdigest()[:12]
+
+
+def _decided_by(name: str) -> bool:
+    """Whether this scenario is noisy, decided by its name so a rerun decides the same."""
+    return hashlib.sha256((name or "").encode()).digest()[0] % 2 == 0
+
+
 class Scenario(BaseModel):
     """One test: what changes, what is asked, what a correct agent does, what must hold."""
 
     name: str
+    # How this scenario is identified on the wire. Derived from ``name``, which is already unique
+    # across a suite and already a slug because it is the folder name. It ships as a header, so
+    # anything outside ASCII is dropped and an empty result falls back to a digest.
+    scenario_key: str = ""
+    # Assigned by the platform when the scenario is pre-allocated. Never written here.
+    scenario_id: str = ""
     use_case: str = ""
+    # What makes this row different from its siblings in the same use case. Coverage is counted
+    # on the pair, so a use case can carry many scenarios without any reading as a duplicate.
+    branch: str = ""
     tests: str = ""
 
     # What this scenario changes about the world after it is reset, as code: a file defining
@@ -195,19 +219,34 @@ class Scenario(BaseModel):
 
     max_turns: int = 10
 
-    # Whether this call happens somewhere noisy. Recorded per scenario rather than per run, so a
-    # suite covers both conditions and the same scenario stays comparable to itself across runs.
-    # Chosen at random when the writer does not say, because a suite where every call is quiet
-    # tests an agent nobody has: real callers phone from cars, kitchens and streets.
-    #
-    # Nothing consumes this yet. It is carried so the scenarios written from today are already
-    # answerable when the caller learns to add noise, rather than needing to be rewritten then.
-    background_noise: bool = Field(default_factory=lambda: random.choice((True, False)))
+    # Where this call is made from. A string names the place ("street", "vehicle", "retail"), and
+    # True asks for noise while leaving the place to the fixture. Left unset it is decided from
+    # the name, so a suite still covers both conditions but the same suite decides the same way
+    # twice; a coin flip here made a seeded run unreproducible.
+    background_noise: bool | str = ""
+
+    # Slots the caller filled by the run rather than by the scenario. Listed so a template that
+    # uses one is not rejected as unfillable at write time.
+    RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
+
+    @model_validator(mode="after")
+    def _identify(self) -> "Scenario":
+        if not self.scenario_key:
+            self.scenario_key = _slug(self.name)
+        if self.background_noise == "":
+            self.background_noise = _decided_by(self.name)
+        return self
 
     def slots(self) -> dict[str, str]:
         """Every value this scenario offers the simulator prompt."""
         persona = {"persona": self.persona.format_persona()} if self.persona else {}
-        return {"instruction": self.instruction, **self.variables, **persona}
+        runtime = {name: "" for name in self.RUNTIME_SLOTS}
+        return {
+            "instruction": self.instruction,
+            **runtime,
+            **self.variables,
+            **persona,
+        }
 
 
 def validate_scenario(
@@ -232,6 +271,12 @@ def validate_scenario(
         missing := scenario.persona.missing_profile_fields()
     ):
         problems.append("persona is incomplete: " + ", ".join(missing))
+    elif scenario.persona is not None:
+        # A persona in words of its own renders fine and then does nothing: no behaviour guidance
+        # attaches, and the accent it names selects no voice.
+        from .persona_guides import unrecognised
+
+        problems.extend(unrecognised(scenario.persona.model_dump()))
     if not scenario.sub_goals:
         problems.append(
             "no sub_goals: nothing would be graded. Name the entries of the catalogue this "

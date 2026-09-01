@@ -14,24 +14,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from claude_agent_sdk import ClaudeAgentOptions
-
-from ..config import (
-    artifact_dir,
-    UNWANTED,
-    gate_hooks,
-    chosen_model,
-    load_skill,
-    permission_gate,
-    provider_env,
-)
+from ..backends import SessionSpec
+from ..config import artifact_dir, chosen_model, load_skill
 from ..contract import AgentContract
 from ..scenario_tools import load_scenarios
 from ..session import Stage
-from ..tools import qualified
 from .tools import (
     RUN_SERVER,
-    TOOL_NAMES,
     load_results,
     missing_prerequisites,
     run_tools,
@@ -50,25 +39,16 @@ def open_stage(
     """A live run-the-scenarios stage, and where it will write its results."""
     destination = out or artifact_dir(contract.agent)
     server = run_tools(destination, destination, contract=contract)
-    allowed = [
-        "AskUserQuestion",
-        *(qualified(RUN_SERVER, name) for name in TOOL_NAMES),
-    ]
-    options = ClaudeAgentOptions(
+    spec = SessionSpec(
         system_prompt=(f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief()}"),
-        allowed_tools=allowed,
-        mcp_servers={RUN_SERVER: server},
-        permission_mode="default",
+        servers={RUN_SERVER: server},
+        builtins=("AskUserQuestion",),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(),
-        env=provider_env(),
+        ask=ask,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(ask, allowed)
-    return Stage(options, name=SKILL), destination
+    return Stage(spec, name=SKILL), destination
 
 
 def opening(contract: AgentContract, destination: Path) -> str:

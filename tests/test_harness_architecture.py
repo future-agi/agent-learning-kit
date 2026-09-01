@@ -430,15 +430,17 @@ def test_hosted_authoring_persists_adjusted_scenario_count_for_bundling(
     assert persisted.scenario_count == 2
 
 
-def test_deferred_hosted_authoring_never_starts_the_declared_container_store(
+@pytest.mark.parametrize("modality", ["voice", "chat"])
+def test_deferred_hosted_authoring_never_starts_or_imports_the_submitted_runtime(
     tmp_path: Path,
+    modality: str,
 ) -> None:
     from fi.alk.harness.contract import AgentContract, DataStore, Runtime, ToolSpec
     from fi.alk.harness.world.tools import world_tools
 
     contract = AgentContract(
         agent="hosted-voice-agent",
-        modality="voice",
+        modality=modality,
         tools=[ToolSpec(name="book_ride", args=["destination"])],
         real_use_cases=["book a ride"],
         data_store=DataStore(kind="postgres", database="rides"),
@@ -454,6 +456,7 @@ def test_deferred_hosted_authoring_never_starts_the_declared_container_store(
     try:
         assert world.store.key == "sqlite"
         assert world.runtime_tools == {"book_ride"}
+        assert "book_ride" not in world.handlers
     finally:
         world.close()
 
@@ -671,6 +674,21 @@ def test_local_and_hosted_jobs_reject_the_other_sides_source() -> None:
             },
             agent={"connector": "http"},
         )
+
+
+def test_hosted_job_accepts_two_hundred_scenarios_and_rejects_more() -> None:
+    common = {
+        "job_id": "job",
+        "run_id": "run",
+        "execution": "hosted",
+        "source": {"kind": "archive", "archive_artifact_id": "source-id"},
+        "agent": {"connector": "auto"},
+        "runtime": {"isolation": "dedicated_vm"},
+    }
+
+    assert HarnessJob(**common, scenario_count=200).scenario_count == 200
+    with pytest.raises(ValueError, match="hosted_scenario_count_out_of_range"):
+        HarnessJob(**common, scenario_count=201)
 
 
 def test_job_carries_references_but_rejects_resolved_secrets() -> None:

@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
 import signal
 import time
@@ -116,6 +117,35 @@ EVENTS_SPOOL_DIR_NAME = (
 )
 
 SECRETS_PATH = Path("/run/futureagi/secrets.json")
+SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
+
+# Platform-owned simulator configuration is delivered on a separate control-plane channel.  It
+# must never be confused with the customer's ``target_provider`` refs, which are selectively
+# injected into the untrusted agent processes by ProcessRuntimeProvider.  These names are the
+# complete set the in-process text/voice simulators may consume.
+_SIMULATOR_SECRET_ALIASES = frozenset(
+    {
+        "ALK_HARNESS",
+        "ALK_HARNESS_MODEL",
+        "ALK_HARNESS_THINKING",
+        "ALK_VERTEX_LOCATION",
+        "CARTESIA_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "OPENAI_API_KEY",
+        "SIMULATOR_LLM_MODEL",
+        "SIMULATOR_LLM_PROVIDER",
+        "SIMULATOR_STT_MODEL",
+        "SIMULATOR_STT_PROVIDER",
+        "SIMULATOR_TTS_MODEL",
+        "SIMULATOR_TTS_PROVIDER",
+    }
+)
 
 
 # =================================================================================================
@@ -165,12 +195,14 @@ def peek_secret_values(secrets_path: Path) -> tuple[str, ...]:
     return tuple(str(value) for value in raw.values() if value)
 
 
-def peek_target_provider_secret_values(
-    secrets_path: Path, secret_purposes: dict[str, str]
+def peek_secret_values_for_purpose(
+    secrets_path: Path,
+    secret_purposes: dict[str, str],
+    purpose: str,
 ) -> dict[str, str]:
     """The same non-destructive, no-unlink read as `peek_secret_values` (same file, same timing
     constraint -- called BEFORE `pool.start()`, which is what actually deletes the file), but
-    ALIAS-preserving and filtered to `purpose: target_provider` -- `peek_secret_values` throws the
+    ALIAS-preserving and filtered to one explicit purpose -- `peek_secret_values` throws the
     alias away, which is fine for outbound redaction (it only needs the raw values) but useless for
     the real `CallRunner`, which needs to pick e.g. `LIVEKIT_API_KEY` out of the map by name. Never
     fatal: a missing/malformed file just means no target-provider secrets are available yet,
@@ -185,7 +217,49 @@ def peek_target_provider_secret_values(
     return {
         str(alias): str(value)
         for alias, value in raw.items()
-        if secret_purposes.get(str(alias)) == "target_provider"
+        if secret_purposes.get(str(alias)) == purpose
+    }
+
+
+def peek_target_provider_secret_values(
+    secrets_path: Path, secret_purposes: dict[str, str]
+) -> dict[str, str]:
+    return peek_secret_values_for_purpose(
+        secrets_path, secret_purposes, "target_provider"
+    )
+
+
+def peek_simulator_provider_secret_values(
+    secrets_path: Path, secret_purposes: dict[str, str]
+) -> dict[str, str]:
+    return peek_secret_values_for_purpose(
+        secrets_path, secret_purposes, "simulator_provider"
+    )
+
+
+def load_simulator_secret_values(path: Path) -> dict[str, str]:
+    """Load and immediately remove the platform-owned simulator secret channel.
+
+    The fixed allowlist is deliberate: a platform deployment cannot accidentally use this file
+    to inject arbitrary ambient variables into the control process.  Agent subprocesses still do
+    not inherit these values because ``process_runtime`` starts them from its closed environment
+    allowlist plus purpose-matched target secrets.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("simulator-secrets.json unlink failed: %s", exc)
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(alias): str(value)
+        for alias, value in raw.items()
+        if str(alias) in _SIMULATOR_SECRET_ALIASES and value not in (None, "")
     }
 
 
@@ -235,6 +309,7 @@ _SECTION_2E_CODES = frozenset(
         "secret_in_bundle",
         "secret_unclaimed",
         "secret_missing",
+        "secret_purpose_forbidden",
         "build_requires_root",
         "user_assignment_invalid",
         "configuration_name_duplicate",
@@ -1501,6 +1576,7 @@ class HostedEntrypointDeps:
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     cancel_path: Path = field(default_factory=lambda: Path(CANCEL_SIGNAL_PATH))
     secrets_path: Path = field(default_factory=lambda: SECRETS_PATH)
+    simulator_secrets_path: Path = field(default_factory=lambda: SIMULATOR_SECRETS_PATH)
     flush_window_seconds: float = ob.FLUSH_WINDOW_SECONDS
     install_sigterm_handler: Callable[[CancelState], Callable[[], None]] = field(
         default=default_install_sigterm_handler
@@ -1533,6 +1609,14 @@ class HostedEntrypointDeps:
         self, secret_purposes: dict[str, str]
     ) -> dict[str, str]:
         return peek_target_provider_secret_values(self.secrets_path, secret_purposes)
+
+    def peek_simulator_provider_secret_values(
+        self, secret_purposes: dict[str, str]
+    ) -> dict[str, str]:
+        return peek_simulator_provider_secret_values(self.secrets_path, secret_purposes)
+
+    def load_simulator_secret_values(self) -> dict[str, str]:
+        return load_simulator_secret_values(self.simulator_secrets_path)
 
 
 # =================================================================================================
@@ -1610,6 +1694,12 @@ async def run_job(
     deps = deps or HostedEntrypointDeps()
     work_directory = output.parent
 
+    # This control-process-only channel is loaded before any Stage or CallRunner is constructed.
+    # It is separate from secrets.json so platform simulator credentials never acquire the
+    # ``target_provider`` purpose and therefore can never enter an agent process.
+    simulator_secret_values = deps.load_simulator_secret_values()
+    os.environ.update(simulator_secret_values)
+
     # 1. Boot -- capabilities. CapabilitiesError -> exit non-zero-and-NOT-3, no event (v1.3 table):
     # there is no channel yet to report a terminal event through.
     try:
@@ -1646,7 +1736,10 @@ async def run_job(
         results_client=results_client,
         artifacts_client=artifacts_client,
         channel_state=channel_state,
-        extra_secret_values=deps.peek_secret_values(),
+        extra_secret_values=(
+            *deps.peek_secret_values(),
+            *tuple(simulator_secret_values.values()),
+        ),
         clock=deps.clock,
         flush_window_seconds=deps.flush_window_seconds,
     )
@@ -1831,6 +1924,9 @@ async def run_job(
         # above at adapter construction. Alias-preserving so `CallRunnerImpl` can pick e.g.
         # `LIVEKIT_API_KEY` out of the map by name.
         target_provider_secret_values = deps.peek_target_provider_secret_values(
+            secret_purposes
+        )
+        simulator_provider_secret_values = deps.peek_simulator_provider_secret_values(
             secret_purposes
         )
         adapter.configure_artifacts(
@@ -2092,6 +2188,7 @@ async def run_job(
             work_directory=work_directory,
             evidence_seam=manifest.runtime.evidence_seam,
             target_provider_secret_values=target_provider_secret_values,
+            simulator_provider_secret_values=simulator_provider_secret_values,
             attempt_number=capabilities.attempt_number,
             source_directory=source,
         )

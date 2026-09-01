@@ -67,17 +67,28 @@ _ALL_CONFIG = {cr.LIVEKIT_URL_CONFIG_KEY: "wss://example.livekit.cloud"}
 
 
 def _job(
-    *, connector: str = "livekit", config: dict[str, Any] | None = None
+    *,
+    connector: str = "livekit",
+    config: dict[str, Any] | None = None,
+    execution: ExecutionMode = ExecutionMode.HOSTED,
 ) -> HarnessJob:
     return HarnessJob(
         job_id="job-abcdef12-xyz",
         run_id="run-1",
-        execution=ExecutionMode.HOSTED,
-        source=RepositorySource(
-            kind=SourceKind.GITHUB,
-            repository="org/repo",
-            visibility=SourceVisibility.PUBLIC,
-            commit_sha="a" * 40,
+        execution=execution,
+        source=(
+            RepositorySource(
+                kind=SourceKind.LOCAL_REPOSITORY,
+                local_path="/tmp/agent",
+                visibility=SourceVisibility.PRIVATE,
+            )
+            if execution is ExecutionMode.LOCAL
+            else RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="org/repo",
+                visibility=SourceVisibility.PUBLIC,
+                commit_sha="a" * 40,
+            )
         ),
         agent=AgentConnection(connector=connector, config=config or {}),
         scenario_count=1,
@@ -162,11 +173,15 @@ def _context(
     connector: str = "livekit",
     config: dict[str, Any] | None = None,
     secrets: dict[str, str] | None = None,
+    simulator_secrets: dict[str, str] | None = None,
+    execution: ExecutionMode = ExecutionMode.HOSTED,
     evidence_seam: EvidenceSeam | None = EvidenceSeam.HTTP_TOOL,
     attempt_number: int = 1,
 ) -> tuple[HarnessJob, cr.CallRunnerContext]:
     job = _job(
-        connector=connector, config=config if config is not None else dict(_ALL_CONFIG)
+        connector=connector,
+        config=config if config is not None else dict(_ALL_CONFIG),
+        execution=execution,
     )
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -179,6 +194,14 @@ def _context(
         if secrets is not None
         else dict(_ALL_SECRETS),
         attempt_number=attempt_number,
+        simulator_provider_secret_values=(
+            simulator_secrets
+            if simulator_secrets is not None
+            else {
+                "SIMULATOR_DEEPGRAM_API_KEY": _ALL_SECRETS[DEEPGRAM_API_KEY],
+                "SIMULATOR_GEMINI_API_KEY": _ALL_SECRETS[GEMINI_API_KEY],
+            }
+        ),
     )
     return job, context
 
@@ -363,10 +386,11 @@ def test_missing_target_provider_secrets_aborts_pre_dial_without_calling_place_c
 
 
 def test_missing_llm_credential_names_the_either_or_pair(tmp_path: Path) -> None:
-    secrets = dict(_ALL_SECRETS)
-    del secrets[GEMINI_API_KEY]
-    _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
-    runner = cr.CallRunnerImpl(FakeAdapter(), context)
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        simulator_secrets={"SIMULATOR_DEEPGRAM_API_KEY": "dg-key"},
+    )
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ={})
     exc = _run_expect_abort(
         runner,
         _FakeScenario("k1"),
@@ -378,10 +402,13 @@ def test_missing_llm_credential_names_the_either_or_pair(tmp_path: Path) -> None
 def test_google_api_key_alone_satisfies_the_llm_credential_check(
     tmp_path: Path,
 ) -> None:
-    secrets = dict(_ALL_SECRETS)
-    del secrets[GEMINI_API_KEY]
-    secrets["GOOGLE_API_KEY"] = "g-key"
-    _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        simulator_secrets={
+            "SIMULATOR_DEEPGRAM_API_KEY": "dg-key",
+            "SIMULATOR_GOOGLE_API_KEY": "g-key",
+        },
+    )
     runner = cr.CallRunnerImpl(FakeAdapter(), context)
     assert runner._missing_config is None
 
@@ -805,9 +832,9 @@ def test_place_call_outer_timeout_raises_call_aborted_with_timing_partial(
     """Forces the runner-owned `asyncio.wait_for` to actually fire (not just the SDK's own
     internal one) by shrinking every phase-overhead constant to a few milliseconds -- avoids a
     multi-minute real sleep in the test suite while still exercising the real timeout code path."""
-    monkeypatch.setattr(cr, "_CONNECT_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(cr, "_READINESS_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(cr, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cr, "CONNECT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cr, "READINESS_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cr, "CLEANUP_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(cr, "_RUN_SECONDS_PAD_SECONDS", 0.01)
     monkeypatch.setattr(cr, "_OUTER_WAIT_FOR_PAD_SECONDS", 0.01)
 
@@ -1140,3 +1167,77 @@ def test_construction_never_exports_secrets_outside_the_target_provider_map(
     _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
     cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
     assert "UNRELATED_ALIAS" not in fake_environ
+
+
+def test_construction_uses_platform_simulator_key_without_exposing_agent_model_key(
+    tmp_path: Path,
+) -> None:
+    fake_environ: dict[str, str] = {}
+    target = {
+        LIVEKIT_API_KEY: "lk-key",
+        LIVEKIT_API_SECRET: "lk-secret",
+        "ANTHROPIC_API_KEY": "customer-agent-key",
+    }
+    simulator = {
+        "SIMULATOR_DEEPGRAM_API_KEY": "platform-deepgram-key",
+        "SIMULATOR_GEMINI_API_KEY": "platform-gemini-key",
+    }
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        secrets=target,
+        simulator_secrets=simulator,
+    )
+    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
+    assert fake_environ[GEMINI_API_KEY] == "platform-gemini-key"
+    assert "ANTHROPIC_API_KEY" not in fake_environ
+
+
+def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) -> None:
+    fake_environ: dict[str, str] = {}
+    target = dict(_ALL_SECRETS)
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        secrets=target,
+        simulator_secrets={},
+    )
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert DEEPGRAM_API_KEY not in fake_environ
+    assert GEMINI_API_KEY not in fake_environ
+    assert runner._missing_config is not None
+
+
+def test_local_sdk_remains_byok_for_simulator_credentials(tmp_path: Path) -> None:
+    fake_environ: dict[str, str] = {}
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        execution=ExecutionMode.LOCAL,
+        simulator_secrets={},
+    )
+    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+
+
+def test_platform_simulator_credentials_win_without_replacing_target_livekit(
+    tmp_path: Path,
+) -> None:
+    fake_environ = {
+        DEEPGRAM_API_KEY: "platform-deepgram",
+        GEMINI_API_KEY: "platform-gemini",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/run/futureagi/platform-vertex.json",
+        "GOOGLE_CLOUD_PROJECT": "platform-project",
+    }
+    _job_obj, context = _context(tmp_path=tmp_path)
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+
+    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
+    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram"
+    assert fake_environ[GEMINI_API_KEY] == "platform-gemini"
+    assert (
+        fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
+        == "/run/futureagi/platform-vertex.json"
+    )
+    assert runner._missing_config is None

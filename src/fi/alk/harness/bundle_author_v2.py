@@ -9,6 +9,7 @@ result, and runs the guest's exact preflight before publishing it.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -236,16 +237,64 @@ def _sqlite_sql(path: Path) -> str:
             definitions: list[str] = []
             columns: list[str] = []
             column_types: list[str] = []
+            primary_key_columns = [
+                str(row[1])
+                for row in sorted(info, key=lambda item: int(item[5] or 0))
+                if int(row[5] or 0)
+            ]
             for row in info:
                 name = str(row[1])
                 sql_type = _sqlite_json_type(
                     [record[name] for record in selected],
                     _sqlite_type(str(row[2] or "")),
                 )
-                suffix = " PRIMARY KEY" if int(row[5] or 0) else ""
+                # SQLite reports the ordinal of every column in a composite key.  Marking each
+                # such column as an inline PostgreSQL primary key creates multiple conflicting
+                # constraints.  Only a single-column key is emitted inline; composite keys are
+                # emitted once as a table constraint below.
+                suffix = (
+                    " PRIMARY KEY"
+                    if int(row[5] or 0) and len(primary_key_columns) == 1
+                    else ""
+                )
+                if int(row[3] or 0) and not int(row[5] or 0):
+                    suffix += " NOT NULL"
                 definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
                 columns.append(name)
                 column_types.append(sql_type)
+            if len(primary_key_columns) > 1:
+                definitions.append(
+                    "PRIMARY KEY ("
+                    + ", ".join(_identifier(column) for column in primary_key_columns)
+                    + ")"
+                )
+            # ``PRAGMA table_info`` exposes primary keys but not UNIQUE constraints.  Dropping
+            # those constraints during the SQLite -> Postgres compilation changes executable
+            # tool semantics: a source statement such as ``ON CONFLICT (phone)`` becomes invalid
+            # even though it worked against the authored world.  Preserve every concrete,
+            # non-partial unique index except the primary-key index already represented above.
+            for index in connection.execute(
+                f"PRAGMA index_list({_identifier(table)})"
+            ):
+                unique = bool(index[2])
+                origin = str(index[3] or "")
+                partial = bool(index[4])
+                if not unique or origin == "pk" or partial:
+                    continue
+                index_name = str(index[1])
+                index_columns = [
+                    str(column[2])
+                    for column in connection.execute(
+                        f"PRAGMA index_info({_identifier(index_name)})"
+                    )
+                    if column[2] is not None
+                ]
+                if index_columns:
+                    definitions.append(
+                        "UNIQUE ("
+                        + ", ".join(_identifier(column) for column in index_columns)
+                        + ")"
+                    )
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
             )
@@ -493,6 +542,56 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
+def _discover_callback_entrypoint(root: Path) -> str | None:
+    """Return the repository's unique module-level ``agent_callback``, if present.
+
+    Callback support is a source property, not an LLM-authored contract property.  Contract
+    authoring can legitimately omit ``runtime.interface`` even when the repository exports the
+    canonical callback.  Treating that omission as authoritative used to compile such agents as
+    ``python agent.py`` HTTP services, which can never pass the generated port readiness probe.
+    """
+    candidates: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root)
+        if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "agent_callback"
+            for node in tree.body
+        ):
+            module = ".".join(relative.with_suffix("").parts)
+            candidates.append(f"{module}:agent_callback")
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise BundleAuthorError(
+            "callback_entrypoint_ambiguous: " + ", ".join(candidates)
+        )
+    return candidates[0]
+
+
+def _callback_entrypoint(root: Path) -> str:
+    """Find the callback promised by an explicitly callable runtime contract."""
+    candidate = _discover_callback_entrypoint(root)
+    if candidate is None:
+        raise BundleAuthorError(
+            "callback_entrypoint_missing: callable runtime requires one module-level "
+            "agent_callback"
+        )
+    return candidate
+
+
+def _callback_adapter_source() -> str:
+    return (
+        Path(__file__).with_name("callback_http_adapter.py").read_text(encoding="utf-8")
+    )
+
+
 def _managed_world_db() -> ManagedProcess:
     return ManagedProcess(
         name="world-db",
@@ -524,6 +623,7 @@ def resolve_environment_plan(
     job: HarnessJob,
     *,
     contract_modality: str | None = None,
+    contract_interface_kind: str | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -743,8 +843,17 @@ def resolve_environment_plan(
             )
         packaging = "compose"
     else:
+        contract_is_callback = (contract_interface_kind or "").strip().lower().replace(
+            "-", "_"
+        ) == "callable"
+        discovered_callback = (
+            None if is_livekit else _discover_callback_entrypoint(root)
+        )
+        is_callback = not is_livekit and (
+            contract_is_callback or discovered_callback is not None
+        )
         entry = "agent.py"
-        if not (root / entry).is_file():
+        if not is_callback and not (root / entry).is_file():
             candidates = sorted(root.glob("**/agent.py"))
             if len(candidates) != 1:
                 raise BundleAuthorError(
@@ -765,18 +874,36 @@ def resolve_environment_plan(
             if is_livekit
             else {}
         )
+        callback_entrypoint = (
+            discovered_callback or _callback_entrypoint(root) if is_callback else None
+        )
+        if callback_entrypoint:
+            environment.update(
+                {
+                    "PORT": "{{PORT_agent}}",
+                    "ALK_CALLBACK_ENTRYPOINT": callback_entrypoint,
+                }
+            )
         process = _plan_python(
             root,
             name=control_name,
-            root=component,
+            root=root if is_callback else component,
             entry=entry,
             control=True,
             needs_secrets=needs_target_secrets,
             port=port,
             environment=environment,
             livekit_download=is_livekit,
-            run_override=_dockerfile_run(component),
+            run_override=(None if is_callback else _dockerfile_run(component)),
         )
+        if is_callback:
+            python_command = process.run_command[:-1]
+            process = process.model_copy(
+                update={
+                    "run_command": python_command + ["-c", _callback_adapter_source()],
+                    "started_check": StartedCheck(port=True, timeout_seconds=180),
+                }
+            )
         if is_livekit:
             process = process.model_copy(
                 update={
@@ -895,6 +1022,7 @@ def author_bundle_v2(
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     contract_modality: str | None = None
+    contract_interface_kind: str | None = None
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -906,10 +1034,15 @@ def author_bundle_v2(
         if not isinstance(contract_body, dict):
             raise BundleAuthorError("contract_invalid: contract.json must be an object")
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
+        runtime = contract_body.get("runtime")
+        interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        if isinstance(interface, dict):
+            contract_interface_kind = str(interface.get("kind") or "").strip().lower()
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
+        contract_interface_kind=contract_interface_kind,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(

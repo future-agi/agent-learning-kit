@@ -24,6 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..simulator_voice import fixture_caller_phone
 from ..catalogue import load_catalogue
 from ..checks import Outcome, run_check
 from ..folder import apply_setup, check_ready
@@ -185,27 +186,8 @@ def instruction_for(scenario: Scenario, world_root: Path) -> str:
 
 
 def fixture_phone(scenario: Scenario) -> str:
-    """The caller identity the submitted voice runtime must see for this scenario.
-
-    The simulated person's prose is not an identity transport.  Without this binding every
-    WebRTC call falls back to the worker's demo ANI, so diverse personas all query the same rider
-    and scenarios exercise the wrong market, cards, saved places, and OTP rows.
-    """
-    aliases = ("phone", "caller_phone", "caller_ani", "ani")
-
-    def find(value) -> str:
-        if isinstance(value, dict):
-            for name in aliases:
-                candidate = str(value.get(name) or "").strip()
-                if candidate:
-                    return candidate
-            for nested in value.values():
-                candidate = find(nested)
-                if candidate:
-                    return candidate
-        return ""
-
-    return find(scenario.fixture)
+    """The caller identity the submitted voice runtime must see for this scenario."""
+    return fixture_caller_phone(scenario.fixture)
 
 
 def wire(
@@ -278,6 +260,12 @@ def wire(
                 "TOOLS_API_URL": url,
                 "LIVEKIT_AGENT_NAME": agent_name,
             }
+            # The submitted agent picks its own model, and a tier that cannot emit a valid
+            # function call fails every scenario the moment it reaches for a tool. Allow an
+            # operator to pin it for a run without editing the submitted repository.
+            agent_model = os.environ.get("ALK_SUBMITTED_AGENT_MODEL", "").strip()
+            if agent_model:
+                runtime_overrides["AGENT_LLM_MODEL"] = agent_model
             os.environ["LIVEKIT_TARGET_AGENT_NAME"] = agent_name
             caller_phone = fixture_phone(scenario)
             if caller_phone:

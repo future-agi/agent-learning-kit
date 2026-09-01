@@ -516,9 +516,11 @@ class AgentContract(BaseModel):
                 + "\nThe agent's code is never edited; the environment must match its existing seam."
             )
         if self.real_use_cases:
+            # Every one of them. A scenario writer covers what it is shown, so a truncated
+            # list silently caps coverage at the cut rather than at the agent's surface.
             parts.append(
                 "REAL USE CASES (what this agent is actually for):\n  - "
-                + "\n  - ".join(self.real_use_cases[:12])
+                + "\n  - ".join(self.real_use_cases)
             )
         if self.tool_entrypoints:
             parts.append(

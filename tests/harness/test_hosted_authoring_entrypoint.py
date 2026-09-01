@@ -5,6 +5,23 @@ import json
 from fi.alk.harness import hosted_authoring_entrypoint as entrypoint
 
 
+def test_platform_simulator_values_ignore_customer_target_credentials() -> None:
+    values = entrypoint._platform_simulator_values(
+        {
+            "ANTHROPIC_API_KEY": "customer-agent-key",
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON": "customer-agent-adc",
+            "SIMULATOR_GOOGLE_APPLICATION_CREDENTIALS_JSON": "platform-adc",
+            "SIMULATOR_GOOGLE_CLOUD_PROJECT": "platform-project",
+        }
+    )
+
+    assert values == {
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON": "platform-adc",
+        "GOOGLE_CLOUD_PROJECT": "platform-project",
+    }
+    assert "ANTHROPIC_API_KEY" not in values
+
+
 def test_vertex_generation_region_is_not_copied_from_google_location(
     tmp_path, monkeypatch
 ) -> None:
@@ -27,7 +44,9 @@ def test_explicit_claude_vertex_region_wins(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("CLOUD_ML_REGION", raising=False)
     entrypoint._configure_generation_environment(
         {
-            "GOOGLE_APPLICATION_CREDENTIALS_JSON": json.dumps({"type": "service_account"}),
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON": json.dumps(
+                {"type": "service_account"}
+            ),
             "GOOGLE_CLOUD_PROJECT": "p",
             "ANTHROPIC_VERTEX_REGION": "europe-west1",
         }

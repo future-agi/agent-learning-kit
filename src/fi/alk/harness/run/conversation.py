@@ -14,9 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from claude_agent_sdk import ClaudeAgentOptions
+from ..backends import SessionSpec
 
-from ..config import chosen_model, provider_env
+from ..config import chosen_model
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..session import Stage
@@ -151,17 +151,17 @@ async def converse(
     from ..simulator import load_simulator_prompt
 
     customer = Stage(
-        ClaudeAgentOptions(
+        SessionSpec(
             system_prompt=customer_prompt(
                 scenario,
                 contract,
                 load_simulator_prompt(world_root) if world_root else "",
             ),
-            allowed_tools=[],
-            setting_sources=[],
             max_turns=1,
             model=chosen_model(model),
-            env=provider_env(model),
+            # The customer has no tools at all, so the permission machinery has nothing to
+            # gate; leaving it off keeps this session exactly what it was before the seam.
+            gated=False,
         ),
         name="customer",
     )

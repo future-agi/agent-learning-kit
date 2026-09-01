@@ -71,7 +71,7 @@ class LocalSandboxRequest(BaseModel):
     github_commit_sha: str | None = None
     github_visibility: SourceVisibility = SourceVisibility.PUBLIC
     github_installation_id: str | None = None
-    scenario_count: int = Field(default=10, ge=1, le=100)
+    scenario_count: int = Field(default=10, ge=1, le=200)
     seed: int | None = None
     agent_name: str | None = None
     connector: str = "auto"

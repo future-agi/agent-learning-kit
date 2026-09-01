@@ -32,12 +32,15 @@ from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..world.runtime import Call
 from .grade import Judgement, Result
+
+if TYPE_CHECKING:
+    from .conversation import Exchange
 
 RUNS = "runs"
 RUN = "run.json"
@@ -501,6 +504,23 @@ def _calls_of(calls: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _said(line: str) -> Exchange:
+    """One transcript line as a turn, with its role read off rather than left in the text.
+
+    The line arrives already labelled ("assistant: ..."). Keeping that label in the text made the
+    judge read ``agent: assistant: ...``, two speakers deep for every turn.
+    """
+    from .conversation import Exchange
+
+    role, _, text = line.partition(":")
+    named = role.strip().lower()
+    if named in ("assistant", "agent"):
+        return Exchange("agent", text.strip())
+    if named in ("user", "customer"):
+        return Exchange("customer", text.strip())
+    return Exchange("customer", line.strip())
+
+
 async def _spoken_to(
     scenario: Scenario,
     contract: AgentContract,
@@ -526,7 +546,7 @@ async def _spoken_to(
 
     from ..catalogue import load_catalogue
     from .call import place_the_call
-    from .conversation import Exchange, Transcript
+    from .conversation import Transcript
     from .evidence import measured, newest_report, spoken_times, tracks_in
     from .grade import (
         checkpoints,
@@ -570,7 +590,10 @@ async def _spoken_to(
             os.environ["HARNESS_VOICE_OUTPUT_ROOT"] = str(sdk_output.resolve())
             os.environ["HARNESS_INSTRUCTION"] = instruction
             os.environ["HARNESS_SCENARIO"] = scenario.name
-            os.environ["HARNESS_OUTCOME"] = scenario.tests
+            # The caller is never handed the grader's pass question: `tests` is written about
+            # the agent in the third person, so as an objective it reads as a rubric rather
+            # than a motive. What this person wants is already in the instruction.
+            os.environ.pop("HARNESS_OUTCOME", None)
             os.environ["HARNESS_PERSONA"] = json.dumps(
                 scenario.persona.model_dump(exclude_none=True)
                 if scenario.persona is not None
@@ -588,6 +611,20 @@ async def _spoken_to(
             os.environ["HARNESS_FIXTURE"] = json.dumps(
                 scenario.fixture, ensure_ascii=False, default=str
             )
+            # A scenario that asks to be heard through background noise selects a clip for the
+            # caller's environment; the voice engine mixes it under the caller. Cleared otherwise so
+            # a previous call's noise never leaks into a quiet one.
+            from ..background_noise import scenario_source
+
+            source = scenario_source(
+                getattr(scenario, "background_noise", False),
+                scenario.fixture,
+                seed=scenario.name,
+            )
+            if source:
+                os.environ["HARNESS_BACKGROUND_NOISE"] = source
+            else:
+                os.environ.pop("HARNESS_BACKGROUND_NOISE", None)
             code = place_the_call(
                 os.environ.get("HARNESS_VOICE_CASE", "2.1.2"),
                 on_exchange=live_exchange if on_exchange else None,
@@ -695,13 +732,7 @@ async def _spoken_to(
     # happened is that one check passed and the other was never asked, which reads as the agent
     # half-failing rather than as the suite not having looked.
     spoken_transcript = Transcript(
-        exchanges=[
-            Exchange(
-                "agent" if line.lower().startswith("assistant") else "customer", line
-            )
-            for line in spoken.splitlines()
-            if line.strip()
-        ],
+        exchanges=[_said(line) for line in spoken.splitlines() if line.strip()],
         calls=list(world.calls),
         ended=str((case.get("metadata") or {}).get("status") or "finished"),
     )

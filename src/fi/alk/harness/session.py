@@ -8,6 +8,11 @@ A stage stays open across turns, so a correction is the next thing said rather t
 and it yields typed events rather than a wall of text. A terminal renders those events as lines;
 a browser renders the same events as a transcript on one side and the artifact on the other.
 Neither is privileged, which is the point.
+
+Which loop actually runs the conversation is a backend, selected by ``ALK_HARNESS`` through
+``backends.resolve``. A stage describes what it needs in a ``SessionSpec``; the backend supplies
+the session and translates its provider's stream into the small reply vocabulary this module
+renders. Nothing above this line knows a vendor's name.
 """
 
 from __future__ import annotations
@@ -17,15 +22,18 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    ResultMessage,
-    SystemMessage,
-    TextBlock,
-    ToolResultBlock,
-    ToolUseBlock,
+from .backends import (
+    Call,
+    HarnessBackend,
+    HarnessSession,
+    ModelReply,
+    Say,
+    SessionOpened,
+    SessionSpec,
+    StageDone,
+    ToolReturned,
+    ToolServer,
+    resolve,
 )
 
 TEXT = "text"
@@ -123,17 +131,16 @@ _TARGET_KEYS = (
 )
 
 
-def _why_it_failed(received: Any) -> str:
+def _why_it_failed(done: StageDone) -> str:
     """What actually went wrong, said in terms somebody can act on."""
-    status = getattr(received, "api_error_status", None)
-    errors = getattr(received, "errors", None) or []
-    said = "; ".join(str(error) for error in errors)[:400]
+    said = "; ".join(str(error) for error in done.errors)[:400]
     if "invalid_rapt" in said or "invalid_grant" in said:
         return (
             "the provider rejected the credentials. GOOGLE_APPLICATION_CREDENTIALS is probably "
             "not set in this shell, so it fell back to your gcloud login. Load the env file "
             "first: set -a; . ./.env.acceptance; set +a"
         )
+    status = done.api_error_status
     return f"the model call failed{f' ({status})' if status else ''}: {said or 'no detail given'}"
 
 
@@ -157,17 +164,11 @@ def _target(payload: Any) -> str:
     return ""
 
 
-def _result_text(block: ToolResultBlock, limit: int = 600) -> str:
-    content = block.content
-    if isinstance(content, list):
-        content = "\n".join(
-            part.get("text", "") for part in content if isinstance(part, dict)
-        )
-    text = content if isinstance(content, str) else str(content)
+def _shown(text: str, limit: int = 600) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def _saved_path(block: ToolResultBlock) -> str:
+def _saved_path(text: str) -> str:
     """The path a tool reports having written, if it wrote one.
 
     Only when the tool actually says it saved something. Matching any path-shaped token in any
@@ -175,17 +176,10 @@ def _saved_path(block: ToolResultBlock) -> str:
     producing output while it is still only looking around, and a front end reloads its panes on
     every read.
     """
-    content = block.content
-    if isinstance(content, list):
-        content = " ".join(
-            part.get("text", "") for part in content if isinstance(part, dict)
-        )
-    if not isinstance(content, str):
-        return ""
-    said = content.lower()
+    said = text.lower()
     if not any(verb in said for verb in ("saved", "wrote", "written")):
         return ""
-    for token in content.split():
+    for token in text.split():
         # Trimmed before the check, not after. A tool that ends its sentence — "saved to
         # out/contract.json." — produces a token ending in the full stop, so testing the
         # suffix first missed every real save and matched only bare paths, which is what a
@@ -199,67 +193,70 @@ def _saved_path(block: ToolResultBlock) -> str:
 class Stage:
     """One stage of the harness, held open so it can be talked to."""
 
-    def __init__(self, options: ClaudeAgentOptions, *, name: str = "") -> None:
-        self._options = options
-        self._client: ClaudeSDKClient | None = None
+    def __init__(
+        self,
+        spec: SessionSpec,
+        *,
+        name: str = "",
+        backend: HarnessBackend | None = None,
+    ) -> None:
+        self._spec = spec
+        self._backend = backend
+        self._session: HarnessSession | None = None
         self.name = name
         self.session_id: str | None = None
         self.history: list[Turn] = []
         # What actually got billed, read back rather than assumed. Asking for a model is not the
-        # same as getting one: the CLI has its own default, and a request that quietly does not
-        # take shows up only on the invoice, weeks later, as a number nobody can explain.
+        # same as getting one: a request that quietly does not take shows up only on the
+        # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
 
+    @property
+    def spec(self) -> SessionSpec:
+        return self._spec
+
     def grant(
-        self, server_name: str, server: Any, tool_names: list[str], ask: Any = None
+        self, server_name: str, server: ToolServer, tool_names: list[str], ask: Any = None
     ) -> None:
         """Give this stage one more tool server, before it opens.
 
-        The permission gate and the PreToolUse hook both close over the granted list when the
-        stage is built, so appending to ``allowed_tools`` after the fact changes nothing — the
-        hook still denies the new tool. Granting means rebuilding all three together, which is
-        why it lives here rather than being three edits every caller must remember.
+        The backend builds its permission surface from the spec when the session opens, so a
+        grant is a spec change and must land before then. ``tool_names`` is accepted for
+        compatibility with existing callers; the server's own tool list is authoritative.
+        ``ask`` replaces the operator callback when given, as it always has.
         """
-        if self._client is not None:
+        if self._session is not None:
             raise RuntimeError(
                 "grant before the stage opens; the session is already running"
             )
-        from .config import gate_hooks, permission_gate
-
-        added = [f"mcp__{server_name}__{name}" for name in tool_names]
-        self._options.mcp_servers = {
-            **(self._options.mcp_servers or {}),
-            server_name: server,
-        }
-        self._options.allowed_tools = [*(self._options.allowed_tools or []), *added]
-        self._options.hooks = gate_hooks(self._options.allowed_tools)
-        self._options.can_use_tool = permission_gate(ask, self._options.allowed_tools)
+        del tool_names
+        self._spec.grant(server_name, server)
+        if ask is not None:
+            self._spec.ask = ask
 
     async def __aenter__(self) -> "Stage":
-        self._client = ClaudeSDKClient(options=self._options)
-        await self._client.connect()
+        if self._backend is None:
+            self._backend = resolve()
+        self._session = self._backend.create(self._spec)
+        await self._session.start()
         return self
 
     async def __aexit__(self, *_exc: Any) -> None:
-        if self._client is not None:
-            await self._client.disconnect()
-            self._client = None
-
-    @property
-    def client(self) -> ClaudeSDKClient:
-        if self._client is None:
-            raise RuntimeError("stage is not open; use it as an async context manager")
-        return self._client
+        if self._session is not None:
+            await self._session.stop()
+            self._session = None
 
     async def stream(self, message: str) -> AsyncIterator[Event]:
         """Send a message and yield events as they arrive."""
-        await self.client.query(message)
+        if self._session is None:
+            raise RuntimeError("stage is not open; use it as an async context manager")
+        await self._session.send(message)
         turn = Turn()
-        response = self.client.receive_response().__aiter__()
+        replies = self._session.replies().__aiter__()
         while True:
             try:
                 received = await asyncio.wait_for(
-                    response.__anext__(), timeout=STAGE_IDLE_TIMEOUT_SECONDS
+                    replies.__anext__(), timeout=STAGE_IDLE_TIMEOUT_SECONDS
                 )
             except StopAsyncIteration:
                 break
@@ -277,79 +274,69 @@ class Stage:
         self.history.append(turn)
 
     def _events(self, received: Any, turn: Turn) -> list[Event]:
-        if isinstance(received, SystemMessage):
-            data = received.data if isinstance(received.data, dict) else {}
-            self.session_id = data.get("session_id") or self.session_id
+        if isinstance(received, SessionOpened):
+            self.session_id = received.session_id or self.session_id
             return []
-        if isinstance(received, AssistantMessage):
+        if isinstance(received, ModelReply):
             events: list[Event] = []
-            for block in received.content:
-                if isinstance(block, TextBlock):
-                    turn.text += block.text
-                    events.append(Event(TEXT, text=block.text))
-                elif isinstance(block, ToolUseBlock):
-                    turn.tools_used.append(block.name)
+            for part in received.parts:
+                if isinstance(part, Say):
+                    turn.text += part.text
+                    events.append(Event(TEXT, text=part.text))
+                elif isinstance(part, Call):
+                    turn.tools_used.append(part.name)
                     events.append(
                         Event(
                             TOOL,
-                            tool=block.name,
+                            tool=part.name,
                             detail={
-                                "target": _target(block.input),
-                                "arguments": block.input,
-                                "label": readable(block.name),
+                                "target": _target(part.arguments),
+                                "arguments": part.arguments,
+                                "label": readable(part.name),
                             },
                         )
                     )
             return events
-        if isinstance(received, ResultMessage):
-            # subtype alone is not the outcome. A call that failed upstream still arrives with
-            # subtype "success", so reporting it verbatim tells somebody their stage worked when
-            # nothing happened at all, and they go looking for the fault in their own request.
-            failed = bool(
-                getattr(received, "is_error", False)
-                or getattr(received, "api_error_status", None)
-            )
-            turn.outcome = "failed" if failed else received.subtype
-            turn.turns = received.num_turns
-            turn.cost_usd = received.total_cost_usd
+        if isinstance(received, ToolReturned):
+            # What a tool said back is the only view a caller has of whether the work is
+            # going well. Dropping it leaves a run that can only be diagnosed by guessing.
+            events = [
+                Event(
+                    RESULT,
+                    text=_shown(received.text),
+                    detail={"is_error": received.is_error},
+                )
+            ]
+            path = _saved_path(received.text)
+            if path:
+                turn.artifacts.append(path)
+                events.append(Event(ARTIFACT, detail={"path": path}))
+            return events
+        if isinstance(received, StageDone):
+            # The reported outcome alone is not the outcome. A call that failed upstream can
+            # still arrive saying "success", so reporting it verbatim tells somebody their
+            # stage worked when nothing happened at all.
+            failed = bool(received.is_error or received.api_error_status)
+            turn.outcome = "failed" if failed else received.outcome
+            turn.turns = received.turns
+            turn.cost_usd = received.cost_usd
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
-            billed = set(getattr(received, "model_usage", None) or {})
-            self.models_used |= billed
+            self.models_used |= received.models
             unexpected = self.unexpected_models()
             return [
                 Event(
                     DONE,
                     detail={
                         "outcome": turn.outcome,
-                        "turns": received.num_turns,
-                        "cost_usd": received.total_cost_usd,
+                        "turns": received.turns,
+                        "cost_usd": received.cost_usd,
                         "error": turn.error,
-                        "models": sorted(billed),
+                        "models": sorted(received.models),
                         "unexpected_model": sorted(unexpected),
                     },
                 )
             ]
-        blocks = getattr(received, "content", None)
-        if isinstance(blocks, list):
-            events = []
-            for block in blocks:
-                if not isinstance(block, ToolResultBlock):
-                    continue
-                # What a tool said back is the only view a caller has of whether the work is
-                # going well. Dropping it leaves a run that can only be diagnosed by guessing.
-                events.append(
-                    Event(
-                        RESULT,
-                        text=_result_text(block),
-                        detail={"is_error": bool(getattr(block, "is_error", False))},
-                    )
-                )
-                path = _saved_path(block)
-                if path:
-                    turn.artifacts.append(path)
-                    events.append(Event(ARTIFACT, detail={"path": path}))
-            return events
         return []
 
     async def say(
@@ -365,18 +352,20 @@ class Stage:
             except StageIdleTimeout:
                 if attempt >= STAGE_IDLE_RETRIES:
                     raise
-                # A timed-out receive has been cancelled and the SDK process may still be
-                # waiting in epoll.  Reusing it can only reproduce the dead stream.  Start a
-                # clean provider session and replay the same stage instruction.  Harness writes
+                # A timed-out receive has been cancelled and the provider session may still be
+                # waiting on a dead stream.  Reusing it can only reproduce the dead stream.
+                # Start a clean session and replay the same stage instruction.  Harness writes
                 # are named/idempotent and remain protected by their validation gates.
-                await self.client.disconnect()
-                self._client = ClaudeSDKClient(options=self._options)
-                await self._client.connect()
+                if self._session is not None:
+                    await self._session.stop()
+                assert self._backend is not None
+                self._session = self._backend.create(self._spec)
+                await self._session.start()
         raise AssertionError("unreachable")
 
     def unexpected_models(self) -> set[str]:
         """Models that were billed but not the one asked for."""
-        asked = getattr(self._options, "model", None)
+        asked = self._spec.model
         if not asked:
             return set()
         return {used for used in self.models_used if asked.split("-2")[0] not in used}

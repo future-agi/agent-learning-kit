@@ -23,18 +23,11 @@ import time
 from typing import Any, Callable, Protocol, runtime_checkable
 from urllib.parse import urljoin
 
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+from ..backends import SessionSpec, resolve as resolve_backend, tool, tool_server
 
-from ..config import (
-    UNWANTED,
-    chosen_model,
-    gate_hooks,
-    permission_gate,
-    provider_env,
-)
+from ..config import chosen_model
 from ..contract import AgentContract
 from ..session import Stage
-from ..tools import qualified
 from ..world.runtime import GeneratedWorld
 
 AGENT_SERVER = "agent"
@@ -114,7 +107,7 @@ def agent_tools(contract: AgentContract, world: GeneratedWorld) -> Any:
 
         return call_tool
 
-    return create_sdk_mcp_server(
+    return tool_server(
         name=AGENT_SERVER,
         version="0.1.0",
         tools=[bind(spec) for spec in contract.tools],
@@ -161,21 +154,24 @@ class Target(Protocol):
 
 
 def _drivable(model: str | None) -> None:
-    """Refuse a model this target cannot actually run, before a suite is graded on it.
+    """Refuse a model the selected backend cannot actually run, before a suite is graded on it.
 
-    This target runs on the Claude Agent SDK against Vertex, so the only models it can drive are
-    Anthropic's. Handed anything else it does not fail: it produces a session that answers
+    Handed a model it cannot reach, a backend does not fail: it produces a session that answers
     nothing, which arrives as a scenario with no turns and no calls and every check red. That
     reads exactly like an agent that ignored the person, and the whole suite is wrong in a way
     nobody would think to question.
     """
     named = (model or "").strip().lower()
-    if not named or "claude" in named or named.startswith("anthropic"):
+    if not named:
+        return
+    backend = resolve_backend()
+    if backend.can_drive(named):
         return
     raise RuntimeError(
-        f"this target cannot run {model!r}. It drives the agent through the Claude Agent SDK on "
-        "Vertex, which speaks to Anthropic models only. To run the agent on something else, "
-        "point the spec's target at one of ALK's own endpoint adapters rather than at this one."
+        f"this target cannot run {model!r}. The selected harness backend "
+        f"({backend.name}) does not drive that model. Pick a model that backend serves, "
+        "select the backend that serves it through ALK_HARNESS, or point the spec's target "
+        "at one of ALK's own endpoint adapters rather than at this one."
     )
 
 
@@ -201,23 +197,15 @@ class LocalAgent:
                 "agent's shipped runtime and applies the provisioned endpoint overrides."
             )
         _drivable(model)
-        allowed = [qualified(AGENT_SERVER, spec.name) for spec in contract.tools]
-        options = ClaudeAgentOptions(
-            system_prompt=agent_prompt(contract),
-            allowed_tools=allowed,
-            mcp_servers={AGENT_SERVER: agent_tools(contract, world)},
-            permission_mode="default",
-            setting_sources=[],
-            max_turns=max_turns,
-            model=chosen_model(model),
-            env=provider_env(model),
-        )
         # The agent under test gets its own tools and nothing else. A target that can reach a
         # file or a shell is not the agent anybody deployed.
-        options.disallowed_tools = list(UNWANTED)
-        options.hooks = gate_hooks(allowed)
-        options.can_use_tool = permission_gate(granted=allowed)
-        self._stage = Stage(options, name="target")
+        spec = SessionSpec(
+            system_prompt=agent_prompt(contract),
+            servers={AGENT_SERVER: agent_tools(contract, world)},
+            max_turns=max_turns,
+            model=chosen_model(model),
+        )
+        self._stage = Stage(spec, name="target")
 
     async def open(self) -> None:
         await self._stage.__aenter__()

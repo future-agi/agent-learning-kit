@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -17,8 +19,25 @@ from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .world.runtime import GeneratedWorld
+from .run.conversation import Transcript, converse
+from .scenario import Scenario as ConversationScenario
+from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
+
+
+DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
+
+
+def _chat_target_timeout_seconds() -> float:
+    """Return the per-turn target deadline without accepting unusable values."""
+    raw = os.getenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+    try:
+        configured = float(raw)
+    except ValueError:
+        return DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+    return configured if 1.0 <= configured <= 600.0 else DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
 
 
 def _duration_ms(started: datetime, ended: datetime) -> int:
@@ -148,8 +167,204 @@ def _tool_call(call: dict[str, Any], index: int) -> tuple[str, dict[str, Any], s
     return name, arguments, str(call.get("id") or f"call_{index}")
 
 
+def _tool_response_result(response: Mapping[str, Any]) -> Any:
+    """Return the callback's real tool result without inventing a second execution."""
+    value = response.get("result", response.get("content"))
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _record_completed_tool_call(
+    world: GeneratedWorld,
+    *,
+    name: str,
+    arguments: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> None:
+    """Record a tool the submitted callback already executed.
+
+    Callback-backed agents can return the request and its completed response together. Replaying
+    that request through the generated world both risks repeating a side effect and incorrectly
+    turns a real success into ``no such tool`` when no mock handler was authored. The callback's
+    response is the authoritative execution evidence at this seam.
+    """
+    error_value = response.get("error")
+    error = str(error_value) if error_value not in (None, "") else ""
+    refused = bool(response.get("refused", False))
+    declared_success = response.get("success", response.get("ok"))
+    ok = bool(declared_success) if declared_success is not None else not error and not refused
+    world.calls.append(
+        Call(
+            name=name,
+            arguments=dict(arguments),
+            result=_tool_response_result(response),
+            ok=ok,
+            refused=refused,
+            error=error,
+            at=time.time(),
+        )
+    )
+
+
+class _HostedChatTarget:
+    """The already-running Bundle V2 chat process, exposed as the normal conversation target.
+
+    ``converse`` owns the simulated customer's turns.  This target owns only the submitted
+    agent's side of the exchange and response-carried tool evidence.  Keeping that split identical
+    to the local repository target prevents the hosted lane from silently becoming a one-message
+    smoke test again.
+    """
+
+    key = "hosted_repository"
+
+    def __init__(
+        self,
+        *,
+        wrapper: Any,
+        contract: AgentContract,
+        world: GeneratedWorld,
+        scenario_key: str,
+        scenario_id: str,
+    ) -> None:
+        self._wrapper = wrapper
+        self._contract = contract
+        self.world = world
+        self._scenario_key = scenario_key
+        self._scenario_id = scenario_id
+        self._messages: list[dict[str, Any]] = []
+        self._turn = 0
+
+    async def open(self) -> None:
+        return
+
+    async def say(self, utterance: str) -> str:
+        self._messages.append({"role": "user", "content": utterance})
+        for continuation in range(8):
+            response = await self._wrapper.call(
+                AgentInput(
+                    thread_id=self._scenario_key,
+                    execution_id=self._scenario_id,
+                    turn_index=self._turn,
+                    scenario_name=self._scenario_key,
+                    modality="text",
+                    messages=list(self._messages),
+                    new_message=dict(self._messages[-1]),
+                    tools=_tools(self._contract)
+                    if self._contract.runtime
+                    and self._contract.runtime.interface
+                    and self._contract.runtime.interface.include_tools
+                    else [],
+                )
+            )
+            trace = dict((response.metadata or {}).get("external_agent") or {})
+            if trace and not trace.get("success", False):
+                raise RuntimeError(
+                    str(trace.get("error") or "submitted endpoint request failed")
+                )
+            returned = list(response.tool_calls or [])
+            if not returned:
+                answer = response.content.strip()
+                self._messages.append({"role": "assistant", "content": answer})
+                self._turn += 1
+                return answer
+
+            self._messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": returned,
+                }
+            )
+            response_by_id = {
+                str(item.get("tool_call_id") or item.get("id") or ""): item
+                for item in response.tool_responses or []
+                if isinstance(item, Mapping)
+                and (item.get("tool_call_id") or item.get("id"))
+            }
+            returned_ids: set[str] = set()
+            for index, call in enumerate(returned, start=1):
+                name, arguments, call_id = _tool_call(call, index)
+                returned_ids.add(call_id)
+                provided = response_by_id.get(call_id)
+                if provided is not None:
+                    _record_completed_tool_call(
+                        self.world,
+                        name=name,
+                        arguments=arguments,
+                        response=provided,
+                    )
+                    result_content = provided.get("content", provided.get("result"))
+                    if not isinstance(result_content, str):
+                        result_content = json.dumps(result_content, default=str)
+                else:
+                    result = self.world.handle_tool_call(
+                        {"id": call_id, "name": name, "arguments": arguments}
+                    )
+                    result_content = (
+                        result.content if result is not None else f"no such tool {name}"
+                    )
+                self._messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": result_content,
+                    }
+                )
+
+            # A callback-backed repository has already run its own real tools.  It returns their
+            # responses beside the final text; replaying the calls above records deterministic
+            # evidence in the generated world, but asking the callback a second time would run the
+            # tools twice.  HTTP agents that only return requests continue normally with the
+            # generated-world responses appended above.
+            provided_ids = set(response_by_id)
+            if returned_ids and returned_ids.issubset(provided_ids):
+                answer = response.content.strip()
+                self._messages.append({"role": "assistant", "content": answer})
+                self._turn += 1
+                return answer
+        raise RuntimeError("submitted chat agent exceeded 8 tool continuations in one turn")
+
+    async def close(self) -> None:
+        return
+
+    @property
+    def spent_usd(self) -> float:
+        # Provider-side target cost is not observable at this transport seam.
+        return 0.0
+
+
+def _conversation_scenario(document: dict[str, Any]) -> ConversationScenario:
+    try:
+        normalized = dict(document)
+        normalized.setdefault(
+            "name", str(normalized.get("scenario_key") or "hosted-chat-scenario")
+        )
+        return ConversationScenario.model_validate(normalized)
+    except Exception as exc:  # noqa: BLE001 - normalize malformed bundle content at the call seam
+        raise CallAborted(f"chat_scenario_invalid: {exc}") from exc
+
+
+async def _drive_conversation(
+    target: _HostedChatTarget,
+    scenario: ConversationScenario,
+    contract: AgentContract,
+    bundle_dir: Path,
+) -> Transcript:
+    return await converse(
+        target,
+        scenario,
+        contract,
+        world_root=bundle_dir,
+    )
+
+
 class HostedChatCallRunner:
-    """Drive an OpenAI-compatible repository HTTP endpoint inside its leased world."""
+    """Drive a repository chat ingress inside its leased world."""
 
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
         self._adapter = adapter
@@ -177,9 +392,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind != "http":
+        if interface is None or interface.kind not in {"http", "callable"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP runtime interface is required"
+                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
@@ -188,8 +403,8 @@ class HostedChatCallRunner:
             )
 
         document = _scenario_document(self._context.bundle_dir, scenario.scenario_key)
-        instruction = str(document.get("instruction") or "").strip()
-        if not instruction:
+        conversation_scenario = _conversation_scenario(document)
+        if not conversation_scenario.instruction.strip():
             raise CallAborted("chat_scenario_invalid: instruction is empty")
         target_world = _tool_world(
             self._context.bundle_dir,
@@ -197,83 +412,49 @@ class HostedChatCallRunner:
             runtime,
             self._context.source_directory,
         )
+        adapter_path = "/invoke" if interface.kind == "callable" else interface.path
+        adapter_protocol = (
+            "fi.alk" if interface.kind == "callable" else interface.protocol
+        )
         wrapper = HTTPAgentWrapper(
             endpoint=urljoin(
-                endpoint.address.rstrip("/") + "/", interface.path.lstrip("/")
+                endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
             ),
-            protocol=interface.protocol,
+            protocol=adapter_protocol,
             include_tools=interface.include_tools,
-            timeout=30.0,
+            timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,
             },
         )
-        messages: list[dict[str, Any]] = [{"role": "user", "content": instruction}]
         started = datetime.now(timezone.utc)
-        answer = ""
         try:
-            for continuation in range(8):
-                response = await wrapper.call(
-                    AgentInput(
-                        thread_id=scenario.scenario_key,
-                        execution_id=scenario.scenario_id,
-                        turn_index=continuation,
-                        scenario_name=scenario.scenario_key,
-                        modality="text",
-                        messages=list(messages),
-                        new_message=dict(messages[-1]),
-                        tools=_tools(self._contract) if interface.include_tools else [],
-                    )
-                )
-                trace = dict((response.metadata or {}).get("external_agent") or {})
-                if trace and not trace.get("success", False):
-                    raise CallAborted(
-                        "chat_target_failed: "
-                        + str(trace.get("error") or "submitted endpoint request failed")
-                    )
-                returned = list(response.tool_calls or [])
-                if not returned:
-                    answer = response.content.strip()
-                    messages.append({"role": "assistant", "content": answer})
-                    break
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": returned,
-                    }
-                )
-                for index, call in enumerate(returned, start=1):
-                    name, arguments, call_id = _tool_call(call, index)
-                    result = target_world.handle_tool_call(
-                        {"id": call_id, "name": name, "arguments": arguments}
-                    )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "name": name,
-                            "content": result.content
-                            if result is not None
-                            else f"no such tool {name}",
-                        }
-                    )
-            else:
-                raise CallAborted("chat_target_failed: exceeded 8 tool continuations")
+            transcript = await _drive_conversation(
+                _HostedChatTarget(
+                    wrapper=wrapper,
+                    contract=self._contract,
+                    world=target_world,
+                    scenario_key=scenario.scenario_key,
+                    scenario_id=scenario.scenario_id,
+                ),
+                conversation_scenario,
+                self._contract,
+                self._context.bundle_dir,
+            )
         except CallAborted:
             raise
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
-            raise CallAborted(f"chat_call_failed: {type(exc).__name__}: {exc}") from exc
+            raise CallAborted(f"chat_target_failed: {type(exc).__name__}: {exc}") from exc
 
         ended = datetime.now(timezone.utc)
-        transcript = f"customer: {instruction}\nagent: {answer or '(said nothing)'}\n"
+        rendered_transcript = transcript.spoken() + "\n"
         transcript_id = await self._adapter.upload_artifact(
-            transcript.encode("utf-8"),
+            rendered_transcript.encode("utf-8"),
             kind=ArtifactKind.TRANSCRIPT,
             scenario_key=scenario.scenario_key,
         )
-        calls = tuple(target_world.calls)
+        calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
                 json.dumps(
@@ -298,7 +479,7 @@ class HostedChatCallRunner:
             )
         return CallOutcome(
             calls=calls,
-            turns=2,
+            turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

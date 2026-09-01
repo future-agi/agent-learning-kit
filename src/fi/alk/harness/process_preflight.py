@@ -468,6 +468,19 @@ def _verify_secret_purposes(
 ) -> None:
     """§2b: both directions, scoped to `target_provider` only — `source_checkout` and any other
     gateway-only purpose never crosses into the guest (§0 step 3) and has nothing to claim here."""
+    simulator_claimants = [
+        process.name
+        for process in manifest.processes
+        if isinstance(process, SourceProcess)
+        and SecretPurpose.SIMULATOR_PROVIDER in process.secret_purposes
+    ]
+    if simulator_claimants:
+        raise PreflightError(
+            "secret_purpose_forbidden",
+            "customer processes cannot claim simulator_provider credentials: "
+            + ", ".join(sorted(simulator_claimants)),
+        )
+
     ref_has_target_provider = any(
         purpose == SecretPurpose.TARGET_PROVIDER.value
         for purpose in secret_refs.values()

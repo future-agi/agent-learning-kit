@@ -16,7 +16,16 @@ from uuid import uuid4
 
 try:
     from livekit import api, rtc
-    from livekit.agents import Agent, AgentSession, RunContext, function_tool, metrics
+    from livekit.agents import (
+        Agent,
+        AgentSession,
+        AudioConfig,
+        BackgroundAudioPlayer,
+        RunContext,
+        function_tool,
+        metrics,
+    )
+    from livekit.agents.voice.background_audio import BuiltinAudioClip
     from livekit.agents.types import (
         ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
         TOPIC_TRANSCRIPTION,
@@ -246,15 +255,25 @@ class _TestRunnerAgent(Agent):
     )
     async def end_call(self, ctx: RunContext) -> str:
         if self._session is None:
+            logger.warning("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
         if len(messages) < self._min_turn_messages or not _has_role_alternation(
             messages
         ):
+            # Whether the caller ever reached for this tool, and why it was turned away, is the
+            # difference between a simulator that will not hang up and one that was not allowed to.
+            logger.warning(
+                "endCall refused: %d messages, floor %d, alternating=%s",
+                len(messages),
+                self._min_turn_messages,
+                _has_role_alternation(messages),
+            )
             return (
                 "Continue the conversation until both speakers have participated "
                 f"and at least {self._min_turn_messages} messages are complete."
             )
+        logger.warning("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
         # natural closing sentence. Remember that exact handle before waking
         # the outer runner so it cannot snapshot history in the brief interval
@@ -338,7 +357,85 @@ class _TestRunnerAgent(Agent):
             room=room,
             room_options=RoomOptions(**room_kwargs),
         )
+        await self._maybe_start_background_audio(room, session)
         return session
+
+    async def _maybe_start_background_audio(
+        self, room: "rtc.Room", session: "AgentSession"
+    ) -> None:
+        """Mix caller-side ambient noise under the simulated caller, if the run asked for it.
+
+        Off unless HARNESS_BACKGROUND_NOISE names a source: a LiveKit builtin clip name, or an
+        http(s) URL to an ambient file. Any failure is swallowed, because a call without ambience is
+        preferable to a dropped one.
+        """
+        source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
+        if not source:
+            return
+
+        def _download() -> str | None:
+            import tempfile
+            import urllib.request
+
+            try:
+                suffix = (
+                    ".mp3"
+                    if ".mp3" in source
+                    else ".ogg"
+                    if ".ogg" in source
+                    else ".wav"
+                )
+                with urllib.request.urlopen(source, timeout=15) as response:
+                    data = response.read()
+                handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                handle.write(data)
+                handle.close()
+                return handle.name
+            except Exception:
+                return None
+
+        try:
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "0.3"))
+            if source.startswith(("http://", "https://")):
+                clip_source: Any = await asyncio.to_thread(_download)
+                if not clip_source:
+                    return
+                self._background_noise_file = clip_source
+            else:
+                clip_source = getattr(BuiltinAudioClip, source, None)
+                if clip_source is None:
+                    logger.warning(
+                        "background audio clip %r is not one LiveKit ships", source
+                    )
+                    return
+            player = BackgroundAudioPlayer(
+                ambient_sound=AudioConfig(clip_source, volume=volume)
+            )
+            await player.start(room=room, agent_session=session)
+            self._background_player = player
+        except Exception:
+            logger.warning("background audio not started", exc_info=True)
+
+    async def _stop_background_audio(self) -> None:
+        """Close the ambience player and remove any clip downloaded for it.
+
+        Without this the mixer task, its audio source and the published track outlive the call,
+        and a suite leaks one of each (plus a temp file) per scenario.
+        """
+        player = getattr(self, "_background_player", None)
+        if player is not None:
+            self._background_player = None
+            try:
+                await player.aclose()
+            except Exception:
+                logger.warning("background audio not closed cleanly", exc_info=True)
+        downloaded = getattr(self, "_background_noise_file", None)
+        if downloaded:
+            self._background_noise_file = None
+            try:
+                Path(downloaded).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("background audio clip not removed: %s", downloaded)
 
     def open_conversation(self) -> None:
         if self._session is None:
@@ -380,7 +477,7 @@ class LiveKitEngine(BaseEngine):
         readiness_timeout: float = 30.0,
         cleanup_timeout: float = 30.0,
         conversation_direction: str = "simulator_first",
-        agent_first_silence_timeout_seconds: float = 30.0,
+        agent_first_silence_timeout_seconds: float = 120.0,
         recording_root: str | Path = "recordings",
         recording_case_directory: str | Path | None = None,
         run_id: str | None = None,
@@ -851,12 +948,22 @@ class LiveKitEngine(BaseEngine):
                         )
             if outcome is not None:
                 return outcome
-            token = (
+            # The target resolves who is calling from participant attributes or metadata.
+            # Without the persona's number every scenario looks like the same demo rider and
+            # the agent looks up the wrong account, which reads as an agent bug.
+            caller_phone = str(
+                (persona.persona.get("metadata") or {}).get("caller_phone") or ""
+            ).strip()
+            builder = (
                 AccessToken(api_key, api_secret)
                 .with_identity(simulator_identity)
                 .with_grants(VideoGrants(room_join=True, room=room_name))
-                .to_jwt()
             )
+            if caller_phone:
+                builder = builder.with_attributes(
+                    {"harness.callerPhone": caller_phone}
+                ).with_metadata(json.dumps({"caller_phone": caller_phone}))
+            token = builder.to_jwt()
             await asyncio.wait_for(
                 room.connect(str(runtime.url), token),
                 timeout=connect_timeout,
@@ -887,13 +994,34 @@ class LiveKitEngine(BaseEngine):
             customer_agent, models = await self._create_customer_agent(
                 persona,
                 simulator,
-                call_type=(
-                    "inbound"
-                    if conversation_direction == "simulator_first"
-                    else "outbound"
-                ),
-                agent_name=agent_definition.name,
+                # Who dialled and who speaks first are separate axes. The caller always places
+                # the call; conversation_direction only decides who opens once connected.
+                call_type="inbound",
+                # `name` is an identity for dispatch, not a label for the caller to hear.
+                agent_name=agent_definition.description,
                 min_turn_messages=min_turn_messages,
+            )
+            setup = getattr(self, "_last_simulator_setup", {}) or {}
+            _record_simulator_setup(
+                case_directory,
+                persona=persona,
+                instructions=setup.get("instructions", ""),
+                llm_config=setup.get("llm_config"),
+                stt_config=setup.get("stt_config"),
+                tts_config=setup.get("tts_config"),
+                extra={
+                    "room_name": room_name,
+                    "agent_name": agent_definition.name,
+                    "test_case_id": test_case_id,
+                    "run_id": run_id,
+                    "conversation_direction": conversation_direction,
+                    "allow_interruptions": setup.get("allow_interruptions"),
+                    "min_endpointing_delay": setup.get("min_endpointing_delay"),
+                    "max_endpointing_delay": setup.get("max_endpointing_delay"),
+                    "use_tts_aligned_transcript": setup.get(
+                        "use_tts_aligned_transcript"
+                    ),
+                },
             )
             sip_participant_identity: str | None = None
             bridge_identity: str | None = None
@@ -1323,6 +1451,13 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            # The ambience belongs to the caller agent, not the engine. Guarded because teardown
+            # must never be the reason a case fails.
+            if customer_agent is not None:
+                try:
+                    await customer_agent._stop_background_audio()
+                except Exception:
+                    logger.warning("background audio not closed cleanly", exc_info=True)
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
             pending_target_transcriptions.clear()
@@ -1579,6 +1714,10 @@ class LiveKitEngine(BaseEngine):
             default_language=(
                 simulator.stt.language if simulator is not None else None
             ),
+            variables={"instruction": persona.situation or ""},
+            # Delivery cues are Cartesia only. Passing the provider here rather than reading it
+            # inside the prompt keeps the decision where the provider is actually known.
+            tts_provider=(simulator.tts.provider if simulator is not None else None),
         )
         if simulator is None:
             voice_provider = os.environ.get(
@@ -1628,6 +1767,16 @@ class LiveKitEngine(BaseEngine):
             tts_config=tts_config,
         )
         vad = await asyncio.to_thread(_load_silero_vad_sync)
+        self._last_simulator_setup = {
+            "instructions": instructions,
+            "llm_config": llm_config,
+            "stt_config": stt_config,
+            "tts_config": tts_config,
+            "allow_interruptions": allow_interruptions,
+            "min_endpointing_delay": min_endpointing_delay,
+            "max_endpointing_delay": max_endpointing_delay,
+            "use_tts_aligned_transcript": use_aligned_transcript,
+        }
         agent = _TestRunnerAgent(
             persona=persona,
             min_turn_messages=min_turn_messages,
@@ -1857,6 +2006,7 @@ async def _wait_for_conversation_end(
         "conversation_settled": asyncio.create_task(
             _wait_for_conversation_silence(session)
         ),
+        "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
             _wait_for_conversation_never_started(
                 session,
@@ -1915,6 +2065,9 @@ async def _wait_for_conversation_end(
             "target_disconnected",
             "room_disconnected",
             "no_conversation",
+            # A farewell loop is a finished conversation, so it outranks the silence backstop
+            # that would otherwise report the same call as a stall.
+            "closing_loop",
             "conversation_silence_timeout",
             "conversation_settled",
             "provider_disconnected",
@@ -1932,6 +2085,63 @@ async def _wait_for_conversation_end(
             on_participant_disconnected,
         )
         _remove_room_listener(room, "disconnected", on_room_disconnected)
+
+
+_CLOSING_PHRASES = (
+    "goodbye",
+    "bye",
+    "take care",
+    "have a great day",
+    "have a good day",
+    "have a wonderful day",
+    "you too",
+)
+
+_CLOSING_EXCHANGE_LIMIT = 4
+
+
+def _is_closing_only(text: str) -> bool:
+    """Whether a turn is nothing but a farewell.
+
+    Deliberately narrow: a turn that closes AND carries anything else (a question, a fact, a
+    correction) is still conversation, and ending on it would cut a live call short.
+    """
+    stripped = "".join(
+        character.lower() if character.isalnum() or character.isspace() else " "
+        for character in (text or "")
+    ).split()
+    if not stripped or len(stripped) > 6:
+        return False
+    joined = " ".join(stripped)
+    return any(phrase in joined for phrase in _CLOSING_PHRASES)
+
+
+async def _wait_for_closing_loop(
+    session: AgentSession,
+    *,
+    limit: int = _CLOSING_EXCHANGE_LIMIT,
+) -> None:
+    """Finish once both sides are only trading farewells.
+
+    A simulator that does not reach for ``endCall`` leaves the target answering goodbye with
+    goodbye until the deadline. One such call ran seventy-six turns, held its worker past the
+    world pool's patience and cost the rest of that job its worlds, so this ends the call on the
+    evidence already in the transcript rather than waiting for a timeout that arrives too late.
+    """
+    while True:
+        messages = _session_messages(session)
+        tail = [
+            message for message in messages if (message.get("content") or "").strip()
+        ][-limit:]
+        if len(tail) == limit and all(
+            _is_closing_only(str(message.get("content") or "")) for message in tail
+        ):
+            logger.info(
+                "closing loop: last %d turns were farewells only, ending the call",
+                limit,
+            )
+            return
+        await asyncio.sleep(1.0)
 
 
 async def _wait_for_conversation_silence(
@@ -2236,6 +2446,30 @@ def _merge_captured_target_turns(
     return merged
 
 
+def _caller_never_spoke(messages: list[dict[str, Any]]) -> bool:
+    """Whether the simulated caller's turns exist as text with no audio behind them.
+
+    Speech synthesis that fails still leaves the caller's line in the transcript, so a mute
+    simulator and a silent agent produce the same stall unless the missing audio is read directly.
+    """
+
+    def timed(message: dict[str, Any]) -> bool:
+        return isinstance(message.get("started_speaking_at"), (int, float))
+
+    spoken = [
+        message
+        for message in messages
+        if message.get("role") == "user" and (message.get("content") or "").strip()
+    ]
+    if not spoken or any(timed(message) for message in spoken):
+        return False
+    # Only the agent's turns carrying timing makes the caller's missing timing evidence of
+    # silence rather than a transcript that simply does not record when anyone spoke.
+    return any(
+        timed(message) for message in messages if message.get("role") == "assistant"
+    )
+
+
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
@@ -2281,6 +2515,20 @@ def _conversation_outcome(
             transcript=transcript,
             messages=messages,
             retryable=True,
+        )
+    if stop_reason == "conversation_silence_timeout" and _caller_never_spoke(messages):
+        # The target sat in real silence because nothing was ever spoken at it. Retrying cannot
+        # put a voice back on the line, so fail fast and name the synthesis rather than spending
+        # the attempt budget reporting the agent as stalled.
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            "simulator_tts_silent",
+            "Simulated caller produced transcript text but no audio",
+            transcript=transcript,
+            messages=messages,
+            retryable=False,
+            details={"stop_reason": stop_reason, "turn_count": str(len(messages))},
         )
     if stop_reason in {
         "conversation_silence_timeout",
@@ -2412,6 +2660,58 @@ def _failure_outcome(
             details=details or {},
         ),
     )
+
+
+def _record_simulator_setup(
+    case_directory: Path,
+    *,
+    persona: Persona,
+    instructions: str,
+    llm_config: Any,
+    stt_config: Any,
+    tts_config: Any,
+    turn_handling: Any = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Write the exact prompt and voice settings this call is about to use.
+
+    Reconstructing either one afterwards from a transcript is guesswork, and the simulator's
+    prompt is what decides how the caller behaves. Written before the call connects so it
+    survives a run that dies mid-conversation.
+    """
+
+    def settings(config: Any) -> Any:
+        if config is None:
+            return None
+        for method in ("model_dump", "dict"):
+            dump = getattr(config, method, None)
+            if callable(dump):
+                try:
+                    return dump()
+                except Exception:  # noqa: BLE001 - never fail a call over logging
+                    pass
+        return str(config)
+
+    try:
+        case_directory.mkdir(parents=True, exist_ok=True)
+        (case_directory / "simulator-prompt.txt").write_text(
+            instructions or "", encoding="utf-8"
+        )
+        payload = {
+            "persona": settings(persona),
+            "simulator_system_prompt": instructions or "",
+            "llm": settings(llm_config),
+            "stt": settings(stt_config),
+            "tts": settings(tts_config),
+            "turn_handling": settings(turn_handling),
+        }
+        payload.update(extra or {})
+        (case_directory / "simulator-setup.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception as error:  # noqa: BLE001 - logging must never break a run
+        logger.warning("could not record simulator setup: %s", error)
 
 
 def _attach_recordings(

@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
@@ -343,6 +343,8 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
+
+
 def world_tools(
     contract: AgentContract,
     destination: Path,
@@ -413,8 +415,14 @@ def world_tools(
         # Daytona; this lightweight store exists only to author baseline data, checks and
         # scenarios before execution-time validation against those real processes.
         world = GeneratedWorld(":memory:", kind="sqlite")
-        if contract.modality == "voice" and contract.runtime:
-            world.runtime_tools = set(contract.tool_names())
+        # This boundary applies to every submitted runtime, not only voice workers. Importing a
+        # chat agent's framework-decorated tools here would require installing untrusted target
+        # dependencies into the credentialed control process. It also tests them under a
+        # different interpreter than the one Bundle V2 will actually build. Mark them as
+        # runtime-owned instead: process_runtime installs the repository dependencies in its
+        # writable build tree, starts the target as svc-agent, and the real scenario calls prove
+        # the tool behavior and capture its tool trace there.
+        world.runtime_tools = set(contract.tool_names())
     else:
         world = GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
@@ -684,6 +692,12 @@ def world_tools(
             return _err(
                 f"{name!r} is not a tool this agent has. It has: "
                 f"{', '.join(sorted(contract.tool_names()))}"
+            )
+        if name in set(getattr(world, "runtime_tools", set())):
+            return _ok(
+                f"{name} is owned by the submitted runtime. Its dependencies and callable are "
+                "built and exercised inside the isolated execution process; no control-plane "
+                "binding is needed."
             )
         if not source_root:
             return _err(
@@ -1351,7 +1365,7 @@ def world_tools(
             f"score {report.score:.2f}"
         )
 
-    server = create_sdk_mcp_server(
+    server = tool_server(
         name=WORLD_SERVER,
         version="0.1.0",
         tools=[

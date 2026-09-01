@@ -467,16 +467,19 @@ def select_process_secrets(
     preflight_bundle`'s own `secret_refs` argument uses, so a caller that already ran preflight
     has this for free.
 
-    `SecretPurpose.SOURCE_CHECKOUT` is excluded unconditionally (F13, p5-round1-review): §1 states
-    it is "gateway-only; never uploaded to the guest," and preflight does not forbid a process
-    from legally *claiming* it (§2b's `secret_unclaimed`/`secret_missing` pair is scoped to
-    `target_provider` only) — the guest should not depend on the gateway alone never putting one
-    in `secrets.json` to keep that promise.
+    `SecretPurpose.SOURCE_CHECKOUT` and `SecretPurpose.SIMULATOR_PROVIDER` are excluded
+    unconditionally. Checkout credentials are gateway-only. Simulator credentials belong to the
+    harness control/caller and must never enter a customer-authored process environment, even if
+    an untrusted or generated bundle attempts to claim that purpose.
     """
     claimed = {
         purpose.value
         for purpose in process.secret_purposes
-        if purpose is not SecretPurpose.SOURCE_CHECKOUT
+        if purpose
+        not in {
+            SecretPurpose.SOURCE_CHECKOUT,
+            SecretPurpose.SIMULATOR_PROVIDER,
+        }
     }
     return {
         alias: value
@@ -1006,10 +1009,12 @@ class PopenProcess:
             return ""
 
     def terminate(self) -> None:
-        self.popen.terminate()
+        self._signal_process_group(signal.SIGTERM, self.popen.terminate)
 
     def interrupt(self) -> None:
-        self.popen.send_signal(signal.SIGINT)
+        self._signal_process_group(
+            signal.SIGINT, lambda: self.popen.send_signal(signal.SIGINT)
+        )
 
     def wait(self, timeout: float) -> bool:
         try:
@@ -1019,7 +1024,24 @@ class PopenProcess:
             return False
 
     def kill(self) -> None:
-        self.popen.kill()
+        self._signal_process_group(signal.SIGKILL, self.popen.kill)
+
+    def _signal_process_group(
+        self, signum: int, fallback: Callable[[], None]
+    ) -> None:
+        """Stop the complete runtime process, including launcher descendants.
+
+        Source commands commonly use launchers such as ``uv run``, ``npm``, or shell
+        scripts. Signalling only the launcher leaves its actual server orphaned and a
+        subsequent world reset cannot bind the same port. ``default_process_runner``
+        gives every process its own session, so its pid is also the process-group id.
+        Keep the direct-Popen fallback for synthetic handles and platforms without
+        ``killpg``.
+        """
+        try:
+            os.killpg(self.popen.pid, signum)
+        except (AttributeError, OSError):
+            fallback()
 
 
 _TERMINATE_WAIT_SECONDS = 5.0
@@ -1118,6 +1140,10 @@ def default_process_runner(
         stderr=subprocess.STDOUT,
         user=user,
         group=group,
+        # Each declared runtime process owns a process group. This is necessary for
+        # deterministic reset/cleanup when the command is a launcher which forks the
+        # real long-lived server (for example ``uv run`` or ``npm start``).
+        start_new_session=True,
     )
     return PopenProcess(popen=popen, log_path=log_path)
 

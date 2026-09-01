@@ -40,8 +40,15 @@ def schemas(server) -> dict[str, dict]:
     """The tools as a stage actually sees them, read off the running server.
 
     Deliberately not read from the source: what matters is what reaches the model, and a
-    schema built correctly but never registered would pass any test of the source.
+    schema built correctly but never registered would pass any test of the source. Stages now
+    describe tools neutrally; routing through the Claude adapter keeps this about what is
+    actually published.
     """
+    from fi.alk.harness.backends import ToolServer
+    from fi.alk.harness.backends.claude import _sdk_server
+
+    if isinstance(server, ToolServer):
+        server = _sdk_server(server)
     handler = server["instance"].request_handlers[mcp.ListToolsRequest]
     listed = asyncio.run(handler(mcp.ListToolsRequest(method="tools/list"))).root.tools
     return {one.name: one.inputSchema for one in listed}

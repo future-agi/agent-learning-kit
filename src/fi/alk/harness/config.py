@@ -14,8 +14,10 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
-from claude_agent_sdk import ClaudeAgentOptions
+from .backends import SessionSpec, resolve
 
+# The first backend's default, kept importable because callers and tests name it. The model a
+# run actually gets comes from chosen_model, which asks the selected backend.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 SKILLS_ROOT = Path(__file__).parent / "skills"
@@ -48,8 +50,33 @@ def chosen_model(model: str | None = None) -> str:
     Passed to the session explicitly as well as through the environment. The environment alone
     does not win: the CLI has its own default and will quietly use it, so a run meant for Haiku
     goes out on whatever the CLI felt like and the bill says so afterwards.
+
+    With nothing named anywhere, the selected backend's own default runs, so switching
+    ``ALK_HARNESS`` never sends one vendor's model name to another vendor's loop.
     """
-    return model or os.environ.get("ALK_HARNESS_MODEL", DEFAULT_MODEL)
+    return (
+        model
+        or os.environ.get("ALK_HARNESS_MODEL")
+        or resolve().default_model
+    )
+
+
+def thinking_config() -> dict[str, Any]:
+    """How much the model may think, from ALK_HARNESS_THINKING.
+
+    The Claude Code CLI defaults to adaptive thinking. In this harness the correctness of what a
+    stage produces is re-checked by code gates (a scenario is proved against the real world, a
+    contract is validated), so the model's private reasoning is spent on decisions the gates make
+    again anyway. Left unset, that reasoning was the majority of generated tokens and the majority
+    of wall time. Default to disabled for speed; ``adaptive`` restores the old behaviour, and an
+    integer sets an explicit budget for models that still honour one.
+    """
+    setting = os.environ.get("ALK_HARNESS_THINKING", "disabled").strip().lower()
+    if setting in {"adaptive", "on", "auto"}:
+        return {"type": "adaptive", "display": "omitted"}
+    if setting.isdigit() and int(setting) > 0:
+        return {"type": "enabled", "budget_tokens": int(setting), "display": "omitted"}
+    return {"type": "disabled"}
 
 
 def provisioning(enabled: bool | None = None) -> bool:
@@ -75,10 +102,20 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     Claude Code resolves the GCP project from ``GOOGLE_CLOUD_PROJECT``, the credential file, or
     the active gcloud configuration, in that order, so an unset project id is not an error here.
     """
+    # Every model a session can reach is pinned to the same one. Naming only the main model
+    # leaves the sub-agent and fast-path settings to the CLI's own preference, and a suite written
+    # by twenty writers then runs on whatever that preference happens to be rather than on the
+    # model the run asked for.
+    chosen = chosen_model(model)
     env = {
         "CLAUDE_CODE_USE_VERTEX": "1",
         "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
-        "ANTHROPIC_MODEL": chosen_model(model),
+        "ANTHROPIC_MODEL": chosen,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": chosen,
+        "ANTHROPIC_SMALL_FAST_MODEL": chosen,
+        "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
     }
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",
@@ -95,35 +132,28 @@ def read_only_session(
     *,
     system_prompt: str,
     cwd: str | Path,
-    mcp_servers: dict[str, Any] | None = None,
-    extra_tools: Iterable[str] = (),
+    servers: dict[str, Any] | None = None,
+    extra_builtins: Iterable[str] = (),
     max_turns: int = 40,
     model: str | None = None,
-) -> ClaudeAgentOptions:
+) -> SessionSpec:
     """A session that may read the agent under test but never write to it.
 
     The agent under test is somebody's real repository. The harness reads it and writes its own
     artifacts elsewhere, so the built-in write tools are simply not granted; the only way this
     session can produce anything is by calling one of ours.
     """
-    allowed = [*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_tools]
-    options = ClaudeAgentOptions(
+    return SessionSpec(
         system_prompt=system_prompt,
-        allowed_tools=allowed,
-        mcp_servers=dict(mcp_servers or {}),
-        # Not acceptEdits: that auto-approves Edit and Write before the permission callback
-        # is consulted, which silently defeats the gate below.
-        permission_mode="default",
+        servers=dict(servers or {}),
+        builtins=tuple(
+            dict.fromkeys([*_READ_ONLY_TOOLS, "AskUserQuestion", *extra_builtins])
+        ),
         cwd=str(cwd),
-        setting_sources=[],
         max_turns=max_turns,
         model=chosen_model(model),
-        env=provider_env(model),
+        thinking=True,
     )
-    options.disallowed_tools = list(UNWANTED)
-    options.hooks = gate_hooks(allowed)
-    options.can_use_tool = permission_gate(granted=allowed)
-    return options
 
 
 # Tools the host offers every session that no stage of this harness has any use for. Denying

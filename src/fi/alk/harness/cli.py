@@ -22,7 +22,6 @@ from .build import opening as build_opening
 from .build import require_buildable
 from .chat import open_conversation
 from .config import (
-    DEFAULT_MODEL,
     artifact_dir,
     chosen_model,
     credentials_hint,
@@ -253,9 +252,15 @@ async def _build(args: argparse.Namespace) -> int:
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
     )
+    deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
         stage,
-        build_opening(contract, provisioned=environment is not None) + _guidance(args),
+        build_opening(
+            contract,
+            provisioned=environment is not None,
+            deferred_runtime=deferred_runtime,
+        )
+        + _guidance(args),
         interactive=args.interactive,
         until=lambda: world_saved(destination),
         nudge=(
@@ -839,16 +844,26 @@ async def _auto(args: argparse.Namespace) -> int:
                 while written_count != wanted and repair_attempt < 2:
                     repair_attempt += 1
                     missing = wanted - written_count
+                    # Count alone is the wrong instruction: asked only for a number, the
+                    # stage pads with happy paths that satisfy cardinality and measure nothing.
                     stage_args.guidance = [
                         (
                             f"The hosted run requires exactly {wanted} scenarios, but "
                             f"only {written_count} are currently saved. "
                             + (
                                 f"Add exactly {missing} distinct validated scenario(s) and "
-                                "call save_scenarios. Preserve all existing scenarios."
+                                "call save_scenarios. Preserve all existing scenarios. Each "
+                                "one must meet the same bar as the rest of the suite: a "
+                                "different branch of the agent's behaviour from every "
+                                "scenario already saved, several steps deep, and failing "
+                                "when the agent does the wrong thing. Do not pad with "
+                                "variations of a scenario that already exists, and do not "
+                                "add a happy path that an existing scenario already covers."
                                 if missing > 0
                                 else f"Remove exactly {-missing} excess scenario(s), preserve "
-                                "the strongest coverage, and call save_scenarios."
+                                "the strongest coverage, and call save_scenarios. Drop the "
+                                "ones that duplicate a branch another scenario already "
+                                "exercises, not the ones that are hardest to pass."
                             )
                         )
                     ]
@@ -1125,7 +1140,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="run unattended instead of staying open for corrections",
     )
-    understand.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+    understand.add_argument("--model", default=None, help=argparse.SUPPRESS)
     understand.set_defaults(run=_understand, interactive=True)
 
     world = sub.add_parser("build", help="build the world from an agent's contract")
@@ -1242,7 +1257,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="fresh artifact directory (defaults to a unique session directory)",
     )
     auto.add_argument("--count", type=int, default=10, help="number of scenarios")
-    auto.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+    auto.add_argument("--model", default=None, help=argparse.SUPPRESS)
     auto.add_argument("--run-model", default=None, help=argparse.SUPPRESS)
     auto.set_defaults(run=_auto)
 
@@ -1266,7 +1281,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", required=True, help="fresh authoring artifact directory"
     )
     author.add_argument("--count", type=int, default=10, help="number of scenarios")
-    author.add_argument("--model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+    author.add_argument("--model", default=chosen_model(), help=argparse.SUPPRESS)
     author.set_defaults(run=_auto, authoring_only=True, run_model=None)
 
     chat = sub.add_parser(

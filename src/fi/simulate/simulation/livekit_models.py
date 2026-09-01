@@ -250,7 +250,28 @@ def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
         and not os.environ.get("VERTEX_LOCATION")
     ):
         kwargs["location"] = "global"
+    thinking = _simulator_thinking(model)
+    if thinking is not None:
+        kwargs["thinking_config"] = thinking
     return google.LLM(model=model, temperature=config.temperature, **kwargs)
+
+
+def _simulator_thinking(model: str) -> dict[str, object] | None:
+    """How much the simulated caller deliberates before answering.
+
+    A person on a phone call answers from what they already know, so thinking buys nothing here and
+    is charged twice: once in latency the target hears as an unnatural pause, and again in a call
+    whose duration no longer reflects how the conversation actually went. Off unless a run asks for
+    it. `SIMULATOR_LLM_THINKING` takes a Gemini thinking level, or a token budget as a number.
+    """
+    if not model.startswith("gemini"):
+        return None
+    asked = os.environ.get("SIMULATOR_LLM_THINKING", "").strip().lower()
+    if asked in ("", "off", "0", "none", "false"):
+        return {"thinking_budget": 0}
+    if asked.isdigit():
+        return {"thinking_budget": int(asked)}
+    return {"thinking_level": asked}
 
 
 def _google_stt(

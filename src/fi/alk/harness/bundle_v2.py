@@ -111,6 +111,7 @@ class ProcessUser(str, Enum):
 
 class SecretPurpose(str, Enum):
     TARGET_PROVIDER = "target_provider"
+    SIMULATOR_PROVIDER = "simulator_provider"
     SOURCE_CHECKOUT = "source_checkout"
 
 
