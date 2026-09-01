@@ -39,9 +39,9 @@ logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
 
-# The worker the stage runs to write one slice of the grid. Named once so the skill can tell the
-# model what to call and both backends declare the same thing.
-WRITER = "scenario-writer"
+# The worker the stage runs to write one slice of the grid. Underscored because one backend
+# rewrites anything else to this form, and the skill has to name the tool the model actually sees.
+WRITER = "scenario_writer"
 # One worker's turn budget: enough to inspect, rehearse, prove and submit its slice.
 WRITER_TURNS = int(os.environ.get("HARNESS_WRITER_TURNS") or 60)
 

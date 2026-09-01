@@ -399,9 +399,13 @@ file. Do not use names like `scenario_1` or `edge_case_a`.
 For anything more than a handful, do not write them one at a time yourself: you will run out of
 turns long before the suite is done.
 
-**Delegate.** You have a `scenario-writer` worker. Give each one a slice of the grid and let
-several run at once. Call them in the same turn to get real concurrency, and keep going until the
-sample is complete.
+**Delegate to `scenario_writer`.** It is a tool like any other: call it with a brief and it
+writes and proves that slice, then reports back. To get real concurrency, **call it several
+times in the same turn** rather than waiting for each to return. Keep going until the sample is
+complete.
+
+Delegating is not optional above a handful. Writing thirty scenarios yourself in one session is
+how a run stalls: the response grows until it stops coming back. Hand out slices instead.
 
 A good slice brief names:
 
