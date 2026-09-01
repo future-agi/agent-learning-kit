@@ -52,6 +52,7 @@ LIVEKIT_API_KEY = "LIVEKIT_API_KEY"
 LIVEKIT_API_SECRET = "LIVEKIT_API_SECRET"
 DEEPGRAM_API_KEY = "DEEPGRAM_API_KEY"
 GEMINI_API_KEY = "GEMINI_API_KEY"
+RETELL_API_KEY = "RETELL_API_KEY"
 
 _ALL_SECRETS = {
     LIVEKIT_API_KEY: "lk-key",
@@ -202,6 +203,9 @@ def _context(
             simulator_secrets
             if simulator_secrets is not None
             else {
+                "SIMULATOR_LIVEKIT_URL": "wss://platform-livekit.example",
+                "SIMULATOR_LIVEKIT_API_KEY": "platform-livekit-key",
+                "SIMULATOR_LIVEKIT_API_SECRET": "platform-livekit-secret",
                 "SIMULATOR_DEEPGRAM_API_KEY": _ALL_SECRETS[DEEPGRAM_API_KEY],
                 "SIMULATOR_GEMINI_API_KEY": _ALL_SECRETS[GEMINI_API_KEY],
             }
@@ -1275,4 +1279,38 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
         fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
         == "/run/futureagi/platform-vertex.json"
     )
+    assert runner._missing_config is None
+
+
+def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
+    tmp_path: Path,
+) -> None:
+    fake_environ: dict[str, str] = {}
+    target = {
+        RETELL_API_KEY: "customer-retell-key",
+        LIVEKIT_API_KEY: "customer-livekit-must-not-export",
+        LIVEKIT_API_SECRET: "customer-livekit-secret-must-not-export",
+    }
+    simulator = {
+        "SIMULATOR_LIVEKIT_URL": "wss://platform-livekit.example",
+        "SIMULATOR_LIVEKIT_API_KEY": "platform-livekit-key",
+        "SIMULATOR_LIVEKIT_API_SECRET": "platform-livekit-secret",
+        "SIMULATOR_DEEPGRAM_API_KEY": "platform-deepgram",
+        "SIMULATOR_GEMINI_API_KEY": "platform-gemini",
+    }
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="retell",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={"agent_id": "source-agent"},
+        secrets=target,
+        simulator_secrets=simulator,
+    )
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+
+    assert fake_environ[LIVEKIT_API_KEY] == "platform-livekit-key"
+    assert fake_environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
+    assert fake_environ[RETELL_API_KEY] == "customer-retell-key"
+    assert runner._livekit_url == "wss://platform-livekit.example"
     assert runner._missing_config is None

@@ -96,6 +96,9 @@ LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
 _SIMULATOR_PLATFORM_ALIAS_MAP = {
+    "SIMULATOR_LIVEKIT_URL": LIVEKIT_URL_ALIAS,
+    "SIMULATOR_LIVEKIT_API_KEY": LIVEKIT_API_KEY_ALIAS,
+    "SIMULATOR_LIVEKIT_API_SECRET": LIVEKIT_API_SECRET_ALIAS,
     "SIMULATOR_DEEPGRAM_API_KEY": DEEPGRAM_API_KEY_ALIAS,
     "SIMULATOR_CARTESIA_API_KEY": CARTESIA_API_KEY_ALIAS,
     "SIMULATOR_GEMINI_API_KEY": GEMINI_API_KEY_ALIAS,
@@ -229,8 +232,11 @@ def _check_config(
         or "deepgram"
     ).lower()
 
-    required = [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS]
     connector = job.agent.connector.strip().lower()
+    livekit_values = (
+        target_provider_secret_values if connector == "livekit" else simulator_values
+    )
+    required = [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS]
     if connector == "vapi":
         required.append(VAPI_API_KEY_ALIAS)
     elif connector == "retell":
@@ -238,21 +244,15 @@ def _check_config(
     if "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
-    missing_aliases = [
-        alias
-        for alias in required
-        if not (
-            target_provider_secret_values.get(alias)
-            if alias
-            in {
-                LIVEKIT_API_KEY_ALIAS,
-                LIVEKIT_API_SECRET_ALIAS,
-                VAPI_API_KEY_ALIAS,
-                RETELL_API_KEY_ALIAS,
-            }
-            else simulator_value(alias)
-        )
-    ]
+
+    def credential(alias: str) -> str | None:
+        if alias in {LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS}:
+            return livekit_values.get(alias)
+        if alias in {VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS}:
+            return target_provider_secret_values.get(alias)
+        return simulator_value(alias)
+
+    missing_aliases = [alias for alias in required if not credential(alias)]
 
     if llm_provider == "google":
         has_api_key = bool(
@@ -274,8 +274,7 @@ def _check_config(
         missing_aliases.append(OPENAI_API_KEY_ALIAS)
 
     has_livekit_url = bool(
-        config.get(LIVEKIT_URL_CONFIG_KEY)
-        or target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+        config.get(LIVEKIT_URL_CONFIG_KEY) or livekit_values.get(LIVEKIT_URL_ALIAS)
     )
     missing_config_keys = [] if has_livekit_url else [LIVEKIT_URL_CONFIG_KEY]
     if not missing_aliases and not missing_config_keys:
@@ -718,6 +717,9 @@ class CallRunnerImpl:
         # come from platform configuration and must not be confused with customer-agent keys.
         if context.job.execution is ExecutionMode.LOCAL:
             for alias in (
+                LIVEKIT_URL_ALIAS,
+                LIVEKIT_API_KEY_ALIAS,
+                LIVEKIT_API_SECRET_ALIAS,
                 DEEPGRAM_API_KEY_ALIAS,
                 CARTESIA_API_KEY_ALIAS,
                 GEMINI_API_KEY_ALIAS,
@@ -746,17 +748,20 @@ class CallRunnerImpl:
         # process but against a per-world sandboxed agent process reached over the network; no
         # other in-process worker races this job-level environment.
         target_environ = os.environ if environ is None else environ
-        for alias in (
-            LIVEKIT_API_KEY_ALIAS,
-            LIVEKIT_API_SECRET_ALIAS,
-            LIVEKIT_URL_ALIAS,
-            VAPI_API_KEY_ALIAS,
-            RETELL_API_KEY_ALIAS,
-        ):
+        connector = context.job.agent.connector.strip().lower()
+        target_aliases = [VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS]
+        if connector == "livekit":
+            target_aliases.extend(
+                [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS, LIVEKIT_URL_ALIAS]
+            )
+        for alias in target_aliases:
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
         for alias in (
+            LIVEKIT_URL_ALIAS,
+            LIVEKIT_API_KEY_ALIAS,
+            LIVEKIT_API_SECRET_ALIAS,
             DEEPGRAM_API_KEY_ALIAS,
             CARTESIA_API_KEY_ALIAS,
             GEMINI_API_KEY_ALIAS,
@@ -787,11 +792,17 @@ class CallRunnerImpl:
         atexit.register(self._cleanup_credentials)
         self._livekit_url = str(
             context.job.agent.config.get(LIVEKIT_URL_CONFIG_KEY)
-            or context.target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+            or (
+                context.target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+                if connector == "livekit"
+                else simulator_secret_values.get(LIVEKIT_URL_ALIAS)
+            )
             or ""
         )
         self._missing_config = _check_config(
-            context.job, context.target_provider_secret_values, target_environ
+            context.job,
+            context.target_provider_secret_values,
+            simulator_secret_values,
         )
         self._scenario_attempt_counts: dict[str, int] = {}
 

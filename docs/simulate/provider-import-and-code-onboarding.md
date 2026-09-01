@@ -46,6 +46,10 @@ does not rewire tools, and never owns provider resources.
 - Vapi/Retell keys are `target_provider` secrets. They are resolved only in the hosted attempt.
 - Platform simulator credentials are `simulator_provider` secrets and never enter customer
   processes.
+- For Vapi and Retell, the LiveKit room used by the simulated caller is platform infrastructure:
+  its URL/key/secret are `simulator_provider` values. For a LiveKit agent-under-test, that
+  agent's own LiveKit URL/key/secret remain `target_provider` values. Hosted execution never
+  falls back across this boundary.
 - Provider definitions, lifecycle receipts and bundles contain no secret values.
 - Signed public URLs are capability material and are not persisted in receipts.
 - Imported resources carry a deterministic `alk-<job>-w<world>` name/metadata prefix where the
@@ -65,3 +69,9 @@ original target unchanged, five multi-turn calls, transcripts and recordings, pr
 tool evidence when the fixture has tools, evaluation coverage, and cleanup of every owned provider
 resource. A green call with missing required evidence is not a pass.
 
+## Reproducible code-upload fixtures
+
+`examples/harness/provider_voice_environment/` contains self-contained Vapi and Retell
+repository-created targets plus an import backend. Both targets expose a real
+`record_preference` implementation, return ownership receipts, and delete resources in reverse
+dependency order. They are certification inputs, not hidden harness implementations.
