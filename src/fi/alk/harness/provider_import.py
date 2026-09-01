@@ -37,6 +37,7 @@ class ProviderImportSpec(BaseModel):
     type: ProviderType
     source_target_id: str = Field(min_length=1)
     public_capability: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    environment_tools: list[str] = Field(default_factory=list)
     event_path: str = "/provider/events"
     tool_path: str = "/provider/tools"
     api_base_url: str | None = None
@@ -60,6 +61,14 @@ class ProviderImportSpec(BaseModel):
                 or ".." in value.split("/")
             ):
                 raise ValueError(f"provider_import_{name}_invalid")
+        return self
+
+    @model_validator(mode="after")
+    def _environment_tool_names_are_unambiguous(self) -> "ProviderImportSpec":
+        normalized = [name.strip() for name in self.environment_tools]
+        if any(not name for name in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("provider_import_environment_tools_invalid")
+        self.environment_tools = normalized
         return self
 
 
@@ -128,6 +137,29 @@ def _rewire_vapi_tool(tool: Mapping[str, Any], tool_base_url: str) -> dict[str, 
     return copied
 
 
+def _vapi_custom_tool_name(tool: Mapping[str, Any]) -> str | None:
+    kind = str(tool.get("type") or "")
+    if kind == "function":
+        function = tool.get("function")
+        if isinstance(function, Mapping):
+            return str(function.get("name") or "").strip() or None
+    if kind == "apiRequest":
+        return str(tool.get("name") or "").strip() or None
+    return None
+
+
+def _require_environment_tool(
+    *, provider: str, name: str | None, available: set[str]
+) -> None:
+    if not name:
+        raise ProviderImportError(f"{provider}_custom_tool_missing_name")
+    if name not in available:
+        raise ProviderImportError(
+            f"provider_tool_implementation_missing: {provider} tool {name!r} "
+            "is not declared by the submitted environment"
+        )
+
+
 def _rewire_retell_tools(value: Any, tool_base_url: str) -> Any:
     if isinstance(value, list):
         return [_rewire_retell_tools(item, tool_base_url) for item in value]
@@ -172,23 +204,38 @@ def _clone_vapi(
     }
     assistant["server"] = {"url": context.event_url}
     resources: list[ProviderResource] = []
+    environment_tools = set(spec.environment_tools)
     try:
         model = assistant.get("model")
         if isinstance(model, dict):
             model = dict(model)
             inline = model.get("tools")
             if isinstance(inline, list):
-                model["tools"] = [
-                    _rewire_vapi_tool(item, context.tool_base_url)
-                    if isinstance(item, Mapping)
-                    else item
-                    for item in inline
-                ]
+                rewritten_inline: list[Any] = []
+                for item in inline:
+                    if isinstance(item, Mapping) and str(item.get("type") or "") in {
+                        "function",
+                        "apiRequest",
+                    }:
+                        _require_environment_tool(
+                            provider="vapi",
+                            name=_vapi_custom_tool_name(item),
+                            available=environment_tools,
+                        )
+                        item = _rewire_vapi_tool(item, context.tool_base_url)
+                    rewritten_inline.append(item)
+                model["tools"] = rewritten_inline
             tool_ids = model.get("toolIds")
             if isinstance(tool_ids, list):
                 cloned_ids: list[str] = []
                 for source_id in tool_ids:
                     source = request("GET", f"{base}/tool/{source_id}", api_key, None)
+                    if str(source.get("type") or "") in {"function", "apiRequest"}:
+                        _require_environment_tool(
+                            provider="vapi",
+                            name=_vapi_custom_tool_name(source),
+                            available=environment_tools,
+                        )
                     create = _rewire_vapi_tool(
                         _without(source, {"id", "orgId", "createdAt", "updatedAt"}),
                         context.tool_base_url,
@@ -250,6 +297,16 @@ def _clone_retell(
     if not source_llm_id:
         raise ProviderImportError("retell_response_engine_missing_llm_id")
     source_llm = request("GET", f"{base}/get-retell-llm/{source_llm_id}", api_key, None)
+    environment_tools = set(spec.environment_tools)
+    general_tools = source_llm.get("general_tools")
+    if isinstance(general_tools, list):
+        for tool in general_tools:
+            if isinstance(tool, Mapping) and str(tool.get("type") or "") == "custom":
+                _require_environment_tool(
+                    provider="retell",
+                    name=str(tool.get("name") or "").strip() or None,
+                    available=environment_tools,
+                )
     llm_create = _rewire_retell_tools(
         _without(
             source_llm,

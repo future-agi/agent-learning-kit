@@ -1022,6 +1022,7 @@ def author_bundle_v2(
     output_root = Path(output).resolve()
     contract_modality: str | None = None
     contract_interface_kind: str | None = None
+    contract_body: dict[str, Any] = {}
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -1137,6 +1138,13 @@ def author_bundle_v2(
                 type=connector,
                 source_target_id=str(job.agent.config[target_key]),
                 public_capability=public_capability,
+                environment_tools=sorted(
+                    {
+                        str(tool.get("name") or "").strip()
+                        for tool in contract_body.get("tools", [])
+                        if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+                    }
+                ),
                 event_path=str(
                     job.agent.config.get("event_path") or "/provider/events"
                 ),
