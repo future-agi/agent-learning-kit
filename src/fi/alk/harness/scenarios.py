@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .backends import SessionSpec, ToolServer, tool, tool_server
+from .backends import SessionSpec, ToolServer, WorkerSpec, tool, tool_server
 
 from .config import artifact_dir, chosen_model, load_skill
 from .catalogue import load_catalogue
@@ -38,6 +38,12 @@ from .tools import schema
 logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
+
+# The worker the stage runs to write one slice of the grid. Named once so the skill can tell the
+# model what to call and both backends declare the same thing.
+WRITER = "scenario-writer"
+# One worker's turn budget: enough to inspect, rehearse, prove and submit its slice.
+WRITER_TURNS = int(os.environ.get("HARNESS_WRITER_TURNS") or 60)
 
 # The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
 # only report gaps and never submit or save a scenario itself.
@@ -94,8 +100,49 @@ def open_stage(
         model=chosen_model(),
         ask=ask,
         thinking=True,
+        workers=writer_workers(contract, destination),
     )
     return Stage(spec, name=SKILL), destination
+
+
+def writer_workers(
+    contract: AgentContract, destination: Path
+) -> dict[str, WorkerSpec]:
+    """The worker the stage may run to write one slice of the grid.
+
+    One definition, not one per slice: the model writes the brief when it calls, so the same
+    worker covers whichever cells it decides to hand out. It gets the scenario tools so it
+    proves and submits its own work, and it is told the agent and its world up front because a
+    worker never sees the parent's conversation.
+
+    ``save_scenarios`` is withheld. Saving rewrites the index and deletes folders it does not
+    know about, so two workers saving at once would delete each other's scenarios; the parent
+    saves once when the fan-out is done.
+    """
+    server, _ = scenario_tools(
+        contract, destination, destination, wanted=0, can_save=False, start_from=[]
+    )
+    return {
+        WRITER: WorkerSpec(
+            description=(
+                "Writes and proves the scenarios for one slice of the coverage grid. Give it "
+                "the cells to cover, how many scenarios, and what makes them distinct."
+            ),
+            instructions=(
+                f"## This agent\n\n{contract.brief(with_data=True)}"
+                f"\n\n## Its world\n\n{world_summary(destination)}"
+                f"\n\n{load_skill(SKILL)}"
+                "\n\n## Your slice\n\nYou are one writer among several working on the same "
+                "suite at the same time. Write only the slice you were given, submit each "
+                "scenario as you prove it, and report which cells you covered and any you "
+                "could not. Do not save the suite; the stage saves once when every writer is "
+                "done."
+            ),
+            builtins=(),
+            servers={SCENARIO_SERVER: server},
+            max_turns=WRITER_TURNS,
+        )
+    }
 
 
 def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:

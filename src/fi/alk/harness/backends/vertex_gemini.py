@@ -174,6 +174,23 @@ def _location() -> str:
     return os.environ.get("ALK_VERTEX_LOCATION", "global").strip() or "global"
 
 
+def _identifier(name: str) -> str:
+    """A worker name this SDK will accept as an agent name."""
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in name).strip("_")
+    return cleaned or "worker"
+
+
+def _call_budget(spec: SessionSpec) -> int:
+    """How many model calls this run may make, workers included.
+
+    This SDK bills every worker's calls to the session that started them: the budget lives on
+    one invocation context and a branched sub-agent shares it. Sizing it for the parent alone
+    is what stops a fan-out partway through and loses the work, so the reserve is added here
+    rather than left for a stage to remember.
+    """
+    return max(spec.max_turns + spec.worker_turns(), 1)
+
+
 def _flattened(result: Any) -> str:
     content = result.get("content") if isinstance(result, dict) else None
     if isinstance(content, list):
@@ -220,22 +237,57 @@ class VertexGeminiSession:
         self._pending: str | None = None
         self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
 
-    def _tools(self) -> list[Any]:
+    def _tools_for(
+        self, builtins: tuple[str, ...], servers: dict[str, Any]
+    ) -> list[Any]:
         # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
         # this backend cannot answer would cost the model a turn finding that out.
         offered: list[Any] = []
-        wanted = {name for name in self._spec.builtins if name in FILE_TOOLS}
+        wanted = {name for name in builtins if name in FILE_TOOLS}
         offered.extend(
             _spec_tool(spec.name, spec)
             for spec in file_tools(self._spec.cwd)
             if spec.name in wanted
         )
-        for server_name, server in self._spec.servers.items():
+        for server_name, server in servers.items():
             offered.extend(
                 _spec_tool(qualified(server_name, spec.name), spec)
                 for spec in server.tools
             )
         return offered
+
+    def _tools(self) -> list[Any]:
+        return self._tools_for(self._spec.builtins, self._spec.servers)
+
+    def _workers(self) -> list[Any]:
+        """Each declared worker as a sub-agent this SDK exposes to the model as a tool.
+
+        ``single_turn`` is the mode that returns the worker's answer to the caller instead of
+        handing the conversation over, which is what a fan-out needs. The model decides how many
+        to call and when; several named in one turn are dispatched concurrently by the SDK, so
+        the width is the model's choice rather than a number fixed here.
+        """
+        from google.adk.agents import LlmAgent
+        from google.genai import types
+
+        built: list[Any] = []
+        for name, worker in self._spec.workers.items():
+            built.append(
+                LlmAgent(
+                    name=_identifier(name),
+                    model=worker.model or self._model,
+                    description=worker.description,
+                    mode="single_turn",
+                    static_instruction=types.Content(
+                        role="user", parts=[types.Part(text=worker.instructions)]
+                    ),
+                    tools=self._tools_for(
+                        worker.builtins or self._spec.builtins,
+                        worker.servers or self._spec.servers,
+                    ),
+                )
+            )
+        return built
 
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
@@ -258,6 +310,7 @@ class VertexGeminiSession:
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]
             ),
             tools=self._tools(),
+            sub_agents=self._workers(),
         )
         sessions = InMemorySessionService()
         await sessions.create_session(
@@ -297,7 +350,7 @@ class VertexGeminiSession:
                 user_id="stage",
                 session_id=self.session_id,
                 new_message=message,
-                run_config=RunConfig(max_llm_calls=max(self._spec.max_turns, 1)),
+                run_config=RunConfig(max_llm_calls=_call_budget(self._spec)),
             ):
                 usage = getattr(event, "usage_metadata", None)
                 if usage is not None:

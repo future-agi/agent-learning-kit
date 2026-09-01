@@ -23,10 +23,16 @@ other's dependencies installed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol, runtime_checkable
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+# How many workers a backend may run at once. Both SDKs cap this themselves (one at twenty by
+# default), so this is the harness's own ceiling, set below theirs and shared so that the turn
+# budget reserved for a fan-out matches what can actually be in flight.
+MOST_WORKERS_AT_ONCE = int(os.environ.get("HARNESS_WORKERS_AT_ONCE") or 8)
 
 
 def qualified(server: str, tool_name: str) -> str:
@@ -92,7 +98,33 @@ def tool_server(
 # session build time rather than silently dropped.
 FILE_TOOLS = ("Read", "Glob", "Grep")
 ASK_TOOL = "AskUserQuestion"
-KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL)
+DELEGATE_TOOL = "Delegate"
+KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
+
+
+@dataclass
+class WorkerSpec:
+    """A worker the model may run to do part of its stage, in its own session.
+
+    Both backends we ship can start a second model session and hand its answer back as a tool
+    result, and both decide at call time how many to run; only the vocabulary differs. This is
+    that capability said once, so a stage declares a worker and every backend honours it.
+
+    ``instructions`` is the worker's own system prompt. ``servers`` and ``builtins`` are its
+    tools, named exactly as ``SessionSpec`` names them, and default to the parent's when left
+    empty. ``max_turns`` bounds one worker; ``model`` overrides the parent's for it.
+
+    A worker never inherits the parent's conversation. Everything it needs comes from
+    ``instructions`` plus the brief the model writes when it calls, which is what keeps a large
+    fan-out from copying the whole stage history N times.
+    """
+
+    description: str
+    instructions: str
+    servers: dict[str, ToolServer] = field(default_factory=dict)
+    builtins: tuple[str, ...] = ()
+    max_turns: int = 40
+    model: str = ""
 
 
 @dataclass
@@ -122,6 +154,21 @@ class SessionSpec:
     # stage (understand, interactive) passes its gate in fully built; backends without a
     # permission callback concept ignore it, which is safe because their gating is structural.
     permission_override: Any = None
+    # Workers this session may run, by name. Declaring any of these is what lets the model
+    # divide its own work; a stage that declares none behaves exactly as before.
+    workers: dict[str, WorkerSpec] = field(default_factory=dict)
+
+    def worker_turns(self) -> int:
+        """Turns to reserve beyond the parent's own, so a fan-out cannot run the budget dry.
+
+        One backend bills every worker's turns to the session that started them, so a budget
+        sized for the parent alone stops a fan-out partway through and loses the work. Reserving
+        the worst case here keeps that a backend detail rather than a stage's problem.
+        """
+        if not self.workers:
+            return 0
+        widest = max(worker.max_turns for worker in self.workers.values())
+        return widest * MOST_WORKERS_AT_ONCE
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""

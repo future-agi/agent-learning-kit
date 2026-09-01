@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
+    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -27,6 +28,7 @@ from claude_agent_sdk import (
 )
 
 from .base import (
+    MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
     Say,
@@ -39,6 +41,10 @@ from .base import (
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# What this SDK calls the tool that runs a worker. The harness calls the capability
+# ``Delegate``; only this line knows the vendor's name for it.
+_DELEGATION_TOOL = "Agent"
 
 
 def _sdk_server(server: ToolServer) -> Any:
@@ -164,18 +170,53 @@ class ClaudeBackend:
                 for tool_spec in server.tools
             ),
         ]
+        servers = {
+            server_name: _sdk_server(server)
+            for server_name, server in spec.servers.items()
+        }
+        agents: dict[str, Any] = {}
+        for name, worker in spec.workers.items():
+            worker_servers = worker.servers or spec.servers
+            for server_name, server in worker_servers.items():
+                servers.setdefault(server_name, _sdk_server(server))
+            agents[name] = AgentDefinition(
+                description=worker.description,
+                prompt=worker.instructions,
+                tools=[
+                    *(worker.builtins or spec.builtins),
+                    *(
+                        qualified(server_name, tool_spec.name)
+                        for server_name, server in worker_servers.items()
+                        for tool_spec in server.tools
+                    ),
+                ],
+                mcpServers=list(worker_servers),
+                model=worker.model or "inherit",
+                maxTurns=worker.max_turns,
+            )
+        if agents:
+            # The delegation tool is named for the model, and it has to be granted here or the
+            # gate below refuses the very call these workers exist to receive.
+            allowed = [*allowed, _DELEGATION_TOOL]
+        env = dict(provider_env(spec.model))
+        if agents:
+            env.setdefault(
+                "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", str(MOST_WORKERS_AT_ONCE)
+            )
+            # One level only. A worker that delegates again multiplies the fan-out by a factor
+            # nothing in the stage accounted for, and the depth is free to raise later.
+            env.setdefault("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "1")
         options = ClaudeAgentOptions(
             system_prompt=spec.system_prompt,
             allowed_tools=allowed,
-            mcp_servers={
-                server_name: _sdk_server(server)
-                for server_name, server in spec.servers.items()
-            },
+            mcp_servers=servers,
             setting_sources=[],
             max_turns=spec.max_turns,
             model=spec.model,
-            env=provider_env(spec.model),
+            env=env,
         )
+        if agents:
+            options.agents = agents
         if spec.cwd is not None:
             options.cwd = spec.cwd
         if spec.gated:
