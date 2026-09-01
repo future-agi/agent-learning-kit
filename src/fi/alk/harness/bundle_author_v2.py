@@ -9,6 +9,7 @@ result, and runs the guest's exact preflight before publishing it.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -491,6 +492,42 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
+def _callback_entrypoint(root: Path) -> str:
+    """Find the one repository callback promised by a callable runtime contract."""
+    candidates: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root)
+        if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "agent_callback"
+            for node in tree.body
+        ):
+            module = ".".join(relative.with_suffix("").parts)
+            candidates.append(f"{module}:agent_callback")
+    if not candidates:
+        raise BundleAuthorError(
+            "callback_entrypoint_missing: callable runtime requires one module-level "
+            "agent_callback"
+        )
+    if len(candidates) != 1:
+        raise BundleAuthorError(
+            "callback_entrypoint_ambiguous: " + ", ".join(candidates)
+        )
+    return candidates[0]
+
+
+def _callback_adapter_source() -> str:
+    return (
+        Path(__file__).with_name("callback_http_adapter.py").read_text(encoding="utf-8")
+    )
+
+
 def _managed_world_db() -> ManagedProcess:
     return ManagedProcess(
         name="world-db",
@@ -522,6 +559,7 @@ def resolve_environment_plan(
     job: HarnessJob,
     *,
     contract_modality: str | None = None,
+    contract_interface_kind: str | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -732,8 +770,11 @@ def resolve_environment_plan(
             )
         packaging = "compose"
     else:
+        is_callback = (contract_interface_kind or "").strip().lower().replace(
+            "-", "_"
+        ) == "callable"
         entry = "agent.py"
-        if not (root / entry).is_file():
+        if not is_callback and not (root / entry).is_file():
             candidates = sorted(root.glob("**/agent.py"))
             if len(candidates) != 1:
                 raise BundleAuthorError(
@@ -754,18 +795,34 @@ def resolve_environment_plan(
             if is_livekit
             else {}
         )
+        callback_entrypoint = _callback_entrypoint(root) if is_callback else None
+        if callback_entrypoint:
+            environment.update(
+                {
+                    "PORT": "{{PORT_agent}}",
+                    "ALK_CALLBACK_ENTRYPOINT": callback_entrypoint,
+                }
+            )
         process = _plan_python(
             root,
             name=control_name,
-            root=component,
+            root=root if is_callback else component,
             entry=entry,
             control=True,
             needs_secrets=needs_target_secrets,
             port=port,
             environment=environment,
             livekit_download=is_livekit,
-            run_override=_dockerfile_run(component),
+            run_override=(None if is_callback else _dockerfile_run(component)),
         )
+        if is_callback:
+            python_command = process.run_command[:-1]
+            process = process.model_copy(
+                update={
+                    "run_command": python_command + ["-c", _callback_adapter_source()],
+                    "started_check": StartedCheck(port=True, timeout_seconds=180),
+                }
+            )
         if is_livekit:
             process = process.model_copy(
                 update={
@@ -884,6 +941,7 @@ def author_bundle_v2(
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     contract_modality: str | None = None
+    contract_interface_kind: str | None = None
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -895,10 +953,15 @@ def author_bundle_v2(
         if not isinstance(contract_body, dict):
             raise BundleAuthorError("contract_invalid: contract.json must be an object")
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
+        runtime = contract_body.get("runtime")
+        interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        if isinstance(interface, dict):
+            contract_interface_kind = str(interface.get("kind") or "").strip().lower()
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
+        contract_interface_kind=contract_interface_kind,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(

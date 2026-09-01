@@ -388,7 +388,7 @@ def test_missing_llm_credential_names_the_either_or_pair(tmp_path: Path) -> None
         tmp_path=tmp_path,
         simulator_secrets={"SIMULATOR_DEEPGRAM_API_KEY": "dg-key"},
     )
-    runner = cr.CallRunnerImpl(FakeAdapter(), context)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ={})
     exc = _run_expect_abort(
         runner,
         _FakeScenario("k1"),
@@ -1171,7 +1171,30 @@ def test_local_sdk_remains_byok_for_simulator_credentials(tmp_path: Path) -> Non
         execution=ExecutionMode.LOCAL,
         simulator_secrets={},
     )
-    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
     assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
     assert fake_environ[GEMINI_API_KEY] == "gm-key"
+
+
+def test_platform_simulator_credentials_win_without_replacing_target_livekit(
+    tmp_path: Path,
+) -> None:
+    fake_environ = {
+        DEEPGRAM_API_KEY: "platform-deepgram",
+        GEMINI_API_KEY: "platform-gemini",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/run/futureagi/platform-vertex.json",
+        "GOOGLE_CLOUD_PROJECT": "platform-project",
+    }
+    _job_obj, context = _context(tmp_path=tmp_path)
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+
+    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
+    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram"
+    assert fake_environ[GEMINI_API_KEY] == "platform-gemini"
+    assert (
+        fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
+        == "/run/futureagi/platform-vertex.json"
+    )
     assert runner._missing_config is None

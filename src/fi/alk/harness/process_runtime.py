@@ -999,10 +999,12 @@ class PopenProcess:
             return ""
 
     def terminate(self) -> None:
-        self.popen.terminate()
+        self._signal_process_group(signal.SIGTERM, self.popen.terminate)
 
     def interrupt(self) -> None:
-        self.popen.send_signal(signal.SIGINT)
+        self._signal_process_group(
+            signal.SIGINT, lambda: self.popen.send_signal(signal.SIGINT)
+        )
 
     def wait(self, timeout: float) -> bool:
         try:
@@ -1012,7 +1014,24 @@ class PopenProcess:
             return False
 
     def kill(self) -> None:
-        self.popen.kill()
+        self._signal_process_group(signal.SIGKILL, self.popen.kill)
+
+    def _signal_process_group(
+        self, signum: int, fallback: Callable[[], None]
+    ) -> None:
+        """Stop the complete runtime process, including launcher descendants.
+
+        Source commands commonly use launchers such as ``uv run``, ``npm``, or shell
+        scripts. Signalling only the launcher leaves its actual server orphaned and a
+        subsequent world reset cannot bind the same port. ``default_process_runner``
+        gives every process its own session, so its pid is also the process-group id.
+        Keep the direct-Popen fallback for synthetic handles and platforms without
+        ``killpg``.
+        """
+        try:
+            os.killpg(self.popen.pid, signum)
+        except (AttributeError, OSError):
+            fallback()
 
 
 _TERMINATE_WAIT_SECONDS = 5.0
@@ -1111,6 +1130,10 @@ def default_process_runner(
         stderr=subprocess.STDOUT,
         user=user,
         group=group,
+        # Each declared runtime process owns a process group. This is necessary for
+        # deterministic reset/cleanup when the command is a launcher which forks the
+        # real long-lived server (for example ``uv run`` or ``npm start``).
+        start_new_session=True,
     )
     return PopenProcess(popen=popen, log_path=log_path)
 

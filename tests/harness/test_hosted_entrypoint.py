@@ -885,6 +885,31 @@ def test_peek_secret_values_missing_file_is_empty() -> None:
     assert he.peek_secret_values(Path("/nonexistent/does-not-exist.json")) == ()
 
 
+def test_load_simulator_secret_values_is_allowlisted_and_destructive(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "simulator-secrets.json"
+    path.write_text(
+        json.dumps(
+            {
+                "DEEPGRAM_API_KEY": "platform-deepgram",
+                "GOOGLE_CLOUD_PROJECT": "platform-project",
+                "LIVEKIT_API_SECRET": "must-not-cross-the-control-seam",
+                "UNRELATED": "must-not-load",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    values = he.load_simulator_secret_values(path)
+
+    assert values == {
+        "DEEPGRAM_API_KEY": "platform-deepgram",
+        "GOOGLE_CLOUD_PROJECT": "platform-project",
+    }
+    assert not path.exists()
+
+
 def test_peek_target_provider_secret_values_filters_by_purpose_and_keeps_the_alias() -> (
     None
 ):
