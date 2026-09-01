@@ -45,6 +45,7 @@ from .bundle_v2 import (
     compute_inputs_digest,
     seal_bundle_v2,
 )
+from .provider_import import ProviderImportSpec
 from .provider_lifecycle import ProviderLifecycleSpec, ProviderScope
 
 _SECRET_PURPOSE_VALUES = {member.value for member in SecretPurpose}
@@ -212,6 +213,7 @@ def preflight_bundle(
         _verify_no_root_build_commands(manifest)  # 5 (§2a)
         _verify_secret_purposes(manifest, secret_refs)  # 5
         _verify_provider_lifecycle(manifest)  # 5
+        _verify_provider_import(manifest)  # 5
         _verify_depends_on(manifest)  # 5
         _verify_engine_catalog(manifest)  # 5
         _verify_fixed_port_not_reserved(manifest)  # 5 / §2b
@@ -494,8 +496,13 @@ def _verify_secret_purposes(
     lifecycle_claims_target_provider = bool(
         isinstance(lifecycle, dict) and lifecycle.get("required_secrets")
     )
+    provider_import_claims_target_provider = isinstance(
+        manifest.metadata.get("provider_import"), dict
+    )
     guest_claims_target_provider = (
-        process_claims_target_provider or lifecycle_claims_target_provider
+        process_claims_target_provider
+        or lifecycle_claims_target_provider
+        or provider_import_claims_target_provider
     )
     if ref_has_target_provider and not guest_claims_target_provider:
         raise PreflightError(
@@ -537,6 +544,22 @@ def _verify_provider_lifecycle(manifest: EnvironmentBundleV2) -> None:
         raise PreflightError(
             "service_unresolved",
             f"{process_name!r} must name a source process",
+        )
+
+
+def _verify_provider_import(manifest: EnvironmentBundleV2) -> None:
+    raw = manifest.metadata.get("provider_import")
+    if raw is None:
+        return
+    try:
+        spec = ProviderImportSpec.model_validate(raw)
+    except ValueError as exc:
+        raise PreflightError("bundle_manifest_invalid", str(exc)) from exc
+    capability = manifest.capabilities.get(spec.public_capability)
+    if capability is None or capability.protocol is not CapabilityProtocol.HTTP:
+        raise PreflightError(
+            "capability_unresolved",
+            f"{spec.public_capability!r} must name an HTTP capability",
         )
 
 

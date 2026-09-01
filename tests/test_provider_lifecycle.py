@@ -53,6 +53,24 @@ def test_environment_backed_rejects_preexisting_target() -> None:
         )
 
 
+def test_provider_import_requires_and_keeps_source_target_id() -> None:
+    connection = AgentConnection(
+        connector="vapi",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={"assistant_id": "assistant-source"},
+    )
+    assert connection.config["assistant_id"] == "assistant-source"
+
+
+def test_provider_import_rejects_unsafe_tool_path() -> None:
+    with pytest.raises(ValueError, match="provider_import_tool_path_invalid"):
+        AgentConnection(
+            connector="retell",
+            mode=ProviderExecutionMode.PROVIDER_IMPORT,
+            config={"agent_id": "agent-source", "tool_path": "/tools/../admin"},
+        )
+
+
 def test_load_manifest_and_build_secret_scoped_invocation(tmp_path: Path) -> None:
     (tmp_path / "alk.yaml").write_text(
         """

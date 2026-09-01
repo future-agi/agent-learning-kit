@@ -27,6 +27,7 @@ from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
     HarnessJob,
+    ProviderExecutionMode,
     RepositorySource,
     SourceKind,
     SourceVisibility,
@@ -71,6 +72,7 @@ def _job(
     connector: str = "livekit",
     config: dict[str, Any] | None = None,
     execution: ExecutionMode = ExecutionMode.HOSTED,
+    mode: ProviderExecutionMode | None = None,
 ) -> HarnessJob:
     return HarnessJob(
         job_id="job-abcdef12-xyz",
@@ -90,7 +92,7 @@ def _job(
                 commit_sha="a" * 40,
             )
         ),
-        agent=AgentConnection(connector=connector, config=config or {}),
+        agent=AgentConnection(connector=connector, mode=mode, config=config or {}),
         scenario_count=1,
         runtime=RuntimeRequirements(
             isolation=RuntimeIsolation.DEDICATED_VM,
@@ -177,11 +179,13 @@ def _context(
     execution: ExecutionMode = ExecutionMode.HOSTED,
     evidence_seam: EvidenceSeam | None = EvidenceSeam.HTTP_TOOL,
     attempt_number: int = 1,
+    mode: ProviderExecutionMode | None = None,
 ) -> tuple[HarnessJob, cr.CallRunnerContext]:
     job = _job(
         connector=connector,
         config=config if config is not None else dict(_ALL_CONFIG),
         execution=execution,
+        mode=mode,
     )
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -606,6 +610,37 @@ def test_provider_connect_only_builds_direct_target_spec(
     assert definition["target"][target_key] == target_id
     assert definition["target"]["provider"] == connector
     assert definition["transport"]["kind"] == transport
+
+
+def test_provider_import_calls_runtime_clone_instead_of_source_target(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="vapi",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={
+            cr.LIVEKIT_URL_CONFIG_KEY: "wss://custom.livekit.cloud",
+            "assistant_id": "source-assistant",
+        },
+        secrets={**_ALL_SECRETS, "VAPI_API_KEY": "provider-key"},
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="provider-import-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("provider-import-call"),
+        _runtime(metadata={"provider_target_id": "cloned-assistant"}),
+    )
+
+    definition = captured["spec"].environment.config["agent_definition"]
+    assert definition["target"]["assistant_id"] == "cloned-assistant"
 
 
 def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(

@@ -396,6 +396,63 @@ provider:
     )
 
 
+def test_vapi_provider_import_is_sealed_with_detected_http_capability(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "vapi-import-source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8"
+    )
+    (source / "requirements.txt").write_text("fastapi==0.116.1\n", encoding="utf-8")
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "job-vapi-import",
+            "run_id": "run-vapi-import",
+            "execution": "hosted",
+            "source": {"kind": "archive", "archive_artifact_id": "source-1"},
+            "agent": {
+                "connector": "vapi",
+                "mode": "provider_import",
+                "config": {"assistant_id": "source-assistant"},
+                "secret_refs": {
+                    "VAPI_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "vapi-key",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+    output = tmp_path / "vapi-import-bundle"
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=job,
+        authoring=_authoring(tmp_path),
+        output=output,
+    )
+
+    imported = bundle.metadata["provider_import"]
+    assert imported["type"] == "vapi"
+    assert imported["source_target_id"] == "source-assistant"
+    assert imported["public_capability"] == "target_http"
+    preflight_bundle(
+        output,
+        bundle,
+        parallelism=1,
+        secret_refs={"VAPI_API_KEY": "target_provider"},
+    )
+
+
 def test_bundle_limits_authoring_scenarios_to_requested_count(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -534,8 +591,7 @@ def test_bundle_preserves_composite_sqlite_primary_key(tmp_path: Path) -> None:
     assert (
         'CREATE TABLE IF NOT EXISTS "performance" '
         '("client_id" text, "period" text, "value" double precision, '
-        'PRIMARY KEY ("client_id", "period"));'
-        in seed_sql
+        'PRIMARY KEY ("client_id", "period"));' in seed_sql
     )
 
 

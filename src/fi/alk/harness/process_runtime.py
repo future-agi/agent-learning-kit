@@ -62,6 +62,12 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .job import FailureDomain
+from .provider_import import (
+    ProviderImportError,
+    ProviderImportSpec,
+    clone_provider_target,
+    destroy_imported_target,
+)
 from .provider_lifecycle import (
     ProviderContext,
     ProviderLifecycleError,
@@ -1026,9 +1032,7 @@ class PopenProcess:
     def kill(self) -> None:
         self._signal_process_group(signal.SIGKILL, self.popen.kill)
 
-    def _signal_process_group(
-        self, signum: int, fallback: Callable[[], None]
-    ) -> None:
+    def _signal_process_group(self, signum: int, fallback: Callable[[], None]) -> None:
         """Stop the complete runtime process, including launcher descendants.
 
         Source commands commonly use launchers such as ``uv run``, ``npm``, or shell
@@ -4701,11 +4705,30 @@ class ProcessRuntimeProvider:
                 domain=FailureDomain.ENVIRONMENT,
             ) from exc
 
+    def _provider_import_spec(self) -> ProviderImportSpec | None:
+        if self._manifest is None:
+            return None
+        raw = self._manifest.metadata.get("provider_import")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return ProviderImportSpec.model_validate(raw)
+        except ValueError as exc:
+            raise ProcessRuntimeError(
+                "provider_import",
+                "build_failed",
+                f"provider import metadata is invalid: {exc}",
+                domain=FailureDomain.ENVIRONMENT,
+            ) from exc
+
     def _ensure_provider_target(
         self, world_index: int, runtime: EnvironmentRuntime
     ) -> None:
         spec = self._provider_spec()
-        if spec is None or world_index in self._provider_receipts:
+        import_spec = self._provider_import_spec()
+        if (
+            spec is None and import_spec is None
+        ) or world_index in self._provider_receipts:
             return
         if self._context is None or self._manifest is None:
             raise ProcessRuntimeError(
@@ -4713,6 +4736,10 @@ class ProcessRuntimeProvider:
                 _INTERNAL_INVARIANT_VIOLATED,
                 "provider lifecycle ran before process runtime context existed",
             )
+        if import_spec is not None:
+            self._ensure_imported_provider_target(world_index, runtime, import_spec)
+            return
+        assert spec is not None  # narrowed by the early return above
         endpoint = runtime.endpoints.get(spec.public_capability)
         if endpoint is None or endpoint.protocol != CapabilityProtocol.HTTP.value:
             raise ProcessRuntimeError(
@@ -4803,11 +4830,86 @@ class ProcessRuntimeProvider:
         runtime.metadata["provider_target_id"] = receipt.target.id
         runtime.metadata["provider_target_kind"] = receipt.target.kind
 
+    def _ensure_imported_provider_target(
+        self,
+        world_index: int,
+        runtime: EnvironmentRuntime,
+        spec: ProviderImportSpec,
+    ) -> None:
+        """Clone an existing provider target only after its isolated backend is ready."""
+        assert self._context is not None
+        endpoint = runtime.endpoints.get(spec.public_capability)
+        if endpoint is None or endpoint.protocol != CapabilityProtocol.HTTP.value:
+            raise ProcessRuntimeError(
+                "provider_import",
+                "build_failed",
+                f"public capability {spec.public_capability!r} must resolve to HTTP",
+                domain=FailureDomain.ENVIRONMENT,
+            )
+        port = urlsplit(endpoint.address).port
+        if not port or self._public_url_resolver is None:
+            raise ProcessRuntimeError(
+                "provider_import",
+                "spawn_failed",
+                "a hosted public URL resolver is required for imported provider tools",
+                domain=FailureDomain.INFRASTRUCTURE,
+            )
+        public_base_url = self._public_url_resolver(port, 7200).rstrip("/")
+        context = ProviderContext(
+            attempt_id=self._provider_attempt_id or self._context.job_id,
+            world_id=str(world_index),
+            provider=spec.type,
+            public_base_url=public_base_url,
+            event_url=public_base_url + spec.event_path,
+            tool_base_url=public_base_url + spec.tool_path,
+            provider_resource_prefix=f"alk-{self._context.job_id[:12]}-w{world_index}",
+            idempotency_key=f"{self._context.job_id}:{self._bundle_digest}:w{world_index}",
+            expires_at=self._provider_expires_at
+            or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
+        )
+        secret_name = "VAPI_API_KEY" if spec.type.value == "vapi" else "RETELL_API_KEY"
+        try:
+            receipt = clone_provider_target(
+                spec,
+                context=context,
+                api_key=self._secret_values.get(secret_name, ""),
+            )
+        except ProviderImportError as exc:
+            raise ProcessRuntimeError(
+                "provider_import",
+                "spawn_failed",
+                str(exc),
+                domain=FailureDomain.ENVIRONMENT,
+            ) from exc
+        self._provider_receipts[world_index] = receipt
+        self._provider_contexts[world_index] = context
+        runtime.metadata["provider_target_id"] = receipt.target.id
+        runtime.metadata["provider_target_kind"] = receipt.target.kind
+        runtime.metadata["provider_import_source_target_id"] = spec.source_target_id
+
     def _destroy_provider_target(self, world_index: int) -> None:
         receipt = self._provider_receipts.pop(world_index, None)
         context = self._provider_contexts.pop(world_index, None)
         spec = self._provider_spec()
-        if receipt is None or context is None or spec is None or self._context is None:
+        import_spec = self._provider_import_spec()
+        if receipt is None or context is None or self._context is None:
+            return
+        if import_spec is not None:
+            secret_name = (
+                "VAPI_API_KEY" if import_spec.type.value == "vapi" else "RETELL_API_KEY"
+            )
+            try:
+                destroy_imported_target(
+                    import_spec,
+                    receipt=receipt,
+                    api_key=self._secret_values.get(secret_name, ""),
+                )
+            except ProviderImportError as exc:
+                logger.error(
+                    "provider import cleanup failed for world %s: %s", world_index, exc
+                )
+            return
+        if spec is None:
             return
         process_name = spec.process or self._manifest.runtime.control_service
         lifecycle_directory = (

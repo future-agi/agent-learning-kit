@@ -99,6 +99,20 @@ class AgentConnection(BaseModel):
                     "environment_backed_target_is_provision_output: "
                     + ", ".join(sorted(forbidden))
                 )
+        elif self.mode is ProviderExecutionMode.PROVIDER_IMPORT:
+            if connector not in {"vapi", "retell"}:
+                raise ValueError("provider_import_requires_vapi_or_retell")
+            target_key = {"vapi": "assistant_id", "retell": "agent_id"}[connector]
+            if not str(self.config.get(target_key) or "").strip():
+                raise ValueError(f"provider_import_requires_{target_key}")
+            for path_key in ("event_path", "tool_path"):
+                value = str(self.config.get(path_key) or "")
+                if value and (
+                    not value.startswith("/")
+                    or value.startswith("//")
+                    or ".." in value.split("/")
+                ):
+                    raise ValueError(f"provider_import_{path_key}_invalid")
         elif self.mode is ProviderExecutionMode.CONNECT_ONLY:
             target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(connector)
             if target_key and not str(self.config.get(target_key) or "").strip():
@@ -117,6 +131,7 @@ class ProviderExecutionMode(str, Enum):
 
     CONNECT_ONLY = "connect_only"
     ENVIRONMENT_BACKED = "environment_backed"
+    PROVIDER_IMPORT = "provider_import"
 
 
 class ArtifactLevel(str, Enum):

@@ -53,7 +53,7 @@ from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, HarnessJob
+from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .simulator_voice import (
@@ -877,12 +877,18 @@ class CallRunnerImpl:
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector
         )
-        provider_target_id = (
-            str(self._context.job.agent.config.get(provider_target_key) or "").strip()
-            if provider_target_key
-            else None
-        )
-        if provider_target_key and not provider_target_id:
+        provider_target_id: str | None = None
+        if provider_target_key and self._context.job.agent.mode in {
+            None,
+            ProviderExecutionMode.CONNECT_ONLY,
+        }:
+            provider_target_id = str(
+                self._context.job.agent.config.get(provider_target_key) or ""
+            ).strip()
+        if provider_target_key and self._context.job.agent.mode not in {
+            None,
+            ProviderExecutionMode.CONNECT_ONLY,
+        }:
             dynamic_target = runtime.metadata.get("provider_target_id")
             provider_target_id = (
                 dynamic_target.strip()
