@@ -78,7 +78,10 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
-    server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
+    workers = writer_workers(contract, destination)
+    server, kept = scenario_tools(
+        contract, destination, destination, wanted=wanted, delegates=bool(workers)
+    )
     spec = SessionSpec(
         # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(
@@ -99,8 +102,12 @@ def open_stage(
         max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
         ask=ask,
-        thinking=True,
-        workers=writer_workers(contract, destination),
+        # Off for this stage. Planning a large suite is a long response, and with thinking on the
+        # provider call stops returning above a handful of scenarios: the process sits at zero CPU
+        # blocked on a read that never completes. The planning here is enumerative rather than
+        # deductive, so it survives the loss.
+        thinking=False,
+        workers=workers,
     )
     return Stage(spec, name=SKILL), destination
 

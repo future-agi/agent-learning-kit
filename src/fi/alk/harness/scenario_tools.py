@@ -247,6 +247,7 @@ def scenario_tools(
     *,
     wanted: int,
     can_save: bool = True,
+    delegates: bool = False,
     start_from: list[Scenario] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
@@ -883,10 +884,13 @@ def scenario_tools(
             drop_scenario,
         ]
         # Only the session a person is talking to may fan out. A writer that is itself one slice
-        # of a fan-out calling this would split its own slice again, and so on.
+        # of a fan-out calling this would split its own slice again, and so on. A stage that was
+        # given writer workers fans out through those instead, and offering both leaves the model
+        # choosing between two ways to do the same thing: it picks this one, and the workers are
+        # never exercised.
         + (
             [generate_suite, save_scenarios]
-            if can_save and parallel_suites()
+            if can_save and parallel_suites() and not delegates
             else [save_scenarios]
             if can_save
             else []
