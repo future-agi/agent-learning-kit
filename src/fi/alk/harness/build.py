@@ -216,9 +216,10 @@ def open_stage(
             "The submitted repository processes and datastore will be built, started and "
             "validated inside the Daytona execution sandbox from the sealed process bundle. "
             "Do not start containers here. Build the deterministic baseline, simulator prompt, "
-            "sub-goals and world checks. Voice runtime tools are owned by the submitted worker: "
-            "do not replace, bind or smoke-call them outside a real voice session. Their real "
-            "behavior is validated when the generated scenarios run in Daytona."
+            "sub-goals and world checks. Runtime tools are owned by the submitted process for "
+            "every modality: do not replace, bind or smoke-call them in this credentialed "
+            "control process. Their dependencies are installed in the writable target build "
+            "tree and their real behavior is validated when generated scenarios run in Daytona."
             + declared_store_note
             + "\n\nYou cannot call a tool here, so you have not seen a single real response "
             "shape. Write every world check and sub-goal against world state you can read now, "
@@ -254,7 +255,12 @@ def open_stage(
     return Stage(spec, name=SKILL), destination
 
 
-def opening(contract: AgentContract, *, provisioned: bool = False) -> str:
+def opening(
+    contract: AgentContract,
+    *,
+    provisioned: bool = False,
+    deferred_runtime: bool = False,
+) -> str:
     if provisioning():
         return (
             f"Provision the environment for {contract.agent!r}.\n\n"
@@ -282,6 +288,15 @@ def opening(contract: AgentContract, *, provisioned: bool = False) -> str:
             + sequence_instruction
             + "Then check_world and save_world. "
             "Do not read source, run shell commands, or investigate runtime-internal tools."
+        )
+    if deferred_runtime:
+        return (
+            f"Build the logical baseline for {contract.agent!r}.\n\n"
+            "The submitted runtime and all of its tools are built later by the isolated process "
+            "runtime. Do not adopt or smoke-call those tools here. Seed the source-backed data "
+            "described by the contract, write the simulator prompt, add observable sub-goals "
+            "and world checks, then check_world and save_world. Runtime tool coverage and "
+            "stateful ordering are proven by the real generated scenarios."
         )
     return (
         f"Build the world for {contract.agent!r}.\n\n"

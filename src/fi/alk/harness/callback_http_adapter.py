@@ -12,6 +12,8 @@ import importlib
 import inspect
 import json
 import os
+import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -71,16 +73,29 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") != "/invoke":
             self._respond(404, {"error": "not_found"})
             return
+        started = time.monotonic()
+        status = 500
+        error_type = "none"
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(payload, dict):
                 raise TypeError("request body must be a JSON object")
             self._respond(200, _invoke(payload))
+            status = 200
         except Exception as exc:  # noqa: BLE001 - target errors cross the HTTP seam
+            error_type = type(exc).__name__
             self._respond(
                 500,
                 {"error": f"{type(exc).__name__}: {exc}", "content": ""},
+            )
+        finally:
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+            print(
+                "callback_http_request "
+                f"status={status} elapsed_ms={elapsed_ms} error_type={error_type}",
+                file=sys.stderr,
+                flush=True,
             )
 
     def log_message(self, format: str, *args: Any) -> None:

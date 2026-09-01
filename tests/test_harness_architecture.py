@@ -430,15 +430,17 @@ def test_hosted_authoring_persists_adjusted_scenario_count_for_bundling(
     assert persisted.scenario_count == 2
 
 
-def test_deferred_hosted_authoring_never_starts_the_declared_container_store(
+@pytest.mark.parametrize("modality", ["voice", "chat"])
+def test_deferred_hosted_authoring_never_starts_or_imports_the_submitted_runtime(
     tmp_path: Path,
+    modality: str,
 ) -> None:
     from fi.alk.harness.contract import AgentContract, DataStore, Runtime, ToolSpec
     from fi.alk.harness.world.tools import world_tools
 
     contract = AgentContract(
         agent="hosted-voice-agent",
-        modality="voice",
+        modality=modality,
         tools=[ToolSpec(name="book_ride", args=["destination"])],
         real_use_cases=["book a ride"],
         data_store=DataStore(kind="postgres", database="rides"),
@@ -454,6 +456,7 @@ def test_deferred_hosted_authoring_never_starts_the_declared_container_store(
     try:
         assert world.store.key == "sqlite"
         assert world.runtime_tools == {"book_ride"}
+        assert "book_ride" not in world.handlers
     finally:
         world.close()
 
