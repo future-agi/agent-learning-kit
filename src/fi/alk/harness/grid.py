@@ -293,18 +293,24 @@ def _serving(
     return tuple(served)
 
 
-def derive(contract: AgentContract, axes: AxisSet) -> Grid:
+def derive(
+    contract: AgentContract, axes: AxisSet, objects: tuple[str, ...] | None = None
+) -> Grid:
     """The grid for one agent.
 
     Never returns nothing. An agent with no readable objects still gets a grid built around a
     single one, because a caller who asked for scenarios needs scenarios, and the stage that
     runs next has a model and a copy of the source with which to do better than this.
+
+    ``objects`` replaces the derivation entirely. Derivation reads a contract, which is a summary
+    of an agent; the stage reading the agent's own source can see what the summary missed, and
+    correcting it there is better than guessing harder here.
     """
     operations = axes.operations
     if not operations:
         return Grid(thin="the axis file declares no operations, so no grid could be derived")
 
-    objects = objects_in(contract, axes)
+    objects = tuple(objects) if objects else objects_in(contract, axes)
     thin = ""
     if not objects:
         # Nothing named a noun. Fall back to the agent itself so the stage still has somewhere

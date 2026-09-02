@@ -219,6 +219,13 @@ class ClaudeBackend:
             options.agents = agents
         if spec.cwd is not None:
             options.cwd = spec.cwd
+        if not spec.gated:
+            # An ungated stage is given the host's whole tool list on purpose, and an unattended
+            # run cannot answer a prompt, so approval has to be settled here rather than left to
+            # the default. The boundary for such a stage is the sandbox it runs in, not the tool
+            # list: it is reading an agent's own repository to write tests against it, and every
+            # artifact it produces still goes through the three gates before it is kept.
+            options.permission_mode = "bypassPermissions"
         if spec.gated:
             # Not acceptEdits: that auto-approves Edit and Write before the permission callback
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose

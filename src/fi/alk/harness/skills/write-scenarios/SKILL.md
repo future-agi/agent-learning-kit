@@ -284,17 +284,22 @@ GOOD   solution   [find_rider(phone=...), get_account(rider_id=...),
 
 ## A suite is a sample over a grid, not a list of ideas
 
-Do not think of the ask as "write N scenarios". Think of it as: derive the space of everything
-this agent could be asked to do, decide which parts of it are worth testing, and sample those
-deliberately. The number is how much of the space you cover, not a target to fill.
+Do not think of the ask as "write N scenarios". Think of it as: the space of everything this
+agent could be asked to do already exists, decide which parts of it are worth testing, and cover
+those deliberately. The number is how much of the space you cover, not a target to fill.
 
-Three steps, in order, before you write anything:
+**The grid is derived for you.** `show_grid` gives it: this agent's objects crossed with the
+twelve operations, minus the cells it has no way to serve. `plan_suite` turns a count into a
+list of coordinates, ordered so that the cases a suite is not worth running without come first.
 
-1. **Derive the grid** from the contract. This is mechanical, not creative.
-2. **Mask** the cells that make no sense for this agent.
-3. **Sample** what remains: cover the common ground, and force in the rare dangerous cells.
+**Check the grid before you trust it.** It was derived from tool names and a data schema, which
+is a summary of the agent rather than the agent. You can read the source. If the derivation
+missed an object, split one thing into two, or turned an action into a thing (`send_confirmation`
+is something the agent does, not something it has), correct it with `set_objects` and everything
+downstream is replanned. This is the one step that decides whether coverage means anything, and
+it is the step nobody else can do for you.
 
-Then write the sample, and finish by reporting what share of the grid you covered.
+Then write the plan, and finish with `show_coverage` so what was left untested is on the record.
 
 ## Step 1: derive the grid
 
@@ -381,18 +386,36 @@ Vary one thing. That is what makes a result mean something.
 
 ## Name each scenario for its cell
 
-`<operation>-<object>__<off-baseline-axis>`, lowercase, hyphens and one double underscore, a
-plain filename with no slashes.
+`<operation>-<object>__<off-baseline-condition>`, lowercase, hyphens and one double underscore, a
+plain filename with no slashes. When you are working from `plan_suite`, the name is given to you;
+use it exactly, because coverage is recovered by reading these names back.
 
 ```
-diagnose-duplicate-charge__evasive
+diagnose-fare__evasive
 execute-refund__impersonation
-authenticate-account__second-language
-compare-plans__baseline
+authenticate-caller__second-language
+compare-ride__baseline
 ```
 
 The index becomes the coverage record, so anyone can see what was tested without opening a single
 file. Do not use names like `scenario_1` or `edge_case_a`.
+
+## Say what a scenario survives, in `varies`
+
+A proved scenario can be copied across the conditions that change only who is calling: the
+account is the same account, the setup is the same setup, the checks are the same checks. Those
+copies cost nothing and are how a suite gets large. `expand_suite` makes them.
+
+**Leave `varies` empty and that happens by default.** Name axes in it only to *withhold* the
+rest, and withhold when the copy would no longer be the scenario you wrote:
+
+- a scenario about a caller who cannot be understood says nothing under a different accent
+- a scenario whose point is somebody's impatience is not that scenario once they are calm
+- a scenario that turns on the caller not being the account holder is not that scenario when
+  they are
+
+Everything else survives being asked by a different sort of person, and should say so by leaving
+the field alone. Withholding out of caution is how a suite stays small for no reason.
 
 ## Work as a team
 
