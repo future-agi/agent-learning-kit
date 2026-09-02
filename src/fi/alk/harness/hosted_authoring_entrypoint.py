@@ -18,9 +18,14 @@ _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _PASSTHROUGH = {
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "ANTHROPIC_VERTEX_REGION",
+    "CLOUD_ML_REGION",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    "GOOGLE_CLOUD_LOCATION",
     "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_GENAI_USE_VERTEXAI",
     "OPENAI_API_KEY",
 }
 
@@ -36,6 +41,16 @@ def _load_values(path: Path) -> dict[str, str]:
     }
 
 
+def _platform_simulator_values(values: dict[str, str]) -> dict[str, str]:
+    """Canonicalize only platform-owned aliases; never use customer target values."""
+    prefix = "SIMULATOR_"
+    return {
+        name.removeprefix(prefix): value
+        for name, value in values.items()
+        if name.startswith(prefix)
+    }
+
+
 def _configure_generation_environment(values: dict[str, str]) -> None:
     for name in _PASSTHROUGH:
         if values.get(name):
@@ -45,9 +60,13 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
     if adc_json:
         parsed = json.loads(adc_json)
         if not isinstance(parsed, dict):
-            raise ValueError("GOOGLE_APPLICATION_CREDENTIALS_JSON must contain an object")
+            raise ValueError(
+                "GOOGLE_APPLICATION_CREDENTIALS_JSON must contain an object"
+            )
         _ADC_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _ADC_PATH.write_text(json.dumps(parsed, separators=(",", ":")), encoding="utf-8")
+        _ADC_PATH.write_text(
+            json.dumps(parsed, separators=(",", ":")), encoding="utf-8"
+        )
         _ADC_PATH.chmod(0o600)
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(_ADC_PATH)
 
@@ -68,7 +87,7 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    values = _load_values(_SECRETS_PATH)
+    values = _platform_simulator_values(_load_values(_SECRETS_PATH))
     _configure_generation_environment(values)
     try:
         return authoring_main(argv)

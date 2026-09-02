@@ -282,7 +282,57 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
     assert Wrapper.call_count == 1
     assert Wrapper.endpoint == "http://localhost:18080/invoke"
     assert [call.name for call in outcome.calls] == ["lookup_account"]
+    assert outcome.calls[0].ok is True
+    assert outcome.calls[0].result == {"status": "active"}
     assert b"The account is active" in adapter.uploads[0]
+
+
+def test_hosted_chat_target_timeout_is_configurable(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    context = _context(tmp_path)
+    observed: dict[str, float] = {}
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **kwargs: Any) -> None:
+            observed["timeout"] = kwargs["timeout"]
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+    )
+
+    asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"),
+            runtime,
+        )
+    )
+
+    assert observed["timeout"] == 90.0
+
+
+def test_hosted_chat_target_timeout_rejects_invalid_values(monkeypatch: Any) -> None:
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "not-a-duration")
+    assert chat._chat_target_timeout_seconds() == 120.0
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "0")
+    assert chat._chat_target_timeout_seconds() == 120.0
 
 
 def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(

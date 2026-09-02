@@ -35,7 +35,7 @@ import logging
 import os
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
@@ -52,7 +52,7 @@ from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import HarnessJob
+from .job import ExecutionMode, HarnessJob
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .simulator_voice import (
@@ -91,6 +91,20 @@ SIMULATOR_TTS_PROVIDER_ALIAS = "SIMULATOR_TTS_PROVIDER"
 SIMULATOR_TTS_MODEL_ALIAS = "SIMULATOR_TTS_MODEL"
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
+
+_SIMULATOR_PLATFORM_ALIAS_MAP = {
+    "SIMULATOR_DEEPGRAM_API_KEY": DEEPGRAM_API_KEY_ALIAS,
+    "SIMULATOR_CARTESIA_API_KEY": CARTESIA_API_KEY_ALIAS,
+    "SIMULATOR_GEMINI_API_KEY": GEMINI_API_KEY_ALIAS,
+    "SIMULATOR_GOOGLE_API_KEY": GOOGLE_API_KEY_ALIAS,
+    "SIMULATOR_GOOGLE_APPLICATION_CREDENTIALS_JSON": (
+        GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS
+    ),
+    "SIMULATOR_GOOGLE_CLOUD_PROJECT": GOOGLE_CLOUD_PROJECT_ALIAS,
+    "SIMULATOR_GOOGLE_CLOUD_LOCATION": GOOGLE_CLOUD_LOCATION_ALIAS,
+    "SIMULATOR_GOOGLE_GENAI_USE_VERTEXAI": GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+    "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
+}
 
 _DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
 
@@ -159,6 +173,7 @@ class CallRunnerContext:
     target_provider_secret_values: Mapping[str, str]
     attempt_number: int
     source_directory: Path | None = None
+    simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -188,7 +203,11 @@ def _check_config(
     def simulator_value(alias: str) -> str | None:
         # Hosted runs supply platform-owned simulator credentials in the control process.  The
         # target-provider value remains a backwards-compatible fallback for local SDK callers.
-        return simulator_values.get(alias) or target_provider_secret_values.get(alias)
+        return simulator_values.get(alias) or (
+            target_provider_secret_values.get(alias)
+            if job.execution is ExecutionMode.LOCAL
+            else None
+        )
 
     config = job.agent.config
     llm_provider = str(
@@ -212,7 +231,13 @@ def _check_config(
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
     missing_aliases = [
-        alias for alias in required if not target_provider_secret_values.get(alias)
+        alias
+        for alias in required
+        if not (
+            target_provider_secret_values.get(alias)
+            if alias in {LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS}
+            else simulator_value(alias)
+        )
     ]
 
     if llm_provider == "google":
@@ -242,6 +267,14 @@ def _check_config(
     if not missing_aliases and not missing_config_keys:
         return None
     return _MissingVoiceConfig(tuple(missing_aliases), tuple(missing_config_keys))
+
+
+def _canonical_simulator_secrets(values: Mapping[str, str]) -> dict[str, str]:
+    """Translate platform-only aliases into the names expected by simulator plugins."""
+    return {
+        _SIMULATOR_PLATFORM_ALIAS_MAP.get(alias, alias): value
+        for alias, value in values.items()
+    }
 
 
 def _dispatch_agent_name(runtime: EnvironmentRuntime) -> str | None:
@@ -607,6 +640,34 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call or _default_place_call
+        simulator_secret_values = _canonical_simulator_secrets(
+            context.simulator_provider_secret_values
+        )
+        # Local SDK runs remain BYOK and historically carry simulator keys in the one local
+        # target map. Hosted runs deliberately do not fall back: their simulator credentials must
+        # come from platform configuration and must not be confused with customer-agent keys.
+        if context.job.execution is ExecutionMode.LOCAL:
+            for alias in (
+                DEEPGRAM_API_KEY_ALIAS,
+                CARTESIA_API_KEY_ALIAS,
+                GEMINI_API_KEY_ALIAS,
+                GOOGLE_API_KEY_ALIAS,
+                GOOGLE_APPLICATION_CREDENTIALS_JSON_ALIAS,
+                GOOGLE_CLOUD_PROJECT_ALIAS,
+                GOOGLE_CLOUD_LOCATION_ALIAS,
+                GOOGLE_GENAI_USE_VERTEXAI_ALIAS,
+                OPENAI_API_KEY_ALIAS,
+                SIMULATOR_LLM_PROVIDER_ALIAS,
+                SIMULATOR_LLM_MODEL_ALIAS,
+                SIMULATOR_STT_PROVIDER_ALIAS,
+                SIMULATOR_STT_MODEL_ALIAS,
+                SIMULATOR_TTS_PROVIDER_ALIAS,
+                SIMULATOR_TTS_MODEL_ALIAS,
+            ):
+                if alias not in simulator_secret_values:
+                    value = context.target_provider_secret_values.get(alias)
+                    if value:
+                        simulator_secret_values[alias] = value
         # WHY: the underlying LiveKit engine reads these directly via `os.environ.get(...)` deep
         # inside `engines/livekit.py` / `livekit_models.py` -- they are NOT `SimulationSpec`
         # fields, so there is no other way to hand them over. Exported ONCE here, at construction,
@@ -640,14 +701,14 @@ class CallRunnerImpl:
             SIMULATOR_TTS_PROVIDER_ALIAS,
             SIMULATOR_TTS_MODEL_ALIAS,
         ):
-            value = context.target_provider_secret_values.get(alias)
+            value = simulator_secret_values.get(alias)
             if value:
                 # Platform-owned simulator credentials already present in the hosted control
                 # process win.  Target credentials are retained only as the local-SDK fallback.
                 target_environ.setdefault(alias, value)
         self._environ = target_environ
         self._adc_path = _materialize_vertex_adc(
-            context.target_provider_secret_values,
+            simulator_secret_values,
             context.work_directory,
             target_environ,
         )

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -19,8 +21,23 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import Transcript, converse
 from .scenario import Scenario as ConversationScenario
-from .world.runtime import GeneratedWorld
+from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
+
+
+DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
+
+
+def _chat_target_timeout_seconds() -> float:
+    """Return the per-turn target deadline without accepting unusable values."""
+    raw = os.getenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+    try:
+        configured = float(raw)
+    except ValueError:
+        return DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+    return configured if 1.0 <= configured <= 600.0 else DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
 
 
 def _duration_ms(started: datetime, ended: datetime) -> int:
@@ -150,6 +167,49 @@ def _tool_call(call: dict[str, Any], index: int) -> tuple[str, dict[str, Any], s
     return name, arguments, str(call.get("id") or f"call_{index}")
 
 
+def _tool_response_result(response: Mapping[str, Any]) -> Any:
+    """Return the callback's real tool result without inventing a second execution."""
+    value = response.get("result", response.get("content"))
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _record_completed_tool_call(
+    world: GeneratedWorld,
+    *,
+    name: str,
+    arguments: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> None:
+    """Record a tool the submitted callback already executed.
+
+    Callback-backed agents can return the request and its completed response together. Replaying
+    that request through the generated world both risks repeating a side effect and incorrectly
+    turns a real success into ``no such tool`` when no mock handler was authored. The callback's
+    response is the authoritative execution evidence at this seam.
+    """
+    error_value = response.get("error")
+    error = str(error_value) if error_value not in (None, "") else ""
+    refused = bool(response.get("refused", False))
+    declared_success = response.get("success", response.get("ok"))
+    ok = bool(declared_success) if declared_success is not None else not error and not refused
+    world.calls.append(
+        Call(
+            name=name,
+            arguments=dict(arguments),
+            result=_tool_response_result(response),
+            ok=ok,
+            refused=refused,
+            error=error,
+            at=time.time(),
+        )
+    )
+
+
 class _HostedChatTarget:
     """The already-running Bundle V2 chat process, exposed as the normal conversation target.
 
@@ -219,21 +279,40 @@ class _HostedChatTarget:
                     "tool_calls": returned,
                 }
             )
+            response_by_id = {
+                str(item.get("tool_call_id") or item.get("id") or ""): item
+                for item in response.tool_responses or []
+                if isinstance(item, Mapping)
+                and (item.get("tool_call_id") or item.get("id"))
+            }
             returned_ids: set[str] = set()
             for index, call in enumerate(returned, start=1):
                 name, arguments, call_id = _tool_call(call, index)
                 returned_ids.add(call_id)
-                result = self.world.handle_tool_call(
-                    {"id": call_id, "name": name, "arguments": arguments}
-                )
+                provided = response_by_id.get(call_id)
+                if provided is not None:
+                    _record_completed_tool_call(
+                        self.world,
+                        name=name,
+                        arguments=arguments,
+                        response=provided,
+                    )
+                    result_content = provided.get("content", provided.get("result"))
+                    if not isinstance(result_content, str):
+                        result_content = json.dumps(result_content, default=str)
+                else:
+                    result = self.world.handle_tool_call(
+                        {"id": call_id, "name": name, "arguments": arguments}
+                    )
+                    result_content = (
+                        result.content if result is not None else f"no such tool {name}"
+                    )
                 self._messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": call_id,
                         "name": name,
-                        "content": result.content
-                        if result is not None
-                        else f"no such tool {name}",
+                        "content": result_content,
                     }
                 )
 
@@ -242,11 +321,7 @@ class _HostedChatTarget:
             # evidence in the generated world, but asking the callback a second time would run the
             # tools twice.  HTTP agents that only return requests continue normally with the
             # generated-world responses appended above.
-            provided_ids = {
-                str(item.get("tool_call_id") or "")
-                for item in response.tool_responses or []
-                if isinstance(item, dict)
-            }
+            provided_ids = set(response_by_id)
             if returned_ids and returned_ids.issubset(provided_ids):
                 answer = response.content.strip()
                 self._messages.append({"role": "assistant", "content": answer})
@@ -347,7 +422,7 @@ class HostedChatCallRunner:
             ),
             protocol=adapter_protocol,
             include_tools=interface.include_tools,
-            timeout=30.0,
+            timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,

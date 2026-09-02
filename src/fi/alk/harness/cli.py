@@ -252,9 +252,15 @@ async def _build(args: argparse.Namespace) -> int:
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
     )
+    deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
         stage,
-        build_opening(contract, provisioned=environment is not None) + _guidance(args),
+        build_opening(
+            contract,
+            provisioned=environment is not None,
+            deferred_runtime=deferred_runtime,
+        )
+        + _guidance(args),
         interactive=args.interactive,
         until=lambda: world_saved(destination),
         nudge=(

@@ -207,6 +207,44 @@ def _write_job(path: Path, job: HarnessJob) -> None:
     path.write_text(job.model_dump_json(), encoding="utf-8")
 
 
+def test_hosted_job_accepts_internal_platform_simulator_ref() -> None:
+    job = _job()
+    refs = dict(job.agent.secret_refs)
+    refs["SIMULATOR_DEEPGRAM_API_KEY"] = SecretRef(
+        manager="platform-config",
+        key="SIMULATOR_DEEPGRAM_API_KEY",
+        purpose="simulator_provider",
+    )
+
+    validated = HarnessJob.model_validate(
+        job.model_dump() | {"agent": job.agent.model_dump() | {"secret_refs": refs}}
+    )
+
+    assert (
+        validated.agent.secret_refs["SIMULATOR_DEEPGRAM_API_KEY"].purpose
+        == "simulator_provider"
+    )
+
+
+def test_hosted_job_rejects_simulator_ref_from_customer_vault() -> None:
+    job = _job()
+    refs = dict(job.agent.secret_refs)
+    refs["SIMULATOR_DEEPGRAM_API_KEY"] = SecretRef(
+        manager="platform-vault",
+        key="customer-selected",
+        purpose="simulator_provider",
+    )
+
+    try:
+        HarnessJob.model_validate(
+            job.model_dump() | {"agent": job.agent.model_dump() | {"secret_refs": refs}}
+        )
+    except ValueError as exc:
+        assert "hosted_secret_manager_unsupported" in str(exc)
+    else:
+        raise AssertionError("customer-vault simulator ref must be rejected")
+
+
 # =================================================================================================
 # Capabilities fixture.
 # =================================================================================================
@@ -918,6 +956,30 @@ def test_peek_target_provider_secret_values_drops_an_alias_with_no_purpose_entry
     assert he.peek_target_provider_secret_values(path, {}) == {}
 
 
+def test_peek_simulator_provider_secret_values_isolated_from_target_provider() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="simulator-secrets-"))
+    path = tmp / "secrets.json"
+    path.write_text(
+        json.dumps(
+            {
+                "AGENT_ANTHROPIC_API_KEY": "customer-key",
+                "SIMULATOR_DEEPGRAM_API_KEY": "platform-key",
+            }
+        ),
+        encoding="utf-8",
+    )
+    purposes = {
+        "AGENT_ANTHROPIC_API_KEY": "target_provider",
+        "SIMULATOR_DEEPGRAM_API_KEY": "simulator_provider",
+    }
+    assert he.peek_simulator_provider_secret_values(path, purposes) == {
+        "SIMULATOR_DEEPGRAM_API_KEY": "platform-key"
+    }
+    assert he.peek_target_provider_secret_values(path, purposes) == {
+        "AGENT_ANTHROPIC_API_KEY": "customer-key"
+    }
+
+
 # =================================================================================================
 # CallRunner wiring (p14): the extended build_call_runner(adapter, context) seam, and the
 # NotWired-stays-the-fallback / real-CallRunnerImpl split on `agent.connector`.
@@ -947,7 +1009,9 @@ def test_default_build_call_runner_returns_notwired_for_a_non_livekit_connector(
     assert isinstance(runner, he.NotWiredCallRunner)
 
 
-def test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto() -> None:
+def test_default_build_call_runner_returns_notwired_for_retell_and_unresolved_auto() -> (
+    None
+):
     for connector in ("retell", "auto"):
         runner = he._default_build_call_runner(
             mock.Mock(), _call_runner_context(job=_job(connector=connector))
