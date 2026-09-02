@@ -270,6 +270,22 @@ def writer_workers(
 
 
 def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
+    if existing and existing < wanted:
+        # A suite short of what was asked for is being *continued*, not edited. Told only that
+        # scenarios exist and to say what it wants changed, a stage reads a large number, finds
+        # nothing to change and stops: one attempt oriented itself and exited inside a minute
+        # with three hundred still to write. The number outstanding has to be the first thing
+        # said, and finishing has to be named as the work.
+        return (
+            f"{existing} of the {wanted} scenarios asked for exist and are loaded. "
+            f"**{wanted - existing} are still to write, and writing them is the work.**\n\n"
+            "Start with show_canvas to see what is still open, then claim_slice and brief a "
+            "writer on it. Keep claiming and dispatching until claim_slice says nothing is "
+            "open; that is the only finish line. Do not stop because the number already looks "
+            "large.\n\n"
+            "list_scenarios and show_coverage tell you what is there so you do not repeat it. "
+            "Anything submitted under an existing name replaces it, so keep the names distinct."
+        )
     if existing:
         return (
             f"There are already {existing} scenarios for {contract.agent!r}, and they are "

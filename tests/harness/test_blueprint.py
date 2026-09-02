@@ -795,3 +795,42 @@ def test_a_writer_gets_enough_turns_for_the_slice_it_can_be_handed():
     biggest = SLICE_SCENARIOS * 2  # what claim_slice clamps to
     assert WRITER_TURNS >= biggest * TURNS_EACH, "not even the writing fits"
     assert WRITER_TURNS >= biggest * TURNS_EACH + 20, "no room to read the agent first"
+
+
+class TestContinuingAnUnfinishedSuite:
+    """A suite short of its target is being continued, not edited. Told only that scenarios
+    exist and to say what it wants changed, a stage reads a large number, finds nothing to
+    change and stops: one attempt oriented itself and exited inside a minute with 354 left."""
+
+    def contract(self):
+        from fi.alk.harness.contract import AgentContract, ToolSpec
+
+        return AgentContract(
+            agent="ride-agent", modality="voice",
+            tools=[ToolSpec(name="book_ride")], data_schema={"rides": {}},
+        )
+
+    def test_it_says_how_many_are_outstanding(self):
+        from fi.alk.harness.scenarios import opening
+
+        said = opening(self.contract(), 500, 146)
+        assert "354" in said and "still to write" in said
+
+    def test_it_names_finishing_as_the_work(self):
+        from fi.alk.harness.scenarios import opening
+
+        said = opening(self.contract(), 500, 146).lower()
+        assert "claim_slice" in said
+        assert "nothing is open" in said
+
+    def test_a_finished_suite_is_offered_for_editing_instead(self):
+        from fi.alk.harness.scenarios import opening
+
+        said = opening(self.contract(), 500, 500)
+        assert "still to write" not in said
+        assert "changed" in said
+
+    def test_a_fresh_suite_is_unaffected(self):
+        from fi.alk.harness.scenarios import opening
+
+        assert "show_grid" in opening(self.contract(), 500, 0)
