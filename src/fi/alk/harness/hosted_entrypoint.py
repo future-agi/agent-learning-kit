@@ -67,6 +67,7 @@ from .process_runtime import (
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
+    bundle_contract,
     bundle_has_scenarios,
 )
 from .world.handle import HostedWorld
@@ -561,16 +562,7 @@ _LIVEKIT_CONNECTOR = "livekit"
 
 
 def _bundle_contract_modality(bundle_dir: Path) -> str | None:
-    path = bundle_dir / "contract.json"
-    if not path.is_file():
-        return None
-    try:
-        body = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(body, dict):
-        return None
-    value = str(body.get("modality") or "").strip().lower()
+    value = str(bundle_contract(bundle_dir).get("modality") or "").strip().lower()
     return value or None
 
 

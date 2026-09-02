@@ -577,6 +577,7 @@ async def _simulate(args: argparse.Namespace) -> int:
                 name=platform.display_run_name(args.name),
                 run_test_id=platform.remembered(destination),
                 modality=contract.modality or "text",
+                description=contract.system_prompt_excerpt,
             )
             call_ids = {
                 scenario.name: call_id

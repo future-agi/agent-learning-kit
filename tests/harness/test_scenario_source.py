@@ -954,8 +954,8 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
         # p13: `build()` now calls `register_with_platform` after load -- this test is about the
         # R1-5 timeout BUDGET specifically, not registration, so registration is stubbed to a
         # passthrough (registration's own behavior is covered separately, below).
-        async def _passthrough(scenarios_client, scenarios, *, run_name):
-            del scenarios_client, run_name
+        async def _passthrough(scenarios_client, scenarios, *, run_name, description=""):
+            del scenarios_client, run_name, description
             return scenarios
 
         with mock.patch.object(ss, "register_with_platform", _passthrough):

@@ -6883,7 +6883,7 @@ def test_a_second_run_joins_the_same_test_rather_than_starting_another():
             self.provisioned = 0
             self.started = 0
 
-        def provision(self, name, personas, modality="text"):
+        def provision(self, name, personas, modality="text", description=""):
             self.provisioned += 1
             return {"run_test_id": "rt-1"}
 
@@ -6938,7 +6938,7 @@ def test_reporting_says_when_the_platform_allocated_too_few_calls():
     from fi.alk.harness import platform
 
     class Short:
-        def provision(self, name, personas, modality="text"):
+        def provision(self, name, personas, modality="text", description=""):
             return {"run_test_id": "rt-1"}
 
         def start(self, run_test_id, scenario_ids=None):
@@ -6966,7 +6966,7 @@ def test_new_platform_execution_preserves_submitted_scenario_order():
     class Ordered:
         started_with = None
 
-        def provision(self, name, personas, modality="text"):
+        def provision(self, name, personas, modality="text", description=""):
             return {"run_test_id": "rt-1", "scenario_ids": ["sid-a", "sid-b"]}
 
         def start(self, run_test_id, scenario_ids=None):

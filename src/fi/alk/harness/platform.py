@@ -177,18 +177,24 @@ class Platform:
         return body.get("result", body) if isinstance(body, dict) else {}
 
     def provision(
-        self, name: str, personas: list[dict[str, Any]], modality: str = "text"
+        self,
+        name: str,
+        personas: list[dict[str, Any]],
+        modality: str = "text",
+        description: str = "",
     ) -> dict[str, Any]:
         agent_name = name.split(" · ", 1)[0].strip() or "ALK agent"
-        return self._call(
-            "/run-tests/provision/",
-            {
-                "name": name,
-                "agent_name": agent_name,
-                "personas": personas,
-                "modality": modality,
-            },
-        )
+        payload: dict[str, Any] = {
+            "name": name,
+            "agent_name": agent_name,
+            "personas": personas,
+            "modality": modality,
+        }
+        # The agent's own system prompt is what the platform stores as the agent description and
+        # later serves as `call.agent_prompt`. Without it every ALK call reports an empty prompt.
+        if description:
+            payload["description"] = description
+        return self._call("/run-tests/provision/", payload)
 
     def start(
         self,
@@ -522,6 +528,7 @@ def begin(
     name: str,
     run_test_id: str = "",
     modality: str = "text",
+    description: str = "",
     platform: Platform | None = None,
 ) -> tuple[Reported, list[str]]:
     """Create the platform rows before a suite starts, so the run is visible while it runs."""
@@ -530,7 +537,10 @@ def begin(
     provisioned_scenario_ids: list[str] = []
     if not reported.run_test_id:
         provisioned = api.provision(
-            name, [persona_of(one) for one in scenarios], modality=modality
+            name,
+            [persona_of(one) for one in scenarios],
+            modality=modality,
+            description=description,
         )
         reported.run_test_id = str(provisioned.get("run_test_id", ""))
         # The provision endpoint returns IDs in the submitted persona order.

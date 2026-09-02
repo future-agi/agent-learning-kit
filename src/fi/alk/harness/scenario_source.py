@@ -368,7 +368,12 @@ class BundleScenarioSource:
         # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
         # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
         # terminal (or the fenced exit) -- nothing new to catch here.
-        return await register_with_platform(scenarios_client, scenarios, run_name=job.run_id)
+        return await register_with_platform(
+            scenarios_client,
+            scenarios,
+            run_name=job.run_id,
+            description=str(bundle_contract(bundle_dir).get("system_prompt_excerpt") or ""),
+        )
 
 
 def _preallocation_error(code: str, message: str) -> Exception:
@@ -386,7 +391,25 @@ def _preallocation_error(code: str, message: str) -> Exception:
     )
 
 
-def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+def bundle_contract(bundle_dir: Path) -> dict[str, Any]:
+    """The bundle's frozen contract, or an empty mapping when there is nothing readable there.
+
+    Lenient on purpose: a hosted job that cannot parse its contract still has scenarios to run,
+    so every caller reads a field and falls back rather than failing the job over a stray byte.
+    """
+    path = Path(bundle_dir) / "contract.json"
+    if not path.is_file():
+        return {}
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _provision_payload(
+    run_name: str, scenarios: Sequence[_CompiledScenario], description: str = ""
+) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py:168-190): `operation`/`name`/`personas` (with
     each persona's `scenario_key`) are the only fields this module can actually supply -- `name`/
@@ -396,11 +419,16 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) ->
     through pr63's full `Scenario` model). Sending bare `scenario_key` per persona still validates
     against the real endpoint; see CONTRACT NOTES in reports/p13-worker-r2.md.
     """
-    return {
+    payload: dict[str, Any] = {
         "operation": "provision",
         "name": run_name,
         "personas": [{"scenario_key": scenario.scenario_key} for scenario in scenarios],
     }
+    # `description` is what the platform stores on the agent and later serves as
+    # `call.agent_prompt`; omitted, every hosted call reports an empty prompt.
+    if description:
+        payload["description"] = description
+    return payload
 
 
 def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
@@ -483,6 +511,7 @@ async def register_with_platform(
     scenarios: Sequence[_CompiledScenario],
     *,
     run_name: str,
+    description: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -497,7 +526,7 @@ async def register_with_platform(
     failure) -> only then build and return the new scenario list with `scenario_id` filled in.
     """
     provision_result = await asyncio.to_thread(
-        scenarios_client.provision, _provision_payload(run_name, scenarios)
+        scenarios_client.provision, _provision_payload(run_name, scenarios, description)
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:
