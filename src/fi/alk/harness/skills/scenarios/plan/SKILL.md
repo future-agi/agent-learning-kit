@@ -108,6 +108,27 @@ If a bucket really does hold exactly one case, that is fine and common. If *ever
 then either the cases want grouping, or this agent supports fewer scenarios than were asked for
 and the honest move is to say so rather than to enumerate your way to the number.
 
+## Size a bucket by the state it crosses, not by a flat number
+
+This is where the size of a suite actually comes from, and where plans go wrong in both
+directions. Do not put one scenario in every bucket, and do not put twenty in every bucket. Ask
+what states this bucket crosses where the agent should behave differently, and count those.
+
+Buckets are wildly uneven, and that is correct. Worked through on a ride-booking agent:
+
+- a bucket touching payment can hold twelve or more: three markets, of which only one supports
+  cash, crossed with the payment states that exist in the data - a valid card, a default card
+  that is expired, a rider with no card at all, a rider with two, a wallet balance that does or
+  does not cover the fare. Each of those changes what the agent should say.
+- a bucket about resolving an address holds around six: the same street name in two cities, an
+  alias, a landmark instead of an address, somewhere outside the served market, a saved-place
+  label that collides, a misheard address the caller corrects.
+- a bucket about a guest being refused saved places holds two. There is no twentieth version of
+  it and inventing one is padding.
+
+So read the seeded data before sizing anything. The states that exist there are the ones a
+scenario can actually be written against, and the count of them is the honest `want`.
+
 `differs` is how a `want` above one earns itself. Naming a number is easy; naming what changes
 between the variants is the part that has to be true. "the market, which decides whether cash is
 offered" is a reason. "different callers" is not, because the agent should answer them the same.
