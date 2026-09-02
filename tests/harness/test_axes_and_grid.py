@@ -170,3 +170,51 @@ class TestAxisSet:
 
         for modality in ("universal", "voice"):
             assert unrecognised_persona_values(axes_for(modality)) == []
+
+
+class TestPreconditionsReachTheGrid:
+    """What a tool refuses until something else has happened.
+
+    This is the one fact about an agent that no instruction to a scenario writer can replace.
+    Without it a writer assumes the worst and replays the agent's whole flow to reach every cell,
+    because that always works and deviating risks a refusal it cannot predict. Three rounds of
+    prose guidance failed to move it; the data moves it or nothing does.
+    """
+
+    def contract(self, **rest):
+        return AgentContract(
+            agent="ride",
+            modality="voice",
+            tools=[
+                ToolSpec(name="get_fares"),
+                ToolSpec(name="book_ride", requires=["get_fares", "select_option"]),
+            ],
+            data_schema={"fares": {}, "rides": {}, "users": {}},
+            **rest,
+        )
+
+    def test_a_cell_carries_what_its_tools_are_reachable_after(self, axes):
+        grid = derive(self.contract(), axes)
+        booking = next(one for one in grid.cells if one.name == "create-ride")
+        assert booking.after == ("get_fares", "select_option")
+
+    def test_a_cell_whose_tools_have_none_is_reachable_directly(self, axes):
+        grid = derive(self.contract(), axes)
+        reading = next(one for one in grid.cells if one.name == "retrieve-fare")
+        assert reading.after == ()
+
+    def test_the_description_says_which_it_is(self, axes):
+        grid = derive(self.contract(), axes)
+        booking = next(one for one in grid.cells if one.name == "create-ride")
+        reading = next(one for one in grid.cells if one.name == "retrieve-fare")
+        assert "reachable only after: get_fares" in booking.described()
+        assert "reachable directly" in reading.described()
+
+    def test_a_contract_recording_none_still_works(self, axes):
+        """Older contracts predate the field. Absent data must read as unknown, not as none."""
+        plain = AgentContract(
+            agent="ride", modality="voice",
+            tools=[ToolSpec(name="get_fares")], data_schema={"fares": {}, "users": {}, "rides": {}},
+        )
+        grid = derive(plain, axes)
+        assert all(one.after == () for one in grid.cells)

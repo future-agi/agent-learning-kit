@@ -97,6 +97,15 @@ class ToolSpec(BaseModel):
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
+    # What must already have happened in the conversation before this tool can succeed, named as
+    # the tools that make it true. Empty means it can be called first thing.
+    #
+    # This is the one fact about an agent that no instruction to a scenario writer can replace.
+    # Without it a writer assumes the worst and replays the agent's whole flow to reach every
+    # cell, because doing so always works and deviating risks a refusal it cannot predict.
+    # Measured on a 20-tool voice agent: only 6 tools had a real precondition, and five of ten
+    # scenarios spent a dozen steps reaching cells that needed none.
+    requires: list[str] = Field(default_factory=list)
 
 
 class ToolEntry(BaseModel):

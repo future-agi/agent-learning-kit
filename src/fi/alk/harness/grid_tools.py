@@ -141,15 +141,34 @@ def grid_tools(
         lines = [f"{len(picks)} scenarios planned:"]
         lines += [f"  {pick.name}  ({pick.described()})  because: {pick.why}" for pick in picks]
         lines.append("")
+        direct = [one for one in picks if not one.cell.after]
+        gated = [one for one in picks if one.cell.after]
         lines.append(
             "Build each solution out of the tools listed against its own cell. Anything else the "
-            "scenario needs is setup_code, not solution steps.\n"
-            "The agent's rules describe how it must behave *when it performs* an operation. They "
-            "are not a requirement that every scenario perform the whole flow: a rule about "
-            "booking binds a scenario that books, and says nothing about one that explains an "
-            "address. Replaying the flow to arrive at a cell which is not about it tests the flow "
-            "once more and the cell not at all."
+            "scenario needs is setup_code, not solution steps."
         )
+        if direct:
+            lines.append(
+                f"\n**{len(direct)} of these cells are reachable directly.** Their tools have no "
+                "precondition, so their solutions start where the scenario starts. Replaying the "
+                "agent's main flow to arrive at one of them tests the flow once more and the cell "
+                "not at all:\n  " + "\n  ".join(one.name for one in direct)
+            )
+        if gated:
+            lines.append(
+                f"\n**{len(gated)} need earlier calls first**, and only these. What each one is "
+                "reachable after is listed against it above; those steps are unavoidable and "
+                "belong in the solution."
+            )
+        if not any(one.cell.after for one in picks) and not any(
+            tool.requires for tool in contract.tools
+        ):
+            lines.append(
+                "\nNo tool on this contract records a precondition. That may be true, or it may "
+                "be that nobody wrote them down. If you find in the source that a tool refuses "
+                "until something else has happened, say so rather than assuming every scenario "
+                "must replay the whole flow to be safe."
+            )
         lines.append("")
         lines.append(coverage(state.grid, state.axes, picks))
         return _ok("\n".join(lines))

@@ -132,6 +132,9 @@ class Cell:
     # operations, which is the point.
     tools: tuple[str, ...] = ()
     weight: float = 1.0
+    # Tools that must be called before this cell's own can succeed, from the contract. Empty
+    # means a scenario here starts where it likes.
+    after: tuple[str, ...] = ()
 
     @property
     def name(self) -> str:
@@ -139,7 +142,12 @@ class Cell:
 
     def described(self) -> str:
         served = f", tools: {', '.join(self.tools)}" if self.tools else ", no dedicated tool"
-        return f"{self.operation} x {self.obj}{served}"
+        needs = (
+            f", reachable only after: {', '.join(self.after)}"
+            if self.after
+            else ", reachable directly"
+        )
+        return f"{self.operation} x {self.obj}{served}{needs}"
 
 
 @dataclass
@@ -367,11 +375,16 @@ def derive(
             if not thin and not asserted and operation.kind in ("read", "manage") and not touching:
                 dropped.append(f"{operation.name}-{obj}".replace("_", "-"))
                 continue
+            needed: list[str] = []
+            for tool in contract.tools:
+                if tool.name in (served or tuple(touching)):
+                    needed.extend(one for one in tool.requires if one not in needed)
             cells.append(
                 Cell(
                     operation=operation.name,
                     obj=obj,
                     kind=operation.kind,
+                    after=tuple(needed),
                     tools=served or tuple(touching),
                     # A cell the agent has a dedicated tool for is what it is mostly asked to
                     # do; one it has no tool for is rarer and usually harder. Both are worth

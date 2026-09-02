@@ -238,6 +238,18 @@ def contract_tools(destination: Path) -> Any:
                                 "items": {"type": "string"},
                                 "description": "Exact parameter names, in order.",
                             },
+                            "requires": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Other tools of this agent that must have been "
+                                "called successfully first, or this one refuses. Read the code: "
+                                "a guard raising before any work is done is a precondition, and "
+                                "a check on identity that the agent establishes when the "
+                                "conversation opens is not. Leave empty when the tool can be "
+                                "called first thing, and most can. This decides whether a test "
+                                "of this tool has to replay the agent's whole flow to reach it "
+                                "or can simply call it.",
+                            },
                             "arg_types": {
                                 "type": "object",
                                 "description": "Declared type per argument where the source "
