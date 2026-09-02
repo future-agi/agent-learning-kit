@@ -473,6 +473,12 @@ complete.
 Delegating is not optional above a handful. Writing thirty scenarios yourself in one session is
 how a run stalls: the response grows until it stops coming back. Hand out slices instead.
 
+**If the suite was planned, brief from the plan.** `deal_blueprint` cuts it into one brief per
+writer, dealt so no writer is handed a single cell. Each line already says what the scenario is,
+so the writer's job is to make it real rather than to invent it, and two writers cannot converge
+on the same situation because no two lines are the same situation. Add the callers to each brief
+yourself; everything below still applies.
+
 A good slice brief names:
 
 - the **cells** it covers, as operation and object

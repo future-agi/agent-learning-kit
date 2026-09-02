@@ -225,6 +225,49 @@ def grid_tools(
         return _ok("\n".join(lines))
 
     @tool(
+        "deal_blueprint",
+        "Cut the plan into briefs, one per writer. Pass how many writers you intend to run.\n\n"
+        "Dealt round-robin rather than in blocks, because the plan comes out grouped by cell and "
+        "a block hands one writer every scenario for one cell. That writer then has to invent "
+        "the whole of that cell's variety alone, which is the position planning the suite up "
+        "front was meant to remove.\n\n"
+        "What comes back is the entries only. You add the callers: a name, an accent and a "
+        "location per scenario, distinct across the whole suite, because a writer cannot see "
+        "what its siblings were given and left to choose it converges on one kind of person.",
+        schema(
+            {"writers": {"type": "integer", "description": "How many writers to deal for."}},
+            ["writers"],
+        ),
+    )
+    async def deal_blueprint(args: dict[str, Any]) -> dict[str, Any]:
+        held = state.blueprint if state.blueprint.entries else load_blueprint(destination)
+        if not held.entries:
+            return _err("No blueprint to deal. Plan the suite with record_blueprint first.")
+        state.blueprint = held
+        try:
+            writers = int(args.get("writers") or 0)
+        except (TypeError, ValueError):
+            return _err("writers has to be a whole number.")
+        if writers < 1:
+            return _err("Deal for at least one writer.")
+
+        done = {one.name for one in load_scenarios(destination)}
+        waiting = [one for one in held.entries if one.name not in done]
+        if not waiting:
+            return _ok("Every planned scenario is already written.")
+
+        size = max(1, (len(waiting) + writers - 1) // writers)
+        cuts = Blueprint(entries=waiting).slices(size)
+        lines = [f"{len(waiting)} still to write, dealt into {len(cuts)} briefs."]
+        for index, cut in enumerate(cuts, start=1):
+            lines.append("")
+            lines.append(f"Brief {index} ({len(cut)} scenarios, cells: "
+                         + ", ".join(sorted({one.cell for one in cut}))
+                         + ")")
+            lines += [f"  {one.line()}" for one in cut]
+        return _ok("\n".join(lines))
+
+    @tool(
         "plan_suite",
         "One way to cover the grid in a given number of scenarios. **A suggestion, not an "
         "instruction.** It is arithmetic over the grid and knows nothing about this agent: it "
@@ -363,6 +406,7 @@ def grid_tools(
             set_objects,
             record_blueprint,
             show_blueprint,
+            deal_blueprint,
             plan_suite,
             list_scenarios,
             show_coverage,
@@ -421,6 +465,7 @@ def tool_names() -> tuple[str, ...]:
         "set_objects",
         "record_blueprint",
         "show_blueprint",
+        "deal_blueprint",
         "plan_suite",
         "list_scenarios",
         "show_coverage",
