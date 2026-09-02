@@ -674,7 +674,7 @@ class Canvas:
                     "themes": [
                         {"id": one.id, "name": one.name, "why": one.why} for one in self.themes
                     ],
-                    "angles": [
+                    "buckets": [
                         {
                             "id": one.id,
                             "theme": one.theme,
@@ -750,7 +750,7 @@ def load(destination: Path) -> Canvas:
                     claimed_by=str(one.get("claimed_by") or ""),
                     notes=list(one.get("notes") or []),
                 )
-                for one in held.get("angles") or []
+                for one in held.get("buckets") or held.get("angles") or []
                 if one.get("id")
             ],
         )

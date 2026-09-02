@@ -195,7 +195,7 @@ def grid_tools(
                         "required": ["id", "name"],
                     },
                 },
-                "angles": {
+                "buckets": {
                     "type": "array",
                     "items": {
                         "type": "object",
@@ -243,11 +243,11 @@ def grid_tools(
                     "a theme at a time rather than emitted in one breath.",
                 },
             },
-            ["angles"],
+            ["buckets"],
         ),
     )
     async def record_canvas(args: dict[str, Any]) -> dict[str, Any]:
-        rows = args.get("angles") or []
+        rows = args.get("buckets") or args.get("angles") or []
         if not isinstance(rows, list) or not rows:
             return _err("Nothing to record. Pass the planned angles.")
 
