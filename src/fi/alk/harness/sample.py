@@ -27,6 +27,20 @@ from .grid import Cell, Grid
 
 logger = logging.getLogger(__name__)
 
+# How many slots one unit of weight buys in the fill. Four is enough resolution to tell an axis
+# that should appear half as often from one that should not, without making the cycle so long
+# that a small suite never reaches its later entries.
+_SCALE = 4
+
+# The ordinary caller is not one condition among many. Most of what an agent meets is somebody
+# with nothing unusual about them, and a suite that forgets this tests the exceptions well and
+# the job badly.
+BASELINE_WEIGHT = 2.0
+
+
+def _slots(weight: float) -> int:
+    return max(1, round(weight * _SCALE))
+
 
 @dataclass(frozen=True)
 class Pick:
@@ -160,10 +174,30 @@ def _forced(grid: Grid, axes: AxisSet, usable: dict[str, list[str]], have: list[
                 _unique(Pick(cell=pool[0], why=f"nothing else covers a {kind} operation"), names)
             )
             kinds.add(kind)
+
+    # Every remaining setting, once. The fill after this is weighted, so an ordinary caller gets
+    # the share of the suite an ordinary caller should have; without this pass that weighting
+    # would decide whether a setting appears at all, and a dial the suite never moves is a dial
+    # nobody knows is broken.
+    pool = _matching(grid)
+    for axis, values in sorted(usable.items()):
+        for value in values:
+            if (axis, value) in covered:
+                continue
+            cell = next(
+                (one for one in pool if one.name not in {p.cell.name for p in have + picks}),
+                pool[0] if pool else None,
+            )
+            if cell is None:
+                continue
+            picks.append(
+                _unique(Pick(cell=cell, dials={axis: value}, why=f"nothing else moves {axis} to {value}"), names)
+            )
+            covered.add((axis, value))
     return picks
 
 
-def _fill(grid: Grid, usable: dict[str, list[str]], wanted: int, have: list[Pick]) -> list[Pick]:
+def _fill(grid: Grid, axes: AxisSet, usable: dict[str, list[str]], wanted: int, have: list[Pick]) -> list[Pick]:
     """The rest, dealt evenly so the suite spreads instead of clustering.
 
     Cells cycle by weight and dial settings cycle alongside them, one dial moved at a time. Every
@@ -176,23 +210,32 @@ def _fill(grid: Grid, usable: dict[str, list[str]], wanted: int, have: list[Pick
     ordered = sorted(grid.cells, key=lambda cell: (-cell.weight, cell.name))
     if not ordered:
         return []
-    # One flat list of every (axis, setting) that is worth moving, plus the baseline. Cycling a
-    # single list rather than nesting loops keeps the spread even at any suite size.
-    conditions: list[dict[str, str]] = [{}]
-    for axis, values in sorted(usable.items()):
-        conditions.extend({axis: value} for value in values)
 
-    # Pairs of dials, once every single one has been dealt. Two conditions at once is where the
-    # interaction bugs live, and it is also what keeps a large request from running out of
-    # coordinates. Ordered after the singles because a failure with one dial moved says which
-    # condition caused it and a failure with two does not.
-    singles = conditions[1:]
-    for first in range(len(singles)):
-        for second in range(first + 1, len(singles)):
-            left, right = singles[first], singles[second]
-            if set(left) & set(right):
-                continue
-            conditions.append({**left, **right})
+    # One flat list of every (axis, setting) worth moving, plus the baseline, each repeated in
+    # proportion to how often it should appear. Weighting matters most for the adversarial axis:
+    # every one of its settings is already guaranteed a place by the forcing pass, so letting it
+    # take an equal share of the fill as well produces a suite that is half attack, which is not
+    # what the agent mostly meets and buries the ordinary paths it mostly fails on.
+    by_axis = {axis.name: axis for axis in axes.axes}
+    conditions: list[dict[str, str]] = [{}] * _slots(BASELINE_WEIGHT)
+    for name, values in sorted(usable.items()):
+        weight = by_axis[name].weight if name in by_axis else 1.0
+        for value in values:
+            conditions.extend([{name: value}] * _slots(weight))
+
+    # Pairs of dials, but only when singles cannot fill the request. Two conditions at once is
+    # where the interaction bugs live, and it is also what keeps a very large request from
+    # running out of coordinates. It costs the thing that makes a result readable, though: a
+    # failure with one dial moved says which condition caused it and a failure with two does not.
+    # So pairs are a last resort before branches rather than an equal part of the mix.
+    if wanted > len(ordered) * len(conditions):
+        singles = [one for one in {tuple(sorted(c.items())) for c in conditions if c}]
+        for first in range(len(singles)):
+            for second in range(first + 1, len(singles)):
+                left, right = dict(singles[first]), dict(singles[second])
+                if set(left) & set(right):
+                    continue
+                conditions.append({**left, **right})
 
     seen = {pick.name for pick in have}
     picks: list[Pick] = []
@@ -254,7 +297,7 @@ def plan(
         picks.extend(_forced(grid, axes, usable, picks))
         picks = picks[:wanted]
     if len(picks) < wanted:
-        picks.extend(_fill(grid, usable, wanted, picks))
+        picks.extend(_fill(grid, axes, usable, wanted, picks))
 
     picks = picks[:wanted]
     if len(picks) < wanted:
