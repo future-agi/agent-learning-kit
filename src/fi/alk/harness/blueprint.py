@@ -53,6 +53,12 @@ MOST_ANGLE_CHARS = 90
 # and a third failure is evidence rather than noise.
 MOST_ATTEMPTS = 3
 
+# A plan whose buckets outnumber this share of the target has stopped being a plan and become a
+# list of scenarios with extra fields. Measured: the first real canvas came back 50 buckets for a
+# target of 50, every want 1, which at a target of a thousand would mean writing a thousand
+# buckets and hitting the wall that planning exists to avoid.
+MOST_BUCKETS_PER_TARGET = 0.6
+
 # Roughly how many scenarios to put in front of one writer: small enough to hold the whole brief,
 # large enough that dispatch is not most of the run.
 SLICE_SCENARIOS = 8
@@ -109,6 +115,9 @@ class Angle:
     # length where comparing words does not.
     facet: str = ""
     want: int = 1
+    # What differs between this bucket's scenarios. Required once it claims more than one, because
+    # a number is easy to write and "what changes between them" is the thing that has to be true.
+    differs: str = ""
     done: int = 0
     refused: int = 0
     attempts: int = 0
@@ -197,6 +206,29 @@ class Canvas:
                 f"{len(thin)} angles say too little to write from: "
                 + ", ".join(thin[:8])
                 + ". An angle names what makes a case worth testing, in a few words."
+            )
+
+        unjustified = [
+            one.id for one in self.angles if one.want > 1 and len(_words(one.differs)) < 2
+        ]
+        if unjustified:
+            found.append(
+                f"{len(unjustified)} buckets ask for more than one scenario without saying what "
+                "differs between them: "
+                + ", ".join(unjustified[:8])
+                + ". Name what changes, like 'the market, which decides whether cash is offered'. "
+                "If nothing changes the right answer, the bucket holds one scenario."
+            )
+
+        # Checked against the target rather than the count, because the failure is a plan that
+        # enumerates instead of grouping, and that only shows up relative to what was asked for.
+        if self.target >= WORTH_PLANNING and len(self.angles) > self.target * MOST_BUCKETS_PER_TARGET:
+            found.append(
+                f"{len(self.angles)} buckets for a target of {self.target} is a list of scenarios "
+                "with extra fields, not a plan. A bucket holds several scenarios; that is what "
+                "keeps a plan small while the suite grows. Group them, or if these cases really "
+                "are all singular then this agent supports fewer scenarios than were asked for "
+                "and the honest move is to say so rather than to enumerate."
             )
 
         wordy = [one.id for one in self.angles if len(one.angle) > MOST_ANGLE_CHARS]
@@ -401,6 +433,7 @@ class Canvas:
                             "angle": one.angle,
                             "facet": one.facet,
                             "want": one.want,
+                            "differs": one.differs,
                             "done": one.done,
                             "refused": one.refused,
                             "attempts": one.attempts,
@@ -445,6 +478,7 @@ def load(destination: Path) -> Canvas:
                     angle=str(one.get("angle") or ""),
                     facet=str(one.get("facet") or ""),
                     want=max(1, int(one.get("want") or 1)),
+                    differs=str(one.get("differs") or ""),
                     done=int(one.get("done") or 0),
                     refused=int(one.get("refused") or 0),
                     attempts=int(one.get("attempts") or 0),

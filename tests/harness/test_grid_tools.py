@@ -403,9 +403,11 @@ class TestTheCanvasLoopEndToEnd:
                 "themes": [{"id": "TH01", "name": "Spine"}, {"id": "TH02", "name": "Rules"}],
                 "angles": [
                     {"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                     "angle": "booking cannot be found", "facet": "data:missing", "want": 3},
+                     "angle": "booking cannot be found", "facet": "data:missing", "want": 3,
+                     "differs": "whether the booking exists at all or belongs to another rider"},
                     {"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                     "angle": "fee disclosed before consent", "facet": "rule:fee", "want": 3},
+                     "angle": "fee disclosed before consent", "facet": "rule:fee", "want": 3,
+                     "differs": "the fee amount, and whether the caller agrees"},
                 ],
             },
         )

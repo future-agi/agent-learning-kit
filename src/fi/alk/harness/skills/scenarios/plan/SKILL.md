@@ -41,16 +41,19 @@ of any size stays workable: nobody ever holds the whole thing at once.
 `angle` says what makes it worth testing, in a few words; its `want` says how many scenarios go in
 it. Each bucket carries:
 
-    id     stable, like TH04-13. Never rewritten, because progress is joined on it.
-    theme  which group it belongs to
-    cell   a grid coordinate, from show_grid
-    angle  what makes this worth testing, in a few words
-    facet  the structural thing under test
-    want   how many variants exist WHERE THE CORRECT ANSWER DIFFERS
+    id       stable, like TH04-13. Never rewritten, because progress is joined on it.
+    theme    which group it belongs to
+    cell     a grid coordinate, from show_grid
+    angle    what makes this worth testing, in a few words
+    facet    the structural thing under test
+    want     how many scenarios go in it
+    differs  what changes between them, once it is more than one
 
 Good:
 
     TH12-03 | diagnose-fare | surge boundary confusion | rule:surge-disclosure | x3
+             differs: which side of the window the trip started, and whether the
+                      receipt was already sent
     TH04-13 | update-payment-method | saved card asked for with no otp this call | rule:otp-before-card | x5
     TH02-01 | compare-address | same street name in two cities | place:ambiguous-city | x5
 
@@ -93,6 +96,21 @@ or which precondition is missing is worth as many as there are genuinely differe
 
 Do not reach for a different persona to make a number bigger. Two scenarios differing only in who
 is calling are one test run twice.
+
+## One bucket is not one scenario
+
+A plan whose buckets outnumber roughly half its target is not a plan, it is a list of scenarios
+with extra fields, and it will be refused. The first canvas written against this stage came back
+fifty buckets for a target of fifty, every `want` set to one: at a target of a thousand that means
+writing a thousand buckets, which is the wall planning exists to avoid.
+
+If a bucket really does hold exactly one case, that is fine and common. If *every* bucket does,
+then either the cases want grouping, or this agent supports fewer scenarios than were asked for
+and the honest move is to say so rather than to enumerate your way to the number.
+
+`differs` is how a `want` above one earns itself. Naming a number is easy; naming what changes
+between the variants is the part that has to be true. "the market, which decides whether cash is
+offered" is a reason. "different callers" is not, because the agent should answer them the same.
 
 ## Where the size actually comes from
 

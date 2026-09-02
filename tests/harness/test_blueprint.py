@@ -201,3 +201,50 @@ class TestItSurvivesDiskAndReplanning:
         assert back.written == 3
         assert back.named("A1").notes == ["three of five"]
         assert back.target == 5
+
+
+class TestAPlanThatIsReallyAList:
+    """The first canvas a model wrote against this stage: 50 buckets for a target of 50.
+
+    Every `want` was one, so it was a list of scenarios carrying extra fields. At a target of a
+    thousand that means writing a thousand buckets, which is the wall planning exists to avoid.
+    Prose warned against it twice and lost twice, so it is checked.
+    """
+
+    def test_one_bucket_per_scenario_is_refused_when_a_target_was_set(self):
+        held = canvas(
+            *[(f"A{i}", "TH01", "retrieve-ride", f"case number {i} of many", "", 1)
+              for i in range(30)],
+            target=40,
+        )
+        assert "not a plan" in " ".join(held.problems({"retrieve-ride"}))
+
+    def test_buckets_that_carry_several_scenarios_pass(self):
+        held = canvas(
+            *[(f"A{i}", "TH01", "retrieve-ride", f"case number {i} of many", "", 5)
+              for i in range(8)],
+            target=40,
+        )
+        for one in held.angles:
+            one.differs = "the market, which decides whether cash is offered"
+        assert held.problems({"retrieve-ride"}) == []
+
+    def test_a_small_suite_is_not_second_guessed(self):
+        """Below the planning threshold there is no target to judge density against."""
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found"))
+        assert held.problems({"retrieve-ride"}) == []
+
+
+class TestACountMustSayWhatItVaries:
+    def test_asking_for_several_without_saying_what_differs_is_refused(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 5))
+        assert "what differs between them" in " ".join(held.problems({"retrieve-ride"}))
+
+    def test_naming_what_differs_is_enough(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 5))
+        held.angles[0].differs = "the market, which decides whether cash is offered"
+        assert held.problems({"retrieve-ride"}) == []
+
+    def test_a_single_scenario_needs_no_justification(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 1))
+        assert held.problems({"retrieve-ride"}) == []

@@ -160,6 +160,11 @@ def grid_tools(
                             "angle": {"type": "string"},
                             "facet": {"type": "string"},
                             "want": {"type": "integer"},
+                            "differs": {
+                                "type": "string",
+                                "description": "What changes between this bucket's scenarios. "
+                                "Required once want is more than one.",
+                            },
                         },
                         "required": ["id", "theme", "cell", "angle"],
                     },
@@ -194,6 +199,7 @@ def grid_tools(
                     angle=str((one or {}).get("angle") or "").strip(),
                     facet=str((one or {}).get("facet") or "").strip(),
                     want=max(1, int((one or {}).get("want") or 1)),
+                    differs=str((one or {}).get("differs") or "").strip(),
                 )
                 for one in rows
                 if isinstance(one, dict)
@@ -369,6 +375,7 @@ def grid_tools(
                             "angle": {"type": "string"},
                             "facet": {"type": "string"},
                             "want": {"type": "integer"},
+                            "differs": {"type": "string"},
                         },
                         "required": ["cell", "angle"],
                     },
@@ -414,6 +421,7 @@ def grid_tools(
                     angle=str((row or {}).get("angle") or "").strip(),
                     facet=str((row or {}).get("facet") or "").strip(),
                     want=max(1, int((row or {}).get("want") or 1)),
+                    differs=str((row or {}).get("differs") or "").strip(),
                 )
                 for row in args.get("found") or []
                 if isinstance(row, dict)
