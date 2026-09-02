@@ -72,3 +72,39 @@ def test_a_scenario_journalled_twice_comes_back_once(tmp_path: Path) -> None:
     record_written([Scenario(name="one")], tmp_path)
 
     assert [one.name for one in journalled(tmp_path)] == ["one", "two"]
+
+
+class TestOnlyOneWayToDelegate:
+    """A stage that declared workers must not also see the SDK's own sub-agent tool.
+
+    Offered both, the model takes the built-in one, and that one launches detached: it answers
+    "launched successfully, you will be notified". Measured, the stage dealt eight slices,
+    dispatched eight background agents that had none of its tools, declared success at nineteen
+    turns and exited, killing all eight and writing nothing.
+    """
+
+    def spec(self, with_workers: bool):
+        from fi.alk.harness.backends import SessionSpec, WorkerSpec
+
+        workers = (
+            {"scenario_writer": WorkerSpec(description="writes a slice", instructions="go")}
+            if with_workers
+            else {}
+        )
+        return SessionSpec(system_prompt="p", workers=workers, gated=False)
+
+    def test_the_builtin_agent_tool_is_withheld(self):
+        import fi.alk.harness.backends.claude as claude
+
+        spec = self.spec(with_workers=True)
+        session = claude.ClaudeBackend().create(spec)
+        blocked = list(getattr(session._options, "disallowed_tools", None) or [])
+        assert "Agent" in blocked and "Task" in blocked
+
+    def test_a_stage_with_no_workers_keeps_it(self):
+        import fi.alk.harness.backends.claude as claude
+
+        spec = self.spec(with_workers=False)
+        session = claude.ClaudeBackend().create(spec)
+        blocked = list(getattr(session._options, "disallowed_tools", None) or [])
+        assert "Agent" not in blocked

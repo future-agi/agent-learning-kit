@@ -258,6 +258,16 @@ class ClaudeBackend:
                 # other side, and the stage asking them something is the point of keeping it
                 # open. Without this the question is approved silently and never reaches them.
                 options.can_use_tool = _ask_only(spec.ask)
+        if spec.workers:
+            # The SDK's own sub-agent tool is withheld from a stage that declared workers, for
+            # the same reason `generate_suite` and `submit_scenario` are: offered two ways to
+            # delegate, the model takes the built-in one. That one launches detached - it answers
+            # "launched successfully, you will be notified" - so the stage dealt eight slices,
+            # dispatched eight background agents that had none of its tools, declared success and
+            # exited, killing all eight. Withheld, the only way to delegate is the declared
+            # worker, which blocks and returns what it wrote.
+            already = list(getattr(options, "disallowed_tools", None) or [])
+            options.disallowed_tools = [*already, "Agent", "Task"]
         if spec.gated:
             # Not acceptEdits: that auto-approves Edit and Write before the permission callback
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
