@@ -97,6 +97,13 @@ def tool_server(
 # a host CLI implements them from files.py. Anything else asked for as a builtin is refused at
 # session build time rather than silently dropped.
 FILE_TOOLS = ("Read", "Glob", "Grep")
+
+# Everything a backend without a host CLI can offer under the names Claude Code uses, so a
+# stage's skill text means the same thing whichever loop is running it. Reading tells you what
+# an agent is meant to do and running tells you what it does; the scenarios worth writing come
+# from the gap, so a stage trusted with one is trusted with both. Writing is absent on purpose:
+# a stage able to edit the agent under test could make its scenarios pass by changing the agent.
+HOST_TOOLS = (*FILE_TOOLS, "Bash")
 ASK_TOOL = "AskUserQuestion"
 DELEGATE_TOOL = "Delegate"
 KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)

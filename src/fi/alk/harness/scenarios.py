@@ -44,14 +44,15 @@ SKILL = "write-scenarios"
 
 # What the stage may reach for beyond its own tools. Everything the host offers, because the
 # scenarios worth writing come from reading the agent rather than from reading its contract.
+# Write and Edit are deliberately absent. The harness's own artifacts go through tools that
+# validate them, and a stage able to edit the agent under test could make its scenarios pass by
+# changing the agent rather than by writing a better scenario.
 STAGE_TOOLS = (
     "AskUserQuestion",
     "Read",
     "Glob",
     "Grep",
     "Bash",
-    "Write",
-    "Edit",
     "WebSearch",
     "WebFetch",
 )

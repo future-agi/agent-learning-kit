@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator
 
 from .base import (
     FILE_TOOLS,
+    HOST_TOOLS,
     Call,
     ModelReply,
     Say,
@@ -35,6 +36,7 @@ from .base import (
     qualified,
 )
 from .files import file_tools
+from .shell import shell_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
 
@@ -243,10 +245,10 @@ class VertexGeminiSession:
         # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
         # this backend cannot answer would cost the model a turn finding that out.
         offered: list[Any] = []
-        wanted = {name for name in builtins if name in FILE_TOOLS}
+        wanted = {name for name in builtins if name in HOST_TOOLS}
         offered.extend(
             _spec_tool(spec.name, spec)
-            for spec in file_tools(self._spec.cwd)
+            for spec in (*file_tools(self._spec.cwd), *shell_tools(self._spec.cwd))
             if spec.name in wanted
         )
         for server_name, server in servers.items():
