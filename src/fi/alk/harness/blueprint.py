@@ -75,6 +75,11 @@ FEWEST_ANGLE_WORDS = 8
 # and a third failure is evidence rather than noise.
 MOST_ATTEMPTS = 3
 
+# A large suite that touches only a small part of the grid is deep in a few places and absent
+# everywhere else. Measured: a 200-scenario plan covering 21 of 63 cells, with a third of the
+# suite sitting on four cells. Depth is worth having and is not a substitute for breadth.
+LEAST_CELLS_COVERED = 0.4
+
 # A plan whose buckets outnumber this share of the target has stopped being a plan and become a
 # list of scenarios with extra fields. Measured: the first real canvas came back 50 buckets for a
 # target of 50, every want 1, which at a target of a thousand would mean writing a thousand
@@ -391,6 +396,19 @@ class Canvas:
                 "are all singular then this agent supports fewer scenarios than were asked for "
                 "and the honest move is to say so rather than to enumerate."
             )
+
+        if self.target >= WORTH_PLANNING * 5 and cells:
+            share = len(self.covered) / len(cells)
+            if share < LEAST_CELLS_COVERED:
+                missing = sorted(cells - self.covered)
+                found.append(
+                    f"this plan touches {len(self.covered)} of {len(cells)} cells. A suite this "
+                    "size that leaves most of the agent alone is deep in a few places and absent "
+                    "everywhere else. Add buckets on the untouched cells, or if a cell genuinely "
+                    "has nothing worth testing, leave it and cover the rest: "
+                    + ", ".join(missing[:10])
+                    + ("" if len(missing) <= 10 else " ...")
+                )
 
         wordy = [one.id for one in self.angles if len(one.angle) > MOST_ANGLE_CHARS]
         if wordy:

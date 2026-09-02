@@ -527,3 +527,39 @@ class TestAnAxisOfNamesIsNotAnAxis:
     def test_one_stray_name_among_states_is_not_enough_to_condemn_an_axis(self):
         held = self.plan_with("status", ["active", "suspended", "dana"], want=3)
         assert held.problems({"retrieve-ride"}, self.labels()) == []
+
+
+class TestDepthIsNotASubstituteForBreadth:
+    """A large suite that touches a fraction of the grid has left most of the agent alone.
+
+    Measured on a real 200-scenario plan: 21 of 63 cells, with a third of the suite sitting on
+    four of them. Every count was justified and every axis was real; it was simply absent from
+    two thirds of the agent. Depth is worth having, and it is not coverage.
+    """
+
+    def wide_grid(self):
+        return {f"cell-{i}" for i in range(20)}
+
+    def test_a_large_plan_on_a_few_cells_is_refused(self):
+        held = canvas(
+            *[(f"A{i}", "TH01", "cell-0" if i < 3 else f"cell-{i}", f"case number {i}", "data:x")
+              for i in range(5)],
+            target=200,
+        )
+        said = " ".join(held.problems(self.wide_grid()))
+        assert "touches 3 of 20 cells" in said
+
+    def test_a_plan_spread_across_the_grid_passes(self):
+        held = canvas(
+            *[(f"A{i}", "TH01", f"cell-{i}", f"case number {i}", "data:x") for i in range(12)],
+            target=200,
+        )
+        assert held.problems(self.wide_grid()) == []
+
+    def test_a_small_suite_is_not_asked_to_cover_everything(self):
+        """Twenty scenarios cannot touch sixty cells, and pretending otherwise helps nobody."""
+        held = canvas(
+            *[(f"A{i}", "TH01", f"cell-{i}", f"case number {i}", "data:x") for i in range(3)],
+            target=20,
+        )
+        assert held.problems(self.wide_grid()) == []

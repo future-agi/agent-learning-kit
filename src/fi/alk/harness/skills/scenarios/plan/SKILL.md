@@ -118,6 +118,14 @@ Write it from the person's side, as something they want, not as a label for a fe
 name" is a label and tells a reader nothing. "a returning user expects to be recognised from their
 number, and the record it matches is not the one they are calling about" is a case.
 
+**The difficulty has to be in the sentence.** If you can describe the bucket without saying what
+could go wrong, you have described the ordinary flow, not a case worth testing. "a person asks for
+the usual thing and gets it" is not a bucket. Every bucket exists because something about it is
+hard: name that thing.
+
+The ordinary path is worth one bucket, and only one. Everything else in the plan should be a way
+it can go wrong.
+
 One or two sentences. If you are writing a third, you are describing how the case unfolds, which
 is the test rather than the plan.
 
@@ -152,6 +160,10 @@ What follows the colon is yours, and describes this agent.
 
 1. Ask which state axes change the answer **for this bucket specifically**. List them in
    **`varies_by`**. Usually one, sometimes two, rarely more.
+
+   Every value of an axis you name has to make sense for this bucket. If an axis has a value that
+   contradicts the bucket's own description, that axis does not apply here and you are inflating
+   the count with combinations that cannot exist.
 2. Multiply the number of values those axes have. That is the ceiling.
 3. Remove combinations that cannot happen in this world.
 4. Remove combinations where the agent should do exactly the same thing.
@@ -191,12 +203,14 @@ Go through the plan and confirm all of these:
 1. No axis is a list of names, identifiers, or specific records.
 2. Every bucket holding more than one test names the axes that make those tests differ.
 3. No bucket asks for more tests than its axes allow.
-4. Every rule the agent must obey has at least one bucket testing it.
-5. Every tool that refuses until something else has happened has a bucket for being asked too
+4. The plan touches most of the grid, not a few cells deeply. A suite that goes eight deep on
+   twenty cells and ignores forty others has left most of the agent untested.
+5. Every rule the agent must obey has at least one bucket testing it.
+6. Every tool that refuses until something else has happened has a bucket for being asked too
    early.
-6. The plan contains buckets where the agent should refuse, where it should ask, and where it
+7. The plan contains buckets where the agent should refuse, where it should ask, and where it
    should escalate. Not only ones where it succeeds.
-7. Every angle reads as a case somebody could actually meet, and would make sense to a reader
+8. Every angle reads as a case somebody could actually meet, and would make sense to a reader
    who has never seen this agent.
 
 ---
