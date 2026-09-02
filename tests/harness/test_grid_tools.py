@@ -559,3 +559,66 @@ class TestTheCanvasLoopEndToEnd:
         # And the writer is told to report them instead, since it cannot record them.
         assert "report" in writer.instructions.lower()
         assert "did not ask for" in writer.instructions
+
+    def test_a_plan_can_be_built_up_a_theme_at_a_time(self, contract, where):
+        """A canvas for a large suite is too much to emit in one response.
+
+        A model that tries either runs long or truncates, and either way the whole plan is lost.
+        So recording adds rather than replaces, and the earlier instalments have to survive.
+        """
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:3]
+        call(server, "record_canvas", {
+            "target": 12,
+            "themes": [{"id": "TH01", "name": "First"}],
+            "axes": [{"name": "s.market", "levels": ["a", "b"]}],
+            "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
+                        "angle": "one thing worth testing", "want": 2,
+                        "live": ["s.market"]}],
+        })
+        said = call(server, "record_canvas", {
+            "themes": [{"id": "TH02", "name": "Second"}],
+            "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
+                        "angle": "another thing worth testing", "want": 3,
+                        "live": ["s.market"]}],
+        })
+        assert "2 buckets" in said
+        assert {one.id for one in state.canvas.angles} == {"TH01-01", "TH02-01"}
+        assert {one.id for one in state.canvas.themes} == {"TH01", "TH02"}
+        assert [one.name for one in state.canvas.axes] == ["s.market"]
+
+    def test_replacing_is_possible_but_has_to_be_asked_for(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:3]
+        call(server, "record_canvas", {
+            "target": 12,
+            "themes": [{"id": "TH01", "name": "First"}],
+            "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
+                        "angle": "one thing worth testing"}],
+        })
+        call(server, "record_canvas", {
+            "replace": True,
+            "themes": [{"id": "TH02", "name": "Second"}],
+            "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
+                        "angle": "a wholly different plan"}],
+        })
+        assert {one.id for one in state.canvas.angles} == {"TH02-01"}
+
+    def test_an_instalment_keeps_progress_already_made(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:3]
+        call(server, "record_canvas", {
+            "target": 12,
+            "axes": [{"name": "s.market", "levels": ["a", "b", "c"]}],
+            "themes": [{"id": "TH01", "name": "First"}],
+            "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
+                        "angle": "one thing worth testing", "want": 3,
+                        "live": ["s.market"]}],
+        })
+        state.canvas.named("TH01-01").done = 2
+        call(server, "record_canvas", {
+            "themes": [{"id": "TH02", "name": "Second"}],
+            "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
+                        "angle": "another thing worth testing"}],
+        })
+        assert state.canvas.named("TH01-01").done == 2

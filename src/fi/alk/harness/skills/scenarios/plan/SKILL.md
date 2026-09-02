@@ -212,7 +212,14 @@ Cover, at least:
    it, and says what is wrong.
 4. Fix and record again. This loop is cheap. Every fault left here costs a proof and a folder once
    writers act on it.
-5. Record in instalments for a large suite, passing `target`, so it can say how far short you are.
+5. **Record one theme at a time, not the whole plan at once.** Recording adds to what is there,
+   so `record_canvas` can be called again and again: a theme's buckets, then the next theme's.
+   Pass `target` on the first call so it can say how far short the plan still is.
+
+   This matters more than it sounds. A plan for several hundred scenarios is a long single
+   response, and a model writing it in one breath either runs long or truncates, and the whole
+   plan is lost. Written a theme at a time, each instalment is validated as it lands and the
+   earlier ones are already safe on disk. If you want to start over, pass `replace`.
 
 ## The plan is a starting partition, not the finished list
 

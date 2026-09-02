@@ -207,6 +207,12 @@ def grid_tools(
                     },
                 },
                 "target": {"type": "integer", "description": "The size of the finished suite."},
+                "replace": {
+                    "type": "boolean",
+                    "description": "Throw away everything recorded so far and keep only what is "
+                    "in this call. Off by default: calls add to the plan, so it can be built up "
+                    "a theme at a time rather than emitted in one breath.",
+                },
             },
             ["angles"],
         ),
@@ -216,7 +222,13 @@ def grid_tools(
         if not isinstance(rows, list) or not rows:
             return _err("Nothing to record. Pass the planned angles.")
 
-        before = {one.id: one for one in state.canvas.angles}
+        # Recording adds to the plan unless told otherwise. A canvas for a large suite is far
+        # too much to emit in one response, and a model that tries will run long or truncate and
+        # lose the lot. Building it up a theme at a time is the safe way, and it only works if a
+        # later call does not silently drop the earlier ones.
+        replace = bool(args.get("replace"))
+        standing = {} if replace else {one.id: one for one in state.canvas.angles}
+        before = dict(standing)
         held = Canvas(
             target=int(args.get("target") or state.canvas.target or 0),
             axes=[
@@ -260,6 +272,13 @@ def grid_tools(
             if was is not None:
                 one.done, one.refused, one.attempts = was.done, was.refused, was.attempts
                 one.state, one.notes = was.state, list(was.notes)
+            standing[one.id] = one
+        held.angles = list(standing.values())
+        if not replace:
+            known = {one.id for one in held.themes}
+            held.themes += [one for one in state.canvas.themes if one.id not in known]
+            named = {one.name for one in held.axes}
+            held.axes += [one for one in state.canvas.axes if one.name not in named]
 
         problems = held.problems({cell.name for cell in state.grid.cells})
         if problems:
