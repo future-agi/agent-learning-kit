@@ -322,6 +322,7 @@ def scenario_tools(
     can_save: bool = True,
     delegates: bool = False,
     start_from: list[Scenario] | None = None,
+    share: list[Scenario] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -330,11 +331,20 @@ def scenario_tools(
     each other's work. A writer that only submits keeps its scenarios in ``kept``, and whoever
     spawned it merges the lists and writes once.
 
-    ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
-    is never counted as already having what a sibling wrote.
+    ``start_from`` seeds that list, copied. A parallel writer starting from disk would count a
+    sibling's work as its own.
+
+    ``share`` is the other case, and it is the one that makes a fan-out land anywhere: the
+    caller passes the very list it will save from, and every server built on it appends into
+    that one list. Without it a writer accepts into a list nobody else can see, the parent saves
+    its own empty one, and a run reports fifty scenarios kept and writes none.
     """
     kept: list[Scenario] = (
-        list(start_from) if start_from is not None else load_scenarios(destination)
+        share
+        if share is not None
+        else list(start_from)
+        if start_from is not None
+        else load_scenarios(destination)
     )
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)

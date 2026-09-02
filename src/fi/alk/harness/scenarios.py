@@ -96,13 +96,20 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
+    # One list, shared by the stage and every writer it runs, because the stage is what saves.
+    shared: list[Scenario] = load_scenarios(destination)
     workers = (
-        writer_workers(contract, destination)
+        writer_workers(contract, destination, share=shared)
         if wanted >= FEWEST_WORTH_DELEGATING
         else {}
     )
     server, kept = scenario_tools(
-        contract, destination, destination, wanted=wanted, delegates=bool(workers)
+        contract,
+        destination,
+        destination,
+        wanted=wanted,
+        delegates=bool(workers),
+        share=shared,
     )
     grid_server, held = grid_tools(contract, destination, wanted=wanted)
     spec = SessionSpec(
@@ -142,7 +149,7 @@ def open_stage(
 
 
 def writer_workers(
-    contract: AgentContract, destination: Path
+    contract: AgentContract, destination: Path, share: list[Scenario] | None = None
 ) -> dict[str, WorkerSpec]:
     """The worker the stage may run to write one slice of the grid.
 
@@ -155,8 +162,16 @@ def writer_workers(
     know about, so two workers saving at once would delete each other's scenarios; the parent
     saves once when the fan-out is done.
     """
+    # The writers append into the caller's own list, which is what the stage later saves from.
+    # Their own list would be invisible to it.
     server, _ = scenario_tools(
-        contract, destination, destination, wanted=0, can_save=False, start_from=[]
+        contract,
+        destination,
+        destination,
+        wanted=0,
+        can_save=False,
+        start_from=None if share is not None else [],
+        share=share,
     )
     return {
         WRITER: WorkerSpec(

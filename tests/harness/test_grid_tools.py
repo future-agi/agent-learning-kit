@@ -291,3 +291,48 @@ class TestAScenarioMustMeanWhatItsNameClaims:
         assert self.refused("cancel-ride__impersonation", "def setup(world):\n    pass\n")
         real = 'def setup(world):\n    world.rows("users")[0]["phone"] = "+15550000"\n'
         assert self.refused("cancel-ride__impersonation", real) == []
+
+
+class TestAFanOutCanActuallySave:
+    """A delegated run accepted 50 scenarios and wrote none.
+
+    Each writer got its own tool server with its own `kept` list, the stage saved from a
+    different list, and `save_scenarios` reported "Saved 0 scenarios" after fifty had passed all
+    three gates. Nothing below the delegation threshold exercised this, because there a single
+    session both accepts and saves. The property that matters is identity: every server the stage
+    builds must append into the very list the stage saves from.
+    """
+
+    def test_share_hands_back_the_same_list_not_a_copy(self, contract, where):
+        from fi.alk.harness.scenario_tools import scenario_tools
+
+        mine: list = []
+        _, kept = scenario_tools(contract, where, where, wanted=0, share=mine)
+        assert kept is mine, "share must not copy, or the caller cannot see what was accepted"
+
+    def test_start_from_still_copies(self, contract, where):
+        """The other case is unchanged: a writer seeded from disk must not alias it."""
+        from fi.alk.harness.scenario_tools import scenario_tools
+
+        seed: list = []
+        _, kept = scenario_tools(contract, where, where, wanted=0, start_from=seed)
+        assert kept is not seed
+
+    def test_the_stage_and_its_writers_share_one_list(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+        from fi.alk.harness.scenario_tools import scenario_tools
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        seen: list = []
+        real = scenario_tools
+
+        def spy(*args, **rest):
+            server, kept = real(*args, **rest)
+            seen.append(kept)
+            return server, kept
+
+        monkeypatch.setattr(scenarios, "scenario_tools", spy)
+        # Above the delegation threshold, so writers are declared.
+        scenarios.open_stage(contract, out=where, wanted=50)
+        assert len(seen) >= 2, "expected a server for the stage and one for its writers"
+        assert all(one is seen[0] for one in seen), "each server built its own list; a save would lose the rest"
