@@ -469,6 +469,7 @@ def callers_for(index: int, wanted: int) -> str:
 
     people = offered("personality")
     accents = offered("accent")
+    places = offered("location")
     if not people:
         return ""
     picks = [people[(index + step) % len(people)] for step in range(max(1, wanted))]
@@ -488,7 +489,20 @@ def callers_for(index: int, wanted: int) -> str:
             " Give your callers varied accents from the offered set, a different one per caller "
             f"where it fits rather than defaulting everyone to the same accent: {', '.join(spread)}. "
             "A suite where every caller sounds the same is a missed test of the agent's speech "
-            "handling, so do not make them all American unless a scenario truly requires it."
+            "handling, so do not default them all to one accent unless a scenario truly requires it."
+        )
+    if places:
+        # Dealt for the same reason accents are. Left to instruction it collapsed the same way:
+        # measured across a suite, two locations for forty-one callers, where the platform offered
+        # five. Where a caller is changes what they ask for and which market rules apply, so it is
+        # a test dimension rather than decoration.
+        here = [
+            places[(index + step) % len(places)]
+            for step in range(min(len(places), max(2, wanted)))
+        ]
+        said += (
+            " Place them in different locations from the offered set rather than all in one, "
+            f"choosing what the scenario supports: {', '.join(here)}."
         )
     return said
 

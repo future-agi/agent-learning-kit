@@ -742,3 +742,26 @@ class TestSeveralWritersCanRunAtOnce:
             seen += [one.id for one in taken]
 
         assert len(seen) == len(set(seen)) == 6
+
+
+class TestTheSpreadIsDealtNotRequested:
+    """Writers are blind to each other, so each independently picks the safest value and the
+    suite converges on it. Measured: two locations across forty-one callers where the platform
+    offered five, the same collapse accents had before they were dealt."""
+
+    def test_each_slice_starts_from_a_different_place(self):
+        from fi.alk.harness.scenarios import callers_for
+
+        first, second = callers_for(0, 4), callers_for(1, 4)
+        assert first and second
+        assert first != second
+
+    def test_locations_are_dealt_as_well_as_accents(self):
+        from fi.alk.harness.persona_guides import offered
+        from fi.alk.harness.scenarios import callers_for
+
+        places = offered("location")
+        if not places:
+            return
+        said = callers_for(0, 6)
+        assert sum(1 for one in places if one in said) >= 2, said
