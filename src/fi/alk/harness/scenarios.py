@@ -100,6 +100,17 @@ def turns_for(wanted: int) -> int:
     return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
 
 
+def _working_dir(destination: Path) -> str:
+    """Where a session's relative paths resolve from.
+
+    The run directory, because that is what holds ``environment-bundle`` and therefore the agent's
+    own source. It used to be the parent, so every relative path the skill talks about missed by
+    one level and each writer spent turns hunting for code it had been told to read.
+    """
+    where = Path(destination)
+    return str(where if where.is_dir() else Path.cwd())
+
+
 def open_stage(
     contract: AgentContract,
     *,
@@ -170,7 +181,7 @@ def open_stage(
         # admits. Withholding the tools that read those makes the suite shallower, and every
         # artifact it produces still has to pass the three gates before it is kept.
         gated=False,
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        cwd=_working_dir(destination),
         max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
         ask=ask,
@@ -645,7 +656,7 @@ async def _write_slice(
                 tools=[spec for spec in server.tools if spec.name != "save_scenarios"],
             )
         },
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        cwd=_working_dir(destination),
         max_turns=turns_for(mine.count),
         model=chosen_model(),
         ask=ask,
@@ -788,7 +799,7 @@ async def gaps_in(
             f"the useful answer.\n\n## This agent\n\n{contract.brief()}"
         ),
         servers={REVIEW_SERVER: server},
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        cwd=_working_dir(destination),
         max_turns=8,
         model=chosen_model(),
         ask=ask,
