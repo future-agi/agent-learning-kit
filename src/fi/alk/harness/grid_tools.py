@@ -27,7 +27,7 @@ from .grid import Grid, derive
 from .sample import coverage, plan
 from .scenario import Scenario
 from .semantic import duplicates as semantic_duplicates
-from .scenario_tools import load_scenarios, write_scenarios
+from .scenario_tools import journalled, load_scenarios, write_scenarios
 from .tools import schema
 
 logger = logging.getLogger(__name__)
@@ -532,7 +532,12 @@ def grid_tools(
         if not held.angles:
             return _err("No canvas to fold into.")
         state.canvas = held
+        # Folders *and* journal. A delegated writer cannot write folders - saving would delete its
+        # siblings' work - so it journals each scenario as it proves it, and checking folders alone
+        # found nothing, credited nothing, and blocked buckets whose scenarios existed all along.
         saved = load_scenarios(destination)
+        known = {one.name for one in saved}
+        saved += [one for one in journalled(destination) if one.name not in known]
         lines: list[str] = []
         for row in args.get("returns") or []:
             if not isinstance(row, dict):
@@ -549,10 +554,19 @@ def grid_tools(
             # leaving every bucket looking unfilled while its scenarios sat on disk.
             claimed_names = [str(one) for one in (row.get("names") or [])]
             really = {s.name for s in saved}
-            if claimed_names:
-                found = [one for one in claimed_names if one in really]
-            else:
-                found = [s.name for s in saved if angle_id in (s.branch or "")]
+            found = [one for one in claimed_names if one in really]
+            if not found:
+                # The writer names its own scenarios and the report passes through another model,
+                # so the names can come back approximate or invented. A bucket's cell is the one
+                # link a scenario name always carries, so fall back to it and credit what has not
+                # been credited already. Reported-but-absent names are still called out below:
+                # this recovers the work, it does not hide the disagreement.
+                taken = {name for a in held.angles for name in a.credited}
+                found = [
+                    s.name
+                    for s in saved
+                    if s.name.split("__", 1)[0] == one.cell and s.name not in taken
+                ][: max(0, one.want - one.done)]
             # Credited through the canvas ledger: each name fills one bucket only, ever, and a
             # bucket filled over two rounds adds up instead of the second fold erasing the first.
             on_disk = held.credit(angle_id, found)

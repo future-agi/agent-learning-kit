@@ -696,3 +696,125 @@ def test_the_stage_s_count_wins_over_the_target_the_model_types(contract, where,
     )
 
     assert load_canvas(tmp_path).target == 500
+
+
+def test_folding_credits_journalled_scenarios_not_only_folders(contract, tmp_path):
+    """A delegated writer cannot write folders - saving would delete its siblings' work - so it
+    journals instead. Checking folders alone found nothing, credited nothing, and blocked
+    buckets whose scenarios existed all along."""
+    import asyncio
+
+    from fi.alk.harness.grid_tools import grid_tools
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import record_written
+
+    server, state = grid_tools(contract, tmp_path, wanted=200)
+    record = next(one for one in server.tools if one.name == "record_canvas")
+    asyncio.run(
+        record.handler(
+            {
+                "themes": [{"id": "TH01", "name": "T", "why": "w"}],
+                "buckets": [
+                    {
+                        "id": "A1",
+                        "theme": "TH01",
+                        "cell": "retrieve-ride",
+                        "angle": (
+                            "someone returning is matched against two stored records that look "
+                            "alike and the wrong one is chosen first"
+                        ),
+                        "why_hard": "data:two-records",
+                        "want": 2,
+                        "varies_by": ["record_state"],
+                    }
+                ],
+                "axes": [
+                    {
+                        "name": "record_state",
+                        "levels": ["one match", "two that look alike"],
+                        "why": "which record is chosen changes the answer",
+                    }
+                ],
+            }
+        )
+    )
+    # Proved and journalled, never written as a folder.
+    record_written(
+        [Scenario(name="retrieve-ride__one"), Scenario(name="retrieve-ride__two")], tmp_path
+    )
+
+    fold = next(one for one in server.tools if one.name == "fold_return")
+    said = asyncio.run(
+        fold.handler(
+            {
+                "returns": [
+                    {
+                        "angle_id": "A1",
+                        "wrote": 2,
+                        "names": ["retrieve-ride__one", "retrieve-ride__two"],
+                        "short": "covered both",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert not said.get("is_error"), said
+    assert state.canvas.named("A1").done == 2
+    assert state.canvas.named("A1").state == "done"
+
+
+def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_path):
+    """The writer names its own scenarios and the report passes through another model, so names
+    come back invented. Measured: every fold reported names that were nowhere on disk."""
+    import asyncio
+
+    from fi.alk.harness.grid_tools import grid_tools
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import record_written
+
+    server, state = grid_tools(contract, tmp_path, wanted=200)
+    record = next(one for one in server.tools if one.name == "record_canvas")
+    asyncio.run(
+        record.handler(
+            {
+                "themes": [{"id": "TH01", "name": "T", "why": "w"}],
+                "buckets": [
+                    {
+                        "id": "A1",
+                        "theme": "TH01",
+                        "cell": "retrieve-ride",
+                        "angle": (
+                            "someone returning is matched against two stored records that look "
+                            "alike and the wrong one is chosen first"
+                        ),
+                        "why_hard": "data:two-records",
+                        "want": 2,
+                        "varies_by": ["record_state"],
+                    }
+                ],
+                "axes": [
+                    {
+                        "name": "record_state",
+                        "levels": ["one match", "two that look alike"],
+                        "why": "which record is chosen changes the answer",
+                    }
+                ],
+            }
+        )
+    )
+    record_written(
+        [Scenario(name="retrieve-ride__real-one"), Scenario(name="retrieve-ride__real-two")],
+        tmp_path,
+    )
+
+    fold = next(one for one in server.tools if one.name == "fold_return")
+    said = asyncio.run(
+        fold.handler(
+            {"returns": [{"angle_id": "A1", "wrote": 2, "names": ["retrieve-ride__invented"]}]}
+        )
+    )
+
+    # The work is credited from the cell, and the disagreement is still reported.
+    assert state.canvas.named("A1").done == 2
+    assert "not on disk" in said["content"][0]["text"]
