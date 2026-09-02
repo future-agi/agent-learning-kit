@@ -49,17 +49,21 @@ it. Each bucket carries:
     want     how many scenarios go in it
     differs  what changes between them, once it is more than one
 
-Good:
+Good, and deliberately from four different kinds of agent, because the shape is the same for all
+of them:
 
-    TH12-03 | diagnose-fare | surge boundary confusion | rule:surge-disclosure | x3
-             differs: which side of the window the trip started, and whether the
-                      receipt was already sent
-    TH04-13 | update-payment-method | saved card asked for with no otp this call | rule:otp-before-card | x5
-    TH02-01 | compare-address | same street name in two cities | place:ambiguous-city | x5
+    TH12-03 | diagnose-charge   | boundary crossed mid-transaction   | rule:disclose-before-commit | x3
+             the 3 differ by: which side of the boundary, and whether the record was already sent
+    TH04-13 | update-credential | reused before identity is proved   | rule:verify-before-use      | x5
+             the 5 differ by: credential_state, identity_state
+    TH07-02 | execute-migration | applied to a repo with dirty state | data:uncommitted-changes    | x4
+             the 4 differ by: repo_state, branch_state
+    TH09-05 | navigate-checkout | form submitted before it validates | precondition:validate_first | x3
+             the 3 differ by: which field is invalid
 
 Not good:
 
-    charged 2.3x for a trip that started one minute before the surge window
+    charged 2.3x for a transaction that started one minute before the window
     closed, and the receipt shows the higher rate with no explanation
 
 That is the scenario with its code removed. It reads like diligence and it is what breaks this
@@ -74,8 +78,10 @@ taking the decision away from the only step that can check it.
 
 ## `why_hard` is what makes this work
 
-`why_hard` names the structural thing under test: `rule:surge-disclosure`, `precondition:book_ride`,
-`data:expired-card`, `place:ambiguous-city`, `state:suspended`.
+`why_hard` names the structural thing under test, and the five prefixes are the whole vocabulary:
+`rule:` something the agent must obey, `precondition:` something that must have happened first,
+`data:` a state the data can be in, `ambiguity:` a request with two readings, `boundary:` a value
+at a limit. What follows the colon is yours and comes from this agent, not from a list.
 
 Two angles claiming one why_hard on one cell are probably one angle written twice, and at angle
 length that is the only reliable way to notice: comparing words fails when a line is three words
@@ -91,7 +97,7 @@ The number of variants **where the correct answer genuinely differs**. Not how m
 answer could be phrased, and not how many people could ask it.
 
 An angle where the agent should do the same thing every time wants one scenario, however many callers you can
-imagine asking it. An angle where the answer turns on the market, the product, the account state
+imagine asking it. An angle where the answer turns on the environment, the resource, the account
 or which precondition is missing is worth as many as there are genuinely different answers.
 
 Do not reach for a different persona to make a number bigger. Two scenarios differing only in who
@@ -120,9 +126,10 @@ behaviour. Two rules keep this honest, and both matter:
 - a level must exist in the data, or be reachable by seeding it
 - a level must change the correct answer
 
-Nine riders are nine names, not nine levels. But a rider whose only card is expired, a rider with
-no card at all, and a rider with two cards are three levels of one axis, because the agent has to
-do something different for each.
+Nine users are nine names, not nine levels: the agent should treat them identically. But a user
+whose only credential is expired, a user with none at all, and a user with two are three levels of
+one axis, because the agent has to do something different for each. The test is always the same
+question: **if this value changed, would the right answer change?**
 
 **3. Name the why_hard values on each cell.** A why_hard is the structural thing under test, and there are
 five kinds, which between them cover how an agent fails:
@@ -159,8 +166,8 @@ one label is what makes two planners label the same bucket differently.
 combinations survive masking.
 
 **6. Mask, do not multiply.** Drop combinations that cannot happen or that collapse to the same
-answer: a wheelchair-accessible product in a market that has none, cash where cash is not taken, a
-guest with saved places. Without masking, `want` is a product of levels and every bucket inflates.
+answer: a capability in an environment that does not offer it, a payment route where that route is
+not accepted, an anonymous user with saved preferences. Without masking, `want` is a product of levels and every bucket inflates.
 
 ## Size a bucket by the state it crosses, not by a flat number
 
@@ -168,24 +175,26 @@ This is where the size of a suite actually comes from, and where plans go wrong 
 directions. Do not put one scenario in every bucket, and do not put twenty in every bucket. Ask
 what states this bucket crosses where the agent should behave differently, and count those.
 
-Buckets are wildly uneven, and that is correct. Worked through on a ride-booking agent:
+Buckets are wildly uneven, and that is correct. Worked through on four different agents, to show
+the reasoning rather than a domain:
 
-- a bucket touching payment can hold twelve or more: three markets, of which only one supports
-  cash, crossed with the payment states that exist in the data - a valid card, a default card
-  that is expired, a rider with no card at all, a rider with two, a wallet balance that does or
-  does not cover the fare. Each of those changes what the agent should say.
-- a bucket about resolving an address holds around six: the same street name in two cities, an
-  alias, a landmark instead of an address, somewhere outside the served market, a saved-place
-  label that collides, a misheard address the caller corrects.
-- a bucket about a guest being refused saved places holds two. There is no twentieth version of
-  it and inventing one is padding.
+- **a booking agent, payment blocked.** Payment state crossed with region: eight payment states,
+  three regions, but only one region takes cash and several pairs collapse to the same refusal.
+  Twelve survive.
+- **a support agent, refund requested.** Order state (shipped, delivered, lost) crossed with
+  whether the request is inside the returns window. Six survive, because a lost order behaves the
+  same either side of the window.
+- **a coding agent, dependency upgrade.** Repository state (clean, dirty, mid-rebase) crossed with
+  whether tests currently pass. Five survive, because you cannot be mid-rebase with a clean tree.
+- **a browser agent, item added to a basket.** Two: in stock and out of stock. There is no third,
+  and inventing one would be padding.
 
 So read the seeded data before sizing anything. The states that exist there are the ones a
 scenario can actually be written against, and the count of them is the honest `want`.
 
 `differs` is how a `want` above one earns itself. Naming a number is easy; naming what changes
-between the variants is the part that has to be true. "the market, which decides whether cash is
-offered" is a reason. "different callers" is not, because the agent should answer them the same.
+between the variants is the part that has to be true. "the region, which decides whether cash is
+accepted" is a reason. "different users" is not, because the agent should answer them the same.
 
 ## Where the size actually comes from
 
