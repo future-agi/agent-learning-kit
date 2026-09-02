@@ -322,8 +322,10 @@ class Canvas:
                 "same answer is one test repeated, not several."
             )
 
-        # Said rather than refused: prose can be a good reason, it just cannot be checked, and a
-        # plan where most counts rest on prose is a plan nobody can audit.
+        # Refused, not merely noted, and only once most of the plan is like this. A written reason
+        # can be perfectly good and a few of them are expected; what cannot stand is a plan whose
+        # sizes rest on prose throughout, because then no number in it can be checked by anything.
+        # The planner can almost always name the axis it means, and being made to is the point.
         unchecked = [one.id for one in self.angles if one.want > 1 and not one.varies_by]
         if len(unchecked) > max(3, len(self.angles) // 4):
             found.append(
