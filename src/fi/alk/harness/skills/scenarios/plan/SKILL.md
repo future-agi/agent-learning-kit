@@ -108,9 +108,18 @@ Give each bucket:
 
 **`cell`** — the coordinate from the grid.
 
-**`angle`** — what makes this case worth testing, in a few words. A phrase, not a sentence, and
-never a paragraph. If you find yourself describing how the case unfolds, you are writing the test
-instead of planning it.
+**`angle`** — a sentence describing the case, written so that somebody who has never seen this
+agent understands what is being tested. Two things have to be in it:
+
+- what the person is trying to achieve
+- what makes it hard
+
+Write it from the person's side, as something they want, not as a label for a feature. "greeted by
+name" is a label and tells a reader nothing. "a returning user expects to be recognised from their
+number, and the record it matches is not the one they are calling about" is a case.
+
+One or two sentences. If you are writing a third, you are describing how the case unfolds, which
+is the test rather than the plan.
 
 **`why_hard`** — which kind of difficulty, using exactly one of these five prefixes:
 
@@ -142,24 +151,25 @@ What follows the colon is yours, and describes this agent.
 **`want`** is the number of tests in the bucket. Work it out; do not pick it.
 
 1. Ask which state axes change the answer **for this bucket specifically**. List them in
-   **`varies_by`**. Usually one or two. Rarely more.
+   **`varies_by`**. Usually one, sometimes two, rarely more.
 2. Multiply the number of values those axes have. That is the ceiling.
-3. Remove the combinations that cannot happen in this world.
-4. Remove the combinations where the agent should do exactly the same thing.
+3. Remove combinations that cannot happen in this world.
+4. Remove combinations where the agent should do exactly the same thing.
 5. What is left is `want`.
 
-`want` can never be larger than the ceiling in step 2. If you want more tests than the axes allow,
-either there is another axis you have not named, or the extra tests do not exist.
+If a bucket holds more than one test it **must** name its axes. There is no way to justify a count
+in words: a sentence cannot be checked, and every count in this plan has to be checkable.
 
-Expect buckets to be very uneven. Some cross two axes and hold many tests. Many hold one, because
-the agent does one thing regardless of everything else. **That unevenness is correct.**
+`want` can never exceed the ceiling from step 2. If you want more tests than the axes allow, either
+there is an axis you have not named, or the extra tests do not exist.
+
+Expect buckets to be very uneven. Some cross two axes and hold many tests. Many hold exactly one,
+because the agent does one thing regardless of everything else. **That unevenness is correct.**
 
 Two signs the sizing has gone wrong:
 
 - every bucket holds one test → you listed tests instead of grouping them
 - every bucket holds the same number → you padded to reach a target
-
----
 
 ## Step 6. Record it, one theme at a time
 
@@ -186,7 +196,8 @@ Go through the plan and confirm all of these:
    early.
 6. The plan contains buckets where the agent should refuse, where it should ask, and where it
    should escalate. Not only ones where it succeeds.
-7. No angle is longer than a short phrase.
+7. Every angle reads as a case somebody could actually meet, and would make sense to a reader
+   who has never seen this agent.
 
 ---
 

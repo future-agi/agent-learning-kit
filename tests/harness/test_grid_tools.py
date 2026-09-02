@@ -400,14 +400,17 @@ class TestTheCanvasLoopEndToEnd:
             "record_canvas",
             {
                 "target": 6,
+                "axes": [{"name": "record_state", "levels": ["a", "b", "c", "d"]}],
                 "themes": [{"id": "TH01", "name": "Spine"}, {"id": "TH02", "name": "Rules"}],
                 "angles": [
                     {"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                     "angle": "booking cannot be found", "why_hard": "data:missing", "want": 3,
-                     "differs": "whether the booking exists at all or belongs to another rider"},
+                     "angle": "a stored record cannot be matched against the identifying details somebody supplied during the exchange",
+                     "why_hard": "data:missing", "expects": "ask", "want": 3,
+                     "varies_by": ["record_state"]},
                     {"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                     "angle": "fee disclosed before consent", "why_hard": "rule:fee", "want": 3,
-                     "differs": "the fee amount, and whether the caller agrees"},
+                     "angle": "a cost must be disclosed clearly and explicitly agreed before the irreversible step proceeds",
+                     "why_hard": "rule:fee", "expects": "ask", "want": 3,
+                     "varies_by": ["record_state"]},
                 ],
             },
         )
@@ -490,7 +493,7 @@ class TestTheCanvasLoopEndToEnd:
             {
                 "returns": [{"angle_id": "TH01-01", "wrote": 0, "short": "found more here"}],
                 "found": [
-                    {"theme": "TH01", "cell": cells[0], "angle": "surge crosses mid-quote",
+                    {"theme": "TH01", "cell": cells[0], "angle": "a published rate changes between the quoted figure and the confirmation step itself",
                      "why_hard": "rule:surge", "want": 2}
                 ],
             },
@@ -512,7 +515,7 @@ class TestTheCanvasLoopEndToEnd:
                     {"angle_id": "TH02-01", "blocked_reason": "done here"},
                 ],
                 "found": [
-                    {"theme": "TH02", "cell": cells[1], "angle": "driver already arrived",
+                    {"theme": "TH02", "cell": cells[1], "angle": "the assigned resource has already arrived by the moment the cancellation request reaches",
                      "why_hard": "state:arrived", "want": 3}
                 ],
             },
@@ -529,7 +532,7 @@ class TestTheCanvasLoopEndToEnd:
                 "fold_return",
                 {
                     "returns": [],
-                    "found": [{"theme": "TH01", "cell": cells[0], "angle": "another case found"}],
+                    "found": [{"theme": "TH01", "cell": cells[0], "angle": "a further difficult case discovered while reading the source, never planned for originally"}],
                 },
             )
         ids = [one.id for one in state.canvas.angles]
@@ -573,13 +576,13 @@ class TestTheCanvasLoopEndToEnd:
             "themes": [{"id": "TH01", "name": "First"}],
             "axes": [{"name": "s.market", "levels": ["a", "b", "c", "d"]}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                        "angle": "one thing worth testing", "want": 2,
+                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask", "want": 2,
                         "varies_by": ["s.market"]}],
         })
         said = call(server, "record_canvas", {
             "themes": [{"id": "TH02", "name": "Second"}],
             "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                        "angle": "another thing worth testing", "want": 3,
+                        "angle": "two stored records resemble each other closely enough that choosing wrongly between them matters", "why_hard": "ambiguity:x", "expects": "ask", "want": 3,
                         "varies_by": ["s.market"]}],
         })
         assert "2 buckets" in said
@@ -594,13 +597,13 @@ class TestTheCanvasLoopEndToEnd:
             "target": 12,
             "themes": [{"id": "TH01", "name": "First"}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                        "angle": "one thing worth testing"}],
+                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask"}],
         })
         call(server, "record_canvas", {
             "replace": True,
             "themes": [{"id": "TH02", "name": "Second"}],
             "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                        "angle": "a wholly different plan"}],
+                        "angle": "an entirely separate plan covering unrelated stored records and their awkward states", "why_hard": "data:y", "expects": "ask"}],
         })
         assert {one.id for one in state.canvas.angles} == {"TH02-01"}
 
@@ -612,14 +615,14 @@ class TestTheCanvasLoopEndToEnd:
             "axes": [{"name": "s.market", "levels": ["a", "b", "c", "d"]}],
             "themes": [{"id": "TH01", "name": "First"}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                        "angle": "one thing worth testing", "want": 3,
+                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask", "want": 3,
                         "varies_by": ["s.market"]}],
         })
         state.canvas.named("TH01-01").done = 2
         call(server, "record_canvas", {
             "themes": [{"id": "TH02", "name": "Second"}],
             "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                        "angle": "another thing worth testing"}],
+                        "angle": "two stored records resemble each other closely enough that choosing wrongly between them matters", "why_hard": "ambiguity:x", "expects": "ask"}],
         })
         assert state.canvas.named("TH01-01").done == 2
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.blueprint import MOST_ATTEMPTS, Angle, Canvas, Theme, load
+from fi.alk.harness.blueprint import _WORD, MOST_ATTEMPTS, Angle, Canvas, Theme, load
 from fi.alk.harness.contract import AgentContract, ToolSpec
 
 
@@ -28,14 +28,22 @@ def where(tmp_path):
     return tmp_path
 
 
+SAID = " where the stored record cannot be matched against details supplied during the exchange"
+
+
 def canvas(*rows, target: int = 0, themes=("TH01",)) -> Canvas:
-    """Rows are (id, theme, cell, angle) with optional why_hard and want."""
+    """Rows are (id, theme, cell, angle) with optional why_hard and want.
+
+    Angles are padded to a readable length, because a bucket that reads as a label rather than a
+    description is refused, and every fixture here would otherwise be testing that instead.
+    """
     return Canvas(
         target=target,
         themes=[Theme(id=one, name=one) for one in themes],
         angles=[
             Angle(
-                id=row[0], theme=row[1], cell=row[2], angle=row[3],
+                id=row[0], theme=row[1], cell=row[2],
+                angle=(row[3] if len(_WORD.findall(row[3])) >= 8 else row[3] + SAID),
                 why_hard=row[4] if len(row) > 4 else "",
                 want=row[5] if len(row) > 5 else 1,
             )
@@ -49,16 +57,23 @@ class TestWhatAPlanMustSayBeforeAnyoneWritesFromIt:
         held = canvas(("A1", "TH01", "invent-thing", "something impossible"))
         assert "not on the grid" in " ".join(held.problems({"retrieve-ride"}))
 
-    def test_an_angle_too_thin_to_write_from_is_reported(self):
-        held = canvas(("A1", "TH01", "retrieve-ride", "ride"))
-        assert "say too little" in " ".join(held.problems({"retrieve-ride"}))
+    def test_a_bucket_that_is_only_labelled_is_reported(self):
+        """"recognized caller greeted by first name" tells a reader nothing about the test."""
+        held = Canvas(
+            themes=[Theme("TH01", "TH01")],
+            angles=[Angle("A1", "TH01", "retrieve-ride", "greeted by name")],
+        )
+        said = " ".join(held.problems({"retrieve-ride"}))
+        assert "labelled rather than described" in said
 
-    def test_an_angle_written_as_a_script_is_reported(self):
-        """The failure that made a plan for a thousand impossible to emit at all."""
+    def test_an_angle_written_as_a_whole_script_is_reported(self):
+        """Readable is the bar; a paragraph is the finished test with its details stripped."""
         held = canvas((
             "A1", "TH01", "retrieve-ride",
-            "caller was charged 2.3x for a trip that started one minute before the surge "
-            "window closed and the receipt shows the higher rate with no explanation",
+            "the person asks about a charge they did not expect, and the agent has to find the "
+            "record, work out which of the two similar entries they mean, explain how the amount "
+            "was reached, check whether a correction is owed, and then either issue it or explain "
+            "why it cannot, while keeping the whole thing inside one short exchange",
         ))
         assert "scripts rather than angles" in " ".join(held.problems({"retrieve-ride"}))
 
@@ -230,7 +245,6 @@ class TestAPlanThatIsReallyAList:
         held.axes = [StateAxis("market", ["sf", "nyc", "blr", "ldn", "par"], "")]
         for one in held.angles:
             one.varies_by = ["market"]
-            one.differs = "the market, which decides whether cash is offered"
         assert held.problems({"retrieve-ride"}) == []
 
     def test_a_small_suite_is_not_second_guessed(self):
@@ -240,13 +254,16 @@ class TestAPlanThatIsReallyAList:
 
 
 class TestACountMustSayWhatItVaries:
-    def test_asking_for_several_without_saying_what_differs_is_refused(self):
+    def test_asking_for_several_without_naming_axes_is_refused(self):
         held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 5))
-        assert "what differs between them" in " ".join(held.problems({"retrieve-ride"}))
+        assert "without naming the" in " ".join(held.problems({"retrieve-ride"}))
 
-    def test_naming_what_differs_is_enough(self):
+    def test_naming_the_axes_is_what_makes_a_count_stand(self):
+        from fi.alk.harness.blueprint import StateAxis
+
         held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 5))
-        held.angles[0].differs = "the market, which decides whether cash is offered"
+        held.axes = [StateAxis("record_state", ["a", "b", "c", "d", "e"], "")]
+        held.angles[0].varies_by = ["record_state"]
         assert held.problems({"retrieve-ride"}) == []
 
     def test_a_single_scenario_needs_no_justification(self):
@@ -282,10 +299,10 @@ class TestACountIsDerivedFromTheWorld:
         held.angles[0].varies_by = ["s.invented"]
         assert "never derived" in " ".join(held.problems({"retrieve-ride"}))
 
-    def test_a_count_with_neither_axes_nor_a_reason_is_still_refused(self):
+    def test_a_count_with_no_axes_is_refused(self):
         held = canvas(("A1", "TH01", "retrieve-ride", "payment state", "", 9))
         held.axes = self.axes()
-        assert "what differs between them" in " ".join(held.problems({"retrieve-ride"}))
+        assert "without naming the" in " ".join(held.problems({"retrieve-ride"}))
 
 
 class TestThePlanReportsWhatItCovers:
@@ -352,9 +369,12 @@ class TestCoverageIsStatedAgainstWhatIsCheckable:
 
     def test_cause_and_outcome_are_recorded_separately(self):
         """An injection expects a refusal AND carries an injection overlay. Not a choice."""
+        from fi.alk.harness.blueprint import StateAxis
+
         held = self.plan()
+        held.axes = [StateAxis("region", ["a", "b", "c"], "")]
         for one in held.angles:
-            one.differs = "the market, which decides whether cash is offered"
+            one.varies_by = ["region"]
         held.angles[0].expects = "refuse"
         held.angles[0].overlay = "injection"
         held.angles[1].expects = "succeed"
@@ -392,11 +412,6 @@ class TestAWriterIsToldWhatMustDiffer:
         line = held.angles[0].line()
         assert "x8" in line
         assert "the 8 differ by: payment_state, market" in line
-
-    def test_a_written_reason_is_used_when_there_are_no_axes(self):
-        held = canvas(("A1", "TH01", "create-ride", "payment cannot be used", "data:payment", 3))
-        held.angles[0].differs = "how far the caller got before it failed"
-        assert "the 3 differ by: how far the caller got" in held.angles[0].line()
 
     def test_a_single_scenario_needs_no_dimension(self):
         held = canvas(("A1", "TH01", "create-ride", "guest has no saved places", "rule:guest", 1))
@@ -449,16 +464,15 @@ class TestACountCannotExceedWhatItsAxesAllow:
         held.angles[0].varies_by = ["payment_state"]
         assert held.problems({"retrieve-ride"}) == []
 
-    def test_a_plan_resting_mostly_on_prose_is_called_out(self):
+    def test_every_multi_scenario_bucket_must_name_its_axes(self):
+        """There is no prose escape hatch any more: the reason has to be checkable."""
         held = canvas(
             *[(f"A{i}", "TH01", "retrieve-ride", f"case number {i}", "data:x", 3)
               for i in range(8)],
         )
         held.axes = self.axes()
-        for one in held.angles:
-            one.differs = "several different riders and their cards"
         said = " ".join(held.problems({"retrieve-ride"}))
-        assert "justify their count in words rather than by naming axes" in said
+        assert "without naming the" in said
 
 
 class TestAnAxisOfNamesIsNotAnAxis:

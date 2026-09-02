@@ -152,7 +152,7 @@ def grid_tools(
         "record_canvas",
         "Write down what this suite will cover, before any of it is written. Themes group the "
         "work; an angle is one thing worth testing on one grid cell, in a few words, with how "
-        "many variants exist where the correct answer genuinely differs.\n\n"
+        "many scenarios it holds and what makes them differ.\n\n"
         "An angle says what is worth testing, never how it goes. 'surge boundary confusion' "
         "is an angle. 'charged 2.3x, receipt shows the higher rate, agent explains the window "
         "closed' is the scenario with its code removed: at that length a plan for a thousand is "
@@ -222,17 +222,12 @@ def grid_tools(
                             "varies_by": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Which state axes move the answer for this "
-                                "bucket. `want` is how many of their combinations survive "
-                                "masking, so the count is derived rather than chosen.",
-                            },
-                            "differs": {
-                                "type": "string",
-                                "description": "What changes between this bucket's scenarios. "
-                                "Needed when want is more than one and no varies_by axes are named.",
+                                "description": "The state axes that make this bucket's scenarios "
+                                "differ from each other. `want` is how many of their combinations "
+                                "genuinely need a different answer, so the count is derived.",
                             },
                         },
-                        "required": ["id", "theme", "cell", "angle"],
+                        "required": ["id", "theme", "cell", "angle", "why_hard", "expects"],
                     },
                 },
                 "target": {"type": "integer", "description": "The size of the finished suite."},
@@ -289,7 +284,6 @@ def grid_tools(
                     varies_by=[str(x) for x in ((one or {}).get("varies_by") or [])],
                     expects=str((one or {}).get("expects") or "").strip().lower(),
                     overlay=str((one or {}).get("overlay") or "").strip().lower(),
-                    differs=str((one or {}).get("differs") or "").strip(),
                 )
                 for one in rows
                 if isinstance(one, dict)
@@ -507,7 +501,6 @@ def grid_tools(
                             "angle": {"type": "string"},
                             "why_hard": {"type": "string"},
                             "want": {"type": "integer"},
-                            "differs": {"type": "string"},
                         },
                         "required": ["cell", "angle"],
                     },
@@ -564,7 +557,6 @@ def grid_tools(
                     angle=str((row or {}).get("angle") or "").strip(),
                     why_hard=str((row or {}).get("why_hard") or "").strip(),
                     want=max(1, int((row or {}).get("want") or 1)),
-                    differs=str((row or {}).get("differs") or "").strip(),
                 )
                 for row in args.get("found") or []
                 if isinstance(row, dict)
