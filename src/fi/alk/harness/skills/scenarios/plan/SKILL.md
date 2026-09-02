@@ -94,6 +94,12 @@ for the sake of it.
 
 If the grid is missing something the agent plainly does, correct it with `set_objects`.
 
+**The grid cannot show you order.** A cell names an operation on an object; it says nothing about
+what must have happened first. So work through the tools that refuse until something else has
+happened, and give each one a bucket for being asked too early. Name the tool in `why_hard`, as
+`precondition:<tool>`. These are among the most valuable tests there are, and they are invisible
+in any count of cells.
+
 ---
 
 ## Step 4. Write the buckets
@@ -232,6 +238,8 @@ them:
 - **a bucket holds more than one test without naming its axes** — the count cannot be checked
 - **a bucket holds more tests than its axes allow** — the extra tests do not exist
 - **the plan has nearly as many buckets as tests** — that is a list, not a plan
+- **a large plan touches only a small part of the grid** — deep in a few places, absent everywhere else
+- **a large plan names none of the tools that refuse until something else has happened** — being asked too early is a case the agent can fail and the grid cannot show
 
 Fix and record again. This loop is cheap. Anything left wrong here costs a whole test later.
 

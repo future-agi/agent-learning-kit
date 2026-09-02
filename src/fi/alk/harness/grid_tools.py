@@ -304,7 +304,9 @@ def grid_tools(
             held.axes += [one for one in state.canvas.axes if one.name not in named]
 
         problems = held.problems(
-            {cell.name for cell in state.grid.cells}, entity_labels(destination)
+            {cell.name for cell in state.grid.cells},
+            entity_labels(destination),
+            [one.name for one in contract.tools if one.requires],
         )
         if problems:
             # Refused rather than stored: a plan is the cheapest thing here to fix, and every

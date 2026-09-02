@@ -621,3 +621,37 @@ class TestThePlannerMayProbeFreely:
         stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
         said = self.probes(stage, monkeypatch)
         assert any("Four throwaway probes" in one for one in said)
+
+
+class TestOrderingIsPlannedForRatherThanMentioned:
+    """A tool that refuses until something else has happened is where an agent breaks, and the
+    grid cannot show the hole: a cell names an object and says nothing about order. Two whole
+    plans were reported as naming none of them and neither planner acted on it, so it is refused.
+    """
+
+    def big(self, why: str = "rule:something"):
+        return canvas(
+            *[
+                (f"A{n}", "TH01", "retrieve-ride", f"case number {n} that goes wrong somehow", why)
+                for n in range(12)
+            ],
+            target=200,
+        )
+
+    def test_a_large_plan_naming_none_of_them_is_refused(self):
+        found = " ".join(self.big().problems({"retrieve-ride"}, None, ["book_ride", "verify_otp"]))
+        assert "none of the 2 tools" in found
+        assert "book_ride" in found
+
+    def test_naming_one_in_why_hard_satisfies_it(self):
+        held = self.big(why="precondition:book_ride")
+        found = " ".join(held.problems({"retrieve-ride"}, None, ["book_ride", "verify_otp"]))
+        assert "none of the" not in found
+
+    def test_a_contract_with_no_gated_tools_is_not_asked_for_one(self):
+        assert "none of the" not in " ".join(self.big().problems({"retrieve-ride"}, None, []))
+
+    def test_a_small_plan_is_left_alone(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "one case that goes wrong"), target=10)
+        found = " ".join(held.problems({"retrieve-ride"}, None, ["book_ride"]))
+        assert "none of the" not in found

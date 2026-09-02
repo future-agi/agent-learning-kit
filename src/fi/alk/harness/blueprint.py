@@ -262,7 +262,12 @@ class Canvas:
                 found.append((axis.name, hits[0]))
         return found
 
-    def problems(self, cells: set[str], labels: dict[str, str] | None = None) -> list[str]:
+    def problems(
+        self,
+        cells: set[str],
+        labels: dict[str, str] | None = None,
+        gated: list[str] | None = None,
+    ) -> list[str]:
         """What must be fixed before a writer acts on any of it.
 
         Everything here is cheaper to catch now: a plan that repeats itself becomes a suite that
@@ -396,6 +401,22 @@ class Canvas:
                 "are all singular then this agent supports fewer scenarios than were asked for "
                 "and the honest move is to say so rather than to enumerate."
             )
+
+        # Reported for two whole plans running and ignored both times, so it is refused rather
+        # than mentioned. A tool that refuses until something else has happened is where an agent
+        # actually breaks, and the grid cannot show the hole: a cell is an object and says nothing
+        # about order. Zero is the bar, not a share, because a share invites scattering tool names
+        # through the prose without writing the ordering case.
+        if self.target >= WORTH_PLANNING * 5 and gated:
+            said = " ".join(one.angle.lower() + " " + one.why_hard.lower() for one in self.angles)
+            if not any(one.lower() in said for one in gated):
+                found.append(
+                    f"none of the {len(gated)} tools that refuse until something else has "
+                    "happened has a bucket naming it. Asking for one of these too early is a "
+                    "case the agent can fail and the grid cannot show, because a cell names an "
+                    "object and says nothing about order. Add a bucket for being asked too "
+                    "early, naming the tool in why_hard: " + ", ".join(sorted(gated)[:10])
+                )
 
         if self.target >= WORTH_PLANNING * 5 and cells:
             share = len(self.covered) / len(cells)
