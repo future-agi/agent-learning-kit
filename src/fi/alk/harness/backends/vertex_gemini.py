@@ -172,6 +172,18 @@ def _project() -> str:
     )
 
 
+def _api_key() -> str:
+    """The Gemini API key to use instead of Vertex, or empty when Vertex should be used.
+
+    Absent unless somebody sets one, so this changes nothing for an existing deployment.
+    """
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        found = os.environ.get(name, "").strip()
+        if found:
+            return found
+    return ""
+
+
 def _location() -> str:
     return os.environ.get("ALK_VERTEX_LOCATION", "global").strip() or "global"
 
@@ -297,11 +309,20 @@ class VertexGeminiSession:
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
-        # ADK builds its Vertex client from the environment, the same way the Claude backend
-        # passes provider env through its options.
-        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
-        os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
-        os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
+        # ADK builds its client from the environment, the same way the Claude backend passes
+        # provider env through its options. Vertex is the default and stays the default: it is
+        # only stood down when an API key is present, because the two reach Gemini over different
+        # hosts. Vertex mints a credential at oauth2.googleapis.com first; an API key goes straight
+        # to generativelanguage.googleapis.com. Where the token endpoints are unreachable but the
+        # model endpoint is not, a key is the only way through, and hard-coding Vertex made that
+        # unreachable by configuration.
+        if _api_key():
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
+            os.environ.setdefault("GOOGLE_API_KEY", _api_key())
+        else:
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+            os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
+            os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
         # static_instruction, not instruction: the skills are full of literal JSON braces,
         # and ADK templates {placeholders} in `instruction` from session state. Static
         # content is sent verbatim and is what ADK context-caches.
