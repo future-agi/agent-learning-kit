@@ -35,12 +35,11 @@ the list and stops, and the ceiling is then ours rather than the agent's.
 
 ## Which part you are doing
 
-**Planning a suite** and the count is more than a couple of dozen: load the plan sub-skill.
-Decide what every scenario is, one line each, before any of them are written.
-
-**Writing scenarios**, whether all of them or one slice of a plan: load the write sub-skill.
-
-For a handful of scenarios, skip planning and write them.
+The method for your part follows this preamble; there is nothing to load. **Planning a suite**
+means deciding what every scenario is, one line each, before any of them are written, and is
+worth doing whenever the count is more than a couple of dozen. **Writing scenarios** means
+producing and proving them, whether the whole suite or one slice of a plan. For a handful,
+skip planning and write them.
 
 ## The words, so they mean one thing each
 

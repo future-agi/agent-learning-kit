@@ -34,8 +34,8 @@ tests         one line: the condition this scenario passes on. It is shown to pe
               "setup_code", "fixture" and the like name your own machinery, not anything
               the agent did, and they are noise in a report. Name the particulars this
               scenario turns on rather than restating the use case: "a known account
-              books with their saved card" reads the same for every sibling, where
-              "Dana books an UberX to SFO on her saved Visa" says which one failed
+              uses their saved credential" reads the same for every sibling, where a line
+              naming this person, this product and this record says which one failed
 instruction   what this person is trying to achieve, written to them, plus everything
               they need to pursue it without inventing anything
 persona       who that person is: identity, communication style, languages/accent and characteristics
@@ -63,6 +63,20 @@ be asked twice, someone who answers a near-miss of the question, someone impatie
 early. These are the fields that decide whether the agent's handling is actually exercised, so
 spread them the way you spread use cases, and let the situation pick the temperament rather than
 attaching one at random.
+
+## Which role you are in
+
+This skill serves three situations. Decide yours before doing anything, from what you were given:
+
+- **You were handed a slice** (your prompt has a "Your slice" section, or a brief naming specific
+  buckets): you are a **slice writer**. Write and prove exactly those scenarios with
+  `try_calls` and `submit_scenario`, report what you covered, and stop. Skip every section marked
+  *orchestrators only*: you do not have those tools, and the suite-level decisions are not yours.
+- **You can dispatch writers** (you have a `scenario_writer` tool): you are the **orchestrator**.
+  Your work is the sections marked *orchestrators only*; the craft sections tell you what to
+  demand of the writers and how to judge what comes back.
+- **Neither**: the suite is small enough to write alone. Everything here is yours, and
+  "dispatch" steps do not apply.
 
 ## Three parts that must never leak into each other
 
@@ -261,11 +275,11 @@ reference steps. A shorter solution is not a weaker scenario, it is a scenario a
 claims to be about.
 
 **The agent's rules are not a reason to replay its flow.** A contract lists what the agent must
-do *when it performs* an operation: book only after an explicit read-back, never charge a saved
-card without a verified code this session. Those bind a scenario that books. They say nothing about
-one that explains an address, and reading them as a demand that every scenario book is the single
-commonest way a suite goes monotonous. Obey the rules your cell's own tools are governed by, and
-leave the rest to the cells they belong to.
+do *when it performs* an operation: commit only after an explicit confirmation, never use a
+stored credential without verifying it this session. Those bind a scenario that commits. They say
+nothing about one that merely explains, and reading them as a demand that every scenario perform
+the main transaction is the single commonest way a suite goes monotonous. Obey the rules your
+cell's own tools are governed by, and leave the rest to the cells they belong to.
 
 ## Two scenarios are different only if the right answer differs
 
@@ -306,7 +320,7 @@ GOOD   solution   [find_account(handle=...), get_account(account_id=...),
        (the transfer now has to be reached by discovering the reason for it)
 ```
 
-## A suite is a sample over a grid, not a list of ideas
+## A suite is a sample over a grid, not a list of ideas *(orchestrators and solo runs only)*
 
 Do not think of the ask as "write N scenarios". Think of it as: the space of everything this
 agent could be asked to do already exists, decide which parts of it are worth testing, and cover
@@ -344,10 +358,12 @@ it is the step nobody else can do for you.
 
 Then write the plan, and finish with `show_coverage` so what was left untested is on the record.
 
-## Step 1: derive the grid
+## Step 1: read the grid *(orchestrators and solo runs only; skip all three steps when a canvas already exists)*
 
 A scenario is a coordinate. The first axis is what the person wants, and it is **derived, not
-brainstormed**, so nothing is missed.
+brainstormed**, so nothing is missed. `show_grid` has already done this derivation; read it, and
+work through the steps below only to judge whether it got the objects right, correcting it with
+`set_objects` where it did not.
 
 **Every task is one of twelve operations applied to one of the agent's objects.** The operations
 are fixed, because an intent either reads, writes, or manages the interaction, and there is no
@@ -371,7 +387,7 @@ Navigate, you have almost certainly under-derived. Those five are the ones hand-
 always miss, and they are where real users spend their time: "why was I charged twice" is a
 Diagnose cell, and it is the single most common support contact there is.
 
-## Step 2: the other axes
+## Step 2: the other axes *(orchestrators and solo runs only)*
 
 The task is what they want. These are the conditions they want it under. Treat each as a vector
 of values, not a label, so they compose.
@@ -394,7 +410,7 @@ of values, not a label, so they compose.
 Getting this wrong is the most common mistake here. An impersonation test where the person is
 actually the account holder tests nothing: the world has to make them *not* be.
 
-## Step 3: mask and sample
+## Step 3: mask and sample *(orchestrators and solo runs only)*
 
 **Mask.** Remove cells that are incoherent for this agent, not merely unlikely. A child changing
 corporate billing; a person speaking one language given an attack written in another. Say roughly
@@ -434,11 +450,14 @@ plain filename with no slashes. When you are working from `plan_suite`, the name
 use it exactly, because coverage is recovered by reading these names back.
 
 ```
-diagnose-fare__evasive
-execute-refund__impersonation
-authenticate-caller__second-language
-compare-ride__baseline
+<operation>-<object>__evasive
+<operation>-<object>__impersonation
+<operation>-<object>__second-language
+<operation>-<object>__baseline
 ```
+
+The operation and object come from the cell being covered; the suffix is the one off-baseline
+condition.
 
 The index becomes the coverage record, so anyone can see what was tested without opening a single
 file. Do not use names like `scenario_1` or `edge_case_a`.
@@ -460,7 +479,7 @@ rest, and withhold when the copy would no longer be the scenario you wrote:
 Everything else survives being asked by a different sort of person, and should say so by leaving
 the field alone. Withholding out of caution is how a suite stays small for no reason.
 
-## Work as a team
+## Work as a team *(orchestrators only: this needs `scenario_writer` and the canvas tools)*
 
 For anything more than a handful, do not write them one at a time yourself: you will run out of
 turns long before the suite is done.
@@ -483,6 +502,12 @@ sentence on what it actually covered.
 That sentence is what the next writer on the same theme reads, so it should say what was covered
 and what was not, not that the work is done. The count is recorded but not believed: what counts
 as written is read off disk, and a disagreement between the two is a bug worth looking at.
+
+**A writer that fails is folded too.** If a dispatched writer errors or never returns, call
+`fold_return` for its angles anyway, with the names of whatever reached disk and a one-line note
+saying what happened. Its claims stay parked until you do, and every angle it held is invisible
+to `claim_slice` for the rest of the run. And name each writer distinctly when you claim: the
+claim records who holds it, and a shared name makes two writers' failures indistinguishable.
 
 An angle that comes back part-filled reopens and is usually given to somebody else next time,
 which is what breaks a deadlock: the second writer is not carrying the first one's assumptions.
@@ -573,17 +598,18 @@ reset seam instead of writing an unexecutable scenario.
 
 Every scenario must include a `fixture` manifest whose origin field is set to seed, generated, or
 mixed, plus the exact identity, credentials/verification data, locations, preferences and
-account state the person may rely on. This manifest is supplied to the varies_by person model; facts
-hidden only in setup code cannot be answered reliably in a contact detail call.
+account state the person may rely on. This manifest is supplied to the simulated person; facts
+hidden only in setup code cannot be answered reliably mid-session.
 
-- Use different realistic names, contact detail numbers, locations, account histories and payment states.
-- Generate a different non-trivial OTP for each scenario that uses one. Never use `123456`,
-  repeated digits, ascending/descending sequences, or a code copied from another scenario.
-- Avoid demo clichés such as Alex/Jordan Test, `555` contact detail numbers, `123 Main Street`, card
-  `4242`, and identical addresses unless they are genuinely present in submitted seed data and
-  the test specifically depends on that record.
-- Keep every fact internally consistent: the person's persona, contact detail, account row, OTP row,
-  payment method, market, currency, saved places and instruction must describe the same person.
+- Use different realistic names, contact details, locations, account histories and account states.
+- Generate a different non-trivial one-time code for each scenario that uses one. Never use
+  `123456`, repeated digits, ascending/descending sequences, or a code copied from another
+  scenario.
+- Avoid demo clichés: placeholder-sounding names, `555` numbers, `123 Main Street`, the card
+  number every tutorial uses, identical addresses. Use them only when genuinely present in the
+  submitted seed data and the test specifically depends on that record.
+- Keep every fact internally consistent: the persona, contact details, every data row seeded for
+  them, and the instruction must all describe the same person.
 - Vary outcome as well as wording: success, refusal, correction, ambiguity, retry, stale state,
   unavailable dependency and recovery should not all share one happy-path fixture.
 
@@ -796,9 +822,9 @@ hides the problem and everything built afterwards inherits it.
    `try_calls` the solution, then `submit_scenario`.
 7. Read what comes back. A refusal names which gate failed and why. Fill real gaps by briefing
    the missing cells.
-8. `save_scenarios` when the count matches what was asked for.
+8. `save_scenarios` once everything submitted is in. It always saves what has been proved; anything still off about the suite comes back in its report rather than blocking the save.
 
-## Finishing
+## Finishing *(orchestrators and solo runs only; a slice writer reports its slice and never saves)*
 
 Report coverage, not effort:
 
