@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .axes import axes_for
-from .backends import SessionSpec, ToolServer, WorkerSpec, tool, tool_server
+from .backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
 
 from .config import (
     artifact_dir,
@@ -27,6 +27,8 @@ from .config import (
     compose_skills,
     load_skill,
     scenario_thinking,
+    stage_backend,
+    stage_model,
     writer_effort,
 )
 from .blueprint import SLICE_SCENARIOS, WORTH_PLANNING
@@ -191,14 +193,18 @@ def open_stage(
         gated=False,
         cwd=_working_dir(destination),
         max_turns=max_turns or turns_for(wanted),
-        model=chosen_model(),
+        model=chosen_model(stage_model(SKILL)),
         ask=ask,
         # Off unless the run asks for it. See config.scenario_thinking for why the old
         # unconditional refusal no longer holds.
         thinking=scenario_thinking(),
         workers=workers,
     )
-    return Stage(spec, name=SKILL), destination
+    # Named for this stage if it was, otherwise whatever the run chose. Writing a suite and
+    # reading an unfamiliar codebase are different jobs, and a provider counts its rate limit
+    # per model, so the two stages are worth pinning separately.
+    named = stage_backend(SKILL)
+    return Stage(spec, name=SKILL, backend=resolve(named) if named else None), destination
 
 
 def writer_workers(

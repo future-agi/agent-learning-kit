@@ -44,6 +44,28 @@ def credentials_hint() -> str:
     )
 
 
+def _stage_key(stage: str) -> str:
+    """A stage's name as an environment variable fragment: ``scenarios/write`` -> ``SCENARIOS``."""
+    return stage.split("/", 1)[0].replace("-", "_").upper()
+
+
+def stage_backend(stage: str) -> str | None:
+    """The backend this stage should run on, if one was named for it.
+
+    Stages are not alike. Reading an unfamiliar codebase and writing a suite of scenarios reward
+    different models, and a provider's rate limit is counted per model, so pinning the expensive
+    stage to one and the voluminous stage to another is both a quality and a throughput decision.
+    ``ALK_SCENARIOS_HARNESS`` overrides ``ALK_HARNESS`` for the scenarios stage alone; with
+    nothing set the global choice applies as before.
+    """
+    return os.environ.get(f"ALK_{_stage_key(stage)}_HARNESS", "").strip() or None
+
+
+def stage_model(stage: str) -> str | None:
+    """The model this stage should run on, if one was named for it. See ``stage_backend``."""
+    return os.environ.get(f"ALK_{_stage_key(stage)}_MODEL", "").strip() or None
+
+
 def chosen_model(model: str | None = None) -> str:
     """The model a session will actually run on.
 
