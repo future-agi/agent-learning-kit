@@ -79,6 +79,26 @@ def thinking_config() -> dict[str, Any]:
     return {"type": "disabled"}
 
 
+def compose_skills(*names: str) -> str:
+    """Several skills behind one copy of the harness preamble.
+
+    ``load_skill`` prepends the preamble to whatever it returns, so asking it for two skills
+    sends that preamble twice: measured at 7KB duplicated in a 93KB prompt, resent every turn.
+    This also lets a stage carry only the method for the job in hand. A planner loaded the whole
+    44KB of the writing skill it was not going to use until after it had finished planning.
+    """
+    parts = [(SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8") for name in names]
+    body = "\n\n---\n\n".join(parts)
+    if not HARNESS.exists():
+        return body
+    return (
+        f"{HARNESS.read_text(encoding='utf-8')}\n\n"
+        "---\n\n"
+        "# The stage you are in now\n\n"
+        f"{body}"
+    )
+
+
 def scenario_thinking() -> bool:
     """Whether the scenario stage may think, from ALK_SCENARIO_THINKING. Off unless asked.
 

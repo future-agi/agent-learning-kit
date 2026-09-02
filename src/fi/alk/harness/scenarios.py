@@ -24,6 +24,7 @@ from .backends import SessionSpec, ToolServer, WorkerSpec, tool, tool_server
 from .config import (
     artifact_dir,
     chosen_model,
+    compose_skills,
     load_skill,
     scenario_thinking,
     writer_effort,
@@ -134,8 +135,9 @@ def open_stage(
         system_prompt=(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
-            f"\n\n{load_skill(SKILL)}"
-            + (f"\n\n{load_skill(PLAN_SKILL)}" if planning else "")
+            # Only the method for the job in hand. A planner does not need the writing skill,
+            # and carrying it cost 44KB on every turn of the stage that plans.
+            + f"\n\n{compose_skills(PARENT_SKILL, PLAN_SKILL if planning else SKILL)}"
             + (
                 f"\n\nPlan all {wanted} scenarios first, then write them."
                 if planning
@@ -207,7 +209,7 @@ def writer_workers(
             instructions=(
                 f"## This agent\n\n{contract.brief(with_data=True)}"
                 f"\n\n## Its world\n\n{world_summary(destination)}"
-                f"\n\n{load_skill(SKILL)}"
+                f"\n\n{compose_skills(PARENT_SKILL, SKILL)}"
                 "\n\n## Your slice\n\nYou are one writer among several working on the same "
                 "suite at the same time. Write only the slice you were given, submit each "
                 "scenario as you prove it, and report which cells you covered and any you "

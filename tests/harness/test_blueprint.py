@@ -257,3 +257,42 @@ class TestWritersRunToCompletionBeforeTheStageEnds:
         assert all(one.get("background") is False for one in built), (
             "a writer was left to run in the background, so the stage can outlive it"
         )
+
+
+class TestTheStageCarriesOnlyWhatItNeeds:
+    """Every turn resends the system prompt, so what is in it is paid for repeatedly.
+
+    Measured before this: 93KB, of which 7KB was the harness preamble included twice and 44KB was
+    the writing skill held by a stage that was still planning.
+    """
+
+    def test_the_preamble_appears_once(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+        from fi.alk.harness.config import HARNESS
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        opening = HARNESS.read_text(encoding="utf-8")[:120]
+        for wanted in (4, 50):
+            stage, _ = scenarios.open_stage(contract, out=where, wanted=wanted)
+            assert stage._spec.system_prompt.count(opening) == 1
+
+    def test_a_planning_stage_does_not_carry_the_writing_method(
+        self, contract, where, monkeypatch
+    ):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        planning, _ = scenarios.open_stage(contract, out=where, wanted=50)
+        writing, _ = scenarios.open_stage(contract, out=where, wanted=4)
+        assert "Plan the suite before writing it" in planning._spec.system_prompt
+        assert len(planning._spec.system_prompt) < len(writing._spec.system_prompt), (
+            "the planner is carrying at least as much as the writer, so nothing was saved"
+        )
+
+    def test_the_writers_still_get_the_writing_method(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
+        worker = next(iter(stage._spec.workers.values()))
+        assert "submit_scenario" in worker.instructions
