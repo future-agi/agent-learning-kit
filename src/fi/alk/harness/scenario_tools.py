@@ -124,6 +124,43 @@ def load_scenarios(destination: Path) -> list[Scenario]:
     return read_all(destination)
 
 
+def unbacked_condition_problems(scenario: Scenario) -> list[str]:
+    """Refuse a scenario whose name claims a condition its world does not make true.
+
+    A scenario named for an adversarial condition is counted as covering it, so the name is a
+    claim about the world and not a label. Some conditions are only real if the seeded data says
+    so: an impersonation test where the caller *is* the account holder is an ordinary call
+    wearing a dangerous name, and it is worse than having no such test at all, because the
+    coverage report then says the case is handled.
+
+    The axis file already declares which settings need the world changed. This holds a scenario
+    to that declaration: claim one in the name, and there has to be setup code making it true.
+    """
+    from .axes import axes_for
+
+    _, _, condition = scenario.name.partition("__")
+    if not condition:
+        return []
+    if scenario.setup_code.strip():
+        return []
+
+    said: list[str] = []
+    parts = {one for one in condition.split("__")[0].split("-") if one}
+    for axis in axes_for().axes:
+        for setting in axis.settings:
+            if not setting.needs_world:
+                continue
+            # Whole-segment match, so ``second-language`` never reads as the ``fraud`` setting.
+            if setting.name != condition.split("__")[0] and setting.name not in parts:
+                continue
+            said.append(
+                f"this scenario is named for {axis.name}={setting.name}, and nothing in the "
+                f"world makes that true: {setting.needs_world}. Write setup_code that seeds it, "
+                "or name the scenario for what it actually tests."
+            )
+    return said
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -153,6 +190,7 @@ def accept_scenario(
             scenario, catalogue, trial.state(), simulator_prompt
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+        problems.extend(unbacked_condition_problems(scenario))
     finally:
         trial.close()
 

@@ -207,3 +207,45 @@ class TestUngatedStageStillTalksToTheOperator:
         assert "Bash" in spec.builtins and "Read" in spec.builtins
         # And it has both tool servers: writing scenarios, and seeing the grid.
         assert {"scenarios", "grid"} <= set(spec.servers)
+
+
+class TestAScenarioMustMeanWhatItsNameClaims:
+    """A scenario named for an adversarial condition is counted as covering it.
+
+    So the name is a claim about the world, not a label. An impersonation test where the caller
+    really is the account holder is an ordinary call wearing a dangerous name, and it is worse
+    than having no such test: the coverage report then says the case is handled. This was found
+    on a real run, where a scenario named for impersonation passed all three gates while its
+    branch read "books a ride, then cancels after confirming" and its setup was empty.
+    """
+
+    def refused(self, name: str, setup: str = "") -> list[str]:
+        from fi.alk.harness.scenario import Scenario
+        from fi.alk.harness.scenario_tools import unbacked_condition_problems
+
+        return unbacked_condition_problems(Scenario(name=name, setup_code=setup))
+
+    def test_claiming_a_world_backed_condition_without_seeding_it_is_refused(self):
+        said = self.refused("cancel-ride__impersonation")
+        assert said and "nothing in the world makes that true" in said[0]
+        # And the reason comes from the axis file, so it says what to seed rather than just no.
+        assert "not who they claim to be" in said[0]
+
+    def test_seeding_it_settles_the_objection(self):
+        assert self.refused("cancel-ride__impersonation", "def setup(world):\n    pass\n") == []
+
+    def test_the_free_caller_dials_are_untouched(self):
+        """A rushed or second-language caller needs no world change, so requiring one is wrong."""
+        for name in ("cancel-ride__rushed", "cancel-ride__second-language", "cancel-ride__senior"):
+            assert self.refused(name) == []
+
+    def test_a_baseline_scenario_needs_no_setup(self):
+        assert self.refused("cancel-ride__baseline") == []
+
+    def test_every_world_backed_setting_is_held_to_it(self):
+        for setting in ("impersonation", "emergency", "fraud"):
+            assert self.refused(f"execute-payment__{setting}"), setting
+
+    def test_a_setting_name_inside_another_word_does_not_trigger_it(self):
+        """`second-language` must never read as some other axis value by substring."""
+        assert self.refused("explain-fare__second-language") == []
