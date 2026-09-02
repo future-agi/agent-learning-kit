@@ -310,8 +310,7 @@
           "applies": {
             "persona.personality": "Anxious"
           },
-          "needs_world": "the situation has to be real in the data, not merely asserted by the caller",
-          "guidance": "Time-critical and consequential. The graded behaviour is recognising it and routing, not solving it."
+          "guidance": "Time-critical and consequential, and reported by the caller rather than written in the data. The graded behaviour is recognising it and routing, not solving it."
         },
         {
           "name": "fraud",

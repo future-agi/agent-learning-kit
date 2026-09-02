@@ -171,7 +171,11 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     _, _, condition = scenario.name.partition("__")
     if not condition:
         return []
-    if _seeds_anything(scenario.setup_code):
+    # Either half grounds the claim. Seeding it is one way; asserting it is the other, and it is
+    # the right one when the base world already makes the condition true. An agent's own starting
+    # data often carries a suspended account or a disputed charge, and a scenario that finds one
+    # and checks it is better grounded than one that writes its own.
+    if _seeds_anything(scenario.setup_code) or _seeds_anything(scenario.ready_code):
         return []
 
     said: list[str] = []
@@ -184,9 +188,10 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
             if setting.name != condition.split("__")[0] and setting.name not in parts:
                 continue
             said.append(
-                f"this scenario is named for {axis.name}={setting.name}, and nothing in the "
-                f"world makes that true: {setting.needs_world}. Write setup_code that seeds it, "
-                "or name the scenario for what it actually tests."
+                f"this scenario is named for {axis.name}={setting.name}, and nothing ties it to "
+                f"the world: {setting.needs_world}. Seed it in setup_code, or find it in the "
+                "starting data and assert it in ready_code, or name the scenario for what it "
+                "actually tests."
             )
     return said
 

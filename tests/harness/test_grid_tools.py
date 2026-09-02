@@ -219,17 +219,33 @@ class TestAScenarioMustMeanWhatItsNameClaims:
     branch read "books a ride, then cancels after confirming" and its setup was empty.
     """
 
-    def refused(self, name: str, setup: str = "") -> list[str]:
+    def refused(self, name: str, setup: str = "", ready: str = "") -> list[str]:
         from fi.alk.harness.scenario import Scenario
         from fi.alk.harness.scenario_tools import unbacked_condition_problems
 
-        return unbacked_condition_problems(Scenario(name=name, setup_code=setup))
+        return unbacked_condition_problems(
+            Scenario(name=name, setup_code=setup, ready_code=ready)
+        )
 
-    def test_claiming_a_world_backed_condition_without_seeding_it_is_refused(self):
+    def test_claiming_a_world_backed_condition_without_grounding_it_is_refused(self):
         said = self.refused("cancel-ride__impersonation")
-        assert said and "nothing in the world makes that true" in said[0]
-        # And the reason comes from the axis file, so it says what to seed rather than just no.
+        assert said and "nothing ties it to the world" in said[0]
+        # And the reason comes from the axis file, so it says what to ground rather than just no.
         assert "not who they claim to be" in said[0]
+
+    def test_asserting_the_condition_grounds_it_just_as_well_as_seeding_it(self):
+        """Found on a real run: the base world already held a suspended account.
+
+        A scenario that finds the condition in the agent's own starting data and asserts it in
+        ready_code is better grounded than one that writes its own, not worse. Demanding
+        setup_code specifically refused correct scenarios.
+        """
+        asserts = (
+            'def ready(world):\n'
+            '    u = next(x for x in world.state()["users"] if x["status"] == "suspended")\n'
+            '    return None if u else "no suspended user"\n'
+        )
+        assert self.refused("execute-payment__fraud", ready=asserts) == []
 
     def test_seeding_it_settles_the_objection(self):
         seeded = 'def setup(world):\n    world.rows("users")[0]["phone"] = "+15550000"\n'
@@ -244,8 +260,14 @@ class TestAScenarioMustMeanWhatItsNameClaims:
         assert self.refused("cancel-ride__baseline") == []
 
     def test_every_world_backed_setting_is_held_to_it(self):
-        for setting in ("impersonation", "emergency", "fraud"):
+        for setting in ("impersonation", "fraud"):
             assert self.refused(f"execute-payment__{setting}"), setting
+
+    def test_a_prompt_side_twist_needs_no_world_at_all(self):
+        """An emergency is reported by the caller, not written in a table, and neither is an
+        injection. Holding those to a world condition would demand fiction."""
+        for setting in ("emergency", "injection"):
+            assert self.refused(f"handoff-caller__{setting}") == [], setting
 
     def test_a_setting_name_inside_another_word_does_not_trigger_it(self):
         """`second-language` must never read as some other axis value by substring."""
