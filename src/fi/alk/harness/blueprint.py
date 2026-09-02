@@ -297,6 +297,40 @@ class Canvas:
                 + ", ".join(odd[:6])
             )
 
+        # The arithmetic has to hold: a bucket cannot hold more scenarios than its axes can tell
+        # apart. Masking only removes combinations, so a want above the product came from
+        # somewhere other than the axes. Measured on the first real plan, 19 of 167 multi-scenario
+        # buckets failed this, one asking for eight from an axis with three levels, and the
+        # reasons given were lists of data values: six riders each using their own card is one
+        # test run six times, not six tests.
+        levels = {one.name: max(1, len(one.levels)) for one in self.axes}
+        overreach: list[str] = []
+        for one in self.angles:
+            if one.want <= 1 or not one.varies_by:
+                continue
+            room = 1
+            for name in one.varies_by:
+                room *= levels.get(name, 1)
+            if one.want > room:
+                overreach.append(f"{one.id} wants {one.want} from {room}")
+        if overreach:
+            found.append(
+                f"{len(overreach)} buckets ask for more scenarios than the axes they name can "
+                "tell apart: "
+                + "; ".join(overreach[:6])
+                + ". Name the other axis that varies, or lower the count. Different data with the "
+                "same answer is one test repeated, not several."
+            )
+
+        # Said rather than refused: prose can be a good reason, it just cannot be checked, and a
+        # plan where most counts rest on prose is a plan nobody can audit.
+        unchecked = [one.id for one in self.angles if one.want > 1 and not one.varies_by]
+        if len(unchecked) > max(3, len(self.angles) // 4):
+            found.append(
+                f"{len(unchecked)} buckets justify their count in words rather than by naming "
+                "axes, so nothing can check them. Name the axes wherever you can."
+            )
+
         unjustified = [
             one.id
             for one in self.angles

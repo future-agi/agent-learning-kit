@@ -220,12 +220,16 @@ class TestAPlanThatIsReallyAList:
         assert "not a plan" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_buckets_that_carry_several_scenarios_pass(self):
+        from fi.alk.harness.blueprint import StateAxis
+
         held = canvas(
             *[(f"A{i}", "TH01", "retrieve-ride", f"case number {i} of many", "", 5)
               for i in range(8)],
             target=40,
         )
+        held.axes = [StateAxis("market", ["sf", "nyc", "blr", "ldn", "par"], "")]
         for one in held.angles:
+            one.varies_by = ["market"]
             one.differs = "the market, which decides whether cash is offered"
         assert held.problems({"retrieve-ride"}) == []
 
@@ -404,3 +408,54 @@ class TestAWriterIsToldWhatMustDiffer:
         held.angles[0].overlay = "injection"
         line = held.angles[0].line()
         assert "expects refuse" in line and "overlay injection" in line
+
+
+class TestACountCannotExceedWhatItsAxesAllow:
+    """A bucket cannot hold more scenarios than its axes can tell apart.
+
+    The first real plan had 19 of 167 multi-scenario buckets failing this, one asking for eight
+    scenarios from a single axis with three levels. Their stated reasons gave the game away: they
+    listed data values rather than states. Six riders each paying with their own valid card is one
+    test run six times, because the agent does the same thing every time. Checking that a reason
+    exists was never enough; the arithmetic has to hold.
+    """
+
+    def axes(self):
+        from fi.alk.harness.blueprint import StateAxis
+
+        return [
+            StateAxis("payment_state", ["valid", "expired", "none"], ""),
+            StateAxis("market", ["sf", "nyc", "blr"], ""),
+        ]
+
+    def test_a_count_beyond_its_axes_is_refused(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "cards on file", "data:cards", 8))
+        held.axes = self.axes()
+        held.angles[0].varies_by = ["payment_state"]
+        said = " ".join(held.problems({"retrieve-ride"}))
+        assert "more scenarios than the axes they name can tell apart" in said
+        assert "A1 wants 8 from 3" in said
+
+    def test_crossing_two_axes_makes_room_for_more(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "cards by market", "data:cards", 8))
+        held.axes = self.axes()
+        held.angles[0].varies_by = ["payment_state", "market"]
+        assert held.problems({"retrieve-ride"}) == []
+
+    def test_asking_for_fewer_than_the_axes_allow_is_fine(self):
+        """Masking only ever removes combinations, so under is expected and over is the fault."""
+        held = canvas(("A1", "TH01", "retrieve-ride", "cards on file", "data:cards", 2))
+        held.axes = self.axes()
+        held.angles[0].varies_by = ["payment_state"]
+        assert held.problems({"retrieve-ride"}) == []
+
+    def test_a_plan_resting_mostly_on_prose_is_called_out(self):
+        held = canvas(
+            *[(f"A{i}", "TH01", "retrieve-ride", f"case number {i}", "data:x", 3)
+              for i in range(8)],
+        )
+        held.axes = self.axes()
+        for one in held.angles:
+            one.differs = "several different riders and their cards"
+        said = " ".join(held.problems({"retrieve-ride"}))
+        assert "justify their count in words rather than by naming axes" in said

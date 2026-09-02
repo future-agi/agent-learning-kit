@@ -571,7 +571,7 @@ class TestTheCanvasLoopEndToEnd:
         call(server, "record_canvas", {
             "target": 12,
             "themes": [{"id": "TH01", "name": "First"}],
-            "axes": [{"name": "s.market", "levels": ["a", "b"]}],
+            "axes": [{"name": "s.market", "levels": ["a", "b", "c", "d"]}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
                         "angle": "one thing worth testing", "want": 2,
                         "varies_by": ["s.market"]}],
@@ -609,7 +609,7 @@ class TestTheCanvasLoopEndToEnd:
         cells = sorted({one.name for one in state.grid.cells})[:3]
         call(server, "record_canvas", {
             "target": 12,
-            "axes": [{"name": "s.market", "levels": ["a", "b", "c"]}],
+            "axes": [{"name": "s.market", "levels": ["a", "b", "c", "d"]}],
             "themes": [{"id": "TH01", "name": "First"}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
                         "angle": "one thing worth testing", "want": 3,
