@@ -467,7 +467,10 @@ def grid_tools(
             "Brief one writer on exactly these, and give it the callers: a name, an accent and "
             "a location per scenario, distinct across the whole suite. Ask it to report, for "
             "each bucket, the names of the scenarios it wrote: that is what fold_return checks "
-            "against the disk."
+            "against the disk.\n\nName the cells above in the brief, verbatim. A writer has no "
+            "grid tools and cannot look a cell up, so one left to guess coins a name that is on "
+            "no grid, and coverage is read back from those names: such a scenario counts towards "
+            "nothing, however good it is."
         )
         return _ok("\n".join(lines))
 

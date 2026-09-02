@@ -462,6 +462,14 @@ condition.
 The index becomes the coverage record, so anyone can see what was tested without opening a single
 file. Do not use names like `scenario_1` or `edge_case_a`.
 
+**Use only the cells you were given.** If you were handed a slice, its cells are named in your
+brief and those are the only ones you may put in a name. You cannot see the grid, so a cell you
+invent is very likely not on it, and coverage is recovered by reading these names back: a name
+that matches no cell is a scenario that counts towards nothing, however good it is. When the case
+you have found belongs somewhere outside your slice, write it under the closest cell you were
+given and say so in your report, or report it as a cell worth adding and leave it unwritten.
+Never coin a new cell name to make one fit.
+
 ## Say what a scenario survives, in `varies`
 
 A proved scenario can be copied across the conditions that change only who is calling: the
