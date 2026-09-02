@@ -753,6 +753,7 @@ class Canvas:
                             "state": one.state,
                             "claimed_by": one.claimed_by,
                             "notes": one.notes,
+                            "credited": one.credited,
                         }
                         for one in self.angles
                     ],
@@ -809,6 +810,7 @@ def load(destination: Path) -> Canvas:
                     state=str(one.get("state") or "open"),
                     claimed_by=str(one.get("claimed_by") or ""),
                     notes=list(one.get("notes") or []),
+                    credited=[str(x) for x in (one.get("credited") or [])],
                 )
                 for one in held.get("buckets") or held.get("angles") or []
                 if one.get("id")

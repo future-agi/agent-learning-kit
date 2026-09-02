@@ -765,3 +765,21 @@ class TestTheSpreadIsDealtNotRequested:
             return
         said = callers_for(0, 6)
         assert sum(1 for one in places if one in said) >= 2, said
+
+
+def test_the_credit_ledger_survives_a_save_and_load(tmp_path):
+    """Without this the ledger evaporates on every restart, and the two-round fold it exists for
+    is exactly the case that spans one: a writer dies, the run is restarted, and the bucket it
+    part-filled has to remember what it already holds."""
+    from fi.alk.harness.blueprint import load
+
+    held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+    held.credit("A1", ["one", "two"])
+    held.fold("A1", done=2)
+    held.written_to(tmp_path)
+
+    back = load(tmp_path)
+    assert back.named("A1").credited == ["one", "two"]
+    assert back.named("A1").done == 2
+    # And a name already credited is not credited a second time after the round trip.
+    assert back.credit("A1", ["one", "three"]) == 3
