@@ -400,18 +400,18 @@ async def _scenarios(args: argparse.Namespace) -> int:
 
         await _converse(
             stage,
-            f"Plan {wanted} scenarios and record the blueprint. Do not write any scenarios, "
-            "and do not brief any writers: stop once the blueprint is recorded.",
+            f"Plan {wanted} scenarios and record the canvas. Do not write any scenarios, "
+            "and do not brief any writers: stop once the canvas is recorded in full.",
             interactive=args.interactive,
-            until=lambda: bool(load_blueprint(destination).entries),
-            nudge="No blueprint was recorded. Call record_blueprint.",
+            until=lambda: bool(load_blueprint(destination).angles),
+            nudge="No canvas was recorded. Call record_canvas.",
         )
         held = load_blueprint(destination)
-        if not held.entries:
-            print("\nNo blueprint was recorded.", file=sys.stderr)
+        if not held.angles:
+            print("\nNo canvas was recorded.", file=sys.stderr)
             return 1
         print(
-            f"\nblueprint: {held.scenarios} scenarios as {len(held.entries)} angles across "
+            f"\nblueprint: {held.planned} scenarios as {len(held.angles)} buckets across "
             f"{len(held.covered)} cells -> {destination / 'blueprint.json'}"
         )
         return 0
