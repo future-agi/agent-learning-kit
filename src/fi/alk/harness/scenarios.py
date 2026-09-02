@@ -39,7 +39,10 @@ from .scenario import Scenario
 from .scenario_tools import (
     parallel_suites,
     SCENARIO_SERVER,
+    forget_journal,
+    journalled,
     load_scenarios,
+    record_written,
     scenario_tools,
     world_summary,
     write_scenarios,
@@ -862,7 +865,7 @@ async def write_in_parallel(
 
     async def guarded(mine: Slice, siblings: list[Slice], index: int) -> list[Scenario]:
         async with limit:
-            return await _write_slice(
+            wrote = await _write_slice(
                 contract,
                 mine,
                 siblings,
@@ -871,12 +874,26 @@ async def write_in_parallel(
                 on_event=on_event,
                 ask=ask,
             )
+        # Journalled the moment the writer returns rather than at the end of the fan-out, so a
+        # run that dies at slice forty keeps the thirty-nine already proved.
+        record_written(wrote, destination)
+        return wrote
 
     written = await asyncio.gather(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    suite = merged([load_scenarios(destination), *written])
+    # A journal left behind means an earlier run was killed before it could save. Its scenarios
+    # were proved against this same world, so they are folded back in rather than rewritten.
+    # Matched by name, because this run journals its own writers too: comparing against `written`
+    # itself would let every scenario in twice, and `merged` renames collisions rather than
+    # dropping them, so the duplicates would survive as -2 folders.
+    already = {one.name for one in load_scenarios(destination)}
+    already |= {one.name for batch in written for one in batch}
+    recovered = [one for one in journalled(destination) if one.name not in already]
+    if recovered:
+        logger.info("recovered %s scenarios from a run that did not save", len(recovered))
+    suite = merged([load_scenarios(destination), recovered, *written])
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
@@ -912,6 +929,9 @@ async def write_in_parallel(
             break
 
     write_scenarios(suite, destination, load_catalogue(destination))
+    # The folders are the truth once they exist, so the journal has done its job and would only
+    # be a stale second copy for the next run to recover from.
+    forget_journal(destination)
     logger.info("suite saved: %s of %s asked for", len(suite), wanted)
     if on_event:
         on_event({"type": "saved", "kept": len(suite), "asked": wanted})

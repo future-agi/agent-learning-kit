@@ -115,6 +115,62 @@ def _forget_dropped(scenarios: list[Scenario], destination: Path) -> None:
             shutil.rmtree(folder)
 
 
+JOURNAL = "written.jsonl"
+
+
+def record_written(scenarios: list[Scenario], destination: Path) -> None:
+    """Append what a writer proved, so a run that dies still has it.
+
+    Under delegation the writers hold their work in memory and the stage saves once at the end,
+    because saving rewrites the index and deletes folders it does not know about, so two writers
+    saving at once would delete each other. That is the right call for the index and the wrong
+    one for durability: a suite of five hundred is hours of proving, and until the final save
+    none of it is anywhere but RAM.
+
+    This is the cheap half of the fix. It is append-only and touches neither the folders nor the
+    index, so it cannot race the writers; it exists to be replayed by ``journalled`` if the final
+    save never happens.
+    """
+    if not scenarios:
+        return
+    path = Path(destination) / JOURNAL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for one in scenarios:
+            handle.write(one.model_dump_json() + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def journalled(destination: Path) -> list[Scenario]:
+    """What the journal holds, for a run picking up after one that died.
+
+    A killed process can leave a half-written final line, so an unreadable line is dropped rather
+    than raising: the point of the journal is to save what survived, and refusing to read it
+    because of the one record that did not would throw away the rest.
+    """
+    path = Path(destination) / JOURNAL
+    if not path.is_file():
+        return []
+    kept: list[Scenario] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            kept.append(Scenario.model_validate_json(line))
+        except Exception:  # noqa: BLE001 - a torn last line is expected, not exceptional
+            continue
+    return kept
+
+
+def forget_journal(destination: Path) -> None:
+    """Drop the journal once the suite is on disk, so the next run starts from nothing."""
+    path = Path(destination) / JOURNAL
+    if path.is_file():
+        path.unlink()
+
+
 def load_scenarios(destination: Path) -> list[Scenario]:
     """Every scenario on disk, read from its folder.
 
