@@ -309,3 +309,45 @@ class TestThePlanReportsWhatItCovers:
             ("A3", "TH01", "diagnose-fare", "three", "data:c"),
         )
         assert "2 rule, 1 data" in held.coverage({"retrieve-ride", "cancel-ride", "diagnose-fare"}, [])
+
+
+class TestCoverageIsStatedAgainstFourThings:
+    """A plan can claim anything about itself; these are the claims that can be checked.
+
+    Rishav asked for happy paths, edge cases, adversarial cases and paths bound to fail. PR 44
+    contributes the operation grid and the overlay axis. Between them the plan has to answer:
+    which cells, which rules, which precondition-gated tools, and how much of each intent.
+    """
+
+    def plan(self):
+        return canvas(
+            ("A1", "TH01", "create-ride", "books cleanly", "rule:readback", 3),
+            ("A2", "TH01", "cancel-ride", "book_ride asked for too early", "precondition:book_ride", 2),
+        )
+
+    def test_a_missing_intent_category_is_named_outright(self):
+        held = self.plan()
+        held.angles[0].intent = "happy"
+        held.angles[1].intent = "happy"
+        said = held.coverage({"create-ride", "cancel-ride"}, [], [])
+        assert "nothing at all for: edge, adversarial, failing" in said
+
+    def test_intents_are_counted_in_scenarios_not_buckets(self):
+        held = self.plan()
+        held.angles[0].intent = "happy"
+        held.angles[1].intent = "failing"
+        said = held.coverage({"create-ride", "cancel-ride"}, [], [])
+        assert "3 happy" in said and "2 failing" in said
+
+    def test_an_intent_nobody_recognises_is_refused(self):
+        held = self.plan()
+        held.angles[0].intent = "chaotic"
+        assert "not one of" in " ".join(held.problems({"create-ride", "cancel-ride"}))
+
+    def test_a_precondition_gated_tool_with_no_bucket_is_named(self):
+        held = self.plan()
+        said = held.coverage(
+            {"create-ride", "cancel-ride"}, [], ["book_ride", "verify_otp", "cancel_ride"]
+        )
+        assert "1 of 3 tools with preconditions" in said
+        assert "verify_otp" in said

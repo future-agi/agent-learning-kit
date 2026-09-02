@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .axes import AxisSet, axes_for
-from .blueprint import SLICE_SCENARIOS, Angle, Canvas, StateAxis, Theme
+from .blueprint import INTENTS, SLICE_SCENARIOS, Angle, Canvas, StateAxis, Theme
 from .blueprint import load as load_canvas
 from .backends import ToolServer, tool, tool_server
 from .contract import AgentContract
@@ -176,6 +176,12 @@ def grid_tools(
                             "angle": {"type": "string"},
                             "facet": {"type": "string"},
                             "want": {"type": "integer"},
+                            "intent": {
+                                "type": "string",
+                                "enum": list(INTENTS),
+                                "description": "What this bucket is for: a happy path, an edge "
+                                "case, an adversarial twist, or a path bound to fail.",
+                            },
                             "live": {
                                 "type": "array",
                                 "items": {"type": "string"},
@@ -232,6 +238,7 @@ def grid_tools(
                     facet=str((one or {}).get("facet") or "").strip(),
                     want=max(1, int((one or {}).get("want") or 1)),
                     live=[str(x) for x in ((one or {}).get("live") or [])],
+                    intent=str((one or {}).get("intent") or "").strip().lower(),
                     differs=str((one or {}).get("differs") or "").strip(),
                 )
                 for one in rows
@@ -257,7 +264,9 @@ def grid_tools(
         path = held.written_to(destination)
         said = [
             held.coverage(
-                {cell.name for cell in state.grid.cells}, list(contract.hard_constraints or [])
+                {cell.name for cell in state.grid.cells},
+                list(contract.hard_constraints or []),
+                [one.name for one in contract.tools if one.requires],
             ),
             f"Written to {path.name}.",
         ]
@@ -320,7 +329,9 @@ def grid_tools(
         lines.append("")
         lines.append(
             held.coverage(
-                {cell.name for cell in state.grid.cells}, list(contract.hard_constraints or [])
+                {cell.name for cell in state.grid.cells},
+                list(contract.hard_constraints or []),
+                [one.name for one in contract.tools if one.requires],
             )
         )
         if held.reached():

@@ -133,7 +133,18 @@ five kinds, which between them cover how an agent fails:
     ambiguity:X     the request has two readings
     boundary:X      a value at a limit
 
-**4. A bucket is one cell and one facet.** That is the whole definition.
+**4. A bucket is one cell and one facet.** That is the whole definition. Give each one an
+`intent` as well, which is a different question from `facet`: the facet says what structure is
+under test, the intent says what the bucket is *for*.
+
+    happy        it should work, and the test is that it does
+    edge         a boundary, a rare state, an awkward-but-legal request
+    adversarial  somebody is trying it on: impersonation, injection, pressure
+    failing      it should not work, and the test is that the agent refuses well
+
+A precondition bucket can be an edge case or a failing path depending on what it asks, which is
+why both are recorded. A plan with nothing in one of these four is reported as such, and a suite
+with no failing paths is not a suite.
 
 **5. Derive `want` from the live axes.** For each bucket, which axes actually move the answer for
 *that facet*? Those are its live ones; name them in `live`. `want` is how many of their
@@ -205,6 +216,20 @@ they are dealt like any other.
 So do not try to be exhaustive here, and do not pad a bucket's `want` to cover cases you cannot
 name. Partition the space honestly, size each bucket at what you can actually see, and let the
 writers widen it. The suite ends up larger than the plan, and the plan was still doing its job.
+
+## What the plan has to be able to say about itself
+
+Recording the canvas prints its own coverage, and it is worth reading rather than skimming,
+because it is the only part of a plan that can be checked against the agent instead of against
+its own tidiness:
+
+- how many grid cells have a bucket, and which have none
+- how many of the agent's hard rules have a bucket testing them, and which do not
+- how many precondition-gated tools are named by some bucket
+- how the scenarios split across the four intents
+
+The two lines to act on are the uncovered rules and the empty intents. A rule with no bucket is
+something the agent is forbidden to get wrong that nobody is checking.
 
 ## When the number asked for is not there
 

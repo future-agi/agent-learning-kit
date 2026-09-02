@@ -45,6 +45,11 @@ TOO_ALIKE = 0.7
 # Below this there is nothing to plan; the writing stage handles small suites directly.
 WORTH_PLANNING = 20
 
+# What a bucket is for, and the four kinds between them cover what anyone has asked to see.
+# Rishav asked for happy path, edge cases, adversarial, and paths bound to fail; PR 44's overlay
+# axis is the adversarial one. Declared per bucket so coverage can be stated rather than hoped for.
+INTENTS = ("happy", "edge", "adversarial", "failing")
+
 # An angle past this has stopped naming what to test and started scripting how it goes.
 MOST_ANGLE_CHARS = 90
 
@@ -136,6 +141,9 @@ class Angle:
     # Which state axes actually move the answer for this bucket. `want` is the number of their
     # combinations that survive masking, so a count stops being a guess and becomes a derivation.
     live: list[str] = field(default_factory=list)
+    # One of INTENTS. Kept separate from `facet`, which says what structure is under test: a
+    # precondition bucket can be an edge case or a failing path, and both are worth knowing.
+    intent: str = ""
     # What differs between this bucket's scenarios. Required once it claims more than one, because
     # a number is easy to write and "what changes between them" is the thing that has to be true.
     differs: str = ""
@@ -239,6 +247,17 @@ class Canvas:
                 f"{len(stray)} buckets name a state axis that was never derived: "
                 + ", ".join(stray[:8])
                 + ". Every axis has to come from the agent's data or its rules."
+            )
+
+        wrong = sorted(
+            {one.intent for one in self.angles if one.intent and one.intent not in INTENTS}
+        )
+        if wrong:
+            found.append(
+                f"{len(wrong)} buckets claim an intent that is not one of "
+                + ", ".join(INTENTS)
+                + ": "
+                + ", ".join(wrong[:6])
             )
 
         unjustified = [
@@ -426,18 +445,27 @@ class Canvas:
             one.state = "open"
         return one.state
 
-    def coverage(self, cells: set[str], rules: list[str]) -> str:
+    def coverage(self, cells: set[str], rules: list[str], tools: list[str] | None = None) -> str:
         """What this plan covers, said against something outside itself.
 
         A plan can only be checked against the agent, not against its own tidiness, so this
         reports the two things that are falsifiable: which cells nothing sits on, and whether
         every rule the agent must obey has a bucket that tests it.
         """
+        intents: dict[str, int] = {one: 0 for one in INTENTS}
+        unset = 0
+        for one in self.angles:
+            if one.intent in intents:
+                intents[one.intent] += max(1, one.want)
+            else:
+                unset += 1
+
         kinds: dict[str, int] = {}
         for one in self.angles:
             kind = (one.facet.split(":", 1)[0] or "unnamed") if one.facet else "unnamed"
             kinds[kind] = kinds.get(kind, 0) + 1
 
+        tools = tools or []
         empty = sorted(cells - self.covered)
         tested = " ".join(one.facet.lower() + " " + one.angle.lower() for one in self.angles)
         # A rule with nothing resembling it anywhere in the plan is the gap worth shouting about:
@@ -454,10 +482,30 @@ class Canvas:
             f"{len(self.angles)} buckets over {len(kinds)} facet kinds: "
             + ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items(), key=lambda k: -k[1])),
             f"{len(self.axes)} state axes derived from the data.",
-            f"{self.planned} scenarios planned.",
+            f"{self.planned} scenarios planned: "
+            + ", ".join(f"{n} {kind}" for kind, n in intents.items())
+            + (f", {unset} buckets with no intent set" if unset else ""),
         ]
+        empty_intents = [kind for kind, n in intents.items() if not n]
+        if empty_intents:
+            lines.append(
+                "  nothing at all for: "
+                + ", ".join(empty_intents)
+                + ". A suite with no failing paths, or no adversarial cases, is not a suite."
+            )
         if empty:
             lines.append("  nothing on: " + ", ".join(empty[:12]) + ("" if len(empty) <= 12 else " ..."))
+        if tools:
+            # Only the tools that refuse until something else has happened. Each one is a real
+            # test - what does the agent do when somebody asks for it too early - and the grid
+            # cannot show the hole, because a cell is an object and says nothing about order.
+            named = " ".join(one.angle.lower() + " " + one.facet.lower() for one in self.angles)
+            missed = [one for one in tools if one.lower() not in named]
+            lines.append(
+                f"  {len(tools) - len(missed)} of {len(tools)} tools with preconditions have a "
+                "bucket that names them."
+                + ("" if not missed else " Not named: " + ", ".join(missed[:10]))
+            )
         if rules:
             lines.append(
                 f"  {len(rules) - len(untested)} of {len(rules)} rules have a bucket."
@@ -512,6 +560,7 @@ class Canvas:
                             "facet": one.facet,
                             "want": one.want,
                             "live": one.live,
+                            "intent": one.intent,
                             "differs": one.differs,
                             "done": one.done,
                             "refused": one.refused,
@@ -567,6 +616,7 @@ def load(destination: Path) -> Canvas:
                     facet=str(one.get("facet") or ""),
                     want=max(1, int(one.get("want") or 1)),
                     live=list(one.get("live") or []),
+                    intent=str(one.get("intent") or ""),
                     differs=str(one.get("differs") or ""),
                     done=int(one.get("done") or 0),
                     refused=int(one.get("refused") or 0),

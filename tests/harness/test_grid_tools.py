@@ -416,7 +416,7 @@ class TestTheCanvasLoopEndToEnd:
         server, state = grid_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         said = self.canvas_of(server, cells)
-        assert "6 scenarios planned." in said
+        assert "6 scenarios planned:" in said
         assert "2 buckets over" in said
         assert (where / "blueprint.json").exists()
         assert "0 written of 6 planned" in call(server, "show_canvas")
