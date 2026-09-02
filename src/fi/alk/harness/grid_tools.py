@@ -39,6 +39,35 @@ def _ok(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
 
+def entity_labels(destination: Path) -> dict[str, str]:
+    """Every value in the world that names a row rather than describing its state.
+
+    A column whose values are distinct in every row identifies those rows: an id, a name, a phone
+    number, the last four digits of a card. A column whose values repeat describes a state they
+    can be in. Only the second kind can be an axis, because the agent behaves the same for every
+    value of the first kind.
+
+    Returns nothing at all rather than raising: this feeds a check, and a check is never worth
+    stopping a run over.
+    """
+    try:
+        from .scenario_tools import world_state
+
+        held: dict[str, str] = {}
+        for collection, rows in (world_state(destination) or {}).items():
+            if len(rows) < 3:
+                continue
+            for column in rows[0]:
+                seen = [str(row.get(column)) for row in rows]
+                if len(set(seen)) == len(seen):
+                    for value in seen:
+                        held.setdefault(value.strip().lower(), f"{collection}.{column}")
+        return held
+    except Exception as why:  # noqa: BLE001 - the check degrades, the run does not
+        logger.info("no entity labels, the identity-axis check is skipped: %s", why)
+        return {}
+
+
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
@@ -280,7 +309,9 @@ def grid_tools(
             named = {one.name for one in held.axes}
             held.axes += [one for one in state.canvas.axes if one.name not in named]
 
-        problems = held.problems({cell.name for cell in state.grid.cells})
+        problems = held.problems(
+            {cell.name for cell in state.grid.cells}, entity_labels(destination)
+        )
         if problems:
             # Refused rather than stored: a plan is the cheapest thing here to fix, and every
             # fault left in it costs a proof and a folder once writers act on it.

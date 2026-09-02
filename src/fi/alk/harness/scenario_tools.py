@@ -1035,6 +1035,16 @@ def tool_names() -> tuple[str, ...]:
 TOOL_NAMES = tool_names()
 
 
+def world_state(world_root: Path) -> dict[str, list[dict[str, Any]]]:
+    """Every row the world holds, for checks that need the data rather than a summary."""
+    with WORLD_IN_USE:
+        world = restore(world_root)
+        try:
+            return world.state()
+        finally:
+            world.close()
+
+
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
     with WORLD_IN_USE:

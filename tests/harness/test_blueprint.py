@@ -459,3 +459,57 @@ class TestACountCannotExceedWhatItsAxesAllow:
             one.differs = "several different riders and their cards"
         said = " ".join(held.problems({"retrieve-ride"}))
         assert "justify their count in words rather than by naming axes" in said
+
+
+class TestAnAxisOfNamesIsNotAnAxis:
+    """The failure that survives every other check, and the one that cost a whole plan.
+
+    Asked to justify a count, a planner that cannot find a real dimension reaches for the entities
+    themselves and declares those an axis. The arithmetic then holds perfectly - eight users
+    really are eight levels - but the agent behaves identically for all eight, so the suite runs
+    one test eight times and reports eight. On a real plan this accounted for 265 of 406
+    scenarios, and every count passed every other check.
+
+    It is caught by asking the world instead of the words: a column distinct in every row names
+    those rows, a column whose values repeat describes their state.
+    """
+
+    def labels(self):
+        return {
+            "dana": "users.first_name",
+            "marcus": "users.first_name",
+            "maya": "users.first_name",
+            "noor": "users.first_name",
+        }
+
+    def plan_with(self, axis_name, levels, want=4):
+        from fi.alk.harness.blueprint import StateAxis
+
+        held = canvas(("A1", "TH01", "retrieve-ride", "greeted by name", "data:name", want))
+        held.axes = [StateAxis(axis_name, levels, "")]
+        held.angles[0].varies_by = [axis_name]
+        return held
+
+    def test_an_axis_built_from_row_names_is_refused(self):
+        held = self.plan_with("recognized_user", ["dana", "marcus", "maya", "noor"])
+        said = " ".join(held.problems({"retrieve-ride"}, self.labels()))
+        assert "lists of names rather than states" in said
+        assert "users.first_name" in said
+
+    def test_it_says_how_much_of_the_plan_rests_on_it(self):
+        """A reviewer needs the blast radius, not just the fault."""
+        held = self.plan_with("recognized_user", ["dana", "marcus", "maya", "noor"], want=4)
+        assert "4 scenarios rest on it" in " ".join(held.problems({"retrieve-ride"}, self.labels()))
+
+    def test_an_axis_of_real_states_passes(self):
+        held = self.plan_with("account_status", ["active", "suspended", "payment_hold", "banned"])
+        assert held.problems({"retrieve-ride"}, self.labels()) == []
+
+    def test_without_the_world_the_check_simply_does_not_run(self):
+        """It degrades to the older checks rather than refusing everything it cannot verify."""
+        held = self.plan_with("recognized_user", ["dana", "marcus", "maya", "noor"])
+        assert held.problems({"retrieve-ride"}, {}) == []
+
+    def test_one_stray_name_among_states_is_not_enough_to_condemn_an_axis(self):
+        held = self.plan_with("status", ["active", "suspended", "dana"], want=3)
+        assert held.problems({"retrieve-ride"}, self.labels()) == []

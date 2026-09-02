@@ -226,7 +226,34 @@ class Canvas:
     def shortfall(self) -> int:
         return max(0, self.target - self.planned)
 
-    def problems(self, cells: set[str]) -> list[str]:
+    def identity_axes(self, labels: dict[str, str]) -> list[tuple[str, str]]:
+        """Axes whose levels are the names of things rather than states of the world.
+
+        This is the failure that survives every other check. Asked to justify a count, a planner
+        that cannot find a real dimension will reach for the entities themselves - the users, the
+        cards, the records - and declare those an axis. The arithmetic then holds perfectly: eight
+        users really are eight levels. But the agent behaves identically for all eight, so the
+        suite runs one test eight times and reports eight.
+
+        It is caught by asking the world rather than the words. A column whose values are distinct
+        in every row identifies rows; a column whose values repeat describes their state. Levels
+        drawn from the first kind are names. ``labels`` maps a lowercased value to the column it
+        came from, built by whoever has the data.
+
+        The planner is not stuck when this fires: it means the state it was reaching for is a
+        property of those entities, not the entities themselves, and naming that property is both
+        possible and better.
+        """
+        found: list[tuple[str, str]] = []
+        for axis in self.axes:
+            if len(axis.levels) < 2:
+                continue
+            hits = [labels[one.strip().lower()] for one in axis.levels if one.strip().lower() in labels]
+            if len(hits) >= max(2, len(axis.levels) - 1):
+                found.append((axis.name, hits[0]))
+        return found
+
+    def problems(self, cells: set[str], labels: dict[str, str] | None = None) -> list[str]:
         """What must be fixed before a writer acts on any of it.
 
         Everything here is cheaper to catch now: a plan that repeats itself becomes a suite that
@@ -303,6 +330,24 @@ class Canvas:
         # buckets failed this, one asking for eight from an axis with three levels, and the
         # reasons given were lists of data values: six riders each using their own card is one
         # test run six times, not six tests.
+        named = self.identity_axes(labels or {})
+        if named:
+            leaning = {one: 0 for one, _ in named}
+            for angle in self.angles:
+                for axis in angle.varies_by:
+                    if axis in leaning:
+                        leaning[axis] += max(1, angle.want)
+            found.append(
+                f"{len(named)} axes are lists of names rather than states of the world: "
+                + "; ".join(
+                    f"{axis} (its levels are values of {column}, "
+                    f"{leaning.get(axis, 0)} scenarios rest on it)"
+                    for axis, column in named[:4]
+                )
+                + ". The agent behaves the same for every one of those, so they are one level, "
+                "not several. Name the property of them that actually changes the answer."
+            )
+
         levels = {one.name: max(1, len(one.levels)) for one in self.axes}
         overreach: list[str] = []
         for one in self.angles:
