@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from .axes import AxisSet, axes_for
+from .blueprint import Blueprint, Entry
+from .blueprint import load as load_blueprint
 from .backends import ToolServer, tool, tool_server
 from .contract import AgentContract
 from .expand import expand_all, summarise
@@ -52,6 +54,7 @@ class Coverage:
         self.axes = axes or axes_for(contract.modality)
         self.grid: Grid = derive(contract, self.axes)
         self.corrections: list[str] = []
+        self.blueprint: Blueprint = Blueprint()
 
     def rebuild(self, objects: list[str]) -> None:
         """Re-derive against an object list the model has corrected."""
@@ -113,6 +116,113 @@ def grid_tools(
             f"Grid rebuilt from {len(objects)} objects: {before} cells before, "
             f"{len(state.grid.cells)} now.\n\n{state.grid.report()}"
         )
+
+    @tool(
+        "record_blueprint",
+        "Write down what every scenario in this suite is going to be, one line each, before any "
+        "of them are written. A line is a name, the grid cell it sits in, and the situation: "
+        "what the person actually wants and what is in the way.\n\n"
+        "This exists because neither of the other two ways works at size. Asking for a thousand "
+        "finished scenarios in one go does not fit. Writing them one at a time makes each one "
+        "in the shadow of the last few, and the suite drifts toward whatever the opening ones "
+        "were. A thousand one-line intentions do fit, so you can see the whole suite at once "
+        "and tell whether it is actually varied while it is still cheap to change.\n\n"
+        "The grid gives you the skeleton and stops there. A thousand scenarios over forty cells "
+        "is twenty-five per cell, and the coordinates of those twenty-five are identical: what "
+        "separates them is the situation, and that is yours to invent. Do not reach for a "
+        "different persona to tell the same story twice; that is the same test.\n\n"
+        "What comes back names the problems rather than fixing them: repeated names, cells that "
+        "do not exist, situations too thin to write from, and pairs that say the same thing in "
+        "different words. Call it again with the plan corrected.",
+        schema(
+            {
+                "entries": {
+                    "type": "array",
+                    "description": "One per scenario, in any order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "cell": {"type": "string"},
+                            "situation": {"type": "string"},
+                        },
+                        "required": ["name", "cell", "situation"],
+                    },
+                },
+                "wanted": {
+                    "type": "integer",
+                    "description": "The size of the finished suite, when this is one instalment "
+                    "of a larger plan.",
+                },
+            },
+            ["entries"],
+        ),
+    )
+    async def record_blueprint(args: dict[str, Any]) -> dict[str, Any]:
+        rows = args.get("entries") or []
+        if not isinstance(rows, list) or not rows:
+            return _err("Nothing to record. Pass the planned scenarios as entries.")
+        held = Blueprint(
+            wanted=int(args.get("wanted") or state.blueprint.wanted or len(rows)),
+            entries=[
+                Entry(
+                    name=str((one or {}).get("name") or "").strip(),
+                    cell=str((one or {}).get("cell") or "").strip(),
+                    situation=str((one or {}).get("situation") or "").strip(),
+                )
+                for one in rows
+                if isinstance(one, dict)
+            ],
+        )
+        problems = held.problems({cell.name for cell in state.grid.cells})
+        if problems:
+            # Refused rather than stored: a plan is the cheapest thing in this pipeline to fix,
+            # and every fault left in it costs a proof and a folder once writers act on it.
+            return _err(
+                "Not recorded. Fix these and record it again:\n  - " + "\n  - ".join(problems)
+            )
+
+        state.blueprint = held
+        path = held.written(destination)
+        missing = sorted({cell.name for cell in state.grid.cells} - held.covered)
+        said = [
+            f"{len(held.entries)} planned, across {len(held.covered)} cells. Written to "
+            f"{path.name}, so writers can be briefed from it and a later session can pick it up.",
+        ]
+        if held.shortfall():
+            said.append(
+                f"{held.shortfall()} short of the {held.wanted} wanted. Record the rest, adding "
+                "to what is here rather than replacing it."
+            )
+        if missing:
+            said.append(
+                f"{len(missing)} cells have nothing planned on them: "
+                + ", ".join(missing[:12])
+                + ("" if len(missing) <= 12 else " ...")
+            )
+        return _ok("\n".join(said))
+
+    @tool(
+        "show_blueprint",
+        "The plan for this suite as it stands, and which of it has been written. Read this "
+        "before briefing a writer, and when picking up a suite somebody else planned.",
+        schema({}, []),
+    )
+    async def show_blueprint(_args: dict[str, Any]) -> dict[str, Any]:
+        held = state.blueprint if state.blueprint.entries else load_blueprint(destination)
+        if not held.entries:
+            return _ok("No blueprint yet. Plan the suite with record_blueprint first.")
+        state.blueprint = held
+        done = {one.name for one in load_scenarios(destination)}
+        waiting = [one for one in held.entries if one.name not in done]
+        lines = [
+            f"{len(held.entries)} planned, {len(held.entries) - len(waiting)} written, "
+            f"{len(waiting)} still to write."
+        ]
+        lines += [f"  {one.line()}" for one in waiting[:60]]
+        if len(waiting) > 60:
+            lines.append(f"  ... and {len(waiting) - 60} more")
+        return _ok("\n".join(lines))
 
     @tool(
         "plan_suite",
@@ -248,7 +358,16 @@ def grid_tools(
     server = tool_server(
         name=GRID_SERVER,
         version="0.1.0",
-        tools=[show_grid, set_objects, plan_suite, list_scenarios, show_coverage, expand_suite],
+        tools=[
+            show_grid,
+            set_objects,
+            record_blueprint,
+            show_blueprint,
+            plan_suite,
+            list_scenarios,
+            show_coverage,
+            expand_suite,
+        ],
     )
     return server, state
 
@@ -297,4 +416,13 @@ def _covered(state: Coverage, kept: list[Scenario]) -> str:
 
 
 def tool_names() -> tuple[str, ...]:
-    return ("show_grid", "set_objects", "plan_suite", "list_scenarios", "show_coverage", "expand_suite")
+    return (
+        "show_grid",
+        "set_objects",
+        "record_blueprint",
+        "show_blueprint",
+        "plan_suite",
+        "list_scenarios",
+        "show_coverage",
+        "expand_suite",
+    )
