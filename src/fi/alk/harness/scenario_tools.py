@@ -376,6 +376,13 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        # Reading the world rewrites it: `restore` reloads the snapshot into the store, which
+        # truncates and reinserts every table. Outside the lock that lands in the middle of
+        # somebody else's proof.
+        with WORLD_IN_USE:
+            return await _inspect_world(args)
+
+    async def _inspect_world(args: dict[str, Any]) -> dict[str, Any]:
         world = restore(world_root)
         try:
             state = world.state()
@@ -449,6 +456,12 @@ def scenario_tools(
                 "probe to correct that problem. Do not map the whole suite before saving work."
             )
         exploration["since_submit"] += 1
+        # Probing rewrites the world too: `restore` reloads the snapshot into the store and this
+        # then applies a setup on top. Held for the same reason a proof is.
+        with WORLD_IN_USE:
+            return await _try_calls(args)
+
+    async def _try_calls(args: dict[str, Any]) -> dict[str, Any]:
         world = restore(world_root)
         try:
             world.reset()
@@ -1024,6 +1037,11 @@ TOOL_NAMES = tool_names()
 
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
+    with WORLD_IN_USE:
+        return _world_summary(world_root)
+
+
+def _world_summary(world_root: Path) -> str:
     world = restore(world_root)
     try:
         state = world.state()

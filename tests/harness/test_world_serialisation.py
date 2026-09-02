@@ -84,3 +84,61 @@ class TestTheWorldIsHeldForTheLengthOfAProof:
         text = str(said)
         assert "could not be prepared" in text
         assert "duplicate key" in text, "the writer needs to know what the world objected to"
+
+
+class TestReadingTheWorldAlsoRewritesIt:
+    """`restore` reloads the snapshot into the store, so every reader is a writer.
+
+    The first pass at serialising this covered only the proof. `inspect_world` and `try_calls`
+    both restore, which truncates and reinserts every table, and both ran outside the lock: a
+    model reading the world while a sibling proved a scenario rewrote the world underneath it.
+    The fix is not a second lock, it is the same one, held by everything that touches the world.
+    """
+
+    def test_reading_the_world_is_serialised_with_proving(self, monkeypatch, tmp_path, payload):
+        from fi.alk.harness import scenario_tools
+        from fi.alk.harness.catalogue import Catalogue
+        from fi.alk.harness.contract import AgentContract, ToolSpec
+
+        contract = AgentContract(
+            agent="ride", modality="voice",
+            tools=[ToolSpec(name="get_rides")],
+            data_schema={"rides": {}, "users": {}},
+        )
+        held = []
+
+        def watch(*args, **rest):
+            held.append(scenario_tools.WORLD_IN_USE._is_owned())
+            raise RuntimeError("far enough: the lock is what is under test")
+
+        monkeypatch.setattr(scenario_tools, "restore", watch)
+        server, _ = scenario_tools.scenario_tools(
+            contract, tmp_path, tmp_path, wanted=0, share=[]
+        )
+        import asyncio
+
+        for name in ("inspect_world", "try_calls"):
+            spec = next(one for one in server.tools if one.name == name)
+            try:
+                asyncio.run(spec.handler({"table": "users", "calls": []}))
+            except Exception:
+                pass
+        assert held and all(held), (
+            "a world-reading tool restored the snapshot without holding the world"
+        )
+
+    def test_the_world_summary_holds_it_too(self, monkeypatch, tmp_path):
+        from fi.alk.harness import scenario_tools
+
+        held = []
+
+        def watch(*args, **rest):
+            held.append(scenario_tools.WORLD_IN_USE._is_owned())
+            raise RuntimeError("far enough")
+
+        monkeypatch.setattr(scenario_tools, "restore", watch)
+        try:
+            scenario_tools.world_summary(tmp_path)
+        except Exception:
+            pass
+        assert held and all(held)
