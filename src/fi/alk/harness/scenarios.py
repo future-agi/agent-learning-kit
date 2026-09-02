@@ -204,7 +204,7 @@ def open_stage(
     # reading an unfamiliar codebase are different jobs, and a provider counts its rate limit
     # per model, so the two stages are worth pinning separately.
     named = stage_backend(SKILL)
-    return Stage(spec, name=SKILL, backend=resolve(named) if named else None), destination
+    return Stage(spec, name=SKILL, backend=resolve(named, spec.model) if named else None), destination
 
 
 def writer_workers(

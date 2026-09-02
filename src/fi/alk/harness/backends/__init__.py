@@ -96,11 +96,15 @@ def backend_names() -> list[str]:
     return sorted(_LOADERS)
 
 
-def resolve(name: str | None = None) -> HarnessBackend:
+def resolve(name: str | None = None, model: str | None = None) -> HarnessBackend:
     """The backend a run will use: the one named, or ALK_HARNESS, or the default.
 
     An unknown name is a loud error naming what exists. Falling back silently would run a whole
     suite on the wrong harness, which is only discovered from the bill.
+
+    ``model`` is the model this caller will actually use, which is not always the run's. A stage
+    that names its own backend names its own model with it, and checking the pair against the
+    run's global model instead rejected the very combination the setting exists to express.
     """
     asked = (name or os.environ.get("ALK_HARNESS") or DEFAULT_BACKEND).strip().lower()
     asked = _ALIASES.get(asked, asked)
@@ -115,7 +119,7 @@ def resolve(name: str | None = None) -> HarnessBackend:
     # A named model that this backend cannot reach is a configuration mistake, and it is only
     # visible here. Left to run, the provider rejects the model mid-stage and the failure reads
     # as the harness having nothing to say rather than as the wrong pairing.
-    wanted = os.environ.get("ALK_HARNESS_MODEL", "").strip()
+    wanted = (model or os.environ.get("ALK_HARNESS_MODEL", "")).strip()
     if wanted and not backend.can_drive(wanted):
         raise ValueError(
             f"harness backend {backend.name!r} cannot drive model {wanted!r}; "

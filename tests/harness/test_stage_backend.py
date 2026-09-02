@@ -84,3 +84,35 @@ class TestTellingTheParentWhatWorkersItHas:
 
     def test_a_stage_with_no_workers_is_told_nothing_extra(self):
         assert self.prompt_for(self.spec(with_workers=False)) == "the method"
+
+
+class TestABackendIsCheckedAgainstTheModelItWillDrive:
+    """A stage that names its own backend names its own model with it. Checking that pair against
+    the run's global model instead rejected the exact combination the setting exists to express:
+    global claude, scenarios on gemini, refused as "vertex-gemini cannot drive claude-sonnet-4-6".
+    """
+
+    def test_a_stage_model_is_what_gets_checked(self, monkeypatch):
+        from fi.alk.harness.backends import resolve
+
+        monkeypatch.setenv("ALK_HARNESS_MODEL", "claude-sonnet-4-6")
+
+        assert resolve("vertex-gemini", "gemini-3.7-flash").name == "vertex-gemini"
+
+    def test_a_genuine_mismatch_is_still_refused(self, monkeypatch):
+        import pytest
+
+        from fi.alk.harness.backends import resolve
+
+        monkeypatch.delenv("ALK_HARNESS_MODEL", raising=False)
+        with pytest.raises(ValueError, match="cannot drive"):
+            resolve("vertex-gemini", "claude-sonnet-4-6")
+
+    def test_with_no_model_named_the_run_s_own_still_applies(self, monkeypatch):
+        import pytest
+
+        from fi.alk.harness.backends import resolve
+
+        monkeypatch.setenv("ALK_HARNESS_MODEL", "claude-sonnet-4-6")
+        with pytest.raises(ValueError, match="cannot drive"):
+            resolve("vertex-gemini")
