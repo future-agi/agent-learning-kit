@@ -180,3 +180,48 @@ class TestTheStagePlansBeforeItWrites:
         said = stage._spec.system_prompt
         assert "already planned in blueprint.json" in said
         assert "Plan all 200 scenarios first" not in said
+
+
+class TestThinkingIsAKnobNotADecision:
+    """Off by default, and separately settable for the planner and its writers.
+
+    The stage used to refuse thinking outright because one provider stalled with it on. That is
+    a run-time choice, not a fact about the harness, and planning a suite is the work most worth
+    paying for it. Nothing here turns it on; it makes turning it on possible.
+    """
+
+    def test_the_stage_does_not_think_unless_asked(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.delenv("ALK_SCENARIO_THINKING", raising=False)
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
+        assert stage._spec.thinking is False
+
+    def test_the_stage_thinks_when_the_run_asks(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setenv("ALK_SCENARIO_THINKING", "on")
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
+        assert stage._spec.thinking is True
+
+    def test_a_writer_takes_its_own_setting_not_the_stage_one(self, contract, where, monkeypatch):
+        """The planner and the writers are different jobs, so they get different dials."""
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setenv("ALK_SCENARIO_THINKING", "on")
+        monkeypatch.setenv("ALK_WRITER_EFFORT", "low")
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
+        worker = next(iter(stage._spec.workers.values()))
+        assert stage._spec.thinking is True
+        assert worker.effort == "low"
+
+    def test_a_writer_left_alone_carries_no_setting(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.delenv("ALK_WRITER_EFFORT", raising=False)
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
+        assert next(iter(stage._spec.workers.values())).effort == ""

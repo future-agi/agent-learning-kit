@@ -209,6 +209,9 @@ class ClaudeBackend:
                 mcpServers=list(worker_servers),
                 model=worker.model or "inherit",
                 maxTurns=worker.max_turns,
+                # Only when asked for: the field has its own default and passing a blank
+                # through would override it with nothing.
+                **({"effort": worker.effort} if worker.effort else {}),
             )
         if agents:
             # The delegation tool is named for the model, and it has to be granted here or the

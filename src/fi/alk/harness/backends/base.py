@@ -132,6 +132,9 @@ class WorkerSpec:
     builtins: tuple[str, ...] = ()
     max_turns: int = 40
     model: str = ""
+    # How hard this worker may think. Empty leaves the model's own default alone. Held here
+    # rather than taken from the stage because a worker's job is not the stage's job.
+    effort: str = ""
 
 
 @dataclass

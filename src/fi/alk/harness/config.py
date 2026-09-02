@@ -79,6 +79,36 @@ def thinking_config() -> dict[str, Any]:
     return {"type": "disabled"}
 
 
+def scenario_thinking() -> bool:
+    """Whether the scenario stage may think, from ALK_SCENARIO_THINKING. Off unless asked.
+
+    The stage used to refuse thinking outright, for a reason that has expired: with it on, the
+    Gemini call stopped returning above a handful of scenarios and the process sat at zero CPU
+    blocked on a read that never completed. That was one provider's failure, and planning a suite
+    is exactly the work thinking is worth paying for, so the choice belongs to whoever starts the
+    run rather than to this file.
+
+    Still off by default, because it has not been measured here since the backend changed.
+    """
+    return os.environ.get("ALK_SCENARIO_THINKING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "adaptive",
+    }
+
+
+def writer_effort() -> str:
+    """How hard a scenario writer may think, from ALK_WRITER_EFFORT. Empty means the model's own.
+
+    Separate from the stage's setting on purpose. The planner decides what a thousand scenarios
+    should be and benefits from thinking; a writer turns one settled line into a scenario and is
+    checked by three gates immediately afterwards, so paying for its private reasoning buys less.
+    """
+    return os.environ.get("ALK_WRITER_EFFORT", "").strip().lower()
+
+
 def provisioning(enabled: bool | None = None) -> bool:
     """Compatibility switch for callers selecting the legacy provisioning surface.
 

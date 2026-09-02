@@ -21,7 +21,13 @@ from typing import Any
 from .axes import axes_for
 from .backends import SessionSpec, ToolServer, WorkerSpec, tool, tool_server
 
-from .config import artifact_dir, chosen_model, load_skill
+from .config import (
+    artifact_dir,
+    chosen_model,
+    load_skill,
+    scenario_thinking,
+    writer_effort,
+)
 from .blueprint import WORTH_PLANNING
 from .blueprint import load as load_blueprint
 from .grid_tools import GRID_SERVER, Coverage, grid_tools
@@ -159,11 +165,9 @@ def open_stage(
         max_turns=max_turns or turns_for(wanted),
         model=chosen_model(),
         ask=ask,
-        # Off for this stage. Planning a large suite is a long response, and with thinking on the
-        # provider call stops returning above a handful of scenarios: the process sits at zero CPU
-        # blocked on a read that never completes. The planning here is enumerative rather than
-        # deductive, so it survives the loss.
-        thinking=False,
+        # Off unless the run asks for it. See config.scenario_thinking for why the old
+        # unconditional refusal no longer holds.
+        thinking=scenario_thinking(),
         workers=workers,
     )
     return Stage(spec, name=SKILL), destination
@@ -215,6 +219,7 @@ def writer_workers(
             builtins=(),
             servers={SCENARIO_SERVER: server},
             max_turns=WRITER_TURNS,
+            effort=writer_effort(),
         )
     }
 
