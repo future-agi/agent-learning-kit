@@ -479,20 +479,27 @@ A good slice brief names:
 - **how many** scenarios
 - the **off-baseline axis** for each, or the range to draw from
 - anything already covered, so two writers do not write the same thing
-- **the caller names that writer must use**, one per scenario
+- **the callers that writer must use**: a name, an accent and a location per scenario
 
 That last one is yours alone. A writer cannot see what its siblings chose, so left to pick
-freely every writer reaches for the same handful of safe first names and a suite of fifty comes
-back with nine people in it. You can see the whole suite, so deal the names out: a distinct name
-per scenario, no name given to two writers. Everything else about the caller stays the writer's
-call, and it should move off your suggestion where the scenario needs somebody else.
+freely every writer reaches for the same safe handful, and it converges on all three axes at
+once: a suite of fifty came back with nine people in it, forty-two of them American, living in
+two places. You can see the whole suite, so deal them out. A distinct name per scenario, no name
+given to two writers, and accents and locations spread across what the platform offers rather
+than left to default. Everything else about the caller stays the writer's call, and it should
+move off your suggestion where the scenario needs somebody else.
+
+Spread is not decoration here. An agent that only ever hears one accent has not been tested on
+the thing voice agents most often fail at.
 
 ```
 Cover Diagnose x charges and Retrieve x charges. Six scenarios.
 Off-baseline axes: one evasive caller, one second-language, one
 mid-escalation, three baseline. AC-1001 has two identical charges,
 which is the duplicate-charge case.
-Callers, one each: Priya, Tomas, Adaeze, Rhys, Ingrid, Hasan.
+Callers, one each: Priya (Indian, Pune), Tomas (Australian, Perth),
+Adaeze (British, Leeds), Rhys (Canadian, Halifax), Ingrid (Neutral,
+Oslo), Hasan (American, Detroit).
 ```
 
 Do not delegate a single scenario, and do not delegate the plan itself: deriving the grid and

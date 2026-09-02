@@ -188,7 +188,8 @@ def writer_workers(
                 "scenario as you prove it, and report which cells you covered and any you "
                 "could not. Do not save the suite; the stage saves once when every writer is "
                 "done.\n\nIf your brief names the callers to use, use those and no others: "
-                "your siblings were given different ones, and you cannot see what they wrote."
+                "their names, accents and locations were dealt across the whole suite, and "
+                "you cannot see what your siblings were given."
             ),
             builtins=(),
             servers={SCENARIO_SERVER: server},
