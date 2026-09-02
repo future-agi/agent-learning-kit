@@ -124,6 +124,36 @@ def load_scenarios(destination: Path) -> list[Scenario]:
     return read_all(destination)
 
 
+def _seeds_anything(code: str) -> bool:
+    """Whether setup code does something, rather than merely existing.
+
+    A scenario read back from disk carries the placeholder ``setup.py`` the folder writer puts
+    there, whose body is a docstring saying the base world is used unchanged. Treating that as
+    seeding would let the placeholder satisfy the very check it fails to satisfy.
+    """
+    import ast
+
+    text = (code or "").strip()
+    if not text:
+        return False
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        # Unparseable is somebody's real attempt, and the proof gates will say so properly.
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = [
+                one
+                for one in node.body
+                if not isinstance(one, ast.Pass)
+                and not (isinstance(one, ast.Expr) and isinstance(one.value, ast.Constant))
+            ]
+            if body:
+                return True
+    return False
+
+
 def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     """Refuse a scenario whose name claims a condition its world does not make true.
 
@@ -141,7 +171,7 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     _, _, condition = scenario.name.partition("__")
     if not condition:
         return []
-    if scenario.setup_code.strip():
+    if _seeds_anything(scenario.setup_code):
         return []
 
     said: list[str] = []

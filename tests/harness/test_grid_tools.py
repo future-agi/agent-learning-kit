@@ -249,3 +249,15 @@ class TestAScenarioMustMeanWhatItsNameClaims:
     def test_a_setting_name_inside_another_word_does_not_trigger_it(self):
         """`second-language` must never read as some other axis value by substring."""
         assert self.refused("explain-fare__second-language") == []
+
+    def test_placeholder_setup_does_not_satisfy_the_claim(self):
+        """The folder writer puts a docstring-only setup.py beside every scenario.
+
+        A scenario read back from disk therefore carries it, and treating that as seeding would
+        let the placeholder satisfy the very check it fails to satisfy.
+        """
+        stub = 'def setup(world):\n    """This scenario runs on the base world unchanged."""\n'
+        assert self.refused("cancel-ride__impersonation", stub)
+        assert self.refused("cancel-ride__impersonation", "def setup(world):\n    pass\n")
+        real = 'def setup(world):\n    world.rows("users")[0]["phone"] = "+15550000"\n'
+        assert self.refused("cancel-ride__impersonation", real) == []

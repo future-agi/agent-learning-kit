@@ -243,6 +243,22 @@ The rule: read your own instruction back, list every condition it assumes, and m
 establishes each one and `ready_code` proves it. An empty `setup_code` is only honest when the base world
 already holds everything the instruction presumes.
 
+## Take the shortest path to your cell
+
+Most agents are built around one long flow. The easy mistake, and the one that quietly ruins a
+suite, is to replay that whole flow in every scenario and then do the one thing the cell is
+about at the very end. A suite written that way tests the flow N times and each cell once,
+which is the opposite of what a grid is for. It also makes every scenario fail for the same
+reason whenever the flow changes.
+
+Measured on a real suite: seven of nine scenarios booked a ride first, median twelve solution
+steps, including the one about explaining an address and the one about establishing identity.
+
+So: build only the state your cell genuinely needs, and build it in `setup_code` rather than in
+reference steps. Seeding a booking is one line; reaching one through the booking flow is twelve.
+A shorter solution is not a weaker scenario, it is a scenario about the thing it claims to be
+about.
+
 ## Two scenarios are different only if the right answer differs
 
 Not if the wording differs. "The item is in stock" and "the item is out of stock" are two

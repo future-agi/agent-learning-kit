@@ -445,6 +445,13 @@ def brief_for(
             if others
             else ""
         )
+        + "**Use the shortest path that makes your cell's point.** An agent usually has one "
+        "long flow it is built around, and the easy mistake is to replay that whole flow in "
+        "every scenario and then do the one thing the cell is about at the end. That tests the "
+        "flow N times and each cell once. If the cell is about explaining something, explain it; "
+        "if it is about identity, establish identity. Only build the state a cell genuinely "
+        "needs, and prefer setup_code to a dozen reference steps: seeding a booking is one line "
+        "and replaying the booking flow is twelve.\n\n"
         + "Every scenario carries the use case from the contract that its coordinate belongs "
         "to, word for word, because results are grouped on that string. Its `branch` says what "
         "makes it different from its siblings.\n\n"
