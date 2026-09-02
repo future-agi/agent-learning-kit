@@ -54,3 +54,36 @@ def test_await_ready_timeout_removes_the_container_it_started(monkeypatch) -> No
     finally:
         # Backstop only -- a passing test already removed it via the fixed timeout path.
         store.stop()
+
+
+class TestEnginesAreReleasedWhenARunIsKilled:
+    """`atexit` alone leaks, because a long run is normally ended by killing it.
+
+    Every run stopped with a signal left its Postgres engine behind: three abandoned runs, three
+    containers still up hours later, which is what made a laptop unusable.
+    """
+
+    def test_a_signal_releases_the_engines_then_lets_the_process_die(self, monkeypatch):
+        released: list[str] = []
+        monkeypatch.setattr(
+            container, "_release_engines", lambda: released.append("released")
+        )
+        killed: list[int] = []
+        monkeypatch.setattr(container.os, "kill", lambda _pid, number: killed.append(number))
+        monkeypatch.setattr(container.signal, "signal", lambda *args: None)
+
+        container._release_on_signal(container.signal.SIGTERM, None)
+
+        assert released == ["released"], "the engines were not released before dying"
+        assert killed == [container.signal.SIGTERM], "the process did not die the way it was asked"
+
+    def test_a_handler_somebody_else_installed_is_left_alone(self, monkeypatch):
+        """This module is imported into other people's processes and must not change their exit."""
+        theirs = lambda *_args: None  # noqa: E731
+        monkeypatch.setattr(container.signal, "getsignal", lambda _n: theirs)
+        installed: list[object] = []
+        monkeypatch.setattr(
+            container.signal, "signal", lambda _n, handler: installed.append(handler)
+        )
+        container._catch_signals()
+        assert installed == []

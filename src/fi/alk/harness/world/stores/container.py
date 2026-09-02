@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import signal
 import secrets
 import subprocess
 import time
@@ -47,6 +48,32 @@ PER_STORE = "ALK_STORE_PER_WORLD"
 # their readiness deadline rather than the run failing for any reason to do with the harness.
 # Sharing one engine makes standing up a world a `CREATE DATABASE`, which is immediate.
 _ENGINES: dict[str, "_Engine"] = {}
+
+
+def _release_on_signal(number: int, _frame: object) -> None:
+    """Release the engines, then die the way we were asked to.
+
+    ``atexit`` is not enough on its own: it does not run when a process is terminated, and a
+    terminated process is the normal way a long run ends here. Every run stopped that way left its
+    engine behind, which is how a machine ends up with one container per abandoned run.
+    """
+    _release_engines()
+    signal.signal(number, signal.SIG_DFL)
+    os.kill(os.getpid(), number)
+
+
+def _catch_signals() -> None:
+    """Ask to be told before we are killed, without stamping on a host that already cares.
+
+    Only from the main thread, and never over a handler somebody else installed: this module is
+    imported into other people's processes and must not quietly change how they shut down.
+    """
+    for number in (signal.SIGTERM, signal.SIGINT):
+        try:
+            if signal.getsignal(number) in (signal.SIG_DFL, None):
+                signal.signal(number, _release_on_signal)
+        except (ValueError, OSError):  # pragma: no cover - not the main thread
+            return
 
 
 def _release_engines() -> None:
@@ -155,6 +182,7 @@ class ContainerStore(Held):
             engine = self._start_engine()
             if not _ENGINES:
                 atexit.register(_release_engines)
+                _catch_signals()
             _ENGINES[self.image] = engine
         self.container = engine.container
         self.user, self.password = engine.user, engine.password
