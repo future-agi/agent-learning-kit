@@ -225,3 +225,35 @@ class TestThinkingIsAKnobNotADecision:
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
         assert next(iter(stage._spec.workers.values())).effort == ""
+
+
+class TestWritersRunToCompletionBeforeTheStageEnds:
+    """A stage that does not wait for its writers loses everything they were writing.
+
+    Left to the default these launch in the background: the call returns "you will be notified",
+    the parent takes its next turn, decides it is done and exits, and the writers die with the
+    process. One run dealt fifty scenarios across five writers and saved one, reporting success.
+    """
+
+    def test_every_worker_is_declared_blocking(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+        from fi.alk.harness.backends import claude as backend
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
+        assert stage._spec.workers, "expected writers above the delegation threshold"
+
+        built: list[dict] = []
+
+        def capture(**rest):
+            built.append(rest)
+            return object()
+
+        monkeypatch.setattr(backend, "AgentDefinition", capture)
+        monkeypatch.setattr(backend, "ClaudeSession", lambda *a, **k: object())
+        backend.ClaudeBackend().create(stage._spec)
+
+        assert built, "no worker was defined; this test would otherwise check nothing"
+        assert all(one.get("background") is False for one in built), (
+            "a writer was left to run in the background, so the stage can outlive it"
+        )

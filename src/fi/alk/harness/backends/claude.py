@@ -209,6 +209,12 @@ class ClaudeBackend:
                 mcpServers=list(worker_servers),
                 model=worker.model or "inherit",
                 maxTurns=worker.max_turns,
+                # Blocking, so the call returns the worker's result. Left unset these launch in
+                # the background and the caller is told it will be notified later: a stage that
+                # dealt fifty scenarios across five writers then ended at its next turn, killing
+                # all five, and reported success having saved one. The parent has nothing useful
+                # to do while a slice is written, and it must not finish before the work does.
+                background=False,
                 # Only when asked for: the field has its own default and passing a blank
                 # through would override it with nothing.
                 **({"effort": worker.effort} if worker.effort else {}),
