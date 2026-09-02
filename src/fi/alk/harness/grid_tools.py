@@ -21,6 +21,7 @@ from .blueprint import Blueprint, Entry
 from .blueprint import load as load_blueprint
 from .backends import ToolServer, tool, tool_server
 from .contract import AgentContract
+from .diversity import measure
 from .expand import expand_all, summarise
 from .grid import Grid, derive
 from .sample import coverage, plan
@@ -268,6 +269,22 @@ def grid_tools(
         return _ok("\n".join(lines))
 
     @tool(
+        "show_diversity",
+        "The shape of the saved suite: how it spreads across cells, who is in it, how much work "
+        "each scenario asks for, and any pair that reads as the same test written twice. Read "
+        "this before saving a large suite, where nobody can read the scenarios themselves.\n\n"
+        "It is lexical, so it catches near-copies and rewordings. Two scenarios describing one "
+        "situation in entirely different words will pass it, and that is a real limit rather "
+        "than a detail.",
+        schema({}, []),
+    )
+    async def show_diversity(_args: dict[str, Any]) -> dict[str, Any]:
+        held = load_scenarios(destination)
+        if not held:
+            return _ok("No scenarios saved yet.")
+        return _ok(measure(held).rendered())
+
+    @tool(
         "plan_suite",
         "One way to cover the grid in a given number of scenarios. **A suggestion, not an "
         "instruction.** It is arithmetic over the grid and knows nothing about this agent: it "
@@ -407,6 +424,7 @@ def grid_tools(
             record_blueprint,
             show_blueprint,
             deal_blueprint,
+            show_diversity,
             plan_suite,
             list_scenarios,
             show_coverage,
@@ -466,6 +484,7 @@ def tool_names() -> tuple[str, ...]:
         "record_blueprint",
         "show_blueprint",
         "deal_blueprint",
+        "show_diversity",
         "plan_suite",
         "list_scenarios",
         "show_coverage",
