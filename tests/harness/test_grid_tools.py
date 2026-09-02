@@ -336,3 +336,23 @@ class TestAFanOutCanActuallySave:
         scenarios.open_stage(contract, out=where, wanted=50)
         assert len(seen) >= 2, "expected a server for the stage and one for its writers"
         assert all(one is seen[0] for one in seen), "each server built its own list; a save would lose the rest"
+
+    def test_a_writer_cannot_drop_what_it_did_not_write(self, contract, where):
+        """Dropping rewrites the index and deletes folders, so it belongs to the saving session.
+
+        With one shared list a writer holding `drop_scenario` could clear a sibling's proved work
+        out from under the stage, and `drop_scenario('*')` would empty the suite on disk mid-run.
+        """
+        from fi.alk.harness.scenario_tools import scenario_tools
+
+        writer, _ = scenario_tools(contract, where, where, wanted=0, can_save=False, share=[])
+        offered = {spec.name for spec in writer.tools}
+        assert "drop_scenario" not in offered
+        assert "save_scenarios" not in offered
+        assert "submit_scenario" in offered, "a writer must still be able to contribute"
+
+    def test_a_saving_session_keeps_it(self, contract, where):
+        from fi.alk.harness.scenario_tools import scenario_tools
+
+        stage, _ = scenario_tools(contract, where, where, wanted=10)
+        assert "drop_scenario" in {spec.name for spec in stage.tools}

@@ -964,17 +964,19 @@ def scenario_tools(
             drop_rule_tool,
             fix_tool_tool,
             aim_for,
-            drop_scenario,
         ]
         # Only the session a person is talking to may fan out. A writer that is itself one slice
         # of a fan-out calling this would split its own slice again, and so on. A stage that was
         # given writer workers fans out through those instead, and offering both leaves the model
         # choosing between two ways to do the same thing: it picks this one, and the workers are
         # never exercised.
+        # Dropping is the saving session's alone, for the reason saving is. It rewrites the
+        # index and deletes folders, so a writer calling it would delete a sibling's work, and
+        # with one shared list it would drop from under the stage what it never wrote.
         + (
-            [generate_suite, save_scenarios]
+            [generate_suite, save_scenarios, drop_scenario]
             if can_save and parallel_suites() and not delegates
-            else [save_scenarios]
+            else [save_scenarios, drop_scenario]
             if can_save
             else []
         ),
