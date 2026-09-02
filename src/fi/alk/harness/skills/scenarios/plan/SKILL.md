@@ -23,43 +23,38 @@ view while it is still cheap to change, and see that thirty of your lines are th
 
 ## What one line is
 
-    name | cell | situation
-
-`name` becomes the scenario's folder. Unique, and descriptive of what is in it rather than its
-position in a list.
+    cell | angle | count
 
 `cell` is a grid coordinate: an operation and an object, like `diagnose-fare`. `show_grid` lists
 them. If the grid is missing something the agent obviously does, correct it with `set_objects`
 rather than planning around the gap.
 
-`situation` is the part only you can write. It names **what the person wants and what is in the
-way**. Not their mood, not their accent, not how they phrase it.
+`angle` is what makes a case on that cell worth testing, in a few words. Not how it goes.
+
+`count` is how many scenarios to write from that angle. One angle can carry several.
 
 Good:
 
-    diagnose-fare-surge-boundary | diagnose-fare | charged 2.3x for a trip that
-      started one minute before the surge window closed, and the receipt shows
-      the higher rate with no explanation
+    diagnose-fare | surge boundary confusion | 3
+    diagnose-fare | duplicate charge that is not one | 2
+    compare-address | same street name in two cities | 2
 
 Not good:
 
-    diagnose-fare-2 | diagnose-fare | an impatient caller asks about a fare
+    diagnose-fare | charged 2.3x for a trip that started one minute before the
+      surge window closed, and the receipt shows the higher rate with no
+      explanation, so the agent has to find the window and explain it
 
-The second names a mood and a cell. Every writer handed it writes the same test.
+That last one is the scenario with its code removed. It reads like diligence and it is the thing
+that breaks this stage: written at that length, a plan for a thousand scenarios is 228KB and you
+would have to emit 57k tokens in one response. You cannot. At angle length the same thousand is a
+few thousand tokens, because one angle carries several scenarios.
 
-There is a second way to get this wrong, and it looks like diligence. A situation can be so
-grounded in the code that it stops being a situation:
+There is a second reason beyond size. The particulars are better chosen by whoever writes the
+scenario, with the agent's source open in front of them. Choosing them here means choosing them
+from memory, and it takes the decision away from the only step that can check it.
 
-    compare-booking | prepare_booking_confirmation returns a summary string
-      listing car type, fare range, pickup, dropoff and payment method
-
-That is a unit test of one tool wearing a scenario's clothes. It will be written, it will pass,
-and it will not catch anything a person would have hit, because no person ever asked for it.
-
-The test to apply: **could the person on the other end have wanted this?** Nobody wants a summary
-string. Somebody does want to know what they are about to be charged before they say yes. Naming
-real tools, real ids and real return values is right and stays right; what matters is that the
-line describes something a caller was trying to do.
+**You own coverage and spread. The writer owns the particulars.** Do not do its job.
 
 ## Where situations actually come from
 

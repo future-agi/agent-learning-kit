@@ -120,9 +120,17 @@ def grid_tools(
 
     @tool(
         "record_blueprint",
-        "Write down what every scenario in this suite is going to be, one line each, before any "
-        "of them are written. A line is a name, the grid cell it sits in, and the situation: "
-        "what the person actually wants and what is in the way.\n\n"
+        "Write down what this suite is going to cover, before any of it is written. A line is a "
+        "grid cell, an angle on it in a few words, and how many scenarios to write from that "
+        "angle.\n\n"
+        "An angle says what makes a case worth testing, never how it goes. \"surge boundary "
+        "confusion\" is an angle. \"charged 2.3x, receipt shows the higher rate, agent explains "
+        "the window closed\" is the scenario with its code removed, and writing that here is "
+        "what makes a plan for a thousand impossible: at that length a thousand lines is 57k "
+        "tokens to emit in one go. At angle length one line carries several scenarios and the "
+        "whole plan is a few thousand tokens.\n\n"
+        "You own coverage and spread. Whoever writes the scenarios owns the particulars, and "
+        "decides them with the agent's source open, which is the right place to decide them.\n\n"
         "This exists because neither of the other two ways works at size. Asking for a thousand "
         "finished scenarios in one go does not fit. Writing them one at a time makes each one "
         "in the shadow of the last few, and the suite drifts toward whatever the opening ones "
@@ -139,15 +147,22 @@ def grid_tools(
             {
                 "entries": {
                     "type": "array",
-                    "description": "One per scenario, in any order.",
+                    "description": "One per angle, in any order.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string"},
                             "cell": {"type": "string"},
-                            "situation": {"type": "string"},
+                            "angle": {
+                                "type": "string",
+                                "description": "A few words on what makes this worth testing.",
+                            },
+                            "count": {
+                                "type": "integer",
+                                "description": "How many scenarios to write from this angle. "
+                                "Default 1.",
+                            },
                         },
-                        "required": ["name", "cell", "situation"],
+                        "required": ["cell", "angle"],
                     },
                 },
                 "wanted": {
@@ -167,9 +182,9 @@ def grid_tools(
             wanted=int(args.get("wanted") or state.blueprint.wanted or len(rows)),
             entries=[
                 Entry(
-                    name=str((one or {}).get("name") or "").strip(),
                     cell=str((one or {}).get("cell") or "").strip(),
-                    situation=str((one or {}).get("situation") or "").strip(),
+                    angle=str((one or {}).get("angle") or "").strip(),
+                    count=max(1, int((one or {}).get("count") or 1)),
                 )
                 for one in rows
                 if isinstance(one, dict)
@@ -187,7 +202,8 @@ def grid_tools(
         path = held.written(destination)
         missing = sorted({cell.name for cell in state.grid.cells} - held.covered)
         said = [
-            f"{len(held.entries)} planned, across {len(held.covered)} cells. Written to "
+            f"{held.scenarios} scenarios planned as {len(held.entries)} angles across "
+            f"{len(held.covered)} cells. Written to "
             f"{path.name}, so writers can be briefed from it and a later session can pick it up.",
         ]
         if held.shortfall():
@@ -214,15 +230,14 @@ def grid_tools(
         if not held.entries:
             return _ok("No blueprint yet. Plan the suite with record_blueprint first.")
         state.blueprint = held
-        done = {one.name for one in load_scenarios(destination)}
-        waiting = [one for one in held.entries if one.name not in done]
+        written = len(load_scenarios(destination))
         lines = [
-            f"{len(held.entries)} planned, {len(held.entries) - len(waiting)} written, "
-            f"{len(waiting)} still to write."
+            f"{held.scenarios} scenarios planned as {len(held.entries)} angles. "
+            f"{written} written so far."
         ]
-        lines += [f"  {one.line()}" for one in waiting[:60]]
-        if len(waiting) > 60:
-            lines.append(f"  ... and {len(waiting) - 60} more")
+        lines += [f"  {one.line()}" for one in held.entries[:80]]
+        if len(held.entries) > 80:
+            lines.append(f"  ... and {len(held.entries) - 80} more angles")
         return _ok("\n".join(lines))
 
     @tool(
@@ -252,19 +267,20 @@ def grid_tools(
         if writers < 1:
             return _err("Deal for at least one writer.")
 
-        done = {one.name for one in load_scenarios(destination)}
-        waiting = [one for one in held.entries if one.name not in done]
-        if not waiting:
-            return _ok("Every planned scenario is already written.")
-
-        size = max(1, (len(waiting) + writers - 1) // writers)
-        cuts = Blueprint(entries=waiting).slices(size)
-        lines = [f"{len(waiting)} still to write, dealt into {len(cuts)} briefs."]
+        size = max(1, (len(held.entries) + writers - 1) // writers)
+        cuts = held.slices(size)
+        lines = [
+            f"{held.scenarios} scenarios as {len(held.entries)} angles, dealt into "
+            f"{len(cuts)} briefs."
+        ]
         for index, cut in enumerate(cuts, start=1):
+            due = sum(max(1, one.count) for one in cut)
             lines.append("")
-            lines.append(f"Brief {index} ({len(cut)} scenarios, cells: "
-                         + ", ".join(sorted({one.cell for one in cut}))
-                         + ")")
+            lines.append(
+                f"Brief {index} ({due} scenarios from {len(cut)} angles, cells: "
+                + ", ".join(sorted({one.cell for one in cut}))
+                + ")"
+            )
             lines += [f"  {one.line()}" for one in cut]
         return _ok("\n".join(lines))
 

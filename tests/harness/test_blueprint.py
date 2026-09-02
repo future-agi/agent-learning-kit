@@ -28,25 +28,27 @@ def where(tmp_path):
     return tmp_path
 
 
-def plan(*rows: tuple[str, str, str], wanted: int = 0) -> Blueprint:
+def plan(*rows, wanted: int = 0) -> Blueprint:
+    """Rows are (cell, angle) or (cell, angle, count)."""
     return Blueprint(
         wanted=wanted,
-        entries=[Entry(name=n, cell=c, situation=s) for n, c, s in rows],
+        entries=[Entry(cell=row[0], angle=row[1], count=row[2] if len(row) > 2 else 1)
+                 for row in rows],
     )
 
 
 class TestSayingTheSameThingTwice:
-    def test_a_reworded_situation_is_caught(self):
+    def test_a_reworded_angle_is_caught(self):
         held = plan(
-            ("a", "retrieve-ride", "caller cannot find the booking they made this morning"),
-            ("b", "retrieve-ride", "the booking made this morning cannot be found by the caller"),
+            ("retrieve-ride", "surge boundary confusion"),
+            ("retrieve-ride", "confusion at the surge boundary"),
         )
-        assert [one[:2] for one in held.duplicates()] == [("a", "b")]
+        assert len(held.duplicates()) == 1
 
-    def test_genuinely_different_situations_in_one_cell_are_left_alone(self):
+    def test_genuinely_different_angles_in_one_cell_are_left_alone(self):
         held = plan(
-            ("a", "retrieve-ride", "caller cannot find the booking they made this morning"),
-            ("b", "retrieve-ride", "wants the fare breakdown for a trip that crossed a surge boundary"),
+            ("retrieve-ride", "booking cannot be found"),
+            ("retrieve-ride", "surge boundary fare breakdown"),
         )
         assert held.duplicates() == []
 
@@ -57,46 +59,62 @@ class TestSayingTheSameThingTwice:
         artificially unlike each other, which is not what variety means here.
         """
         held = plan(
-            ("a", "retrieve-ride", "caller cannot find the booking they made this morning"),
-            ("d", "cancel-ride", "caller cannot find the booking they made this morning"),
+            ("retrieve-ride", "booking cannot be found"),
+            ("cancel-ride", "booking cannot be found"),
         )
         assert held.duplicates() == []
 
-    def test_padding_a_situation_does_not_make_it_a_new_one(self):
-        """Scored against the smaller line, so restating it at greater length still collides."""
+    def test_padding_an_angle_does_not_make_it_a_new_one(self):
+        """Scored against the smaller line, so restating it at greater length still collides.
+
+        Worth knowing the limit this exposes: an angle is a few words, so one word differing
+        swings the ratio hard. "booking cannot be found" and "cannot find the booking" score 0.5
+        and pass, where the same pair written as full situations would have been caught. Shorter
+        plans are cheaper and their duplicate check is weaker; that trade was made deliberately.
+        """
         held = plan(
-            ("a", "cancel-ride", "card was declined at checkout"),
-            ("b", "cancel-ride", "the card was unfortunately declined at checkout again today"),
+            ("cancel-ride", "card declined"),
+            ("cancel-ride", "the card was unfortunately declined again"),
         )
         assert held.duplicates()
 
 
 class TestWhatAPlanMustSayBeforeAnyoneWritesFromIt:
     def test_a_cell_nobody_has_is_reported(self):
-        held = plan(("a", "invent-thing", "wants something the agent cannot do"))
+        held = plan(("invent-thing", "something the agent cannot do"))
         said = " ".join(held.problems({"retrieve-ride"}))
         assert "not on the grid" in said
 
-    def test_a_situation_too_thin_to_write_from_is_reported(self):
-        held = plan(("a", "retrieve-ride", "a ride"))
+    def test_an_angle_too_thin_to_write_from_is_reported(self):
+        held = plan(("retrieve-ride", "ride"))
         assert "say too little" in " ".join(held.problems({"retrieve-ride"}))
 
-    def test_repeated_names_are_reported(self):
-        held = plan(
-            ("a", "retrieve-ride", "caller cannot find the booking from this morning"),
-            ("a", "retrieve-ride", "wants a fare breakdown across a surge boundary"),
-        )
-        assert "more than once" in " ".join(held.problems({"retrieve-ride"}))
+    def test_an_angle_written_as_a_script_is_reported(self):
+        """The failure that made a plan for a thousand impossible to emit at all."""
+        held = plan((
+            "retrieve-ride",
+            "caller was charged 2.3x for a trip that started one minute before the surge "
+            "window closed and the receipt shows the higher rate with no explanation",
+        ))
+        assert "scripts rather than angles" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_an_empty_plan_is_a_problem_not_a_crash(self):
         assert Blueprint().problems({"retrieve-ride"}) == ["the blueprint is empty"]
 
     def test_one_duplicate_pair_reads_as_one(self):
         held = plan(
-            ("a", "retrieve-ride", "caller cannot find the booking they made this morning"),
-            ("b", "retrieve-ride", "the booking made this morning cannot be found by the caller"),
+            ("retrieve-ride", "surge boundary confusion"),
+            ("retrieve-ride", "confusion at the surge boundary"),
         )
         assert "1 pair describe" in " ".join(held.problems({"retrieve-ride"}))
+
+    def test_a_count_is_what_says_how_many_scenarios(self):
+        """The point of the redesign: lines and scenarios are no longer the same number."""
+        held = plan(("retrieve-ride", "booking cannot be found", 6),
+                    ("cancel-ride", "fee disclosed before consent", 4), wanted=10)
+        assert len(held.entries) == 2
+        assert held.scenarios == 10
+        assert held.shortfall() == 0
 
 
 class TestCuttingItUp:
@@ -107,8 +125,8 @@ class TestCuttingItUp:
         position the blueprint exists to remove.
         """
         held = plan(
-            *[(f"r{i}", "retrieve-ride", f"situation number {i} about finding a booking") for i in range(4)],
-            *[(f"c{i}", "cancel-ride", f"situation number {i} about calling off a trip") for i in range(4)],
+            *[("retrieve-ride", f"finding a booking case {i}") for i in range(4)],
+            *[("cancel-ride", f"calling off a trip case {i}") for i in range(4)],
         )
         cuts = held.slices(4)
         assert all(len({one.cell for one in cut}) > 1 for cut in cuts), (
@@ -116,9 +134,9 @@ class TestCuttingItUp:
         )
 
     def test_every_entry_is_dealt_exactly_once(self):
-        held = plan(*[(f"s{i}", "retrieve-ride", f"situation number {i} about a booking") for i in range(7)])
-        dealt = [one.name for cut in held.slices(3) for one in cut]
-        assert sorted(dealt) == sorted(one.name for one in held.entries)
+        held = plan(*[("retrieve-ride", f"booking case {i}") for i in range(7)])
+        dealt = [one.angle for cut in held.slices(3) for one in cut]
+        assert sorted(dealt) == sorted(one.angle for one in held.entries)
 
 
 class TestItSurvivesABadFile:
@@ -130,7 +148,7 @@ class TestItSurvivesABadFile:
         assert load(tmp_path).entries == []
 
     def test_a_plan_survives_the_round_trip(self, tmp_path):
-        held = plan(("a", "retrieve-ride", "caller cannot find this morning's booking"), wanted=1)
+        held = plan(("retrieve-ride", "booking cannot be found"), wanted=1)
         held.written(tmp_path)
         back = load(tmp_path)
         assert back.wanted == 1
@@ -169,16 +187,14 @@ class TestTheStagePlansBeforeItWrites:
 
         Blueprint(
             wanted=200,
-            entries=[
-                Entry(f"s{i}", "retrieve-ride", f"situation number {i} about finding a booking")
-                for i in range(200)
-            ],
+            entries=[Entry(cell="retrieve-ride", angle=f"booking case {i}", count=1)
+                     for i in range(200)],
         ).written(where)
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
         said = stage._spec.system_prompt
-        assert "already planned in blueprint.json" in said
+        assert "angles in blueprint.json" in said
         assert "Plan all 200 scenarios first" not in said
 
 

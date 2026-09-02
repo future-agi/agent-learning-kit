@@ -5,10 +5,19 @@ thousand one at a time converges: each scenario is written with the last few in 
 suite drifts toward whatever the first few were. The way out is to decide what all N are before
 writing any of them, cheaply enough that all N fit in one head at once.
 
-That is what a blueprint is. One line per scenario, naming the cell it sits in and the situation
-that makes it worth running, and nothing else: no setup, no checks, no solution. A thousand of
-those fit in a context that a thousand scenarios could not, so the model can see the whole suite
-while deciding whether it is varied.
+That is what a blueprint is, and the level it is pitched at is the whole design. It says *what is
+worth testing*, never *how it resolves*. An angle is a short phrase, not a script: "surge boundary
+confusion", not "charged 2.3x, receipt shows the higher rate, agent explains the window closed at
+19:00". The second is the scenario with the code removed, and writing it in the plan costs the
+plan its reason to exist.
+
+Measured, when the level slipped: situations averaged 179 characters, so a plan for a thousand
+scenarios would be 228KB and the model would have to emit 57k tokens in one response. It cannot.
+At a short angle and a count it is a few thousand tokens for the same thousand scenarios, because
+one angle carries several.
+
+So the plan owns coverage and spread; the writer owns specifics. Asking the plan for specifics is
+what breaks it, and the specifics are better decided with the agent's source open anyway.
 
 The grid supplies the skeleton and cannot supply this. A grid of 39 cells asked for 1000
 scenarios gives 26 per cell, and coordinates alone make those 26 identical. What separates them
@@ -31,6 +40,10 @@ TOO_ALIKE = 0.7
 
 # Below this there is nothing to plan; the writing stage handles small suites directly.
 WORTH_PLANNING = 20
+
+# An angle past this length has stopped being an angle. Set from the run where it slipped:
+# situations averaged 179 characters and a thousand of them would not fit anywhere.
+MOST_ANGLE_CHARS = 90
 
 _WORD = re.compile(r"[a-z0-9]+")
 # Carried by nearly every line in a suite, so they say nothing about whether two differ.
@@ -62,14 +75,14 @@ def _overlap(one: set[str], two: set[str]) -> float:
 
 @dataclass
 class Entry:
-    """One planned scenario: where it sits, and what happens in it."""
+    """One angle on one cell, and how many scenarios to write from it."""
 
-    name: str
     cell: str
-    situation: str
+    angle: str
+    count: int = 1
 
     def line(self) -> str:
-        return f"{self.name} | {self.cell} | {self.situation}"
+        return f"{self.cell} | {self.angle}" + (f" | x{self.count}" if self.count != 1 else "")
 
 
 @dataclass
@@ -88,6 +101,11 @@ class Blueprint:
     def covered(self) -> set[str]:
         return {one.cell for one in self.entries}
 
+    @property
+    def scenarios(self) -> int:
+        """How many scenarios this plan asks for, which is not how many lines it has."""
+        return sum(max(1, one.count) for one in self.entries)
+
     def problems(self, cells: set[str]) -> list[str]:
         """What is wrong with this plan, said once, before a writer acts on any of it.
 
@@ -99,14 +117,6 @@ class Blueprint:
         if not self.entries:
             return ["the blueprint is empty"]
 
-        names = [one.name for one in self.entries]
-        repeated = sorted({name for name in names if names.count(name) > 1})
-        if repeated:
-            found.append(
-                f"{len(repeated)} scenario names appear more than once: "
-                + ", ".join(repeated[:8])
-            )
-
         unknown = sorted({one.cell for one in self.entries} - cells)
         if unknown:
             found.append(
@@ -116,19 +126,29 @@ class Blueprint:
                 "is wrong."
             )
 
-        thin = [one.name for one in self.entries if len(_words(one.situation)) < 4]
+        thin = [one.angle for one in self.entries if len(_words(one.angle)) < 2]
         if thin:
             found.append(
-                f"{len(thin)} situations say too little to write from: "
+                f"{len(thin)} angles say too little to write from: "
                 + ", ".join(thin[:8])
-                + ". A situation names what the person wants and what is in the way."
+                + ". An angle names what makes a case worth testing, in a few words."
+            )
+        # An angle is a phrase. Past this it has stopped naming what to test and started
+        # scripting how it goes, which is the writer's decision and does not fit at scale.
+        wordy = [one.angle for one in self.entries if len(one.angle) > MOST_ANGLE_CHARS]
+        if wordy:
+            found.append(
+                f"{len(wordy)} angles are written as scripts rather than angles: "
+                + "; ".join(one[:60] + "..." for one in wordy[:4])
+                + f". Keep an angle under {MOST_ANGLE_CHARS} characters and leave the "
+                "particulars to whoever writes it, with the source in front of them."
             )
 
         alike = self.duplicates()
         if alike:
             found.append(
                 f"{len(alike)} pair{'s' if len(alike) != 1 else ''} describe the same "
-                "situation in different words: "
+                "angle in different words: "
                 + "; ".join(f"{one} / {two}" for one, two, _ in alike[:6])
             )
         return found
@@ -146,16 +166,16 @@ class Blueprint:
 
         found: list[tuple[str, str, float]] = []
         for group in by_cell.values():
-            seen = [(one, _words(one.situation)) for one in group]
+            seen = [(one, _words(one.angle)) for one in group]
             for index, (one, words) in enumerate(seen):
                 for other, other_words in seen[index + 1 :]:
                     score = _overlap(words, other_words)
                     if score >= TOO_ALIKE:
-                        found.append((one.name, other.name, round(score, 2)))
+                        found.append((one.angle, other.angle, round(score, 2)))
         return sorted(found, key=lambda row: -row[2])
 
     def shortfall(self) -> int:
-        return max(0, self.wanted - len(self.entries))
+        return max(0, self.wanted - self.scenarios)
 
     def honest(self) -> str:
         """What to say about a plan that came in under target, if anything.
@@ -170,14 +190,14 @@ class Blueprint:
             return ""
         if not self.ceiling:
             return (
-                f"{len(self.entries)} planned against {self.wanted} asked for, with no reason "
+                f"{self.scenarios} planned against {self.wanted} asked for, with no reason "
                 "given. Keep planning. Only if you genuinely cannot find another distinct "
                 "situation worth running, record the plan again with `ceiling` saying what you "
                 "exhausted and what you would need to go further."
             )
         return (
-            f"{len(self.entries)} of the {self.wanted} asked for. More would be the same tests "
-            f"under different names, so the honest number is {len(self.entries)}: {self.ceiling}"
+            f"{self.scenarios} of the {self.wanted} asked for. More would be the same tests "
+            f"under different names, so the honest number is {self.scenarios}: {self.ceiling}"
         )
 
     def slices(self, size: int) -> list[list[Entry]]:
@@ -204,7 +224,7 @@ class Blueprint:
                     "wanted": self.wanted,
                     "ceiling": self.ceiling,
                     "entries": [
-                        {"name": one.name, "cell": one.cell, "situation": one.situation}
+                        {"cell": one.cell, "angle": one.angle, "count": one.count}
                         for one in self.entries
                     ],
                 },
@@ -231,12 +251,12 @@ def load(destination: Path) -> Blueprint:
             ceiling=str(held.get("ceiling") or ""),
             entries=[
                 Entry(
-                    name=str(one.get("name") or ""),
                     cell=str(one.get("cell") or ""),
-                    situation=str(one.get("situation") or ""),
+                    angle=str(one.get("angle") or ""),
+                    count=int(one.get("count") or 1),
                 )
                 for one in held.get("entries") or []
-                if one.get("name")
+                if one.get("cell")
             ],
         )
     except Exception:

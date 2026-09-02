@@ -129,7 +129,7 @@ def open_stage(
     # into one shape without anyone having done anything wrong.
     # Against the count asked for here, not the blueprint's own: an empty blueprint records a
     # target of zero, so asking it for its shortfall says nothing is missing.
-    planning = wanted >= WORTH_PLANNING and len(held.blueprint.entries) < wanted
+    planning = wanted >= WORTH_PLANNING and held.blueprint.scenarios < wanted
     spec = SessionSpec(
         # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(
@@ -148,7 +148,8 @@ def open_stage(
                 + ". Submitting one under an existing name replaces it."
             )
             + (
-                f"\n\n{len(held.blueprint.entries)} scenarios are already planned in "
+                f"\n\n{held.blueprint.scenarios} scenarios are already planned as "
+                f"{len(held.blueprint.entries)} angles in "
                 "blueprint.json. Brief writers from it rather than planning again; "
                 "show_blueprint says which are still to write."
                 if held.blueprint.entries and not planning
