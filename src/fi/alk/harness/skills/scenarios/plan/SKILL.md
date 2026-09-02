@@ -47,6 +47,20 @@ Not good:
 
 The second names a mood and a cell. Every writer handed it writes the same test.
 
+There is a second way to get this wrong, and it looks like diligence. A situation can be so
+grounded in the code that it stops being a situation:
+
+    compare-booking | prepare_booking_confirmation returns a summary string
+      listing car type, fare range, pickup, dropoff and payment method
+
+That is a unit test of one tool wearing a scenario's clothes. It will be written, it will pass,
+and it will not catch anything a person would have hit, because no person ever asked for it.
+
+The test to apply: **could the person on the other end have wanted this?** Nobody wants a summary
+string. Somebody does want to know what they are about to be charged before they say yes. Naming
+real tools, real ids and real return values is right and stays right; what matters is that the
+line describes something a caller was trying to do.
+
 ## Where situations actually come from
 
 From the agent's code, not from your general knowledge of what goes wrong with software. Read it
