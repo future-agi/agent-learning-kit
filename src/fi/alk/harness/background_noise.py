@@ -16,17 +16,57 @@ import json
 import os
 from pathlib import Path
 
-# LiveKit ships these; they are the reliable default when no custom catalog is configured.
-_BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
+# LiveKit ships these four; they are the reliable default when no custom catalog is configured.
+#
+# Whoever writes a scenario picks the word for where its caller is, so this cannot be a closed
+# list: a suite measured here used `city`, `airport` and `hotel`, none of which were mapped, and
+# every one of them fell through to an office. Matching is on words rather than the whole string,
+# so "in a moving vehicle" and "vehicle" reach the same clip and an unfamiliar phrase still lands
+# somewhere defensible.
+_BUILTIN_BY_WORD: dict[str, str] = {
+    # outdoors and moving
     "street": "CITY_AMBIENCE",
+    "city": "CITY_AMBIENCE",
     "transit": "CITY_AMBIENCE",
+    "traffic": "CITY_AMBIENCE",
     "vehicle": "CITY_AMBIENCE",
+    "car": "CITY_AMBIENCE",
+    "driving": "CITY_AMBIENCE",
+    "bus": "CITY_AMBIENCE",
+    "train": "CITY_AMBIENCE",
     "outdoors": "FOREST_AMBIENCE",
+    "outside": "FOREST_AMBIENCE",
+    "park": "FOREST_AMBIENCE",
+    # busy indoor places
     "retail": "CROWDED_ROOM",
+    "shop": "CROWDED_ROOM",
+    "store": "CROWDED_ROOM",
+    "cafe": "CROWDED_ROOM",
+    "restaurant": "CROWDED_ROOM",
+    "bar": "CROWDED_ROOM",
+    "airport": "CROWDED_ROOM",
+    "station": "CROWDED_ROOM",
+    "hotel": "CROWDED_ROOM",
+    "lobby": "CROWDED_ROOM",
+    "crowd": "CROWDED_ROOM",
+    "event": "CROWDED_ROOM",
+    # quiet indoor places
     "office": "OFFICE_AMBIENCE",
     "home": "OFFICE_AMBIENCE",
+    "indoors": "OFFICE_AMBIENCE",
+    "desk": "OFFICE_AMBIENCE",
 }
 _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
+
+
+def _builtin_for(environment: str) -> str:
+    """The clip for an environment, matched on any word in it."""
+    words = "".join(c if c.isalnum() else " " for c in environment).split()
+    for word in words:
+        found = _BUILTIN_BY_WORD.get(word)
+        if found:
+            return found
+    return _DEFAULT_BUILTIN
 
 
 def enabled() -> bool:
@@ -70,7 +110,7 @@ def source_for(environment: str = "", seed: str = "") -> str:
             located = str(chosen.get("url") or chosen.get("path") or "").strip()
             if located:
                 return located
-    return _BUILTIN_BY_ENVIRONMENT.get(env, _DEFAULT_BUILTIN)
+    return _builtin_for(env)
 
 
 def scenario_source(
