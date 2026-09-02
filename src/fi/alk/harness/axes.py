@@ -113,6 +113,20 @@ class Operation:
     name: str
     kind: str = ""
     asks: str = ""
+    # Tool-name fragments that suggest a tool serves this operation. Hints for building the
+    # grid, not a taxonomy: a tool matching none of them still counts toward its object.
+    verbs: tuple[str, ...] = ()
+    # Whether a cell is only real when a tool exists for it. True for the operations that
+    # change state, because an agent cannot cancel something it has no way to cancel. False
+    # for reading and for managing the conversation, which an agent can be asked to do about
+    # anything it can see, and which is exactly where hand-written suites never go.
+    needs_own_tool: bool = False
+    # ``object`` crosses this operation with every object the agent has. ``agent`` makes it one
+    # cell for the whole agent, which is right for the operations that are about the
+    # conversation rather than about a thing: proving who you are, being walked through a flow,
+    # being handed to a human. Crossing those with every object produces cells like
+    # "authenticate a market config", which are noise the sampler then has to spend budget on.
+    scope: str = "object"
 
 
 @dataclass(frozen=True)
@@ -122,6 +136,10 @@ class AxisSet:
     modality: str
     operations: tuple[Operation, ...] = ()
     axes: tuple[Axis, ...] = ()
+    # The ordered list a small suite is filled from, so asking for four scenarios yields four
+    # worth running rather than four happy paths. Data, so what a small suite contains is tuned
+    # by editing the axis file.
+    priorities: tuple[dict[str, Any], ...] = ()
 
     def axis(self, name: str) -> Axis | None:
         for one in self.axes:
@@ -230,6 +248,8 @@ def _merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     result["modality"] = over.get("modality") or base.get("modality") or UNIVERSAL
     if over.get("operations"):
         result["operations"] = over["operations"]
+    if over.get("priorities"):
+        result["priorities"] = over["priorities"]
     by_name = {
         str(one.get("name") or ""): one
         for one in base.get("axes") or []
@@ -295,6 +315,9 @@ def axes_for(modality: str = "") -> AxisSet:
             name=str(one.get("name") or "").strip(),
             kind=str(one.get("kind") or "").strip(),
             asks=str(one.get("asks") or "").strip(),
+            verbs=tuple(str(each).strip().lower() for each in one.get("verbs") or [] if str(each).strip()),
+            needs_own_tool=bool(one.get("needs_own_tool")),
+            scope=str(one.get("scope") or "object").strip().lower(),
         )
         for one in held.get("operations") or []
         if isinstance(one, dict) and str(one.get("name") or "").strip()
@@ -304,7 +327,15 @@ def axes_for(modality: str = "") -> AxisSet:
         for one in (_axis(each) for each in held.get("axes") or [] if isinstance(each, dict))
         if one is not None and one.settings
     )
-    return AxisSet(modality=str(held.get("modality") or wanted), operations=operations, axes=axes)
+    priorities = tuple(
+        dict(one) for one in held.get("priorities") or [] if isinstance(one, dict)
+    )
+    return AxisSet(
+        modality=str(held.get("modality") or wanted),
+        operations=operations,
+        axes=axes,
+        priorities=priorities,
+    )
 
 
 def unrecognised_persona_values(axes: AxisSet) -> list[str]:
