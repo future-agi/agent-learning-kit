@@ -4277,12 +4277,16 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.tools import CONTRACT_SERVER  # noqa: F401
     from fi.alk.harness.world import tools as world_tools
 
-    from fi.alk.harness import scenario_tools
+    from fi.alk.harness import grid_tools, scenario_tools
 
+    # The scenarios stage carries both servers, so its skills may name tools from either.
+    suite = set(scenario_tools.TOOL_NAMES) | set(grid_tools.tool_names())
     surface = {
         "understand-agent": {"submit_contract"},
         "build-environment": set(world_tools.TOOL_NAMES),
-        "write-scenarios": set(scenario_tools.TOOL_NAMES),
+        "scenarios": suite,
+        "scenarios/plan": suite,
+        "scenarios/write": suite,
         "run-scenarios": set(run_tools.TOOL_NAMES),
     }
     # A skill also backticks the names of fields it is telling the model to fill in. Those are
@@ -4294,6 +4298,14 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     fields = set()
     for model in (AgentContract, ToolSpec, Scenario, Persona, SubGoal):
         fields |= set(model.model_fields)
+    # The blueprint's own fields, which its skill names the same way. Dataclasses, so read them
+    # the same derived way rather than listing them here where they would go stale.
+    import dataclasses
+
+    from fi.alk.harness.blueprint import Blueprint, Entry
+
+    for shape in (Blueprint, Entry):
+        fields |= {one.name for one in dataclasses.fields(shape)}
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import MODALITIES
 
@@ -4301,6 +4313,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         fields
         | set(MODALITIES)
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
+        # Named in worked examples rather than called: a sub-agent, and identifiers standing in
+        # for an agent's own tool and for scenario names.
+        | {"scenario_writer", "send_confirmation", "scenario_1", "edge_case_a"}
     )
 
     for stage, tools in surface.items():
@@ -4850,7 +4865,7 @@ def test_every_stage_is_told_what_the_harness_is_for():
     for stage in (
         "understand-agent",
         "build-environment",
-        "write-scenarios",
+        "scenarios/write",
         "run-scenarios",
     ):
         text = load_skill(stage)

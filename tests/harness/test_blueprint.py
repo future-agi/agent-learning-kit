@@ -151,7 +151,7 @@ class TestTheStagePlansBeforeItWrites:
         stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
         said = stage._spec.system_prompt
         assert "Plan all 200 scenarios first" in said
-        assert "plan-scenarios" in said or "Plan the suite before writing it" in said
+        assert "Plan the suite before writing it" in said
 
     def test_a_small_suite_is_not(self, contract, where, monkeypatch):
         from fi.alk.harness import scenarios

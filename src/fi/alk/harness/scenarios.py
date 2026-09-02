@@ -42,8 +42,9 @@ from .tools import schema
 
 logger = logging.getLogger(__name__)
 
-SKILL = "write-scenarios"
-PLAN_SKILL = "plan-scenarios"
+SKILL = "scenarios/write"
+PLAN_SKILL = "scenarios/plan"
+PARENT_SKILL = "scenarios"
 
 # What the stage may reach for beyond its own tools. Everything the host offers, because the
 # scenarios worth writing come from reading the agent rather than from reading its contract.

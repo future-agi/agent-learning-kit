@@ -1,5 +1,5 @@
 ---
-name: write-scenarios
+name: write
 description: Write the scenarios an agent is tested with, each proved before it is kept.
 ---
 

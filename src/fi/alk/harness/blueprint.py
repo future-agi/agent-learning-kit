@@ -78,6 +78,11 @@ class Blueprint:
 
     entries: list[Entry] = field(default_factory=list)
     wanted: int = 0
+    # Why the plan stops short of what was asked for, when it does. Empty while the planner is
+    # still adding. This is the honest answer to a request for more scenarios than an agent has
+    # distinct things worth testing, and it is a last resort rather than an early exit: the point
+    # is to meet the number asked for, and to say so plainly when meeting it would mean padding.
+    ceiling: str = ""
 
     @property
     def covered(self) -> set[str]:
@@ -152,6 +157,29 @@ class Blueprint:
     def shortfall(self) -> int:
         return max(0, self.wanted - len(self.entries))
 
+    def honest(self) -> str:
+        """What to say about a plan that came in under target, if anything.
+
+        A suite short of its number is not automatically wrong. An agent with six tools and one
+        collection does not have a thousand distinct things worth testing, and inventing the
+        difference produces a thousand rows that look like coverage and are not. But this is the
+        last resort and not the first move: a planner that stops at a hundred because a hundred
+        was easy has failed at the actual job.
+        """
+        if not self.shortfall():
+            return ""
+        if not self.ceiling:
+            return (
+                f"{len(self.entries)} planned against {self.wanted} asked for, with no reason "
+                "given. Keep planning. Only if you genuinely cannot find another distinct "
+                "situation worth running, record the plan again with `ceiling` saying what you "
+                "exhausted and what you would need to go further."
+            )
+        return (
+            f"{len(self.entries)} of the {self.wanted} asked for. More would be the same tests "
+            f"under different names, so the honest number is {len(self.entries)}: {self.ceiling}"
+        )
+
     def slices(self, size: int) -> list[list[Entry]]:
         """The blueprint cut into pieces a writer can hold, dealt so no writer gets one cell.
 
@@ -174,6 +202,7 @@ class Blueprint:
             json.dumps(
                 {
                     "wanted": self.wanted,
+                    "ceiling": self.ceiling,
                     "entries": [
                         {"name": one.name, "cell": one.cell, "situation": one.situation}
                         for one in self.entries
@@ -199,6 +228,7 @@ def load(destination: Path) -> Blueprint:
         held = json.loads(path.read_text(encoding="utf-8"))
         return Blueprint(
             wanted=int(held.get("wanted") or 0),
+            ceiling=str(held.get("ceiling") or ""),
             entries=[
                 Entry(
                     name=str(one.get("name") or ""),
