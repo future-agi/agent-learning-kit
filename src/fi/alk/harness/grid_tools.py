@@ -422,7 +422,9 @@ def grid_tools(
         lines.append("")
         lines.append(
             "Brief one writer on exactly these, and give it the callers: a name, an accent and "
-            "a location per scenario, distinct across the whole suite."
+            "a location per scenario, distinct across the whole suite. Ask it to report, for "
+            "each bucket, the names of the scenarios it wrote: that is what fold_return checks "
+            "against the disk."
         )
         return _ok("\n".join(lines))
 
@@ -442,6 +444,13 @@ def grid_tools(
                         "properties": {
                             "angle_id": {"type": "string"},
                             "wrote": {"type": "integer"},
+                            "names": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The scenarios the writer says it wrote for this "
+                                "bucket. Each is checked against what is on disk; only the ones "
+                                "that are really there are counted.",
+                            },
                             "short": {
                                 "type": "string",
                                 "description": "One sentence on what was covered.",
@@ -491,8 +500,16 @@ def grid_tools(
             if one is None:
                 lines.append(f"  {angle_id}: no such angle")
                 continue
-            # Counted off disk by the id the writer was told to name its scenarios after.
-            on_disk = sum(1 for scenario in saved if angle_id in (scenario.branch or ""))
+            # Verified against disk rather than believed, and rather than relying on a naming
+            # convention nobody enforces: the writer says which scenarios it wrote, and each is
+            # counted only if a scenario of that name is really there. Matching on the bucket id
+            # inside a free-text field was the earlier approach and would have matched nothing,
+            # leaving every bucket looking unfilled while its scenarios sat on disk.
+            claimed_names = [str(one) for one in (row.get("names") or [])]
+            if claimed_names:
+                on_disk = sum(1 for one in claimed_names if one in {s.name for s in saved})
+            else:
+                on_disk = sum(1 for scenario in saved if angle_id in (scenario.branch or ""))
             claimed = int(row.get("wrote") or 0)
             was = held.fold(
                 angle_id,
@@ -501,7 +518,10 @@ def grid_tools(
                 blocked_reason=str(row.get("blocked_reason") or ""),
             )
             note = f"  {angle_id}: {on_disk}/{one.want} on disk, now {was}"
-            if claimed and claimed != on_disk:
+            missing = [x for x in claimed_names if x not in {s.name for s in saved}]
+            if missing:
+                note += f" ({len(missing)} named but not on disk: {', '.join(missing[:3])})"
+            elif claimed and claimed != on_disk:
                 note += f" (writer said {claimed}, which does not match and is worth checking)"
             lines.append(note)
         opened = held.add(

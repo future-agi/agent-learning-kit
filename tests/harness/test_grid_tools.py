@@ -622,3 +622,39 @@ class TestTheCanvasLoopEndToEnd:
                         "angle": "another thing worth testing"}],
         })
         assert state.canvas.named("TH01-01").done == 2
+
+    def test_progress_is_counted_by_checking_named_scenarios_against_disk(
+        self, contract, where
+    ):
+        """The writer says what it wrote; each name is only counted if it is really there.
+
+        The earlier approach looked for the bucket id inside a free-text field that nothing tells
+        writers to fill. It would have matched nothing, so every bucket would have looked unfilled
+        while its scenarios sat on disk, and a whole run would have ended reporting everything
+        blocked.
+        """
+        from fi.alk.harness.scenario import Scenario
+        from fi.alk.harness.scenario_tools import write_scenarios
+
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        write_scenarios(
+            [Scenario(name="really-here-1"), Scenario(name="really-here-2")], where, None
+        )
+        said = call(
+            server,
+            "fold_return",
+            {
+                "returns": [
+                    {
+                        "angle_id": "TH01-01",
+                        "wrote": 3,
+                        "names": ["really-here-1", "really-here-2", "never-written"],
+                    }
+                ]
+            },
+        )
+        assert "2/3 on disk" in said
+        assert "1 named but not on disk: never-written" in said
+        assert state.canvas.named("TH01-01").done == 2

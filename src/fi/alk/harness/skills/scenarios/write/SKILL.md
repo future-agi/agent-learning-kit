@@ -491,6 +491,11 @@ ceiling gets measured instead of guessed.
 
 `show_canvas` shows the themes and how far each has got; pass a theme to see its buckets.
 
+When you fold, give the **names** of the scenarios written for each bucket. Progress is counted by
+checking those names against what is actually on disk, so a name that was never written is not
+counted and is reported back to you. Do not rely on the count alone: a number is a claim, a name
+is checkable.
+
 **Writers find things the plan missed, and reporting them is your job, not theirs.** A writer has
 `submit_scenario` and the world tools; it does not have the canvas. So it reports what it found in
 its reply to you, and **you** put those into `found` on `fold_return`: a cell, a few words on what
