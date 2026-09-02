@@ -55,6 +55,15 @@ class Proof:
     with_nothing: list[Outcome] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
     broken: list[str] = field(default_factory=list)
+    # Solution steps recorded as passing without being executed, because the tool they name has
+    # nothing bound to call. The proof covers the remaining steps only.
+    #
+    # Not a failure and not nothing. A step that genuinely has no effect on the world is
+    # correctly assumed; a step that should have had one and could not run leaves this scenario
+    # proved more weakly than its siblings, and the two are indistinguishable from here. It is
+    # carried so that whatever reads a proof can say which it is looking at, and so expansion
+    # cannot quietly multiply a partial proof into a dozen of them.
+    assumed: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -237,10 +246,11 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 def _run(
     scenario: Scenario, world_root: Path, *, with_solution: bool
-) -> tuple[GeneratedWorld, list[Call], list[str]]:
+) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
     """A world set up for this scenario, optionally with the solution played through it."""
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
+    assumed: list[str] = []
     if with_solution:
         for step in scenario.solution:
             call = play_reference_step(world, step)
@@ -248,7 +258,7 @@ def _run(
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
         runtime_tools = set(getattr(world, "runtime_tools", set()))
         endpoints = getattr(world, "endpoint_for", {}) or {}
-        assumed = [
+        assumed[:] = [
             str(getattr(step, "tool", ""))
             for step in scenario.solution
             if str(getattr(step, "tool", "")) in runtime_tools
@@ -269,7 +279,7 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused
+    return world, list(world.calls), refused, sorted(set(assumed))
 
 
 def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
@@ -299,7 +309,8 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     proof.ready = True
 
     # Gate 2: does the reference solution pass this scenario's own checks?
-    world, calls, refused = _run(scenario, world_root, with_solution=True)
+    world, calls, refused, assumed = _run(scenario, world_root, with_solution=True)
+    proof.assumed = assumed
     try:
         proof.with_solution = [
             run_check(source, world, calls, name=name) for name, source in checks
@@ -311,7 +322,7 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
-    untouched, nothing, _ = _run(scenario, world_root, with_solution=False)
+    untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [
             run_check(source, untouched, nothing, name=name) for name, source in checks

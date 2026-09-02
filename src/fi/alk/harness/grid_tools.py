@@ -116,9 +116,13 @@ def grid_tools(
 
     @tool(
         "plan_suite",
-        "How many scenarios to write and which cell each one covers, for a given count. The "
-        "plan puts the cases a suite is not worth running without first, then forces in every "
-        "safety overlay, then fills the grid evenly. Use it to brief writers.",
+        "One way to cover the grid in a given number of scenarios. **A suggestion, not an "
+        "instruction.** It is arithmetic over the grid and knows nothing about this agent: it "
+        "cannot tell which of its cells are dangerous in practice, where its real users spend "
+        "their time, or which of its operations you have just read the source for and know to "
+        "be fragile. You can. Take what fits, drop what does not, write cells it did not "
+        "choose, and say what you changed and why. It is most useful when the count is large "
+        "enough that choosing by hand would be the whole job.",
         schema(
             {
                 "count": {
@@ -138,7 +142,11 @@ def grid_tools(
         if count <= 0:
             return _err("Ask for at least one scenario.")
         picks = plan(state.grid, state.axes, count)
-        lines = [f"{len(picks)} scenarios planned:"]
+        lines = [
+            f"A suggested {len(picks)}. Yours to change: this is arithmetic over the grid, and "
+            "you have read the agent.",
+            "",
+        ]
         lines += [f"  {pick.name}  ({pick.described()})  because: {pick.why}" for pick in picks]
         lines.append("")
         direct = [one for one in picks if not one.cell.after]

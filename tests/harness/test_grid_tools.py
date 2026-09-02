@@ -91,8 +91,15 @@ class TestPlanning:
     def test_a_plan_names_one_coordinate_per_scenario(self, contract, where, count):
         server, _ = grid_tools(contract, where)
         said = call(server, "plan_suite", {"count": count})
-        assert said.startswith(f"{count} scenarios planned:")
+        assert f"A suggested {count}." in said
         assert "because:" in said
+
+    def test_the_plan_presents_itself_as_a_suggestion(self, contract, where):
+        """Choosing what to test is the model's call. This is arithmetic over the grid and
+        knows nothing about which of the agent's operations are dangerous in practice."""
+        server, _ = grid_tools(contract, where)
+        said = call(server, "plan_suite", {"count": 5})
+        assert "Yours to change" in said
 
     def test_a_nonsense_count_is_refused_rather_than_guessed(self, contract, where):
         server, _ = grid_tools(contract, where)
