@@ -661,3 +661,38 @@ class TestTheCanvasLoopEndToEnd:
         assert "2/3 on disk" in said
         assert "1 named but not on disk: never-written" in said
         assert state.canvas.named("TH01-01").done == 2
+
+
+def test_the_stage_s_count_wins_over_the_target_the_model_types(contract, where, tmp_path):
+    """Every whole-plan refusal guards on target, so a lowballed or omitted one disarmed all of
+    them. The stage knows what was asked for; the model does not get to lower it."""
+    import asyncio
+
+    from fi.alk.harness.blueprint import load as load_canvas
+    from fi.alk.harness.grid_tools import grid_tools
+
+    server, _state = grid_tools(contract, tmp_path, wanted=500)
+    record = next(one for one in server.tools if one.name == "record_canvas")
+    asyncio.run(
+        record.handler(
+            {
+                "target": 20,
+                "themes": [{"id": "TH01", "name": "T", "why": "w"}],
+                "buckets": [
+                    {
+                        "id": "A1",
+                        "theme": "TH01",
+                        "cell": "retrieve-ride",
+                        "angle": (
+                            "someone returning is matched against two stored records that look "
+                            "alike and the wrong one is chosen first"
+                        ),
+                        "why_hard": "data:two-records",
+                        "want": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    assert load_canvas(tmp_path).target == 500
