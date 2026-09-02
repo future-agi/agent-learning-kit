@@ -503,9 +503,14 @@ claim a distinct writer name, because that name is what records who holds the wo
 
 Sequential dispatch is the difference between a suite that finishes and one that does not. A
 writer spends most of its life waiting on a model, so writers that wait in parallel cost almost
-the same wall-clock as one. Four to six at a time is the usual range: enough to matter, few
-enough that the provider does not start refusing. Add more only if none of them are being
-refused.
+the same wall-clock as one, and one writer at a time is the slowest thing you can do.
+
+**Start at eight, and keep claiming while work is open.** The useful width is however many
+slices the plan still has: claim, dispatch, and only stop widening when `claim_slice` says
+nothing is open or the provider starts refusing. A writer also pays a fixed cost before its
+first scenario, because it reads the agent under test first, so a handful of writers each
+writing a few scenarios wastes most of its time on that reading; prefer fewer, fuller slices
+over many tiny ones.
 
 Two things stay serial no matter how many writers run, and neither is a reason to dispatch fewer.
 They share one world, so proving is queued behind whoever holds it; and the canvas is yours
