@@ -541,13 +541,26 @@ class TestDepthIsNotASubstituteForBreadth:
         return {f"cell-{i}" for i in range(20)}
 
     def test_a_large_plan_on_a_few_cells_is_refused(self):
+        """Judged once the plan is whole: instalments of a themed recording are left alone."""
+        held = canvas(
+            *[(f"A{i}", "TH01", "cell-0" if i < 3 else f"cell-{i}", f"case number {i}",
+               "data:x", 40)
+              for i in range(5)],
+            target=200,
+        )
+        said = " ".join(held.problems(self.wide_grid()))
+        assert "touches 3 of 20 cells" in said
+
+    def test_a_first_instalment_is_not_judged_as_the_whole_plan(self):
+        """The skill records one theme at a time; a first theme covers few cells by nature, and
+        refusing it orders the model to break the instalment discipline."""
         held = canvas(
             *[(f"A{i}", "TH01", "cell-0" if i < 3 else f"cell-{i}", f"case number {i}", "data:x")
               for i in range(5)],
             target=200,
         )
         said = " ".join(held.problems(self.wide_grid()))
-        assert "touches 3 of 20 cells" in said
+        assert "touches" not in said
 
     def test_a_plan_spread_across_the_grid_passes(self):
         held = canvas(
@@ -630,9 +643,12 @@ class TestOrderingIsPlannedForRatherThanMentioned:
     """
 
     def big(self, why: str = "rule:something"):
+        # want=17 apiece so the plan is whole (planned >= target): whole-plan refusals wait for
+        # a whole plan, and an instalment names no gated tool without being at fault.
         return canvas(
             *[
-                (f"A{n}", "TH01", "retrieve-ride", f"case number {n} that goes wrong somehow", why)
+                (f"A{n}", "TH01", "retrieve-ride", f"case number {n} that goes wrong somehow",
+                 why, 17)
                 for n in range(12)
             ],
             target=200,
@@ -655,3 +671,32 @@ class TestOrderingIsPlannedForRatherThanMentioned:
         held = canvas(("A1", "TH01", "retrieve-ride", "one case that goes wrong"), target=10)
         found = " ".join(held.problems({"retrieve-ride"}, None, ["book_ride"]))
         assert "none of the" not in found
+
+
+class TestProgressNeverMovesBackwards:
+    """A bucket filled over two rounds folds each round's own names, and the second writer's
+    two must not erase the first writer's three. Assigning absolutely marked finished buckets
+    part-done, burned an attempt per round, and blocked buckets that were being filled."""
+
+    def test_two_rounds_add_up(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        held.credit("A1", ["one", "two", "three"])
+        held.fold("A1", done=len(held.named("A1").credited))
+        held.credit("A1", ["four", "five"])
+        held.fold("A1", done=len(held.named("A1").credited))
+        assert held.named("A1").done == 5
+        assert held.named("A1").state == "done"
+
+    def test_a_name_fills_one_bucket_only(self):
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "booking missing", "", 2),
+            ("B1", "TH01", "cancel-ride", "already cancelled", "", 2),
+        )
+        assert held.credit("A1", ["shared-name"]) == 1
+        assert held.credit("B1", ["shared-name"]) == 0
+
+    def test_a_fold_with_less_than_the_ledger_keeps_the_ledger(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        held.credit("A1", ["one", "two", "three"])
+        held.fold("A1", done=0, short="writer died")
+        assert held.named("A1").done == 3

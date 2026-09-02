@@ -173,6 +173,10 @@ class Angle:
     state: str = "open"
     claimed_by: str = ""
     notes: list[str] = field(default_factory=list)
+    # The scenario names this bucket has been credited with, so `done` is a ledger rather than
+    # whatever the last fold said. Two writers filling one bucket across rounds add up instead of
+    # the second overwriting the first, and one name can never fill two buckets.
+    credited: list[str] = field(default_factory=list)
 
     @property
     def outstanding(self) -> int:
@@ -407,7 +411,12 @@ class Canvas:
         # actually breaks, and the grid cannot show the hole: a cell is an object and says nothing
         # about order. Zero is the bar, not a share, because a share invites scattering tool names
         # through the prose without writing the ordering case.
-        if self.target >= WORTH_PLANNING * 5 and gated:
+        # Whole-plan judgements wait until the plan claims to be whole. The skill records one
+        # theme at a time, and a first instalment of one theme covers few cells and may name no
+        # gated tool; refusing it orders the model to break the instalment discipline, and the
+        # escape it will find is worse than the wait.
+        whole = self.planned >= self.target
+        if whole and self.target >= WORTH_PLANNING * 5 and gated:
             said = " ".join(one.angle.lower() + " " + one.why_hard.lower() for one in self.angles)
             if not any(one.lower() in said for one in gated):
                 found.append(
@@ -418,7 +427,7 @@ class Canvas:
                     "early, naming the tool in why_hard: " + ", ".join(sorted(gated)[:10])
                 )
 
-        if self.target >= WORTH_PLANNING * 5 and cells:
+        if whole and self.target >= WORTH_PLANNING * 5 and cells:
             share = len(self.covered) / len(cells)
             if share < LEAST_CELLS_COVERED:
                 missing = sorted(cells - self.covered)
@@ -562,6 +571,23 @@ class Canvas:
                 )
         return kept
 
+    def credit(self, angle_id: str, names: list[str]) -> int:
+        """Credit on-disk scenario names to one bucket, each name to one bucket only, ever.
+
+        This is what lets a bucket be filled over two rounds: each round adds its own names and
+        `done` is the ledger's length, instead of the last fold overwriting the one before. It is
+        also what stops one recycled name marking two buckets done.
+        """
+        taken = {name for one in self.angles for name in one.credited}
+        one = self.named(angle_id)
+        if one is None:
+            return 0
+        for name in names:
+            if name and name not in taken:
+                one.credited.append(name)
+                taken.add(name)
+        return len(one.credited)
+
     def fold(
         self,
         angle_id: str,
@@ -571,11 +597,17 @@ class Canvas:
         refused: int = 0,
         blocked_reason: str = "",
     ) -> str:
-        """Take one writer's return. ``done`` comes from disk, never from the writer's report."""
+        """Take one writer's return. ``done`` comes from disk, never from the writer's report.
+
+        Never downwards: a bucket filled over two rounds folds each round's own names, and the
+        second writer's two must not erase the first writer's three. Assigning absolutely here
+        marked finished buckets part-done, burned an attempt per round, and blocked buckets that
+        were being filled.
+        """
         one = self.named(angle_id)
         if one is None:
             return f"no angle called {angle_id!r}"
-        one.done = done
+        one.done = max(one.done, done, len(one.credited))
         one.refused += refused
         one.claimed_by = ""
         if short:

@@ -39,6 +39,9 @@ def _ok(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
 
+_LABELS: dict[Path, dict[str, str]] = {}
+
+
 def entity_labels(destination: Path) -> dict[str, str]:
     """Every value in the world that names a row rather than describing its state.
 
@@ -50,6 +53,12 @@ def entity_labels(destination: Path) -> dict[str, str]:
     Returns nothing at all rather than raising: this feeds a check, and a check is never worth
     stopping a run over.
     """
+    # Cached per destination for the stage's lifetime: the seed does not change while a plan is
+    # being recorded, and building this reads the world, which restores it - a full truncate and
+    # reload of every table. A sixteen-instalment plan was rewriting the world sixteen times to
+    # answer the same question.
+    if destination in _LABELS:
+        return _LABELS[destination]
     try:
         from .scenario_tools import world_state
 
@@ -62,6 +71,7 @@ def entity_labels(destination: Path) -> dict[str, str]:
                 if len(set(seen)) == len(seen):
                     for value in seen:
                         held.setdefault(value.strip().lower(), f"{collection}.{column}")
+        _LABELS[destination] = held
         return held
     except Exception as why:  # noqa: BLE001 - the check degrades, the run does not
         logger.info("no entity labels, the identity-axis check is skipped: %s", why)
@@ -254,7 +264,10 @@ def grid_tools(
         standing = {} if replace else {one.id: one for one in state.canvas.angles}
         before = dict(standing)
         held = Canvas(
-            target=int(args.get("target") or state.canvas.target or 0),
+            # The stage's own count wins over anything the model types. Every whole-plan check
+            # is guarded on target, so a lowballed or omitted target quietly disarmed all of
+            # them, and the checks exist precisely for the model that would rather not meet them.
+            target=wanted or int(args.get("target") or state.canvas.target or 0),
             axes=[
                 StateAxis(
                     name=str((one or {}).get("name") or "").strip(),
@@ -431,7 +444,10 @@ def grid_tools(
         if not held.angles:
             return _err("No canvas to deal. Plan the suite with record_canvas first.")
         state.canvas = held
-        taken = held.next_slice(int(args.get("scenarios") or SLICE_SCENARIOS))
+        # Clamped to twice the recommended size, because a writer's turn budget is finite and a
+        # thirty-scenario slice comes back part-filled, burning an attempt on every bucket in it.
+        asked = int(args.get("scenarios") or SLICE_SCENARIOS)
+        taken = held.next_slice(max(1, min(asked, SLICE_SCENARIOS * 2)))
         if not taken:
             done = held.reached()
             return _ok(
@@ -532,10 +548,14 @@ def grid_tools(
             # inside a free-text field was the earlier approach and would have matched nothing,
             # leaving every bucket looking unfilled while its scenarios sat on disk.
             claimed_names = [str(one) for one in (row.get("names") or [])]
+            really = {s.name for s in saved}
             if claimed_names:
-                on_disk = sum(1 for one in claimed_names if one in {s.name for s in saved})
+                found = [one for one in claimed_names if one in really]
             else:
-                on_disk = sum(1 for scenario in saved if angle_id in (scenario.branch or ""))
+                found = [s.name for s in saved if angle_id in (s.branch or "")]
+            # Credited through the canvas ledger: each name fills one bucket only, ever, and a
+            # bucket filled over two rounds adds up instead of the second fold erasing the first.
+            on_disk = held.credit(angle_id, found)
             claimed = int(row.get("wrote") or 0)
             was = held.fold(
                 angle_id,
