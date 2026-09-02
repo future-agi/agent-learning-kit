@@ -310,6 +310,11 @@ def derive(
     if not operations:
         return Grid(thin="the axis file declares no operations, so no grid could be derived")
 
+    # An explicit list is an assertion by something that read the agent's source, which is more
+    # than this function ever sees. Tool-name matching may fail to attach a tool to an object it
+    # names, and pruning on that basis would make a correction shrink the grid, which is the
+    # opposite of what correcting it is for.
+    asserted = bool(objects)
     objects = tuple(objects) if objects else objects_in(contract, axes)
     thin = ""
     if not objects:
@@ -357,8 +362,9 @@ def derive(
                 continue
             # A contract too thin to name a single tool still has to yield somewhere to start,
             # so the no-tool pruning is skipped for it. Pruning is about what an agent plainly
-            # cannot do, and about an agent this poorly described nothing is plain.
-            if not thin and operation.kind in ("read", "manage") and not touching:
+            # cannot do, and about an agent this poorly described nothing is plain. The same
+            # holds for an object list somebody asserted after reading the source.
+            if not thin and not asserted and operation.kind in ("read", "manage") and not touching:
                 dropped.append(f"{operation.name}-{obj}".replace("_", "-"))
                 continue
             cells.append(
