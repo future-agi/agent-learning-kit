@@ -10,10 +10,10 @@ Embeddings settle it. Measured on that exact pair with Vertex `text-embedding-00
 scores 0.95 and a genuinely different angle on the same cell scores 0.42. The gap is wide enough
 that a threshold in between is not a judgement call.
 
-**Off unless it is switched on.** Embedding calls are billed, and which account they are billed
-to is not this module's business to assume. It runs only when ``ALK_EMBEDDINGS`` is set, so no
-run reaches a paid API because a check quietly decided it would be useful. Everything degrades to
-the lexical answer, which is the same thing that happens when there are no credentials at all.
+**Off unless it is switched on.** This reaches a paid API, and a duplicate check is not a good
+enough reason to do that without being asked. It runs only when ``ALK_EMBEDDINGS`` is set, and
+otherwise everything degrades to the lexical answer, which is what already happens when no
+credentials are present.
 
 Optional by construction in every other way too. No credentials, no network, no library, or an
 API that refuses: each of those returns nothing and the caller keeps what it had. A duplicate
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # setting: the model that writes scenarios and the model that measures them are different
 # choices, and pinning this one keeps a similarity score comparable between runs.
 # Set this to switch embedding on. Unset means every call here returns nothing, which is the
-# default because these requests are billed and nothing should spend without being asked to.
+# default: this reaches a paid API, and nothing should spend without being asked to.
 SWITCH = "ALK_EMBEDDINGS"
 
 MODEL = "text-embedding-005"
