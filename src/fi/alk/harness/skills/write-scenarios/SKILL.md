@@ -255,9 +255,15 @@ Measured on a real suite: seven of nine scenarios booked a ride first, median tw
 steps, including the one about explaining an address and the one about establishing identity.
 
 So: build only the state your cell genuinely needs, and build it in `setup_code` rather than in
-reference steps. Seeding a booking is one line; reaching one through the booking flow is twelve.
-A shorter solution is not a weaker scenario, it is a scenario about the thing it claims to be
-about.
+reference steps. A shorter solution is not a weaker scenario, it is a scenario about the thing it
+claims to be about.
+
+**The agent's rules are not a reason to replay its flow.** A contract lists what the agent must
+do *when it performs* an operation: book only after an explicit read-back, never charge a saved
+card without a verified code this call. Those bind a scenario that books. They say nothing about
+one that explains an address, and reading them as a demand that every scenario book is the single
+commonest way a suite goes monotonous. Obey the rules your cell's own tools are governed by, and
+leave the rest to the cells they belong to.
 
 ## Two scenarios are different only if the right answer differs
 

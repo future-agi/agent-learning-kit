@@ -141,6 +141,16 @@ def grid_tools(
         lines = [f"{len(picks)} scenarios planned:"]
         lines += [f"  {pick.name}  ({pick.described()})  because: {pick.why}" for pick in picks]
         lines.append("")
+        lines.append(
+            "Build each solution out of the tools listed against its own cell. Anything else the "
+            "scenario needs is setup_code, not solution steps.\n"
+            "The agent's rules describe how it must behave *when it performs* an operation. They "
+            "are not a requirement that every scenario perform the whole flow: a rule about "
+            "booking binds a scenario that books, and says nothing about one that explains an "
+            "address. Replaying the flow to arrive at a cell which is not about it tests the flow "
+            "once more and the cell not at all."
+        )
+        lines.append("")
         lines.append(coverage(state.grid, state.axes, picks))
         return _ok("\n".join(lines))
 

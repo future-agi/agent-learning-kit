@@ -96,7 +96,11 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
-    workers = writer_workers(contract, destination)
+    workers = (
+        writer_workers(contract, destination)
+        if wanted >= FEWEST_WORTH_DELEGATING
+        else {}
+    )
     server, kept = scenario_tools(
         contract, destination, destination, wanted=wanted, delegates=bool(workers)
     )
@@ -233,6 +237,12 @@ def load(destination: Path) -> list[Scenario]:
 AT_ONCE = 4
 MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
 MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 50)
+
+# Below this, one session writes the suite itself. Delegation buys parallelism and costs turns:
+# each worker is briefed, runs, and reports, and for a handful of scenarios that overhead is the
+# whole bill. Measured on two N=10 runs of the same suite: 54 turns without workers, 119 with,
+# for output that was identical scenario by scenario.
+FEWEST_WORTH_DELEGATING = int(os.environ.get("HARNESS_DELEGATE_ABOVE") or 20)
 
 # How many times the suite is reviewed and topped up after the first pass. One is enough to
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop
@@ -445,13 +455,7 @@ def brief_for(
             if others
             else ""
         )
-        + "**Use the shortest path that makes your cell's point.** An agent usually has one "
-        "long flow it is built around, and the easy mistake is to replay that whole flow in "
-        "every scenario and then do the one thing the cell is about at the end. That tests the "
-        "flow N times and each cell once. If the cell is about explaining something, explain it; "
-        "if it is about identity, establish identity. Only build the state a cell genuinely "
-        "needs, and prefer setup_code to a dozen reference steps: seeding a booking is one line "
-        "and replaying the booking flow is twelve.\n\n"
+        + _solution_shape(contract, mine)
         + "Every scenario carries the use case from the contract that its coordinate belongs "
         "to, word for word, because results are grouped on that string. Its `branch` says what "
         "makes it different from its siblings.\n\n"
@@ -477,6 +481,44 @@ def brief_for(
         "with submit_scenario and then stop: do not save, and do not ask what to do next. "
         "Whoever asked for this collects the suite and writes it." + callers
     )
+
+
+def _solution_shape(contract: AgentContract, mine: Slice) -> str:
+    """What the solution for these cells should be built out of, and what it should not.
+
+    The agent's own rules are the reason a suite goes monotonous. They are written for the agent
+    at large ("book only after an explicit read-back"), and handed to a writer for every cell
+    they read as a demand that each scenario perform the whole flow. Asking for the shortest path
+    while supplying those rules unscoped is a contradiction, and the writer resolves it in favour
+    of the rules, which is the right call on the information it has.
+
+    So the rules are scoped here: the ones bearing on this cell's own tools are quoted, and the
+    rest are left out of the brief rather than argued with.
+    """
+    serving = sorted({name for pick in mine.picks for name in pick.cell.tools})
+    if not serving:
+        return ""
+
+    bearing = [
+        rule
+        for rule in contract.hard_constraints
+        if any(name in rule for name in serving)
+    ]
+    said = (
+        "**Build each solution out of the tools that serve its own cell.** These are yours:\n"
+        f"  {', '.join(serving)}\n\n"
+        "Any other state the scenario needs is `setup_code`, not solution steps. An agent has one "
+        "long flow it is built around, and replaying that flow to arrive at a cell which is not "
+        "about it tests the flow once more and the cell not at all.\n\n"
+    )
+    if bearing:
+        said += (
+            "The agent's rules that bear on these tools, and only these:\n  - "
+            + "\n  - ".join(one.strip() for one in bearing)
+            + "\n\nIts other rules govern parts of the agent your cells do not reach. They are "
+            "not a requirement that your scenario perform the whole flow.\n\n"
+        )
+    return said
 
 
 async def _write_slice(
