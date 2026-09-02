@@ -25,6 +25,8 @@ def request(
         headers={
             "Authorization": f"Bearer {os.environ['VAPI_API_KEY']}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "FutureAGI-ALK/1.0",
         },
     )
     try:

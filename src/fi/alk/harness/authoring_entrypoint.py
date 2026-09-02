@@ -11,11 +11,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
+import tempfile
 
 from .cli import _auto
-from .job import HarnessJob
+from .job import HarnessJob, ProviderExecutionMode
+from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
+from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
 
 def _persist_authored_scenario_count(
@@ -41,6 +45,44 @@ def _persist_authored_scenario_count(
     temporary.replace(job_path)
 
 
+def _load_provider_import_profile(
+    job: HarnessJob,
+    secrets_path: Path | None,
+    profile_cache_path: Path | None = None,
+) -> dict[str, object] | None:
+    if job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT:
+        return None
+    if profile_cache_path is not None and profile_cache_path.is_file():
+        cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
+        if not isinstance(cached, dict):
+            raise RuntimeError("provider_import_authoring_profile_invalid")
+        return cached
+    if secrets_path is None:
+        raise RuntimeError("provider_import_authoring_secrets_missing")
+    try:
+        values = json.loads(secrets_path.read_text(encoding="utf-8"))
+    finally:
+        # The provider credential is needed only for this read-only inspection. Remove the file
+        # before any model session or source/environment process starts.
+        secrets_path.unlink(missing_ok=True)
+    if not isinstance(values, dict):
+        raise RuntimeError("provider_import_authoring_secrets_invalid")
+    connector = job.agent.connector.strip().lower()
+    secret_name = "VAPI_API_KEY" if connector == "vapi" else "RETELL_API_KEY"
+    target_key = "assistant_id" if connector == "vapi" else "agent_id"
+    profile = inspect_provider_target(
+        connector,
+        source_target_id=str(job.agent.config.get(target_key) or ""),
+        api_key=str(values.get(secret_name) or ""),
+        api_base_url=str(job.agent.config.get("provider_api_base_url") or "") or None,
+    )
+    if profile_cache_path is not None:
+        profile_cache_path.write_text(
+            json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    return profile
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("job", type=Path)
@@ -50,6 +92,16 @@ def main(argv: list[str] | None = None) -> int:
         "--adjustments",
         type=Path,
         help="JSONL inbox for user corrections applied at safe stage boundaries",
+    )
+    parser.add_argument(
+        "--target-secrets",
+        type=Path,
+        help="One-shot control-process secrets used to inspect an imported provider target",
+    )
+    parser.add_argument(
+        "--provider-profile-cache",
+        type=Path,
+        help="Control-owned sanitized profile reused across authoring retries",
     )
     args = parser.parse_args(argv)
 
@@ -71,9 +123,30 @@ def main(argv: list[str] | None = None) -> int:
         adjustments_path=str(args.adjustments) if args.adjustments else None,
         authoring_only=True,
     )
-    status = asyncio.run(_auto(namespace))
+    profile = _load_provider_import_profile(
+        job, args.target_secrets, args.provider_profile_cache
+    )
+    previous_profile_path = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV)
+    with tempfile.TemporaryDirectory(prefix="alk-provider-profile-") as temporary:
+        if profile is not None:
+            profile_path = Path(temporary) / "provider-import-profile.json"
+            profile_path.write_text(
+                json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = str(profile_path)
+        try:
+            status = asyncio.run(_auto(namespace))
+        finally:
+            if previous_profile_path is None:
+                os.environ.pop(PROVIDER_IMPORT_PROFILE_PATH_ENV, None)
+            else:
+                os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = previous_profile_path
     if status == 0:
         _persist_authored_scenario_count(args.job, job, args.output.resolve())
+        if profile is not None:
+            (args.output.resolve() / "provider-import-profile.json").write_text(
+                json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
     return status
 
 

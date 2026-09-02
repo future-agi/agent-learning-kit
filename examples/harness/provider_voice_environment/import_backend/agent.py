@@ -48,9 +48,19 @@ async def provider_events(request: Request) -> dict[str, bool]:
 async def record_preference(request: Request) -> dict[str, Any]:
     body = await request.json()
     _record("tool.record_preference", body)
+    preference = body.get("preference") if isinstance(body, dict) else None
+    if preference is None and isinstance(body, dict):
+        arguments = body.get("args") or body.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except ValueError:
+                arguments = None
+        if isinstance(arguments, dict):
+            preference = arguments.get("preference")
     return {
         "recorded": True,
-        "preference": body.get("preference") if isinstance(body, dict) else None,
+        "preference": preference,
     }
 
 

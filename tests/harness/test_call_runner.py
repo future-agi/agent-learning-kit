@@ -170,6 +170,60 @@ def test_file_tool_trace_clear_removes_previous_attempt(tmp_path: Path) -> None:
     assert not trace.exists()
 
 
+def test_provider_reported_tool_call_is_used_when_guest_trace_is_empty(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="retell",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={"agent_id": "source-retell-agent"},
+        secrets={RETELL_API_KEY: "retell-key"},
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        report = _report(
+            transcript="user: window\nagent: saved",
+            messages=[
+                {"role": "user", "content": "window"},
+                {"role": "assistant", "content": "saved"},
+            ],
+        )
+        assert report.test_cases[0].result is not None
+        report.test_cases[0].result.metadata["evidence"] = [
+            {
+                "adapter": "retell",
+                "metadata": {
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "name": "record_preference",
+                            "arguments": {"preference": "window"},
+                            "result": {"recorded": True},
+                            "ok": True,
+                            "at": 4.25,
+                        }
+                    ]
+                },
+            }
+        ]
+        return report
+
+    adapter = FakeAdapter()
+    outcome = _run(
+        cr.CallRunnerImpl(adapter, context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"provider_target_id": "cloned-retell-agent"}),
+    )
+
+    assert len(outcome.calls) == 1
+    assert outcome.calls[0].name == "record_preference"
+    assert outcome.calls[0].arguments == {"preference": "window"}
+    assert outcome.calls[0].result == {"recorded": True}
+    assert any(kind is cr.ArtifactKind.TOOL_TRACE for kind, _, _ in adapter.uploads)
+
+
 def _context(
     *,
     tmp_path: Path,

@@ -648,6 +648,65 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
+    """Translate provider-reported tool evidence into scheduler calls.
+
+    LiveKit's legacy report conversion stores per-case evidence in
+    ``result.metadata.evidence``; canonical reports may populate
+    ``case.evidence`` directly. Accept both shapes so hosted execution is not
+    coupled to the report representation.
+    """
+    sources: list[Any] = list(getattr(case, "evidence", None) or [])
+    result = getattr(case, "result", None)
+    result_metadata = getattr(result, "metadata", None)
+    if isinstance(result_metadata, Mapping):
+        embedded = result_metadata.get("evidence")
+        if isinstance(embedded, list):
+            sources.extend(embedded)
+
+    calls: list[Call] = []
+    for source in sources:
+        if hasattr(source, "model_dump"):
+            source = source.model_dump(mode="json", exclude_none=True)
+        if not isinstance(source, Mapping):
+            continue
+        metadata = source.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        raw_calls = metadata.get("tool_calls")
+        if not isinstance(raw_calls, list):
+            continue
+        for raw in raw_calls:
+            if not isinstance(raw, Mapping):
+                continue
+            name = raw.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            arguments: Any = raw.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    arguments = {"raw": arguments}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            ok = bool(raw.get("ok", True))
+            raw_at = raw.get("at")
+            at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
+            calls.append(
+                Call(
+                    name=name,
+                    arguments=arguments,
+                    result=raw.get("result") if ok else None,
+                    ok=ok,
+                    error=str(raw.get("error") or ""),
+                    refused=not ok,
+                    at=at,
+                )
+            )
+    return tuple(calls)
+
+
 def _truncate(value: str, *, limit: int = _RESULT_TRUNCATE_CHARS) -> str:
     return value if len(value) <= limit else value[:limit]
 
@@ -1010,6 +1069,14 @@ class CallRunnerImpl:
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
         calls = self._collect_calls(runtime) if case is not None else ()
+        # Provider-hosted agents execute tools outside the guest process, so their
+        # authoritative call evidence is returned by Vapi/Retell after the call.
+        # Preserve provider-native controls such as ``end_call`` because scenario
+        # checks may verify termination ordering. Fall back to that observed stream
+        # when the submitted backend exposes no local trace seam; never infer calls
+        # from transcript prose.
+        if not calls and case is not None:
+            calls = _collect_provider_tool_calls(case)
         if calls:
             tool_trace = "\n".join(
                 json.dumps(

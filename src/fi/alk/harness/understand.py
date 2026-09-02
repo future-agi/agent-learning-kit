@@ -10,6 +10,7 @@ not the first. Correcting it is the next thing said, not a re-run.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,6 +21,27 @@ from .sources import AgentSource
 from .tools import CONTRACT_SERVER, contract_tools
 
 SKILL = "understand-agent"
+PROVIDER_IMPORT_PROFILE_PATH_ENV = "ALK_PROVIDER_IMPORT_PROFILE_PATH"
+
+
+def _provider_import_briefing() -> str:
+    """Load the sanitized external-provider definition prepared by the control process."""
+    configured = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV, "").strip()
+    if not configured:
+        return ""
+    path = Path(configured)
+    try:
+        profile = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return (
+        "\n\n## Imported provider target (authoritative, read-only)\n\n"
+        "The submitted repository implements this target's environment-facing webhooks. "
+        "The externally hosted assistant definition below is equally authoritative for its "
+        "conversation, prompt, model, voice, and tool schemas. Reconcile both sources. Do not "
+        "invent behavior or tool inputs that conflict with the provider definition.\n\n"
+        f"```json\n{json.dumps(profile, indent=2, sort_keys=True)}\n```"
+    )
 
 
 def open_stage(
@@ -32,7 +54,10 @@ def open_stage(
     """A live understand-the-agent stage, and where it will write."""
     destination = out or artifact_dir(source.name)
     spec = read_only_session(
-        system_prompt=f"{load_skill(SKILL)}\n\n## This agent\n\n{source.briefing()}",
+        system_prompt=(
+            f"{load_skill(SKILL)}\n\n## This agent\n\n{source.briefing()}"
+            f"{_provider_import_briefing()}"
+        ),
         cwd=source.workdir(),
         servers={**source.servers(), CONTRACT_SERVER: contract_tools(destination)},
         extra_builtins=source.builtin_tools(),

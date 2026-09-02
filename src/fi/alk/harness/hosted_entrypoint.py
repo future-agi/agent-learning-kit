@@ -137,6 +137,9 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_GENAI_USE_VERTEXAI",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
         "OPENAI_API_KEY",
         "SIMULATOR_LLM_MODEL",
         "SIMULATOR_LLM_PROVIDER",
@@ -1926,9 +1929,14 @@ async def run_job(
         target_provider_secret_values = deps.peek_target_provider_secret_values(
             secret_purposes
         )
-        simulator_provider_secret_values = deps.peek_simulator_provider_secret_values(
-            secret_purposes
-        )
+        # Platform simulator credentials arrive through simulator-secrets.json, not the
+        # customer-controlled secrets.json. Preserve that separately loaded channel all the way
+        # into CallRunnerContext. Any legacy simulator-purpose refs are merged first so the
+        # platform channel wins on alias collisions and cannot be overridden by a submitted job.
+        simulator_provider_secret_values = {
+            **deps.peek_simulator_provider_secret_values(secret_purposes),
+            **simulator_secret_values,
+        }
         adapter.configure_artifacts(
             job.artifacts
         )  # level table + budget, now that job.json is known.

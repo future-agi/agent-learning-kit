@@ -4793,8 +4793,12 @@ class ProcessRuntimeProvider:
         }
         invocation = build_lifecycle_invocation(
             command=spec.provision,
-            source_directory=world_scratch_dir(
-                self._context.work_directory, world_index, process_name
+            # Lifecycle code and its per-process dependency installation live in the immutable
+            # build tree. The world scratch directory contains only writable runtime state, so
+            # using it as cwd makes a repository command such as `python provider_target.py`
+            # fail before it can contact the provider.
+            source_directory=build_tree_dir(
+                self._context.work_directory, process_name
             ),
             lifecycle_directory=lifecycle_directory,
             context_path=context_path,
@@ -4917,8 +4921,8 @@ class ProcessRuntimeProvider:
         )
         invocation = build_lifecycle_invocation(
             command=spec.destroy,
-            source_directory=world_scratch_dir(
-                self._context.work_directory, world_index, process_name
+            source_directory=build_tree_dir(
+                self._context.work_directory, process_name
             ),
             lifecycle_directory=lifecycle_directory,
             context_path=lifecycle_directory / "context.json",

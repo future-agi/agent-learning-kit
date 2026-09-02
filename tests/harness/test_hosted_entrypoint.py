@@ -894,7 +894,9 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
             {
                 "DEEPGRAM_API_KEY": "platform-deepgram",
                 "GOOGLE_CLOUD_PROJECT": "platform-project",
-                "LIVEKIT_API_SECRET": "must-not-cross-the-control-seam",
+                "LIVEKIT_URL": "wss://platform-livekit.example",
+                "LIVEKIT_API_KEY": "platform-livekit-key",
+                "LIVEKIT_API_SECRET": "platform-livekit-secret",
                 "UNRELATED": "must-not-load",
             }
         ),
@@ -906,6 +908,9 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
     assert values == {
         "DEEPGRAM_API_KEY": "platform-deepgram",
         "GOOGLE_CLOUD_PROJECT": "platform-project",
+        "LIVEKIT_URL": "wss://platform-livekit.example",
+        "LIVEKIT_API_KEY": "platform-livekit-key",
+        "LIVEKIT_API_SECRET": "platform-livekit-secret",
     }
     assert not path.exists()
 
@@ -1080,6 +1085,19 @@ def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_eviden
     harness.deps.secrets_path.write_text(
         json.dumps({TARGET_PROVIDER_ALIAS: "lk-secret-value"}), encoding="utf-8"
     )
+    harness.deps.simulator_secrets_path = harness.tmp / "simulator-secrets.json"
+    harness.deps.simulator_secrets_path.write_text(
+        json.dumps(
+            {
+                "DEEPGRAM_API_KEY": "platform-deepgram",
+                "GOOGLE_CLOUD_PROJECT": "platform-project",
+                "LIVEKIT_URL": "wss://platform-livekit.example",
+                "LIVEKIT_API_KEY": "platform-livekit-key",
+                "LIVEKIT_API_SECRET": "platform-livekit-secret",
+            }
+        ),
+        encoding="utf-8",
+    )
     harness.deps.build_provider = lambda _capabilities, _transport: (
         SecretDeletingProvisioner(instances=1, secrets_path=harness.deps.secrets_path)
     )
@@ -1108,7 +1126,15 @@ def test_call_runner_context_is_threaded_with_real_job_bundle_secrets_and_eviden
     assert context.target_provider_secret_values == {
         TARGET_PROVIDER_ALIAS: "lk-secret-value"
     }
+    assert context.simulator_provider_secret_values == {
+        "DEEPGRAM_API_KEY": "platform-deepgram",
+        "GOOGLE_CLOUD_PROJECT": "platform-project",
+        "LIVEKIT_URL": "wss://platform-livekit.example",
+        "LIVEKIT_API_KEY": "platform-livekit-key",
+        "LIVEKIT_API_SECRET": "platform-livekit-secret",
+    }
     assert not harness.deps.secrets_path.exists()
+    assert not harness.deps.simulator_secrets_path.exists()
 
 
 def test_row_counts_for_capability_returns_the_matching_store() -> None:

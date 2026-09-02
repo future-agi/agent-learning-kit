@@ -4648,6 +4648,9 @@ def test_environment_backed_provider_is_created_exposed_and_destroyed(
     lifecycle_calls: list[str] = []
 
     def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if "provider.py" in argv:
+            assert kwargs["cwd"] == tmp_path / "build" / "agent"
+            assert (kwargs["cwd"] / "provider.py").is_file()
         if argv[-1] == "provision":
             lifecycle_calls.append("provision")
             context = json.loads(

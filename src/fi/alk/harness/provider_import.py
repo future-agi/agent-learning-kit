@@ -11,6 +11,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -66,13 +67,126 @@ class ProviderImportSpec(BaseModel):
     @model_validator(mode="after")
     def _environment_tool_names_are_unambiguous(self) -> "ProviderImportSpec":
         normalized = [name.strip() for name in self.environment_tools]
-        if any(not name for name in normalized) or len(set(normalized)) != len(normalized):
+        if any(not name for name in normalized) or len(set(normalized)) != len(
+            normalized
+        ):
             raise ValueError("provider_import_environment_tools_invalid")
         self.environment_tools = normalized
         return self
 
 
 JsonRequest = Callable[[str, str, str, Mapping[str, Any] | None], dict[str, Any]]
+
+
+def _safe_profile_value(value: Any, key: str = "") -> Any:
+    """Return provider configuration that is safe to give the authoring model.
+
+    Imported assistant definitions are part of the source of truth for contract and scenario
+    authoring, but provider responses may also contain credentials or signed callback URLs. Keep
+    behavioral configuration while removing secrets and URL userinfo/query fragments.
+    """
+    lowered = key.lower()
+    if any(
+        marker in lowered
+        for marker in (
+            "secret",
+            "token",
+            "api_key",
+            "apikey",
+            "credential",
+            "authorization",
+        )
+    ):
+        return "[redacted]"
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _safe_profile_value(item, str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_safe_profile_value(item, key) for item in value]
+    if isinstance(value, str) and "://" in value:
+        parsed = urlsplit(value)
+        if parsed.scheme and parsed.netloc:
+            hostname = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
+    return value
+
+
+def inspect_provider_target(
+    provider: ProviderType | str,
+    *,
+    source_target_id: str,
+    api_key: str,
+    api_base_url: str | None = None,
+    request: JsonRequest | None = None,
+) -> dict[str, Any]:
+    """Fetch a sanitized, read-only behavioral profile for hosted authoring.
+
+    This deliberately performs no create/update/delete operation. The profile lets contract and
+    scenario generation see the externally hosted prompt, model/voice configuration and exact
+    tool schemas instead of guessing solely from a submitted webhook implementation.
+    """
+    provider = ProviderType(provider)
+    if not api_key:
+        raise ProviderImportError(f"{provider.value}_api_key_missing")
+    if not source_target_id:
+        raise ProviderImportError("provider_import_source_target_id_missing")
+    request = request or _request_json
+    if provider is ProviderType.VAPI:
+        base = (api_base_url or "https://api.vapi.ai").rstrip("/")
+        assistant = request(
+            "GET", f"{base}/assistant/{source_target_id}", api_key, None
+        )
+        model = assistant.get("model")
+        reusable_tools: list[dict[str, Any]] = []
+        if isinstance(model, Mapping):
+            for tool_id in model.get("toolIds") or []:
+                reusable_tools.append(
+                    request("GET", f"{base}/tool/{tool_id}", api_key, None)
+                )
+        profile = {
+            "provider": "vapi",
+            "source_target_id": source_target_id,
+            "name": assistant.get("name"),
+            "first_message": assistant.get("firstMessage"),
+            "first_message_mode": assistant.get("firstMessageMode"),
+            "model": model,
+            "voice": assistant.get("voice"),
+            "transcriber": assistant.get("transcriber"),
+            "end_call_message": assistant.get("endCallMessage"),
+            "end_call_phrases": assistant.get("endCallPhrases"),
+            "reusable_tools": reusable_tools,
+        }
+    else:
+        base = (api_base_url or "https://api.retellai.com").rstrip("/")
+        agent = request("GET", f"{base}/get-agent/{source_target_id}", api_key, None)
+        engine = agent.get("response_engine")
+        if not isinstance(engine, Mapping) or engine.get("type") != "retell-llm":
+            raise ProviderImportError(
+                "retell_response_engine_unsupported: provider_import currently requires retell-llm"
+            )
+        llm_id = str(engine.get("llm_id") or "").strip()
+        if not llm_id:
+            raise ProviderImportError("retell_response_engine_missing_llm_id")
+        llm = request("GET", f"{base}/get-retell-llm/{llm_id}", api_key, None)
+        profile = {
+            "provider": "retell",
+            "source_target_id": source_target_id,
+            "name": agent.get("agent_name"),
+            "voice_id": agent.get("voice_id"),
+            "language": agent.get("language"),
+            "responsiveness": agent.get("responsiveness"),
+            "interruption_sensitivity": agent.get("interruption_sensitivity"),
+            "enable_backchannel": agent.get("enable_backchannel"),
+            "begin_message": llm.get("begin_message"),
+            "general_prompt": llm.get("general_prompt"),
+            "general_tools": llm.get("general_tools"),
+            "states": llm.get("states"),
+            "model": llm.get("model"),
+        }
+    return _safe_profile_value(profile)
 
 
 def _request_json(
@@ -87,14 +201,28 @@ def _request_json(
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # Vapi's Cloudflare policy rejects urllib's default Python user
+            # agent as Error 1010 from hosted sandboxes. Use a stable product
+            # identity for provider API traffic instead.
+            "User-Agent": "FutureAGI-ALK/1.0",
         },
     )
     try:
         with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed provider hosts
             raw = response.read()
     except HTTPError as exc:
+        # Provider APIs commonly return a safe machine-readable explanation (for
+        # example an account/IP policy or an invalid target id). Preserve a
+        # bounded, single-line excerpt so hosted failures are actionable. Never
+        # include request headers or the caller's credential.
+        try:
+            detail = exc.read(512).decode("utf-8", errors="replace")
+        except (AttributeError, OSError):
+            detail = ""
+        detail = " ".join(detail.split())
+        suffix = f": {detail}" if detail else ""
         raise ProviderImportError(
-            f"provider_api_error: {method} returned HTTP {exc.code}"
+            f"provider_api_error: {method} returned HTTP {exc.code}{suffix}"
         ) from exc
     except (URLError, TimeoutError) as exc:
         raise ProviderImportError(
@@ -122,6 +250,12 @@ def _join(base: str, original: Any) -> str:
     path = urlsplit(str(original or "")).path
     if not path or path == "/":
         return base
+    base_path = urlsplit(base).path.rstrip("/")
+    # A common source definition already uses the same logical mount
+    # (`/provider/tools/...`) as ALK's signed world endpoint. Do not append the
+    # mount twice when only the origin is changing.
+    if base_path and (path == base_path or path.startswith(base_path + "/")):
+        path = path[len(base_path) :]
     return base.rstrip("/") + "/" + path.lstrip("/")
 
 
@@ -191,7 +325,17 @@ def _clone_vapi(
     original = request(
         "GET", f"{base}/assistant/{spec.source_target_id}", api_key, None
     )
-    assistant = _without(original, {"id", "orgId", "createdAt", "updatedAt"})
+    assistant = _without(
+        original,
+        {
+            "id",
+            "orgId",
+            "createdAt",
+            "updatedAt",
+            "latestVersion",
+            "isServerUrlSecretSet",
+        },
+    )
     assistant["name"] = context.provider_resource_prefix[:40]
     assistant["metadata"] = {
         **(
@@ -434,4 +578,5 @@ __all__ = [
     "ProviderImportSpec",
     "clone_provider_target",
     "destroy_imported_target",
+    "inspect_provider_target",
 ]

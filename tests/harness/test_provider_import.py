@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
+
+import fi.alk.harness.provider_import as provider_import
 
 from fi.alk.harness.provider_import import (
     ProviderImportError,
     ProviderImportSpec,
     clone_provider_target,
     destroy_imported_target,
+    inspect_provider_target,
 )
 from fi.alk.harness.provider_lifecycle import ProviderContext
 
@@ -27,6 +32,125 @@ def _context(provider: str) -> ProviderContext:
     )
 
 
+def test_provider_http_error_surfaces_bounded_response_without_credential(
+    monkeypatch,
+) -> None:
+    secret = "do-not-leak"
+    response = BytesIO(b'{"message":"source IP is not permitted"}')
+
+    def fail(_request, *, timeout):
+        assert timeout == 30
+        raise HTTPError(
+            "https://api.vapi.ai/assistant/source",
+            403,
+            "Forbidden",
+            {},
+            response,
+        )
+
+    monkeypatch.setattr(provider_import, "urlopen", fail)
+    with pytest.raises(ProviderImportError) as raised:
+        provider_import._request_json(
+            "GET", "https://api.vapi.ai/assistant/source", secret, None
+        )
+
+    message = str(raised.value)
+    assert "HTTP 403" in message
+    assert "source IP is not permitted" in message
+    assert secret not in message
+
+
+def test_vapi_import_profile_includes_prompt_and_reusable_tools_without_secrets() -> (
+    None
+):
+    def request(method, url, api_key, body):
+        assert method == "GET"
+        assert body is None
+        assert api_key == "vapi-secret"
+        if "/assistant/" in url:
+            return {
+                "name": "Bookings",
+                "firstMessage": "How can I help?",
+                "server": {"url": "https://user:pass@example.test/hook?token=hidden"},
+                "model": {
+                    "provider": "openai",
+                    "model": "gpt-4.1-mini",
+                    "messages": [{"role": "system", "content": "Book a table."}],
+                    "toolIds": ["tool-1"],
+                },
+                "credentialId": "credential-1",
+            }
+        return {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+                "name": "reserve",
+                "parameters": {
+                    "type": "object",
+                    "required": ["party_size"],
+                },
+            },
+            "server": {"url": "https://example.test/reserve?signature=hidden"},
+        }
+
+    profile = inspect_provider_target(
+        "vapi",
+        source_target_id="assistant-1",
+        api_key="vapi-secret",
+        request=request,
+    )
+
+    assert profile["first_message"] == "How can I help?"
+    assert profile["model"]["messages"][0]["content"] == "Book a table."
+    assert profile["reusable_tools"][0]["function"]["name"] == "reserve"
+    assert (
+        profile["reusable_tools"][0]["server"]["url"] == "https://example.test/reserve"
+    )
+    assert "vapi-secret" not in str(profile)
+    assert "credential-1" not in str(profile)
+
+
+def test_retell_import_profile_includes_prompt_and_exact_tool_schema() -> None:
+    def request(method, url, api_key, body):
+        assert method == "GET"
+        assert body is None
+        assert api_key == "retell-secret"
+        if "/get-agent/" in url:
+            return {
+                "agent_name": "Preferences",
+                "voice_id": "voice-1",
+                "response_engine": {"type": "retell-llm", "llm_id": "llm-1"},
+            }
+        return {
+            "general_prompt": "Always record a stated preference before ending.",
+            "begin_message": "What preference should I save?",
+            "general_tools": [
+                {
+                    "type": "custom",
+                    "name": "record_preference",
+                    "url": "https://example.test/provider/tools/record_preference?key=nope",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["preference"],
+                        "properties": {"preference": {"type": "string"}},
+                    },
+                }
+            ],
+        }
+
+    profile = inspect_provider_target(
+        "retell",
+        source_target_id="agent-1",
+        api_key="retell-secret",
+        request=request,
+    )
+
+    assert profile["general_prompt"].startswith("Always record")
+    tool = profile["general_tools"][0]
+    assert tool["parameters"]["required"] == ["preference"]
+    assert tool["url"] == "https://example.test/provider/tools/record_preference"
+
+
 def test_vapi_import_clones_tools_rewires_urls_and_cleans_up() -> None:
     calls: list[tuple[str, str, object]] = []
 
@@ -37,6 +161,8 @@ def test_vapi_import_clones_tools_rewires_urls_and_cleans_up() -> None:
             return {
                 "id": "source-assistant",
                 "orgId": "org",
+                "latestVersion": 3,
+                "isServerUrlSecretSet": False,
                 "name": "Production",
                 "server": {"url": "https://prod.example/events"},
                 "model": {
@@ -80,6 +206,8 @@ def test_vapi_import_clones_tools_rewires_urls_and_cleans_up() -> None:
         if method == "POST" and url.endswith("/assistant")
     )
     assert assistant_body["server"]["url"] == "https://world.example/provider/events"
+    assert "latestVersion" not in assistant_body
+    assert "isServerUrlSecretSet" not in assistant_body
     assert assistant_body["model"]["toolIds"] == ["cloned-tool"]
     assert (
         assistant_body["model"]["tools"][0]["server"]["url"]
@@ -163,7 +291,7 @@ def test_retell_import_clones_llm_rewires_custom_tools_then_agent() -> None:
                     {
                         "type": "custom",
                         "name": "lookup",
-                        "url": "https://prod.example/tools/lookup",
+                        "url": "https://prod.example/provider/tools/lookup",
                     },
                     {"type": "end_call", "name": "end_call"},
                 ],
@@ -191,7 +319,7 @@ def test_retell_import_clones_llm_rewires_custom_tools_then_agent() -> None:
     )
     assert (
         llm_body["general_tools"][0]["url"]
-        == "https://world.example/provider/tools/tools/lookup"
+        == "https://world.example/provider/tools/lookup"
     )
     assert "url" not in llm_body["general_tools"][1]
     agent_body = next(
