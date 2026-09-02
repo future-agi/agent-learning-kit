@@ -153,14 +153,22 @@ def journalled(destination: Path) -> list[Scenario]:
     if not path.is_file():
         return []
     kept: list[Scenario] = []
+    # Keyed by name, because a retried slice journals what it had already proved a second time and
+    # the caller renames folder-name collisions rather than dropping them, so a repeat would come
+    # back as a `-2` folder holding the same test.
+    taken: set[str] = set()
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            kept.append(Scenario.model_validate_json(line))
+            one = Scenario.model_validate_json(line)
         except Exception:  # noqa: BLE001 - a torn last line is expected, not exceptional
             continue
+        if one.name in taken:
+            continue
+        taken.add(one.name)
+        kept.append(one)
     return kept
 
 

@@ -63,3 +63,12 @@ def test_the_journal_is_dropped_once_the_suite_is_on_disk(tmp_path: Path) -> Non
 
 def test_forgetting_a_journal_that_is_not_there_is_quiet(tmp_path: Path) -> None:
     forget_journal(tmp_path)
+
+
+def test_a_scenario_journalled_twice_comes_back_once(tmp_path: Path) -> None:
+    """A retried slice re-journals what it had already proved. The caller renames folder-name
+    collisions rather than dropping them, so a repeat would survive as a second folder."""
+    record_written([Scenario(name="one"), Scenario(name="two")], tmp_path)
+    record_written([Scenario(name="one")], tmp_path)
+
+    assert [one.name for one in journalled(tmp_path)] == ["one", "two"]

@@ -617,6 +617,10 @@ async def _write_slice(
         # four minutes in is the difference between a run that looks alive and one that does not.
         nonlocal seen
         if len(kept) != seen:
+            # Journalled here rather than when the slice returns, because a slice can be thirty
+            # scenarios and hours long: at slice granularity a kill still loses everything that
+            # slice had proved. `kept` is this slice's own list, so the tail is exactly what is new.
+            record_written(kept[seen:], destination)
             seen = len(kept)
             logger.info("slice %s proved %s of %s", mine.named(), seen, mine.count)
         if on_event:
@@ -645,7 +649,11 @@ async def _write_slice(
         max_turns=turns_for(mine.count),
         model=chosen_model(),
         ask=ask,
-        thinking=True,
+        # The same switch the parent reads, not an unconditional yes. Only the Claude backend
+        # acts on this, and thinking left on there is the configuration that stalled a run at
+        # zero CPU on a read that never returned, so a run that turned thinking off must get a
+        # writer that has it off too.
+        thinking=scenario_thinking(),
     )
     stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
     try:
@@ -865,7 +873,7 @@ async def write_in_parallel(
 
     async def guarded(mine: Slice, siblings: list[Slice], index: int) -> list[Scenario]:
         async with limit:
-            wrote = await _write_slice(
+            return await _write_slice(
                 contract,
                 mine,
                 siblings,
@@ -874,10 +882,6 @@ async def write_in_parallel(
                 on_event=on_event,
                 ask=ask,
             )
-        # Journalled the moment the writer returns rather than at the end of the fan-out, so a
-        # run that dies at slice forty keeps the thirty-nine already proved.
-        record_written(wrote, destination)
-        return wrote
 
     written = await asyncio.gather(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
