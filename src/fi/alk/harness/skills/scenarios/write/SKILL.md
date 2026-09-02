@@ -489,7 +489,16 @@ which is what breaks a deadlock: the second writer is not carrying the first one
 An angle nobody can fill after a few attempts is marked blocked, and that is how the suite's real
 ceiling gets measured instead of guessed.
 
-`show_canvas` shows the themes and how far each has got; pass a theme to see its angles.
+`show_canvas` shows the themes and how far each has got; pass a theme to see its buckets.
+
+**Writers are expected to find things the plan missed.** The plan was written from outside the
+code. You are inside one bucket with the source open, which is where a case nobody could see from
+outside gets noticed. When you find one, pass it back in `found` on `fold_return` with its cell,
+what makes it worth testing, and how many scenarios it holds. It becomes a bucket like any other
+and gets dealt to somebody.
+
+Do not quietly widen the bucket you were given to swallow what you found: that hides the
+discovery and makes the count wrong. Open a bucket for it.
 
 A good slice brief names:
 

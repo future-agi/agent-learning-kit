@@ -355,7 +355,24 @@ def grid_tools(
                         },
                         "required": ["angle_id"],
                     },
-                }
+                },
+                "found": {
+                    "type": "array",
+                    "description": "Buckets the writer found that nobody planned. The plan was "
+                    "written from outside the code; a writer works inside one bucket with the "
+                    "source open and finds cases the planner could not have seen.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "theme": {"type": "string"},
+                            "cell": {"type": "string"},
+                            "angle": {"type": "string"},
+                            "facet": {"type": "string"},
+                            "want": {"type": "integer"},
+                        },
+                        "required": ["cell", "angle"],
+                    },
+                },
             },
             ["returns"],
         ),
@@ -388,6 +405,25 @@ def grid_tools(
             if claimed and claimed != on_disk:
                 note += f" (writer said {claimed}, which does not match and is worth checking)"
             lines.append(note)
+        opened = held.add(
+            [
+                Angle(
+                    id="",
+                    theme=str((row or {}).get("theme") or "").strip(),
+                    cell=str((row or {}).get("cell") or "").strip(),
+                    angle=str((row or {}).get("angle") or "").strip(),
+                    facet=str((row or {}).get("facet") or "").strip(),
+                    want=max(1, int((row or {}).get("want") or 1)),
+                )
+                for row in args.get("found") or []
+                if isinstance(row, dict)
+            ]
+        )
+        if opened:
+            lines.append("")
+            lines.append(f"{len(opened)} buckets opened that nobody planned:")
+            lines += [f"  {one.line()}" for one in opened]
+
         held.written_to(destination)
         lines.append("")
         lines.append(f"{held.written} of {held.planned} written.")

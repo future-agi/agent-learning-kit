@@ -468,3 +468,66 @@ class TestTheCanvasLoopEndToEnd:
         state.canvas.named("TH01-01").done = 2
         self.canvas_of(server, cells)
         assert state.canvas.named("TH01-01").done == 2
+
+    def test_a_writer_can_open_buckets_nobody_planned(self, contract, where):
+        """The plan is a starting partition, not an exhaustive list.
+
+        A writer works inside one bucket with the source open, which is the only place a case
+        the planner could not see from outside gets noticed. With nowhere to put it, the writer
+        drops it or crams it into the bucket it was given, and the canvas goes on claiming a
+        completeness it never had.
+        """
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        before = state.canvas.planned
+        said = call(
+            server,
+            "fold_return",
+            {
+                "returns": [{"angle_id": "TH01-01", "wrote": 0, "short": "found more here"}],
+                "found": [
+                    {"theme": "TH01", "cell": cells[0], "angle": "surge crosses mid-quote",
+                     "facet": "rule:surge", "want": 2}
+                ],
+            },
+        )
+        assert "1 buckets opened that nobody planned" in said
+        assert state.canvas.planned == before + 2
+
+    def test_a_found_bucket_gets_dealt_like_any_other(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        call(server, "claim_slice", {"writer": "w1"})
+        call(
+            server,
+            "fold_return",
+            {
+                "returns": [
+                    {"angle_id": "TH01-01", "blocked_reason": "done here"},
+                    {"angle_id": "TH02-01", "blocked_reason": "done here"},
+                ],
+                "found": [
+                    {"theme": "TH02", "cell": cells[1], "angle": "driver already arrived",
+                     "facet": "state:arrived", "want": 3}
+                ],
+            },
+        )
+        assert "TH02-F01" in call(server, "claim_slice", {"writer": "w2"})
+
+    def test_writer_ids_cannot_collide_with_planned_ones(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        for _ in range(3):
+            call(
+                server,
+                "fold_return",
+                {
+                    "returns": [],
+                    "found": [{"theme": "TH01", "cell": cells[0], "angle": "another case found"}],
+                },
+            )
+        ids = [one.id for one in state.canvas.angles]
+        assert len(ids) == len(set(ids))

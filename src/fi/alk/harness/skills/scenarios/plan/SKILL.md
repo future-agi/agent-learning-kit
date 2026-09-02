@@ -37,8 +37,9 @@ stop, and the ceiling would be the list's rather than the agent's.
 **A theme** groups related angles. It is also the unit this is read and dispatched in, so a plan
 of any size stays workable: nobody ever holds the whole thing at once.
 
-**An angle** is one thing worth testing on one grid cell, in a few words, plus how many variants
-exist. Each carries:
+**A bucket** is one thing worth testing on one grid cell, and it holds several scenarios. Its
+`angle` says what makes it worth testing, in a few words; its `want` says how many scenarios go in
+it. Each bucket carries:
 
     id     stable, like TH04-13. Never rewritten, because progress is joined on it.
     theme  which group it belongs to
@@ -119,6 +120,17 @@ Cover, at least:
 4. Fix and record again. This loop is cheap. Every fault left here costs a proof and a folder once
    writers act on it.
 5. Record in instalments for a large suite, passing `target`, so it can say how far short you are.
+
+## The plan is a starting partition, not the finished list
+
+You are writing this from outside the code. A writer works inside one bucket with the source open
+and will find cases you could not have seen: a branch two calls deep, a state the data reaches
+only after something else, a refusal nobody documented. It can open new buckets when it does, and
+they are dealt like any other.
+
+So do not try to be exhaustive here, and do not pad a bucket's `want` to cover cases you cannot
+name. Partition the space honestly, size each bucket at what you can actually see, and let the
+writers widen it. The suite ends up larger than the plan, and the plan was still doing its job.
 
 ## When the number asked for is not there
 

@@ -42,6 +42,16 @@ Decide what every scenario is, one line each, before any of them are written.
 
 For a handful of scenarios, skip planning and write them.
 
+## The words, so they mean one thing each
+
+A **scenario** is one test: a folder, a setup, checks, a reference solution. The concrete thing.
+
+A **bucket** is a kind of case that holds several scenarios. Its *angle* is what makes it worth
+testing. Buckets are what a plan is made of, because "scenario" and "situation" both name single
+instances and neither works as the container.
+
+A **theme** groups buckets, and is the unit a large plan is read and dispatched in.
+
 ## Meet the number, or say why not
 
 Give the person as much of what they asked for as genuinely exists. Aim at their number and work

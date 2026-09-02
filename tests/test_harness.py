@@ -4316,6 +4316,8 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         # Named in worked examples rather than called: a sub-agent, and identifiers standing in
         # for an agent's own tool and for scenario names.
         | {"scenario_writer", "send_confirmation", "scenario_1", "edge_case_a"}
+        # Argument names a skill tells the model to fill in, not tools.
+        | {"found", "returns", "angles", "themes", "target"}
     )
 
     for stage, tools in surface.items():

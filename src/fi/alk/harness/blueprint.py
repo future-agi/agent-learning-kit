@@ -297,6 +297,39 @@ class Canvas:
             one.claimed_by = writer
             one.attempts += 1
 
+    def add(self, found: list[Angle]) -> list[Angle]:
+        """Buckets a writer found that nobody planned.
+
+        The canvas the planner writes is a partition of what it could see from outside the code.
+        A writer works inside one bucket with the source open and routinely finds that the bucket
+        holds cases the planner could not have known about. Without somewhere to put them the
+        writer either silently drops them or crams them into the bucket it was given, and the
+        canvas keeps claiming a completeness it never had.
+
+        Ids are made here rather than by the writer, so two writers finding something at the same
+        time cannot collide.
+        """
+        taken = {one.id for one in self.angles}
+        kept: list[Angle] = []
+        for one in found:
+            if not one.angle.strip() or not one.cell.strip():
+                continue
+            stem = one.theme if any(t.id == one.theme for t in self.themes) else "TH00"
+            index = 1
+            while f"{stem}-F{index:02d}" in taken:
+                index += 1
+            one.id = f"{stem}-F{index:02d}"
+            one.theme = stem
+            taken.add(one.id)
+            self.angles.append(one)
+            kept.append(one)
+        if kept and not any(one.id == "TH00" for one in self.themes):
+            if any(one.theme == "TH00" for one in kept):
+                self.themes.append(
+                    Theme(id="TH00", name="Found while writing", why="Not planned from outside.")
+                )
+        return kept
+
     def fold(
         self,
         angle_id: str,
