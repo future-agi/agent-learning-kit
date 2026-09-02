@@ -7,6 +7,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
 
 ROOT = (
@@ -130,3 +131,61 @@ def test_retell_code_fixture_creates_llm_then_agent_and_cleans_dependencies(
         "agent-copy",
         "llm-copy",
     ]
+
+
+def test_conversation_flow_import_backend_implements_all_declared_tool_routes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PROVIDER_TRACE_PATH", str(tmp_path / "provider-trace.jsonl"))
+    path = ROOT / "conversation_flow_import_backend" / "agent.py"
+    spec = importlib.util.spec_from_file_location("conversation_flow_backend", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    client = TestClient(module.app)
+
+    fetched = client.post(
+        "/provider/tools/api/fetch-rider-appointment",
+        json={"args": {"rider_name": "Alex Morgan", "date_of_birth": "1985/06/15"}},
+    ).json()
+    assert fetched["booking_found"] is True
+    booking_id = fetched["booking_id"]
+
+    updated = client.post(
+        "/provider/tools/api/update-rider-appointment",
+        json={
+            "arguments": json.dumps(
+                {"booking_id": booking_id, "new_appointment_time": "2:00 PM"}
+            )
+        },
+    ).json()
+    assert updated["update_success"] is True
+    assert updated["updated_fields"] == ["appointment_time"]
+
+    canceled = client.post(
+        "/provider/tools/api/cancel-rider-appointment",
+        json={"booking_id": booking_id, "cancellation_reason": "schedule changed"},
+    ).json()
+    assert canceled["cancellation_success"] is True
+
+    created = client.post(
+        "/provider/tools/api/create-rider-booking",
+        json={
+            "rider_name": "Morgan Lee",
+            "pickup_location": "1 Main Street",
+            "dropoff_location": "General Hospital",
+            "appointment_date": "September 12, 2026",
+            "appointment_time": "10:30 AM",
+            "vehicle_type": "sedan",
+        },
+    ).json()
+    assert created["booking_success"] is True
+
+    trace = (tmp_path / "provider-trace.jsonl").read_text(encoding="utf-8")
+    for name in (
+        "fetch_appointment_details",
+        "update_appointment",
+        "cancel_appointment",
+        "create_booking",
+    ):
+        assert f'"kind": "tool.{name}"' in trace

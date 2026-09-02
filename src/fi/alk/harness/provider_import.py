@@ -163,15 +163,12 @@ def inspect_provider_target(
         base = (api_base_url or "https://api.retellai.com").rstrip("/")
         agent = request("GET", f"{base}/get-agent/{source_target_id}", api_key, None)
         engine = agent.get("response_engine")
-        if not isinstance(engine, Mapping) or engine.get("type") != "retell-llm":
+        if not isinstance(engine, Mapping):
             raise ProviderImportError(
-                "retell_response_engine_unsupported: provider_import currently requires retell-llm"
+                "retell_response_engine_unsupported: response_engine must be an object"
             )
-        llm_id = str(engine.get("llm_id") or "").strip()
-        if not llm_id:
-            raise ProviderImportError("retell_response_engine_missing_llm_id")
-        llm = request("GET", f"{base}/get-retell-llm/{llm_id}", api_key, None)
-        profile = {
+        engine_type = str(engine.get("type") or "").strip()
+        profile: dict[str, Any] = {
             "provider": "retell",
             "source_target_id": source_target_id,
             "name": agent.get("agent_name"),
@@ -180,12 +177,37 @@ def inspect_provider_target(
             "responsiveness": agent.get("responsiveness"),
             "interruption_sensitivity": agent.get("interruption_sensitivity"),
             "enable_backchannel": agent.get("enable_backchannel"),
-            "begin_message": llm.get("begin_message"),
-            "general_prompt": llm.get("general_prompt"),
-            "general_tools": llm.get("general_tools"),
-            "states": llm.get("states"),
-            "model": llm.get("model"),
+            "response_engine_type": engine_type,
         }
+        if engine_type == "retell-llm":
+            llm_id = str(engine.get("llm_id") or "").strip()
+            if not llm_id:
+                raise ProviderImportError("retell_response_engine_missing_llm_id")
+            llm = request("GET", f"{base}/get-retell-llm/{llm_id}", api_key, None)
+            profile.update(
+                {
+                    "begin_message": llm.get("begin_message"),
+                    "general_prompt": llm.get("general_prompt"),
+                    "general_tools": llm.get("general_tools"),
+                    "states": llm.get("states"),
+                    "model": llm.get("model"),
+                }
+            )
+        elif engine_type == "conversation-flow":
+            flow_id = str(engine.get("conversation_flow_id") or "").strip()
+            if not flow_id:
+                raise ProviderImportError(
+                    "retell_response_engine_missing_conversation_flow_id"
+                )
+            flow = request(
+                "GET", f"{base}/get-conversation-flow/{flow_id}", api_key, None
+            )
+            profile["conversation_flow"] = flow
+        else:
+            raise ProviderImportError(
+                "retell_response_engine_unsupported: provider_import supports "
+                "retell-llm and conversation-flow"
+            )
     return _safe_profile_value(profile)
 
 
@@ -305,6 +327,41 @@ def _rewire_retell_tools(value: Any, tool_base_url: str) -> Any:
     if str(copied.get("type") or "") == "custom" and copied.get("url"):
         copied["url"] = _join(tool_base_url, copied["url"])
     return copied
+
+
+def _validate_retell_custom_tools(value: Any, environment_tools: set[str]) -> None:
+    """Validate every custom tool wherever Retell nests it in an engine graph."""
+    if isinstance(value, list):
+        for item in value:
+            _validate_retell_custom_tools(item, environment_tools)
+        return
+    if not isinstance(value, Mapping):
+        return
+    if str(value.get("type") or "") == "custom":
+        _require_environment_tool(
+            provider="retell",
+            name=str(value.get("name") or "").strip() or None,
+            available=environment_tools,
+        )
+    for item in value.values():
+        _validate_retell_custom_tools(item, environment_tools)
+
+
+_RETELL_AGENT_READ_ONLY_FIELDS = {
+    "agent_id",
+    "last_modification_timestamp",
+    "version",
+    "base_version",
+    "is_published",
+}
+
+_RETELL_ENGINE_READ_ONLY_FIELDS = {
+    "llm_id",
+    "conversation_flow_id",
+    "last_modification_timestamp",
+    "version",
+    "is_published",
+}
 
 
 @dataclass(frozen=True)
@@ -433,60 +490,96 @@ def _clone_retell(
         "GET", f"{base}/get-agent/{spec.source_target_id}", api_key, None
     )
     engine = original.get("response_engine")
-    if not isinstance(engine, Mapping) or engine.get("type") != "retell-llm":
+    if not isinstance(engine, Mapping):
         raise ProviderImportError(
-            "retell_response_engine_unsupported: provider_import currently requires retell-llm"
+            "retell_response_engine_unsupported: response_engine must be an object"
         )
-    source_llm_id = str(engine.get("llm_id") or "").strip()
-    if not source_llm_id:
-        raise ProviderImportError("retell_response_engine_missing_llm_id")
-    source_llm = request("GET", f"{base}/get-retell-llm/{source_llm_id}", api_key, None)
     environment_tools = set(spec.environment_tools)
-    general_tools = source_llm.get("general_tools")
-    if isinstance(general_tools, list):
-        for tool in general_tools:
-            if isinstance(tool, Mapping) and str(tool.get("type") or "") == "custom":
-                _require_environment_tool(
-                    provider="retell",
-                    name=str(tool.get("name") or "").strip() or None,
-                    available=environment_tools,
-                )
-    llm_create = _rewire_retell_tools(
-        _without(
-            source_llm,
-            {"llm_id", "last_modification_timestamp", "version", "is_published"},
-        ),
-        context.tool_base_url,
-    )
-    created_llm = request("POST", f"{base}/create-retell-llm", api_key, llm_create)
-    llm_id = str(created_llm.get("llm_id") or "").strip()
-    if not llm_id:
-        raise ProviderImportError("retell_llm_create_missing_id")
+    engine_type = str(engine.get("type") or "").strip()
+    engine_resource: ProviderResource
+    cloned_engine: dict[str, Any]
+    source_engine_id: str
+    delete_engine_url: str
+
+    if engine_type == "retell-llm":
+        source_engine_id = str(engine.get("llm_id") or "").strip()
+        if not source_engine_id:
+            raise ProviderImportError("retell_response_engine_missing_llm_id")
+        source_engine = request(
+            "GET", f"{base}/get-retell-llm/{source_engine_id}", api_key, None
+        )
+        _validate_retell_custom_tools(source_engine, environment_tools)
+        engine_create = _rewire_retell_tools(
+            _without(source_engine, _RETELL_ENGINE_READ_ONLY_FIELDS),
+            context.tool_base_url,
+        )
+        created_engine = request(
+            "POST", f"{base}/create-retell-llm", api_key, engine_create
+        )
+        cloned_engine_id = str(created_engine.get("llm_id") or "").strip()
+        if not cloned_engine_id:
+            raise ProviderImportError("retell_llm_create_missing_id")
+        engine_resource = ProviderResource(
+            kind="retell_llm", id=cloned_engine_id, owned=True
+        )
+        cloned_engine = {"type": "retell-llm", "llm_id": cloned_engine_id}
+        delete_engine_url = f"{base}/delete-retell-llm/{cloned_engine_id}"
+    elif engine_type == "conversation-flow":
+        source_engine_id = str(engine.get("conversation_flow_id") or "").strip()
+        if not source_engine_id:
+            raise ProviderImportError(
+                "retell_response_engine_missing_conversation_flow_id"
+            )
+        source_engine = request(
+            "GET",
+            f"{base}/get-conversation-flow/{source_engine_id}",
+            api_key,
+            None,
+        )
+        _validate_retell_custom_tools(source_engine, environment_tools)
+        engine_create = _rewire_retell_tools(
+            _without(source_engine, _RETELL_ENGINE_READ_ONLY_FIELDS),
+            context.tool_base_url,
+        )
+        created_engine = request(
+            "POST", f"{base}/create-conversation-flow", api_key, engine_create
+        )
+        cloned_engine_id = str(created_engine.get("conversation_flow_id") or "").strip()
+        if not cloned_engine_id:
+            raise ProviderImportError("retell_conversation_flow_create_missing_id")
+        engine_resource = ProviderResource(
+            kind="conversation_flow", id=cloned_engine_id, owned=True
+        )
+        cloned_engine = {
+            "type": "conversation-flow",
+            "conversation_flow_id": cloned_engine_id,
+        }
+        delete_engine_url = f"{base}/delete-conversation-flow/{cloned_engine_id}"
+    else:
+        raise ProviderImportError(
+            "retell_response_engine_unsupported: provider_import supports "
+            "retell-llm and conversation-flow"
+        )
+
     agent_create = _without(
         original,
-        {
-            "agent_id",
-            "last_modification_timestamp",
-            "version",
-            "base_version",
-            "is_published",
-        },
+        _RETELL_AGENT_READ_ONLY_FIELDS,
     )
     agent_create["agent_name"] = context.provider_resource_prefix
-    agent_create["response_engine"] = {"type": "retell-llm", "llm_id": llm_id}
+    agent_create["response_engine"] = cloned_engine
     agent_create["webhook_url"] = context.event_url
     try:
         created_agent = request("POST", f"{base}/create-agent", api_key, agent_create)
     except ProviderImportError:
         try:
-            request("DELETE", f"{base}/delete-retell-llm/{llm_id}", api_key, None)
+            request("DELETE", delete_engine_url, api_key, None)
         except ProviderImportError:
             pass
         raise
     target_id = str(created_agent.get("agent_id") or "").strip()
     if not target_id:
         try:
-            request("DELETE", f"{base}/delete-retell-llm/{llm_id}", api_key, None)
+            request("DELETE", delete_engine_url, api_key, None)
         except ProviderImportError:
             pass
         raise ProviderImportError("retell_agent_create_missing_id")
@@ -494,12 +587,13 @@ def _clone_retell(
         target_id=target_id,
         target_kind="voice_agent",
         resources=(
-            ProviderResource(kind="retell_llm", id=llm_id, owned=True),
+            engine_resource,
             ProviderResource(kind="voice_agent", id=target_id, owned=True),
         ),
         metadata={
             "source_target_id": spec.source_target_id,
-            "source_response_engine_id": source_llm_id,
+            "source_response_engine_id": source_engine_id,
+            "source_response_engine_type": engine_type,
             "clone_kind": "provider_import",
         },
     )
@@ -567,6 +661,17 @@ def destroy_imported_target(
             try:
                 request(
                     "DELETE", f"{base}/delete-retell-llm/{resource.id}", api_key, None
+                )
+            except ProviderImportError as exc:
+                if "HTTP 404" not in str(exc):
+                    raise
+        elif resource.kind == "conversation_flow":
+            try:
+                request(
+                    "DELETE",
+                    f"{base}/delete-conversation-flow/{resource.id}",
+                    api_key,
+                    None,
                 )
             except ProviderImportError as exc:
                 if "HTTP 404" not in str(exc):

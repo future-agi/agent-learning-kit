@@ -25,7 +25,9 @@ ALK:
 
 The original target is never patched or deleted. Provider-native tools remain provider-native.
 Opaque custom implementations and unsupported Retell response engines fail before dialing; ALK
-does not synthesize business logic.
+does not synthesize business logic. Retell imports support both Retell LLM and Conversation Flow
+response engines. Conversation Flow graphs are copied as a unit, including embedded components,
+and every nested custom tool is validated and rewired before any provider resource is created.
 
 ### 2. Create from repository code
 
@@ -60,7 +62,7 @@ does not rewire tools, and never owns provider resources.
 | Provider | Copied resources | Rewired fields | Deliberate rejection |
 | --- | --- | --- | --- |
 | Vapi | reusable tools, assistant | assistant server, function/API-request tool URLs | referenced resources that cannot be fetched or copied |
-| Retell | Retell LLM, voice agent | custom-function URLs, agent webhook | custom-LLM and conversation-flow engines until their dependency graphs are implemented |
+| Retell | Retell LLM or Conversation Flow, voice agent | every nested custom-function URL, agent webhook | custom-LLM and undeclared custom-tool implementations |
 
 ## Acceptance gates
 

@@ -393,3 +393,230 @@ def test_retell_import_rejects_tool_without_environment_implementation() -> None
             api_key="retell-secret",
             request=request,
         )
+
+
+def test_retell_conversation_flow_profile_includes_graph_and_tools() -> None:
+    def request(method, url, api_key, body):
+        assert method == "GET"
+        assert body is None
+        assert api_key == "retell-secret"
+        if "/get-agent/" in url:
+            return {
+                "agent_name": "Appointments",
+                "voice_id": "retell-Grace",
+                "response_engine": {
+                    "type": "conversation-flow",
+                    "conversation_flow_id": "flow-source",
+                },
+            }
+        return {
+            "conversation_flow_id": "flow-source",
+            "start_speaker": "agent",
+            "model_choice": {"type": "cascading", "model": "gpt-4.1"},
+            "nodes": [{"id": "start", "instruction": "Help the rider."}],
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "fetch_appointment_details",
+                    "url": "https://user:pass@example.test/fetch?token=hidden",
+                }
+            ],
+        }
+
+    profile = inspect_provider_target(
+        "retell",
+        source_target_id="agent-1",
+        api_key="retell-secret",
+        request=request,
+    )
+
+    assert profile["response_engine_type"] == "conversation-flow"
+    assert profile["conversation_flow"]["nodes"][0]["instruction"] == "Help the rider."
+    assert (
+        profile["conversation_flow"]["tools"][0]["url"] == "https://example.test/fetch"
+    )
+
+
+def test_retell_import_clones_conversation_flow_rewires_all_nested_tools() -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def request(method, url, api_key, body):
+        assert api_key == "retell-secret"
+        calls.append((method, url, body))
+        if method == "GET" and "/get-agent/" in url:
+            return {
+                "agent_id": "source-agent",
+                "version": 7,
+                "agent_name": "Appointments",
+                "voice_id": "retell-Grace",
+                "response_engine": {
+                    "type": "conversation-flow",
+                    "conversation_flow_id": "source-flow",
+                    "version": 1,
+                },
+                "webhook_url": "https://prod.example/events",
+            }
+        if method == "GET" and "/get-conversation-flow/" in url:
+            return {
+                "conversation_flow_id": "source-flow",
+                "version": 3,
+                "is_published": True,
+                "start_speaker": "agent",
+                "model_choice": {"type": "cascading", "model": "gpt-4.1"},
+                "tools": [
+                    {
+                        "type": "custom",
+                        "name": "fetch_appointment_details",
+                        "url": "https://prod.example/api/fetch-rider-appointment",
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "book",
+                        "tool": {
+                            "type": "custom",
+                            "name": "create_booking",
+                            "url": "https://prod.example/api/create-rider-booking",
+                        },
+                    }
+                ],
+            }
+        if method == "POST" and url.endswith("/create-conversation-flow"):
+            return {"conversation_flow_id": "cloned-flow"}
+        if method == "POST" and url.endswith("/create-agent"):
+            return {"agent_id": "cloned-agent"}
+        return {}
+
+    spec = ProviderImportSpec(
+        type="retell",
+        source_target_id="source-agent",
+        public_capability="tools",
+        environment_tools=["fetch_appointment_details", "create_booking"],
+    )
+    receipt = clone_provider_target(
+        spec, context=_context("retell"), api_key="retell-secret", request=request
+    )
+
+    flow_body = next(
+        body
+        for method, url, body in calls
+        if method == "POST" and url.endswith("/create-conversation-flow")
+    )
+    assert "conversation_flow_id" not in flow_body
+    assert "version" not in flow_body
+    assert "is_published" not in flow_body
+    assert (
+        flow_body["tools"][0]["url"]
+        == "https://world.example/provider/tools/api/fetch-rider-appointment"
+    )
+    assert (
+        flow_body["nodes"][0]["tool"]["url"]
+        == "https://world.example/provider/tools/api/create-rider-booking"
+    )
+    agent_body = next(
+        body
+        for method, url, body in calls
+        if method == "POST" and url.endswith("/create-agent")
+    )
+    assert agent_body["response_engine"] == {
+        "type": "conversation-flow",
+        "conversation_flow_id": "cloned-flow",
+    }
+    assert agent_body["webhook_url"] == "https://world.example/provider/events"
+    assert receipt.metadata["source_response_engine_type"] == "conversation-flow"
+    assert [resource.kind for resource in receipt.resources] == [
+        "conversation_flow",
+        "voice_agent",
+    ]
+
+    destroy_imported_target(
+        spec, receipt=receipt, api_key="retell-secret", request=request
+    )
+    deletes = [(method, url) for method, url, _body in calls if method == "DELETE"]
+    assert deletes == [
+        ("DELETE", "https://api.retellai.com/delete-agent/cloned-agent"),
+        ("DELETE", "https://api.retellai.com/delete-conversation-flow/cloned-flow"),
+    ]
+
+
+def test_retell_conversation_flow_rejects_nested_missing_tool_before_create() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def request(method, url, _api_key, _body):
+        calls.append((method, url))
+        if "/get-agent/" in url:
+            return {
+                "response_engine": {
+                    "type": "conversation-flow",
+                    "conversation_flow_id": "source-flow",
+                }
+            }
+        return {
+            "conversation_flow_id": "source-flow",
+            "nodes": [
+                {
+                    "tool": {
+                        "type": "custom",
+                        "name": "cancel_appointment",
+                        "url": "https://prod.example/cancel",
+                    }
+                }
+            ],
+        }
+
+    with pytest.raises(ProviderImportError, match="cancel_appointment"):
+        clone_provider_target(
+            ProviderImportSpec(
+                type="retell",
+                source_target_id="source-agent",
+                public_capability="tools",
+                environment_tools=["fetch_appointment_details"],
+            ),
+            context=_context("retell"),
+            api_key="retell-secret",
+            request=request,
+        )
+
+    assert not any(method == "POST" for method, _url in calls)
+
+
+def test_retell_conversation_flow_is_deleted_if_agent_creation_fails() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def request(method, url, _api_key, _body):
+        calls.append((method, url))
+        if "/get-agent/" in url:
+            return {
+                "response_engine": {
+                    "type": "conversation-flow",
+                    "conversation_flow_id": "source-flow",
+                }
+            }
+        if method == "GET":
+            return {
+                "conversation_flow_id": "source-flow",
+                "start_speaker": "agent",
+                "nodes": [],
+            }
+        if url.endswith("/create-conversation-flow"):
+            return {"conversation_flow_id": "cloned-flow"}
+        if url.endswith("/create-agent"):
+            raise ProviderImportError("provider_api_error: POST returned HTTP 400")
+        return {}
+
+    with pytest.raises(ProviderImportError, match="HTTP 400"):
+        clone_provider_target(
+            ProviderImportSpec(
+                type="retell",
+                source_target_id="source-agent",
+                public_capability="tools",
+            ),
+            context=_context("retell"),
+            api_key="retell-secret",
+            request=request,
+        )
+
+    assert calls[-1] == (
+        "DELETE",
+        "https://api.retellai.com/delete-conversation-flow/cloned-flow",
+    )

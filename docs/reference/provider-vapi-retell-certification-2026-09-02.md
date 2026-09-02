@@ -7,6 +7,8 @@ This report is maintained from the live certification campaign in
   `provider-import-vapi-retell-20260902-r11`.
 - Retell code-source onboarding: 5/5 calls passed end to end on snapshot
   `provider-import-vapi-retell-20260902-r12`.
+- Retell Conversation Flow import: 5/5 calls passed end to end on snapshot
+  `provider-import-retell-conversation-flow-20260902-r14`.
 - Vapi import and code-source flows reached Vapi successfully, but the provider rejected calls
   because the test wallet balance was negative. Vapi live-call success is intentionally outside
   this release gate until the account is funded.
@@ -51,6 +53,37 @@ simulator owns that hang-up path. Regression tests assert both boundaries.
 - Tools: 14 raw provider tool/event records
 - Source immutability: the original Retell agent retained its original LLM, tool, and webhook
   configuration after the run
+
+## Retell Conversation Flow import evidence
+
+- Source agent: `agent_c5322ea1bb2d7f5cf661bbd4c4` (`conversation-flow` response engine)
+- Hosted job: `fa087f27-f572-4e4b-9552-6e50958001a9`
+- Harness run: `16944eca-9026-42d6-8827-abaf6fd2936f`
+- Platform test: `085a0186-9e71-48d9-9d06-06270c568bf1`
+- Platform execution: `226888cd-9bc9-408b-a419-b2fc4858521c`
+- Calls: 5 passed, 0 failed, on infrastructure attempt 1
+- Conversations: 61 turns total; durations populated for all five calls (92–203 seconds)
+- Audio/transcripts: all five calls have four call-linked recordings and one transcript; all 24
+  job recording artifacts, including validation evidence, were non-empty RIFF/WAVE files
+- Tools: all four source Conversation Flow custom tools were cloned, recursively rewired to the
+  isolated environment, invoked successfully, and persisted with arguments and results:
+  `fetch_appointment_details`, `update_appointment`, `cancel_appointment`, and `create_booking`
+- Evals: 13/13 generated sub-goals held and every platform call contains its eval outputs
+- CSAT: completed for all five platform call rows
+- Cleanup: no ALK-owned temporary Retell agents or Conversation Flows remained after the run
+- Secrets: the Retell key remained a `target_provider` secret reference and no plaintext match
+  appeared in persisted job output or source-controlled files
+- Source immutability: the importer never updates the source agent or source Conversation Flow;
+  a live clone/rewire/delete check also verified the source agent document was byte-canonically
+  unchanged
+- Regression suite: 1,239 harness and harness-integration tests passed, 1 skipped
+
+The preceding r13 campaign completed the provider plumbing but exposed an authoring defect: one
+scenario combined a correct out-of-scope transfer branch with a requirement to finish a booking
+after the transfer. The call and artifacts completed, but that contradictory transactional check
+failed. The scenario-writing contract now requires one coherent terminal outcome and forbids
+combining escalation/refusal/end-call branches with downstream work they correctly prevent. The
+fresh r14 campaign then passed 5/5.
 
 ## Vapi disposition
 

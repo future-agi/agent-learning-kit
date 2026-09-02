@@ -4317,6 +4317,16 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         )
 
 
+def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
+    """A transfer/refusal scenario cannot also require work after the conversation ends."""
+    from fi.alk.harness.config import SKILLS_ROOT
+
+    text = (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8")
+    assert "one coherent terminal outcome" in text
+    assert "must not also require a transaction to finish after that transfer" in text
+    assert "split them into" in text and "separate scenarios" in text
+
+
 def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
     """The world is built from data_schema and base_environment. Without them the build stage has
     no schema to create and no rows to seed, so every tool call it makes refuses — and that looks
