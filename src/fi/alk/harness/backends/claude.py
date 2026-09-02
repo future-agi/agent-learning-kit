@@ -231,8 +231,25 @@ class ClaudeBackend:
             # One level only. A worker that delegates again multiplies the fan-out by a factor
             # nothing in the stage accounted for, and the depth is free to raise later.
             env.setdefault("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "1")
+        # A declared worker is reached through the SDK's own sub-agent tool, which asks *which*
+        # kind to run. Nothing otherwise tells the model that ours exists, and left to guess it
+        # dispatches the generic kind: that one launches detached, answers "launched
+        # successfully, you will be notified", and returns nothing, so a stage dealt eight slices,
+        # dispatched eight agents holding none of its tools, declared success and exited having
+        # written nothing. On the other backend a worker is a plain tool in the list, which is why
+        # this only ever bit here. Naming them costs a line and removes the guess.
+        said = spec.system_prompt
+        if spec.workers:
+            said += (
+                "\n\n## Your workers\n\nYou have these sub-agents: "
+                + ", ".join(sorted(spec.workers))
+                + ". Dispatch one by naming it exactly as the kind of sub-agent to run. They "
+                "return what they produced when they finish. Do not dispatch a general-purpose "
+                "sub-agent instead: that kind runs detached, holds none of your tools, and its "
+                "work is lost when you finish your turn."
+            )
         options = ClaudeAgentOptions(
-            system_prompt=spec.system_prompt,
+            system_prompt=said,
             allowed_tools=allowed,
             mcp_servers=servers,
             setting_sources=[],

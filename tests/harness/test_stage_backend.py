@@ -46,3 +46,41 @@ class TestNamingOneStage:
 
         assert stage_model("scenarios/plan") == "gemini-3.7-flash"
         assert stage_model("scenarios/write") == "gemini-3.7-flash"
+
+
+class TestTellingTheParentWhatWorkersItHas:
+    """A declared worker is reached through the SDK's sub-agent tool, which asks which kind to
+    run. Nothing otherwise names ours, and left to guess the model dispatched the generic kind:
+    that runs detached, holds none of the stage's tools, and its work is lost when the parent
+    finishes its turn. Measured: eight slices dealt, eight agents dispatched, nothing written.
+    """
+
+    def spec(self, with_workers: bool):
+        from fi.alk.harness.backends import SessionSpec, WorkerSpec
+
+        return SessionSpec(
+            system_prompt="the method",
+            workers=(
+                {"scenario_writer": WorkerSpec(description="writes a slice", instructions="go")}
+                if with_workers
+                else {}
+            ),
+            gated=False,
+        )
+
+    def prompt_for(self, spec):
+        from fi.alk.harness.backends.claude import ClaudeBackend
+
+        return ClaudeBackend().create(spec)._options.system_prompt
+
+    def test_the_worker_is_named(self):
+        said = self.prompt_for(self.spec(with_workers=True))
+        assert "scenario_writer" in said
+        assert "the method" in said, "the stage's own method must survive"
+
+    def test_the_generic_kind_is_warned_against(self):
+        said = self.prompt_for(self.spec(with_workers=True)).lower()
+        assert "general-purpose" in said and "detached" in said
+
+    def test_a_stage_with_no_workers_is_told_nothing_extra(self):
+        assert self.prompt_for(self.spec(with_workers=False)) == "the method"
