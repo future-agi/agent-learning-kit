@@ -281,8 +281,14 @@ def contract_tools(destination: Path) -> Any:
                 },
                 "data_schema": {
                     "type": "object",
-                    "description": "The shape of the records the agent works on: which fields "
-                    "each kind of record has.",
+                    "description": "The shape of the records the agent works on. One entry per "
+                    "kind of record, each mapping a field name straight to its type: "
+                    '{\"bookings\": {\"booking_ref\": \"TEXT PRIMARY KEY\", \"status\": '
+                    '\"TEXT NOT NULL\"}}. Fields go directly under the record name, with no '
+                    "wrapper around them, because the world is built from exactly these entries. "
+                    "Include the field the record is identified by; it is the easiest one to "
+                    "leave out and the most expensive to lose, since the agent's own code selects "
+                    "it and will not find it.",
                 },
                 "base_environment": {
                     "type": "object",

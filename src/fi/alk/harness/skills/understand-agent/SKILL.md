@@ -121,12 +121,13 @@ Find, in roughly this order:
     to change the agent's code, which is a decision for the person, not for you.
 
 13. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
-    every field of every kind of record, and any values a field is constrained to. **Include the
-    field each record is identified by.** It is the easiest one to skip, because it reads as
-    bookkeeping rather than content, and the most expensive one to lose: the world is built from
-    what you record here, so a missing identifier is a column the agent's own code selects and
+    every field of every kind of record, **including the one it is identified by**, and any
+    values a field is constrained to. The identifier is the easiest field to skip, because it
+    reads as bookkeeping rather than content, and the most expensive to lose: the world is built
+    from what you record, so a missing identifier is a column the agent's own code selects and
     does not find, and every flow touching that record fails at the first call with a server
-    error the caller only hears as "temporarily unavailable". Record the
+    error the caller only hears as "temporarily unavailable". It is one field among the others,
+    not a separate thing to describe. Record the
     **contents** in proportion — a small dataset goes in whole; for a large one a representative
     sample is what belongs here, chosen to include the awkward rows an agent has to cope with: a
     record already cancelled, an item out of stock, an account with nothing on file.
