@@ -187,7 +187,8 @@ def writer_workers(
                 "suite at the same time. Write only the slice you were given, submit each "
                 "scenario as you prove it, and report which cells you covered and any you "
                 "could not. Do not save the suite; the stage saves once when every writer is "
-                "done."
+                "done.\n\nIf your brief names the callers to use, use those and no others: "
+                "your siblings were given different ones, and you cannot see what they wrote."
             ),
             builtins=(),
             servers={SCENARIO_SERVER: server},
