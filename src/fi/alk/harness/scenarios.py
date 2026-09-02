@@ -42,7 +42,6 @@ from .scenario_tools import (
     forget_journal,
     journalled,
     load_scenarios,
-    record_written,
     scenario_tools,
     world_summary,
     write_scenarios,
@@ -93,9 +92,9 @@ def turns_for(wanted: int) -> int:
     """A turn budget that grows with the suite being asked for.
 
     A fixed ceiling is what made asking for a large suite pointless: generation stopped partway
-    through, and `save_scenarios` refuses a count that does not match what was asked for, so a run
-    that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
-    the request, or the request cannot be honoured.
+    through with the rest of the suite unwritten. (`save_scenarios` used to refuse a short count
+    on top of that, which turned a partial run into a saved-nothing run; it saves whatever was
+    proved now.) The budget has to follow the request, or the request cannot be honoured.
     """
     return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
 
@@ -628,10 +627,6 @@ async def _write_slice(
         # four minutes in is the difference between a run that looks alive and one that does not.
         nonlocal seen
         if len(kept) != seen:
-            # Journalled here rather than when the slice returns, because a slice can be thirty
-            # scenarios and hours long: at slice granularity a kill still loses everything that
-            # slice had proved. `kept` is this slice's own list, so the tail is exactly what is new.
-            record_written(kept[seen:], destination)
             seen = len(kept)
             logger.info("slice %s proved %s of %s", mine.named(), seen, mine.count)
         if on_event:

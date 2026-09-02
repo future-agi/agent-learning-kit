@@ -331,6 +331,12 @@ def accept_scenario(
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
     if persist:
         write_scenarios(kept, world_root, catalogue)
+    else:
+        # The writer that cannot persist folders journals instead, right here at the accept,
+        # because this is the one point every path goes through. The first journal hook sat in a
+        # fan-out that the native worker path never calls, so the run it was built for still held
+        # its whole suite in memory.
+        record_written([scenario], world_root)
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
@@ -1012,7 +1018,14 @@ def scenario_tools(
         # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
+        # Whatever the journal holds that this session does not is a killed run's proved work,
+        # already gated on its way in. Folded here rather than dropped, matched by name so this
+        # session's own accepts are not doubled; forgotten after the write because the folders
+        # are the truth from then on and a stale journal would re-import them next run.
+        held = {one.name for one in kept}
+        kept.extend(one for one in journalled(destination) if one.name not in held)
         path = write_scenarios(kept, destination, catalogue)
+        forget_journal(destination)
         diversity = suite_diversity_problems(kept)
         judged = sum(
             1

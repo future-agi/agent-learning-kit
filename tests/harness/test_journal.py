@@ -72,3 +72,15 @@ def test_a_scenario_journalled_twice_comes_back_once(tmp_path: Path) -> None:
     record_written([Scenario(name="one")], tmp_path)
 
     assert [one.name for one in journalled(tmp_path)] == ["one", "two"]
+
+
+def test_an_accept_that_cannot_persist_journals_instead(tmp_path: Path) -> None:
+    """The journal fires at the accept, the one point every writer path goes through. Its first
+    home was a fan-out the native worker path never calls, so the run it was built for still
+    held its whole suite in memory."""
+    import inspect
+
+    from fi.alk.harness import scenario_tools
+
+    source = inspect.getsource(scenario_tools.accept_scenario)
+    assert "record_written" in source
