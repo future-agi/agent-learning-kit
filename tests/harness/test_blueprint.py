@@ -783,3 +783,15 @@ def test_the_credit_ledger_survives_a_save_and_load(tmp_path):
     assert back.named("A1").done == 2
     # And a name already credited is not credited a second time after the round trip.
     assert back.credit("A1", ["one", "three"]) == 3
+
+
+def test_a_writer_gets_enough_turns_for_the_slice_it_can_be_handed():
+    """A flat sixty gave 3.8 turns per scenario including the reading a writer does before it
+    writes anything, so slices came back part-filled and the next writer paid that reading cost
+    again to finish somebody else's work."""
+    from fi.alk.harness.blueprint import SLICE_SCENARIOS
+    from fi.alk.harness.scenarios import TURNS_EACH, WRITER_TURNS
+
+    biggest = SLICE_SCENARIOS * 2  # what claim_slice clamps to
+    assert WRITER_TURNS >= biggest * TURNS_EACH, "not even the writing fits"
+    assert WRITER_TURNS >= biggest * TURNS_EACH + 20, "no room to read the agent first"

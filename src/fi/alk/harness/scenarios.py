@@ -29,7 +29,7 @@ from .config import (
     scenario_thinking,
     writer_effort,
 )
-from .blueprint import WORTH_PLANNING
+from .blueprint import SLICE_SCENARIOS, WORTH_PLANNING
 from .blueprint import load as load_canvas
 from .grid_tools import GRID_SERVER, Coverage, grid_tools
 from .sample import Pick, coverage, plan as plan_picks
@@ -73,8 +73,6 @@ STAGE_TOOLS = (
 # The worker the stage runs to write one slice of the grid. Underscored because one backend
 # rewrites anything else to this form, and the skill has to name the tool the model actually sees.
 WRITER = "scenario_writer"
-# One worker's turn budget: enough to inspect, rehearse, prove and submit its slice.
-WRITER_TURNS = int(os.environ.get("HARNESS_WRITER_TURNS") or 60)
 
 # The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
 # only report gaps and never submit or save a scenario itself.
@@ -86,6 +84,17 @@ REVIEW_SERVER = "suite-review"
 TURNS_EACH = 3
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
+
+# One worker's turn budget: enough to inspect, rehearse, prove and submit its slice.
+#
+# Sized from the largest slice it can be handed rather than picked. A slice is clamped to twice
+# the recommended size, each scenario costs about `TURNS_EACH` in practice, and before writing any
+# of them a writer reads the agent under test. At a flat sixty it had 3.8 turns per scenario
+# including that reading, so slices came back part-filled, their buckets reopened, and the next
+# writer paid the same reading cost again to finish somebody else's work.
+WRITER_TURNS = int(
+    os.environ.get("HARNESS_WRITER_TURNS") or (SLICE_SCENARIOS * 2 * (TURNS_EACH + 1) + 24)
+)
 
 
 def turns_for(wanted: int) -> int:
