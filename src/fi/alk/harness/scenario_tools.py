@@ -28,7 +28,7 @@ from .catalogue import (
 )
 from .contract import AgentContract
 from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
-from .prove import play_reference_step, prepared, prove
+from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
 from .scenario import (
     Scenario,
     Step,
@@ -217,24 +217,35 @@ def accept_scenario(
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
 
-    # Read against the world this scenario actually runs in, so a setup that creates the table
-    # a check reads is not reported as referring to something that does not exist.
-    trial, _applied, _ready = prepared(scenario, world_root)
-    try:
-        problems = validate_scenario(
-            scenario, catalogue, trial.state(), simulator_prompt
-        )
-        problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-        problems.extend(unbacked_condition_problems(scenario))
-    finally:
-        trial.close()
+    # One world, and everything below rewrites it, so siblings wait rather than interleave.
+    # Held across the trial and the proof together: serialising them separately would still let
+    # a sibling restore in the gap and leave this scenario proved against somebody else's world.
+    with WORLD_IN_USE:
+        # Read against the world this scenario actually runs in, so a setup that creates the
+        # table a check reads is not reported as referring to something that does not exist.
+        try:
+            trial, _applied, _ready = prepared(scenario, world_root)
+            try:
+                problems = validate_scenario(
+                    scenario, catalogue, trial.state(), simulator_prompt
+                )
+                problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(unbacked_condition_problems(scenario))
+            finally:
+                trial.close()
 
-    if problems:
-        return _err(
-            "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
-        )
+            if problems:
+                return _err(
+                    "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
+                )
 
-    proof = prove(scenario, catalogue, world_root)
+            proof = prove(scenario, catalogue, world_root)
+        except Exception as failed:
+            # A store that refuses is this scenario's problem to hear about, not grounds for
+            # killing the writer. Escaping here took a whole sub-agent down mid-run and lost
+            # every scenario it had not yet handed back.
+            return _err(f"Not kept. The world could not be prepared for it: {failed}"[:600])
+
     if not proof.holds:
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a

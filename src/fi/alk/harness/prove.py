@@ -27,6 +27,7 @@ Only a scenario that clears all three is kept. That is the green light.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -280,6 +281,17 @@ def _run(
                 len(scenario.solution),
             )
     return world, list(world.calls), refused, sorted(set(assumed))
+
+
+# Proving is not re-entrant across writers, because there is one world and a proof rewrites it.
+# ``restore`` truncates every table and then inserts the snapshot back on an autocommit
+# connection, so the truncate lands before the inserts do. Two writers proving at once interleave
+# there: both truncate, then both insert, and the second collides with the first on a primary key.
+# That is the loud failure, and it killed a writer mid-run. The quiet one is worse: between a
+# writer's restore and its own ready check, a sibling can restore underneath it, and the scenario
+# is then proved against a world nobody wrote for it. A proof that passes for the wrong reason is
+# the one thing this whole stage exists to prevent, so the world is held for the length of a proof.
+WORLD_IN_USE = threading.RLock()
 
 
 def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
