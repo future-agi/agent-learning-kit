@@ -179,6 +179,17 @@ class Scenario(BaseModel):
     # on the pair, so a use case can carry many scenarios without any reading as a duplicate.
     branch: str = ""
     tests: str = ""
+    # Which caller conditions this scenario stays true under, by axis name. A proved scenario
+    # carries a working environment, so an axis listed here can be varied by copying rather than
+    # by writing and proving another one: the setup, the checks and the reference solution are
+    # reused untouched and only the person changes.
+    #
+    # Empty means every axis whose settings leave the world alone, which is the ordinary case.
+    # A scenario names axes explicitly only to *withhold* one, and it withholds one when the
+    # scenario's own point would be lost: an accent test says nothing about a caller given a
+    # different accent, and a scenario turning on somebody's impatience is not the same scenario
+    # once they are calm.
+    varies: list[str] = Field(default_factory=list)
 
     # What this scenario changes about the world after it is reset, as code: a file defining
     # ``setup(world)``. Rows in a table were enough while every world was a database, and they
