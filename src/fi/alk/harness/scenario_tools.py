@@ -334,6 +334,7 @@ def scenario_tools(
     delegates: bool = False,
     start_from: list[Scenario] | None = None,
     share: list[Scenario] | None = None,
+    probing: bool = False,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -360,7 +361,11 @@ def scenario_tools(
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
-    exploration = {"since_submit": 0}
+    # A writer that probes without ever submitting is stalling, and the guard below says so. A
+    # planner has nothing to submit yet: exploring the agent is its whole job at that point, and
+    # the same guard blocks it from doing what it was asked to do. Measured: a planning run spent
+    # twenty-five minutes refused on every probe.
+    exploration = {"since_submit": 0, "guarded": not probing}
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -449,7 +454,7 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
-        if exploration["since_submit"] >= 4:
+        if exploration["guarded"] and exploration["since_submit"] >= 4:
             return _err(
                 "Four throwaway probes have run since the last saved scenario. Submit and prove "
                 "one scenario now; if its gate identifies a concrete problem, use the next "

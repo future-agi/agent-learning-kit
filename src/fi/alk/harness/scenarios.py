@@ -107,6 +107,8 @@ def open_stage(
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
+    # Whether this stage is still planning decides two things below, so it is worked out first.
+    planning = wanted >= WORTH_PLANNING and load_canvas(destination).planned < wanted
     # One list, shared by the stage and every writer it runs, because the stage is what saves.
     shared: list[Scenario] = load_scenarios(destination)
     workers = (
@@ -121,6 +123,8 @@ def open_stage(
         wanted=wanted,
         delegates=bool(workers),
         share=shared,
+        # While there is a plan to write, probing the agent is the work rather than a detour.
+        probing=planning,
     )
     grid_server, held = grid_tools(contract, destination, wanted=wanted)
     held.canvas = load_canvas(destination)
@@ -129,7 +133,6 @@ def open_stage(
     # into one shape without anyone having done anything wrong.
     # Against the count asked for here, not the blueprint's own: an empty blueprint records a
     # target of zero, so asking it for its shortfall says nothing is missing.
-    planning = wanted >= WORTH_PLANNING and held.canvas.planned < wanted
     spec = SessionSpec(
         # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(

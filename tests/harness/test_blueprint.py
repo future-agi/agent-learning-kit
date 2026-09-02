@@ -563,3 +563,61 @@ class TestDepthIsNotASubstituteForBreadth:
             target=20,
         )
         assert held.problems(self.wide_grid()) == []
+
+
+class TestThePlannerMayProbeFreely:
+    """The probe guard belongs to writers, and it was stopping the planner from planning.
+
+    A writer that probes the agent repeatedly without submitting anything is stalling, and the
+    guard says so after four. A planner has nothing to submit yet: reading and probing the agent
+    *is* its work at that point. Measured before the fix, a planning run spent twenty-five minutes
+    refused on every probe it attempted.
+    """
+
+    def probe_of(self, stage):
+        return next(
+            one
+            for server in stage._spec.servers.values()
+            for one in server.tools
+            if one.name == "try_calls"
+        )
+
+    def probes(self, stage, monkeypatch, times=6):
+        """Probe repeatedly and collect whatever came back.
+
+        The guard runs before the world is touched, so a probe it refuses returns a message while
+        one it allows dies reaching for a world this test does not have. Only the refusals matter
+        here, which is exactly what is under test.
+        """
+        import asyncio
+
+        from fi.alk.harness import scenario_tools
+
+        def no_world(*_args, **_rest):
+            raise RuntimeError("no world in this test")
+
+        monkeypatch.setattr(scenario_tools, "restore", no_world)
+        probe = self.probe_of(stage)
+        said = []
+        for _ in range(times):
+            try:
+                said.append(str(asyncio.run(probe.handler({"calls": []}))))
+            except RuntimeError:
+                said.append("(reached the world)")
+        return said
+
+    def test_a_planning_stage_is_not_pushed_to_submit(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
+        said = self.probes(stage, monkeypatch)
+        assert not any("Four throwaway probes" in one for one in said)
+
+    def test_a_writing_stage_still_is(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
+        said = self.probes(stage, monkeypatch)
+        assert any("Four throwaway probes" in one for one in said)
