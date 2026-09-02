@@ -383,3 +383,88 @@ class TestAFanOutCanActuallySave:
         assert "Saved 1 scenario" in text, f"the stage saved nothing a writer produced: {text}"
         assert (where / "scenarios" / "only-one").is_dir()
         assert kept is shared
+
+
+class TestTheCanvasLoopEndToEnd:
+    """Plan, claim, write, fold, and again. The loop the stage is now built around.
+
+    Exercised through the real tools rather than the objects underneath, because every defect
+    this run has produced lived in the wiring: a list that was copied instead of shared, writers
+    that were never waited for, a reader that rewrote the world. The model is not in this test;
+    everything it would call is.
+    """
+
+    def canvas_of(self, server, cells):
+        return call(
+            server,
+            "record_canvas",
+            {
+                "target": 6,
+                "themes": [{"id": "TH01", "name": "Spine"}, {"id": "TH02", "name": "Rules"}],
+                "angles": [
+                    {"id": "TH01-01", "theme": "TH01", "cell": cells[0],
+                     "angle": "booking cannot be found", "facet": "data:missing", "want": 3},
+                    {"id": "TH02-01", "theme": "TH02", "cell": cells[1],
+                     "angle": "fee disclosed before consent", "facet": "rule:fee", "want": 3},
+                ],
+            },
+        )
+
+    def test_a_plan_is_recorded_and_read_back(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        said = self.canvas_of(server, cells)
+        assert "6 scenarios planned as 2 angles in 2 themes" in said
+        assert (where / "blueprint.json").exists()
+        assert "0 written of 6 planned" in call(server, "show_canvas")
+
+    def test_a_slice_claims_its_angles_so_nothing_is_written_twice(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        first = call(server, "claim_slice", {"scenarios": 6, "writer": "w1"})
+        assert "TH01-01" in first and "TH02-01" in first
+        assert "Nothing is open" in call(server, "claim_slice", {"writer": "w2"})
+
+    def test_what_a_writer_claims_is_checked_against_disk(self, contract, where):
+        """The writer says three; the disk says none; the disk wins and the gap is named."""
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        call(server, "claim_slice", {"writer": "w1"})
+        said = call(
+            server,
+            "fold_return",
+            {"returns": [{"angle_id": "TH01-01", "wrote": 3, "short": "covered all three"}]},
+        )
+        assert "0/3 on disk" in said
+        assert "writer said 3" in said and "does not match" in said
+
+    def test_a_part_filled_angle_comes_back_for_somebody_else(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        call(server, "claim_slice", {"writer": "w1"})
+        call(server, "fold_return", {"returns": [{"angle_id": "TH01-01", "wrote": 0}]})
+        assert "TH01-01" in call(server, "claim_slice", {"writer": "w2"})
+
+    def test_an_angle_a_writer_says_is_impossible_is_not_dealt_again(self, contract, where):
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        call(server, "claim_slice", {"writer": "w1"})
+        call(
+            server,
+            "fold_return",
+            {"returns": [{"angle_id": "TH01-01", "blocked_reason": "no second case exists"}]},
+        )
+        assert "TH01-01" not in call(server, "claim_slice", {"writer": "w2"})
+
+    def test_replanning_keeps_what_writers_already_did(self, contract, where):
+        """Re-recording is how a plan is corrected mid-run; it must not erase the ledger."""
+        server, state = grid_tools(contract, where)
+        cells = sorted({one.name for one in state.grid.cells})[:2]
+        self.canvas_of(server, cells)
+        state.canvas.named("TH01-01").done = 2
+        self.canvas_of(server, cells)
+        assert state.canvas.named("TH01-01").done == 2

@@ -240,7 +240,13 @@ class Canvas:
         return found
 
     def reclaim(self) -> int:
-        """Put back angles whose writer never returned. A crashed writer must not park one."""
+        """Put back angles nobody is going to return.
+
+        Called when a canvas is read from disk, never while dealing: a claim belongs to the run
+        that made it, so anything still claimed in a file is a writer that died with its process.
+        Reclaiming on every deal instead re-opens the claim just made, and the same angles go out
+        to every writer.
+        """
         loose = [one for one in self.angles if one.state == "claimed"]
         for one in loose:
             one.state = "open"
@@ -386,7 +392,7 @@ def load(destination: Path) -> Canvas:
         return Canvas()
     try:
         held = json.loads(path.read_text(encoding="utf-8"))
-        return Canvas(
+        found = Canvas(
             target=int(held.get("target") or 0),
             ceiling=str(held.get("ceiling") or ""),
             themes=[
@@ -417,5 +423,8 @@ def load(destination: Path) -> Canvas:
                 if one.get("id")
             ],
         )
+        # Anything still claimed was claimed by a run that is over.
+        found.reclaim()
+        return found
     except Exception:
         return Canvas()

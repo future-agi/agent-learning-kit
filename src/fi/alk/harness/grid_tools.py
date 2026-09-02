@@ -306,7 +306,6 @@ def grid_tools(
         if not held.angles:
             return _err("No canvas to deal. Plan the suite with record_canvas first.")
         state.canvas = held
-        held.reclaim()
         taken = held.next_slice(int(args.get("scenarios") or SLICE_SCENARIOS))
         if not taken:
             done = held.reached()
