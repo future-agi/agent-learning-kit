@@ -61,6 +61,36 @@ class PostgresStore(ContainerStore):
         host, port = self.address()
         return f"postgresql://{self.user}:{self.password}@{host}:{port}/{self.database}"
 
+    def _make_space(self, engine) -> None:
+        """A database of this world's own inside the shared engine.
+
+        Postgres stores tread on each other otherwise: every world truncates and reloads every
+        table, so two sharing one database would each wipe the other. A database apiece is the
+        cheap unit of isolation here, and creating one is immediate where a container is not.
+        """
+        import secrets as _secrets
+
+        name = f"w{_secrets.token_hex(6)}"
+        self.database = engine.database
+        with self._connect() as connection:
+            connection.execute(f'CREATE DATABASE "{name}"')
+        self.database = name
+
+    def _drop_space(self) -> None:
+        """Give the database back. Only ever one this store created."""
+        mine, self.database = self.database, self._shared.database if self._shared else self.database
+        if mine == self.database:
+            return
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
+                    (mine,),
+                )
+                connection.execute(f'DROP DATABASE IF EXISTS "{mine}"')
+        except Exception:  # noqa: BLE001 - teardown never fails a run
+            pass
+
     def probe(self) -> None:
         """Really connect. A running container is not yet a database that listens."""
         with _psycopg().connect(self.dsn(), connect_timeout=3) as connection:

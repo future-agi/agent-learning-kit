@@ -40,6 +40,10 @@ def test_await_ready_timeout_removes_the_container_it_started(monkeypatch) -> No
     # A short deadline keeps this fast -- the bug and the fix are both about WHAT HAPPENS on
     # timeout, not about how long a real engine takes to boot.
     monkeypatch.setattr(container, "READY_TIMEOUT_SECONDS", 0.5)
+    # The engine this store starts for itself, rather than one it was handed. Stores normally
+    # share an engine per image and a shared engine is only made ready once, so the timeout path
+    # belongs to whoever starts one.
+    monkeypatch.setenv(container.PER_STORE, "1")
     store = NeverReadyStore()
     try:
         with pytest.raises(container.StoreError, match="did not answer"):
