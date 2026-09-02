@@ -413,6 +413,8 @@ class _TestRunnerAgent(Agent):
             )
             await player.start(room=room, agent_session=session)
             self._background_player = player
+            # Silence is indistinguishable from a clip that never started, so say which one did.
+            logger.info("background audio started: %s at volume %s", source, volume)
         except Exception:
             logger.warning("background audio not started", exc_info=True)
 
