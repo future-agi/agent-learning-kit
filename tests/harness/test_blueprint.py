@@ -311,12 +311,14 @@ class TestThePlanReportsWhatItCovers:
         assert "2 rule, 1 data" in held.coverage({"retrieve-ride", "cancel-ride", "diagnose-fare"}, [])
 
 
-class TestCoverageIsStatedAgainstFourThings:
+class TestCoverageIsStatedAgainstWhatIsCheckable:
     """A plan can claim anything about itself; these are the claims that can be checked.
 
-    Rishav asked for happy paths, edge cases, adversarial cases and paths bound to fail. PR 44
-    contributes the operation grid and the overlay axis. Between them the plan has to answer:
-    which cells, which rules, which precondition-gated tools, and how much of each intent.
+    The outcome axis replaced happy/edge/adversarial/failing, which was taken from a conversation
+    rather than derived and overlapped badly: an injection attempt is adversarial *and* a path
+    bound to fail, and "edge" is an intensity rather than a kind. Two planners would label one
+    bucket differently, which makes the count meaningless. Outcome and cause are separate fields
+    now, and each is mutually exclusive within itself.
     """
 
     def plan(self):
@@ -325,23 +327,41 @@ class TestCoverageIsStatedAgainstFourThings:
             ("A2", "TH01", "cancel-ride", "book_ride asked for too early", "precondition:book_ride", 2),
         )
 
-    def test_a_missing_intent_category_is_named_outright(self):
+    def test_an_outcome_the_agent_is_never_asked_for_is_named(self):
         held = self.plan()
-        held.angles[0].intent = "happy"
-        held.angles[1].intent = "happy"
+        held.angles[0].expects = "succeed"
+        held.angles[1].expects = "succeed"
         said = held.coverage({"create-ride", "cancel-ride"}, [], [])
-        assert "nothing at all for: edge, adversarial, failing" in said
+        assert "nothing the agent should refuse, ask, escalate" in said
 
-    def test_intents_are_counted_in_scenarios_not_buckets(self):
+    def test_outcomes_are_counted_in_scenarios_not_buckets(self):
         held = self.plan()
-        held.angles[0].intent = "happy"
-        held.angles[1].intent = "failing"
+        held.angles[0].expects = "succeed"
+        held.angles[1].expects = "refuse"
         said = held.coverage({"create-ride", "cancel-ride"}, [], [])
-        assert "3 happy" in said and "2 failing" in said
+        assert "3 succeed" in said and "2 refuse" in said
 
-    def test_an_intent_nobody_recognises_is_refused(self):
+    def test_an_outcome_nobody_recognises_is_refused(self):
         held = self.plan()
-        held.angles[0].intent = "chaotic"
+        held.angles[0].expects = "vibes"
+        assert "not one of" in " ".join(held.problems({"create-ride", "cancel-ride"}))
+
+    def test_cause_and_outcome_are_recorded_separately(self):
+        """An injection expects a refusal AND carries an injection overlay. Not a choice."""
+        held = self.plan()
+        for one in held.angles:
+            one.differs = "the market, which decides whether cash is offered"
+        held.angles[0].expects = "refuse"
+        held.angles[0].overlay = "injection"
+        held.angles[1].expects = "succeed"
+        assert held.problems({"create-ride", "cancel-ride"}) == []
+        said = held.coverage({"create-ride", "cancel-ride"}, [], [])
+        assert "3 refuse" in said
+        assert "3 carry an adversarial overlay" in said
+
+    def test_an_overlay_nobody_recognises_is_refused(self):
+        held = self.plan()
+        held.angles[0].overlay = "spooky"
         assert "not one of" in " ".join(held.problems({"create-ride", "cancel-ride"}))
 
     def test_a_precondition_gated_tool_with_no_bucket_is_named(self):

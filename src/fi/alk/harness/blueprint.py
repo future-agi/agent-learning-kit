@@ -45,10 +45,20 @@ TOO_ALIKE = 0.7
 # Below this there is nothing to plan; the writing stage handles small suites directly.
 WORTH_PLANNING = 20
 
-# What a bucket is for, and the four kinds between them cover what anyone has asked to see.
-# Rishav asked for happy path, edge cases, adversarial, and paths bound to fail; PR 44's overlay
-# axis is the adversarial one. Declared per bucket so coverage can be stated rather than hoped for.
-INTENTS = ("happy", "edge", "adversarial", "failing")
+# What the agent should do. Exactly one is true of any scenario and between them they cover
+# everything an agent can do, which is what makes the coverage line worth reading.
+#
+# An earlier version of this axis was happy / edge / adversarial / failing, taken from a
+# conversation rather than derived. Those overlap: an injection attempt is adversarial and also a
+# path bound to fail, "edge" is an intensity rather than a kind, and outcome and cause were mixed
+# into one field. Two planners would label the same bucket differently, which makes the count
+# meaningless. Splitting outcome from cause fixes it.
+EXPECTS = ("succeed", "refuse", "ask", "escalate")
+
+# Why it is hard, when something is deliberately making it hard. PR 44's overlay axis, and
+# orthogonal to EXPECTS on purpose: an injection is `refuse` plus `injection`, never a choice
+# between the two.
+OVERLAYS = ("impersonation", "injection", "fraud", "emergency", "pressure")
 
 # An angle past this has stopped naming what to test and started scripting how it goes.
 MOST_ANGLE_CHARS = 90
@@ -141,9 +151,10 @@ class Angle:
     # Which state axes actually move the answer for this bucket. `want` is the number of their
     # combinations that survive masking, so a count stops being a guess and becomes a derivation.
     live: list[str] = field(default_factory=list)
-    # One of INTENTS. Kept separate from `facet`, which says what structure is under test: a
-    # precondition bucket can be an edge case or a failing path, and both are worth knowing.
-    intent: str = ""
+    # One of EXPECTS: what the agent should do here.
+    expects: str = ""
+    # One of OVERLAYS, or empty. What is deliberately making it hard, if anything.
+    overlay: str = ""
     # What differs between this bucket's scenarios. Required once it claims more than one, because
     # a number is easy to write and "what changes between them" is the thing that has to be true.
     differs: str = ""
@@ -250,14 +261,24 @@ class Canvas:
             )
 
         wrong = sorted(
-            {one.intent for one in self.angles if one.intent and one.intent not in INTENTS}
+            {one.expects for one in self.angles if one.expects and one.expects not in EXPECTS}
         )
         if wrong:
             found.append(
-                f"{len(wrong)} buckets claim an intent that is not one of "
-                + ", ".join(INTENTS)
+                f"{len(wrong)} buckets expect something that is not one of "
+                + ", ".join(EXPECTS)
                 + ": "
                 + ", ".join(wrong[:6])
+            )
+        odd = sorted(
+            {one.overlay for one in self.angles if one.overlay and one.overlay not in OVERLAYS}
+        )
+        if odd:
+            found.append(
+                f"{len(odd)} buckets name an overlay that is not one of "
+                + ", ".join(OVERLAYS)
+                + ": "
+                + ", ".join(odd[:6])
             )
 
         unjustified = [
@@ -452,13 +473,16 @@ class Canvas:
         reports the two things that are falsifiable: which cells nothing sits on, and whether
         every rule the agent must obey has a bucket that tests it.
         """
-        intents: dict[str, int] = {one: 0 for one in INTENTS}
+        expects: dict[str, int] = {one: 0 for one in EXPECTS}
         unset = 0
+        overlaid = 0
         for one in self.angles:
-            if one.intent in intents:
-                intents[one.intent] += max(1, one.want)
+            if one.expects in expects:
+                expects[one.expects] += max(1, one.want)
             else:
                 unset += 1
+            if one.overlay:
+                overlaid += max(1, one.want)
 
         kinds: dict[str, int] = {}
         for one in self.angles:
@@ -483,15 +507,17 @@ class Canvas:
             + ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items(), key=lambda k: -k[1])),
             f"{len(self.axes)} state axes derived from the data.",
             f"{self.planned} scenarios planned: "
-            + ", ".join(f"{n} {kind}" for kind, n in intents.items())
-            + (f", {unset} buckets with no intent set" if unset else ""),
+            + ", ".join(f"{n} {kind}" for kind, n in expects.items())
+            + (f", {unset} buckets not saying" if unset else "")
+            + f". {overlaid} carry an adversarial overlay.",
         ]
-        empty_intents = [kind for kind, n in intents.items() if not n]
-        if empty_intents:
+        nothing = [kind for kind, n in expects.items() if not n]
+        if nothing:
             lines.append(
-                "  nothing at all for: "
-                + ", ".join(empty_intents)
-                + ". A suite with no failing paths, or no adversarial cases, is not a suite."
+                "  nothing the agent should "
+                + ", ".join(nothing)
+                + ". A suite where the agent never has to refuse, ask or escalate is testing "
+                "one third of its job."
             )
         if empty:
             lines.append("  nothing on: " + ", ".join(empty[:12]) + ("" if len(empty) <= 12 else " ..."))
@@ -560,7 +586,8 @@ class Canvas:
                             "facet": one.facet,
                             "want": one.want,
                             "live": one.live,
-                            "intent": one.intent,
+                            "expects": one.expects,
+                            "overlay": one.overlay,
                             "differs": one.differs,
                             "done": one.done,
                             "refused": one.refused,
@@ -616,7 +643,8 @@ def load(destination: Path) -> Canvas:
                     facet=str(one.get("facet") or ""),
                     want=max(1, int(one.get("want") or 1)),
                     live=list(one.get("live") or []),
-                    intent=str(one.get("intent") or ""),
+                    expects=str(one.get("expects") or ""),
+                    overlay=str(one.get("overlay") or ""),
                     differs=str(one.get("differs") or ""),
                     done=int(one.get("done") or 0),
                     refused=int(one.get("refused") or 0),

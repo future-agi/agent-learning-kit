@@ -133,18 +133,26 @@ five kinds, which between them cover how an agent fails:
     ambiguity:X     the request has two readings
     boundary:X      a value at a limit
 
-**4. A bucket is one cell and one facet.** That is the whole definition. Give each one an
-`intent` as well, which is a different question from `facet`: the facet says what structure is
-under test, the intent says what the bucket is *for*.
+**4. A bucket is one cell and one facet.** That is the whole definition.
 
-    happy        it should work, and the test is that it does
-    edge         a boundary, a rare state, an awkward-but-legal request
-    adversarial  somebody is trying it on: impersonation, injection, pressure
-    failing      it should not work, and the test is that the agent refuses well
+Also say what the agent **should do** there, which is a different question from what structure is
+under test:
 
-A precondition bucket can be an edge case or a failing path depending on what it asks, which is
-why both are recorded. A plan with nothing in one of these four is reported as such, and a suite
-with no failing paths is not a suite.
+    succeed    it completes the task
+    refuse     it must not do this
+    ask        it must clarify before acting
+    escalate   it hands off to a human
+
+Exactly one is true of any bucket, and between them they cover everything an agent can do. That is
+what makes the count worth reporting: a suite where the agent never has to refuse, ask or escalate
+is testing one third of its job.
+
+And separately, if something is deliberately making it hard, name the `overlay`:
+`impersonation`, `injection`, `fraud`, `emergency`, `pressure`.
+
+Keep these two apart. An injection attempt **expects a refusal and carries an injection overlay**;
+it is not a choice between "adversarial" and "a path bound to fail". Mixing cause and outcome into
+one label is what makes two planners label the same bucket differently.
 
 **5. Derive `want` from the live axes.** For each bucket, which axes actually move the answer for
 *that facet*? Those are its live ones; name them in `live`. `want` is how many of their
@@ -226,9 +234,9 @@ its own tidiness:
 - how many grid cells have a bucket, and which have none
 - how many of the agent's hard rules have a bucket testing them, and which do not
 - how many precondition-gated tools are named by some bucket
-- how the scenarios split across the four intents
+- what the agent should do across the suite, and how much of it carries an adversarial overlay
 
-The two lines to act on are the uncovered rules and the empty intents. A rule with no bucket is
+The two lines to act on are the uncovered rules and any outcome the agent is never asked for. A rule with no bucket is
 something the agent is forbidden to get wrong that nobody is checking.
 
 ## When the number asked for is not there
