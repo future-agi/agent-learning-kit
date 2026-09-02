@@ -1,0 +1,213 @@
+"""The plan for a suite, written before any scenario is.
+
+Asking a model for a thousand scenarios in one context does not work, and asking it for a
+thousand one at a time converges: each scenario is written with the last few in view, so the
+suite drifts toward whatever the first few were. The way out is to decide what all N are before
+writing any of them, cheaply enough that all N fit in one head at once.
+
+That is what a blueprint is. One line per scenario, naming the cell it sits in and the situation
+that makes it worth running, and nothing else: no setup, no checks, no solution. A thousand of
+those fit in a context that a thousand scenarios could not, so the model can see the whole suite
+while deciding whether it is varied.
+
+The grid supplies the skeleton and cannot supply this. A grid of 39 cells asked for 1000
+scenarios gives 26 per cell, and coordinates alone make those 26 identical. What separates them
+is situational: what the person actually wants, what is in the way, what the agent has to notice.
+Dial settings were the earlier answer and are not counted as variety, because the same situation
+told by a different persona is the same test.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# Two situations sharing this much of their vocabulary are the same situation wearing different
+# words. Set from the observed gap: rewordings of one situation ran past 0.7, genuinely different
+# situations in the same cell sat well below it.
+TOO_ALIKE = 0.7
+
+# Below this there is nothing to plan; the writing stage handles small suites directly.
+WORTH_PLANNING = 20
+
+_WORD = re.compile(r"[a-z0-9]+")
+# Carried by nearly every line in a suite, so they say nothing about whether two differ.
+_NOISE = frozenset(
+    {
+        "the", "a", "an", "and", "or", "but", "for", "with", "without", "to", "of", "in",
+        "on", "at", "by", "from", "then", "than", "that", "this", "it", "its", "is", "are",
+        "was", "be", "been", "has", "have", "had", "do", "does", "did", "not", "no",
+        "caller", "person", "user", "agent", "asks", "ask", "wants", "want", "tries", "try",
+    }
+)
+
+
+def _words(text: str) -> set[str]:
+    return {word for word in _WORD.findall(text.lower()) if word not in _NOISE}
+
+
+def _overlap(one: set[str], two: set[str]) -> float:
+    """How much two situations share, as a fraction of the smaller one.
+
+    Against the smaller rather than the union, because a one-line situation and a padded
+    restatement of it are the same situation, and union would score that pair as different
+    purely because one of them used more words.
+    """
+    if not one or not two:
+        return 0.0
+    return len(one & two) / min(len(one), len(two))
+
+
+@dataclass
+class Entry:
+    """One planned scenario: where it sits, and what happens in it."""
+
+    name: str
+    cell: str
+    situation: str
+
+    def line(self) -> str:
+        return f"{self.name} | {self.cell} | {self.situation}"
+
+
+@dataclass
+class Blueprint:
+    """Every scenario a suite intends to contain, before any of them exist."""
+
+    entries: list[Entry] = field(default_factory=list)
+    wanted: int = 0
+
+    @property
+    def covered(self) -> set[str]:
+        return {one.cell for one in self.entries}
+
+    def problems(self, cells: set[str]) -> list[str]:
+        """What is wrong with this plan, said once, before a writer acts on any of it.
+
+        Everything here is cheaper to catch now than after the scenarios exist: a plan that
+        repeats itself becomes a suite that repeats itself, and by then each duplicate has cost
+        a proof.
+        """
+        found: list[str] = []
+        if not self.entries:
+            return ["the blueprint is empty"]
+
+        names = [one.name for one in self.entries]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            found.append(
+                f"{len(repeated)} scenario names appear more than once: "
+                + ", ".join(repeated[:8])
+            )
+
+        unknown = sorted({one.cell for one in self.entries} - cells)
+        if unknown:
+            found.append(
+                f"{len(unknown)} entries name a cell that is not on the grid: "
+                + ", ".join(unknown[:8])
+                + ". Use show_grid, or correct the grid with set_objects if it is the grid that "
+                "is wrong."
+            )
+
+        thin = [one.name for one in self.entries if len(_words(one.situation)) < 4]
+        if thin:
+            found.append(
+                f"{len(thin)} situations say too little to write from: "
+                + ", ".join(thin[:8])
+                + ". A situation names what the person wants and what is in the way."
+            )
+
+        alike = self.duplicates()
+        if alike:
+            found.append(
+                f"{len(alike)} pair{'s' if len(alike) != 1 else ''} describe the same "
+                "situation in different words: "
+                + "; ".join(f"{one} / {two}" for one, two, _ in alike[:6])
+            )
+        return found
+
+    def duplicates(self) -> list[tuple[str, str, float]]:
+        """Pairs too alike to be worth writing twice, compared only inside a cell.
+
+        Two cells can legitimately share a situation: retrieving a booking and cancelling one
+        both start from a caller who cannot find it. Comparing across cells would report those
+        as duplicates and push the plan toward making cells artificially unlike each other.
+        """
+        by_cell: dict[str, list[Entry]] = {}
+        for one in self.entries:
+            by_cell.setdefault(one.cell, []).append(one)
+
+        found: list[tuple[str, str, float]] = []
+        for group in by_cell.values():
+            seen = [(one, _words(one.situation)) for one in group]
+            for index, (one, words) in enumerate(seen):
+                for other, other_words in seen[index + 1 :]:
+                    score = _overlap(words, other_words)
+                    if score >= TOO_ALIKE:
+                        found.append((one.name, other.name, round(score, 2)))
+        return sorted(found, key=lambda row: -row[2])
+
+    def shortfall(self) -> int:
+        return max(0, self.wanted - len(self.entries))
+
+    def slices(self, size: int) -> list[list[Entry]]:
+        """The blueprint cut into pieces a writer can hold, dealt so no writer gets one cell.
+
+        Round-robin rather than contiguous: the entries arrive grouped by cell, and a contiguous
+        cut hands one writer every scenario for one cell. That writer then has the whole of a
+        cell's variety to invent alone, which is the position the blueprint exists to avoid.
+        """
+        if size < 1:
+            return [list(self.entries)]
+        count = max(1, (len(self.entries) + size - 1) // size)
+        dealt: list[list[Entry]] = [[] for _ in range(count)]
+        for index, one in enumerate(self.entries):
+            dealt[index % count].append(one)
+        return [one for one in dealt if one]
+
+    def written(self, destination: Path) -> Path:
+        path = Path(destination) / "blueprint.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "wanted": self.wanted,
+                    "entries": [
+                        {"name": one.name, "cell": one.cell, "situation": one.situation}
+                        for one in self.entries
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+
+def load(destination: Path) -> Blueprint:
+    """The blueprint on disk, or an empty one. A missing or damaged file is not fatal.
+
+    A plan is worth redoing; it is never worth stopping a run over, and the stage that reads this
+    can always write a new one.
+    """
+    path = Path(destination) / "blueprint.json"
+    if not path.exists():
+        return Blueprint()
+    try:
+        held = json.loads(path.read_text(encoding="utf-8"))
+        return Blueprint(
+            wanted=int(held.get("wanted") or 0),
+            entries=[
+                Entry(
+                    name=str(one.get("name") or ""),
+                    cell=str(one.get("cell") or ""),
+                    situation=str(one.get("situation") or ""),
+                )
+                for one in held.get("entries") or []
+                if one.get("name")
+            ],
+        )
+    except Exception:
+        return Blueprint()
