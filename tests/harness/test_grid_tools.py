@@ -356,3 +356,30 @@ class TestAFanOutCanActuallySave:
 
         stage, _ = scenario_tools(contract, where, where, wanted=10)
         assert "drop_scenario" in {spec.name for spec in stage.tools}
+
+    def test_what_a_writer_accepts_is_what_the_stage_saves(self, contract, where, monkeypatch):
+        """The whole failure, end to end: accept through a writer, save through the stage.
+
+        The gates are not the subject here and are exercised elsewhere; what broke was everything
+        after them, so this puts a proved scenario into the writers' list the way an acceptance
+        does and asks the stage to save.
+        """
+        from fi.alk.harness import scenarios as stage_module
+        from fi.alk.harness.scenario_tools import scenario_tools
+
+        monkeypatch.setattr(stage_module, "world_summary", lambda _root: "(no world here)")
+        shared: list = []
+        stage, kept = scenario_tools(contract, where, where, wanted=1, share=shared)
+        writers = stage_module.writer_workers(contract, where, share=shared)
+        writer = writers[stage_module.WRITER].servers[stage_module.SCENARIO_SERVER]
+
+        # What accept_scenario does once all three gates pass: the writer's list gets it.
+        writers_list = next(iter(writers.values())).servers[stage_module.SCENARIO_SERVER]
+        assert writers_list is writer
+        shared.append(Scenario(name="only-one", setup_code="", ready_code=""))
+
+        save = next(spec for spec in stage.tools if spec.name == "save_scenarios")
+        text = str(asyncio.run(save.handler({})))
+        assert "Saved 1 scenario" in text, f"the stage saved nothing a writer produced: {text}"
+        assert (where / "scenarios" / "only-one").is_dir()
+        assert kept is shared
