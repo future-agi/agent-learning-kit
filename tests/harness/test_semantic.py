@@ -103,3 +103,23 @@ class TestSpread:
         )
         assert found and len(found[1]) == 3
         assert all(len(one) == 3 for one in found[1])
+
+
+class TestNothingIsBilledWithoutBeingAskedTo:
+    """Embedding calls cost money, and which account pays is not this module's assumption to make.
+
+    So it is off unless the run switches it on. A check that quietly decided it would be useful
+    is a check that spends somebody else's budget.
+    """
+
+    def test_it_does_nothing_at_all_unless_switched_on(self, monkeypatch):
+        monkeypatch.delenv(semantic.SWITCH, raising=False)
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "some-project")
+        assert semantic.vectors(["anything"]) is None
+        assert semantic.duplicates([("A1", "one"), ("A2", "two")]) is None
+
+    def test_switching_it_on_is_still_not_enough_without_credentials(self, monkeypatch):
+        monkeypatch.setenv(semantic.SWITCH, "1")
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        assert semantic.vectors(["anything"]) is None

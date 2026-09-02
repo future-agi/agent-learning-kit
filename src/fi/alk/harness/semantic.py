@@ -10,9 +10,14 @@ Embeddings settle it. Measured on that exact pair with Vertex `text-embedding-00
 scores 0.95 and a genuinely different angle on the same cell scores 0.42. The gap is wide enough
 that a threshold in between is not a judgement call.
 
-This is optional by construction. No credentials, no network, no library, or an API that refuses:
-every one of those returns nothing and the caller keeps its lexical answer. A duplicate check is
-worth having and never worth stopping a run over.
+**Off unless it is switched on.** Embedding calls are billed, and which account they are billed
+to is not this module's business to assume. It runs only when ``ALK_EMBEDDINGS`` is set, so no
+run reaches a paid API because a check quietly decided it would be useful. Everything degrades to
+the lexical answer, which is the same thing that happens when there are no credentials at all.
+
+Optional by construction in every other way too. No credentials, no network, no library, or an
+API that refuses: each of those returns nothing and the caller keeps what it had. A duplicate
+check is worth having and never worth stopping a run over.
 """
 
 from __future__ import annotations
@@ -26,6 +31,10 @@ logger = logging.getLogger(__name__)
 # Vertex's general-purpose text embedding. Named here rather than taken from the harness model
 # setting: the model that writes scenarios and the model that measures them are different
 # choices, and pinning this one keeps a similarity score comparable between runs.
+# Set this to switch embedding on. Unset means every call here returns nothing, which is the
+# default because these requests are billed and nothing should spend without being asked to.
+SWITCH = "ALK_EMBEDDINGS"
+
 MODEL = "text-embedding-005"
 
 # Above this, two lines are the same test. From the measured gap: rewordings land at 0.93 to 0.96
@@ -48,7 +57,13 @@ class Pair:
 
 
 def _client():
-    """A Vertex client, or None. Never raises: this whole module is optional."""
+    """A Vertex client, or None. Never raises: this whole module is optional.
+
+    Refuses before anything else unless the run asked for embedding, because the first thing this
+    would otherwise do is bill somebody.
+    """
+    if not os.environ.get(SWITCH, "").strip():
+        return None
     try:
         from google import genai
     except Exception:  # pragma: no cover - depends on the machine
