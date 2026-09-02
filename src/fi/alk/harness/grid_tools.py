@@ -26,6 +26,7 @@ from .expand import expand_all, summarise
 from .grid import Grid, derive
 from .sample import coverage, plan
 from .scenario import Scenario
+from .semantic import duplicates as semantic_duplicates
 from .scenario_tools import load_scenarios, write_scenarios
 from .tools import schema
 
@@ -283,6 +284,19 @@ def grid_tools(
                 + ", ".join(missing[:12])
                 + ("" if len(missing) <= 12 else " ...")
             )
+        # Embedding-based, and only ever additional: the lexical pass below still runs, and this
+        # returns nothing at all when there are no credentials.
+        alike = semantic_duplicates(
+            [(one.id, one.angle) for one in held.angles],
+            within={one.id: one.cell for one in held.angles},
+        )
+        if alike:
+            said.append(
+                f"{len(alike)} pairs read as the same test despite sharing no wording: "
+                + "; ".join(f"{one.one}/{one.two} at {one.score}" for one in alike[:6])
+                + ". Worth a look; two cells may legitimately share a situation."
+            )
+
         clashes = held.collisions()
         if clashes:
             said.append(
