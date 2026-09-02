@@ -371,3 +371,36 @@ class TestCoverageIsStatedAgainstWhatIsCheckable:
         )
         assert "1 of 3 tools with preconditions" in said
         assert "verify_otp" in said
+
+
+class TestAWriterIsToldWhatMustDiffer:
+    """A bucket of five that does not say what varies is five chances to write one test.
+
+    The plan deliberately never names the five scenarios; the writer chooses them with the source
+    open. So the one thing the plan owes the writer is the dimension they must differ along, and
+    for a while that was recorded on the bucket and then left out of the line writers actually
+    see.
+    """
+
+    def test_the_dimension_reaches_the_writer(self):
+        held = canvas(("A1", "TH01", "create-ride", "payment cannot be used", "data:payment", 8))
+        held.angles[0].varies_by = ["payment_state", "market"]
+        line = held.angles[0].line()
+        assert "x8" in line
+        assert "the 8 differ by: payment_state, market" in line
+
+    def test_a_written_reason_is_used_when_there_are_no_axes(self):
+        held = canvas(("A1", "TH01", "create-ride", "payment cannot be used", "data:payment", 3))
+        held.angles[0].differs = "how far the caller got before it failed"
+        assert "the 3 differ by: how far the caller got" in held.angles[0].line()
+
+    def test_a_single_scenario_needs_no_dimension(self):
+        held = canvas(("A1", "TH01", "create-ride", "guest has no saved places", "rule:guest", 1))
+        assert "differ by" not in held.angles[0].line()
+
+    def test_what_the_agent_should_do_reaches_the_writer_too(self):
+        held = canvas(("A1", "TH01", "create-ride", "injection in the address", "rule:injection", 1))
+        held.angles[0].expects = "refuse"
+        held.angles[0].overlay = "injection"
+        line = held.angles[0].line()
+        assert "expects refuse" in line and "overlay injection" in line

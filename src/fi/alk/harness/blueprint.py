@@ -170,11 +170,27 @@ class Angle:
         return max(0, self.want - self.done)
 
     def line(self) -> str:
+        """One bucket as a writer is given it.
+
+        `varies_by` and `differs` belong here even though they read like planning notes. They are
+        the only thing standing between a bucket of five and one scenario written five times: the
+        plan deliberately does not name the five, so what it must say instead is the dimension
+        they differ along. Left out of this line, as it was at first, a writer is told to produce
+        five and never told what makes them five.
+        """
         held = f"{self.id} | {self.cell} | {self.angle} | x{self.want}"
         if self.why_hard:
             held += f" | {self.why_hard}"
+        if self.expects:
+            held += f" | expects {self.expects}"
+        if self.overlay:
+            held += f" | overlay {self.overlay}"
+        if self.want > 1:
+            reason = ", ".join(self.varies_by) or self.differs
+            if reason:
+                held += f"\n      the {self.want} differ by: {reason}"
         if self.done or self.state != "open":
-            held += f" | {self.state} {self.done}/{self.want}"
+            held += f"\n      {self.state}, {self.done} of {self.want} written"
         return held
 
 
