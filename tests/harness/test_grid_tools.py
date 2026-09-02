@@ -232,7 +232,8 @@ class TestAScenarioMustMeanWhatItsNameClaims:
         assert "not who they claim to be" in said[0]
 
     def test_seeding_it_settles_the_objection(self):
-        assert self.refused("cancel-ride__impersonation", "def setup(world):\n    pass\n") == []
+        seeded = 'def setup(world):\n    world.rows("users")[0]["phone"] = "+15550000"\n'
+        assert self.refused("cancel-ride__impersonation", seeded) == []
 
     def test_the_free_caller_dials_are_untouched(self):
         """A rushed or second-language caller needs no world change, so requiring one is wrong."""
