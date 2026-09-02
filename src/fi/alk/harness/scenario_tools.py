@@ -1064,13 +1064,18 @@ def scenario_tools(
             inspect_scenario,
             try_calls,
             add_sub_goal,
-            submit_scenario,
+            *([] if delegates else [submit_scenario]),
             amend_contract,
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
             aim_for,
         ]
+        # Writing is withheld from a stage that has writers, for the same reason `generate_suite`
+        # is: offered both, the model does the work itself. Measured on a 200 run, the stage made
+        # 59 of the submissions and dispatched four writers, then spent its turns proving instead
+        # of dealing, so the fan-out it was given went mostly unused. A stage that cannot submit
+        # has one way to produce a scenario, which is to hand a slice to a writer.
         # Only the session a person is talking to may fan out. A writer that is itself one slice
         # of a fan-out calling this would split its own slice again, and so on. A stage that was
         # given writer workers fans out through those instead, and offering both leaves the model

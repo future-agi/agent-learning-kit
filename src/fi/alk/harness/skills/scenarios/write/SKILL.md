@@ -490,8 +490,13 @@ times in the same turn** rather than waiting for each to return: several calls i
 run together, while the same calls made one per turn run one after another. Keep going until the
 sample is complete.
 
-Delegating is not optional above a handful. Writing thirty scenarios yourself in one session is
-how a run stalls: the response grows until it stops coming back. Hand out slices instead.
+**Whether you write scenarios yourself depends on whether you were given writers, and you can
+see which from your own tools.** A small ask declares no writers, and then `submit_scenario` is
+yours and writing them yourself is the right thing to do. A large one declares writers, and then
+`submit_scenario` is deliberately not among your tools: offered both, a stage does the work
+itself, and the fan-out goes unused while its turns drain. In that case **your job is to deal work
+and fold what returns, not to write scenarios.** Writing thirty yourself in one session is also
+how a run stalls, because the response grows until it stops coming back.
 
 **If the suite was planned, work from the canvas, and run several writers at once.**
 
@@ -527,6 +532,12 @@ batch, so its angles are available again immediately.
 That sentence is what the next writer on the same theme reads, so it should say what was covered
 and what was not, not that the work is done. The count is recorded but not believed: what counts
 as written is read off disk, and a disagreement between the two is a bug worth looking at.
+
+**Do not stop because some buckets look unfillable.** A bucket only means what it says once its
+writer has genuinely tried and reported back; a bucket showing nothing written may simply not have
+been dealt yet. Keep claiming while `claim_slice` returns work, and treat "nothing is open" as the
+only finish line. A run once saved at sixty-one of two hundred because a handful of buckets read
+as blocked, and concluded that was the agent's ceiling.
 
 **A writer that fails is folded too.** If a dispatched writer errors or never returns, call
 `fold_return` for its angles anyway, with the names of whatever reached disk and a one-line note
@@ -843,8 +854,9 @@ hides the problem and everything built afterwards inherits it.
 4. **Mask** the incoherent cells and say roughly how many went.
 5. **Sample** to the number asked for: hard-required cells first, then pairs, then weight.
 6. For anything more than a handful, **brief writers on slices of that sample and run several at
-   once**. Keep going until the sample is complete. For one scenario, write it yourself:
-   `try_calls` the solution, then `submit_scenario`.
+   once**. Keep claiming and dispatching until nothing is open: that is the whole of your work at
+   this size. For one scenario, and only when you have no writers, write it yourself: `try_calls`
+   the solution, then `submit_scenario`.
 7. Read what comes back. A refusal names which gate failed and why. Fill real gaps by briefing
    the missing cells.
 8. `save_scenarios` once everything submitted is in. It always saves what has been proved; anything still off about the suite comes back in its report rather than blocking the save.

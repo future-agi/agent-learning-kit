@@ -818,3 +818,41 @@ def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_p
     # The work is credited from the cell, and the disagreement is still reported.
     assert state.canvas.named("A1").done == 2
     assert "not on disk" in said["content"][0]["text"]
+
+
+def test_a_stage_with_writers_cannot_submit_scenarios_itself(contract, tmp_path):
+    """Offered both, the model does the work itself: measured on a 200 run, the stage made 59 of
+    the submissions and dispatched four writers, then spent its turns proving instead of dealing.
+    The same argument already withholds generate_suite."""
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    delegating, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=200, delegates=True)
+    alone, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=200, delegates=False)
+
+    assert "submit_scenario" not in {one.name for one in delegating.tools}
+    assert "submit_scenario" in {one.name for one in alone.tools}
+    # It still folds, saves and reads the world; only writing is taken away.
+    assert {"save_scenarios", "inspect_world", "try_calls"} <= {
+        one.name for one in delegating.tools
+    }
+
+
+def test_a_small_ask_keeps_its_own_pen(contract, tmp_path, monkeypatch):
+    """Withholding writing must not reach a stage that has nobody to delegate to. Asking for five
+    or ten scenarios declares no writers, so the stage writes them itself as it always did."""
+    from fi.alk.harness import scenarios as stage_module
+
+    # A worker's prompt embeds the seeded world; this test is about the tool list beside it.
+    monkeypatch.setattr(stage_module, "world_summary", lambda _where: "a world")
+
+    for wanted, expected in ((5, True), (10, True), (19, True), (20, False), (200, False)):
+        workers = (
+            stage_module.writer_workers(contract, tmp_path)
+            if wanted >= stage_module.FEWEST_WORTH_DELEGATING
+            else {}
+        )
+        server, _ = stage_module.scenario_tools(
+            contract, tmp_path, tmp_path, wanted=wanted, delegates=bool(workers)
+        )
+        has_pen = "submit_scenario" in {one.name for one in server.tools}
+        assert has_pen is expected, f"wanted={wanted} should write itself: {expected}"
