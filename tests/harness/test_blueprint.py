@@ -75,7 +75,7 @@ class TestWhatAPlanMustSayBeforeAnyoneWritesFromIt:
             "was reached, check whether a correction is owed, and then either issue it or explain "
             "why it cannot, while keeping the whole thing inside one short exchange",
         ))
-        assert "scripts rather than angles" in " ".join(held.problems({"retrieve-ride"}))
+        assert "written as whole scripts" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_a_theme_nobody_declared_is_reported(self):
         held = canvas(("A1", "TH99", "retrieve-ride", "booking cannot be found"))

@@ -270,20 +270,20 @@ class Canvas:
         ids = [one.id for one in self.angles]
         repeated = sorted({one for one in ids if ids.count(one) > 1})
         if repeated:
-            found.append(f"{len(repeated)} angle ids appear twice: " + ", ".join(repeated[:8]))
+            found.append(f"{len(repeated)} bucket ids appear twice: " + ", ".join(repeated[:8]))
 
         known = {one.id for one in self.themes}
         orphans = sorted({one.theme for one in self.angles if one.theme not in known})
         if orphans:
             found.append(
-                f"{len(orphans)} angles name a theme that is not declared: "
+                f"{len(orphans)} buckets name a theme that is not declared: "
                 + ", ".join(orphans[:8])
             )
 
         unknown = sorted(self.covered - cells)
         if unknown:
             found.append(
-                f"{len(unknown)} angles name a cell that is not on the grid: "
+                f"{len(unknown)} buckets name a cell that is not on the grid: "
                 + ", ".join(unknown[:8])
                 + ". Use show_grid, or correct the grid with set_objects if the grid is wrong."
             )
@@ -395,7 +395,7 @@ class Canvas:
         wordy = [one.id for one in self.angles if len(one.angle) > MOST_ANGLE_CHARS]
         if wordy:
             found.append(
-                f"{len(wordy)} angles are written as scripts rather than angles: "
+                f"{len(wordy)} buckets are written as whole scripts rather than as a case: "
                 + ", ".join(wordy[:6])
                 + f". Keep one under {MOST_ANGLE_CHARS} characters and leave the particulars to "
                 "whoever writes it, with the source in front of them."

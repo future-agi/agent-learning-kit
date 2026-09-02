@@ -201,6 +201,26 @@ Go through the plan and confirm all of these:
 
 ---
 
+## What will be refused, and why
+
+`record_canvas` rejects the whole instalment and tells you which rule you broke. These are all of
+them:
+
+- **two buckets share an id** — progress is tracked against ids, so a repeat loses history
+- **a bucket names a theme you did not declare** — nothing can group it
+- **a bucket names a cell that is not on the grid** — nothing can count it
+- **a bucket is labelled rather than described** — a reader cannot tell what is being tested
+- **a bucket is written as a whole script** — that is the test, not the plan
+- **a bucket names a state axis you did not derive** — nothing can check the count
+- **a bucket expects something outside succeed, refuse, ask, escalate**
+- **a bucket names an overlay outside the five listed**
+- **an axis is a list of names rather than states** — the agent behaves the same for all of them
+- **a bucket holds more than one test without naming its axes** — the count cannot be checked
+- **a bucket holds more tests than its axes allow** — the extra tests do not exist
+- **the plan has nearly as many buckets as tests** — that is a list, not a plan
+
+Fix and record again. This loop is cheap. Anything left wrong here costs a whole test later.
+
 ## What you must not do
 
 - Do not write the tests themselves.
