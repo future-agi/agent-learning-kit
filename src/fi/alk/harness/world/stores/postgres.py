@@ -263,6 +263,12 @@ class PostgresStore(ContainerStore):
             if not tables:
                 return
             listed = ", ".join(f'"{table}"' for table in tables)
+            # One transaction for the emptying and the refilling together. On autocommit the
+            # truncate lands first, so anything that interrupts the inserts - a killed run, a
+            # crash - leaves the world half loaded, and the next restore fails on rows the
+            # truncate should have removed. Wrapped, an interrupted restore rolls back to the
+            # world it started from.
+            connection.execute("BEGIN")
             # One statement, so Postgres resolves the dependency order between them itself.
             connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
 
@@ -289,6 +295,10 @@ class PostgresStore(ContainerStore):
                                 for row in rows
                             ],
                         )
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
             finally:
                 connection.execute("SET session_replication_role = DEFAULT")
 
