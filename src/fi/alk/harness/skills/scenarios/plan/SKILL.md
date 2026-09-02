@@ -45,7 +45,7 @@ it. Each bucket carries:
     theme    which group it belongs to
     cell     a grid coordinate, from show_grid
     angle    what makes this worth testing, in a few words
-    facet    the structural thing under test
+    why_hard    the structural thing under test
     want     how many scenarios go in it
     differs  what changes between them, once it is more than one
 
@@ -72,18 +72,18 @@ taking the decision away from the only step that can check it.
 
 **You own coverage and spread. The writer owns the particulars.** Do not do its job.
 
-## `facet` is what makes this work
+## `why_hard` is what makes this work
 
-`facet` names the structural thing under test: `rule:surge-disclosure`, `precondition:book_ride`,
+`why_hard` names the structural thing under test: `rule:surge-disclosure`, `precondition:book_ride`,
 `data:expired-card`, `place:ambiguous-city`, `state:suspended`.
 
-Two angles claiming one facet on one cell are probably one angle written twice, and at angle
+Two angles claiming one why_hard on one cell are probably one angle written twice, and at angle
 length that is the only reliable way to notice: comparing words fails when a line is three words
 long, because one differing word swings the comparison.
 
 When a collision is reported, look rather than obey. Three different *input forms* for an address
 legitimately share a cell, and four different *reasons* for going out of scope legitimately share
-one. Name a sub-facet and move on. Sometimes it really is a duplicate.
+one. Name a sub-why_hard and move on. Sometimes it really is a duplicate.
 
 ## What `want` means, exactly
 
@@ -124,7 +124,7 @@ Nine riders are nine names, not nine levels. But a rider whose only card is expi
 no card at all, and a rider with two cards are three levels of one axis, because the agent has to
 do something different for each.
 
-**3. Name the facets on each cell.** A facet is the structural thing under test, and there are
+**3. Name the why_hard values on each cell.** A why_hard is the structural thing under test, and there are
 five kinds, which between them cover how an agent fails:
 
     rule:X          a constraint it must obey
@@ -133,7 +133,7 @@ five kinds, which between them cover how an agent fails:
     ambiguity:X     the request has two readings
     boundary:X      a value at a limit
 
-**4. A bucket is one cell and one facet.** That is the whole definition.
+**4. A bucket is one cell and one why_hard.** That is the whole definition.
 
 Also say what the agent **should do** there, which is a different question from what structure is
 under test:
@@ -154,8 +154,8 @@ Keep these two apart. An injection attempt **expects a refusal and carries an in
 it is not a choice between "adversarial" and "a path bound to fail". Mixing cause and outcome into
 one label is what makes two planners label the same bucket differently.
 
-**5. Derive `want` from the live axes.** For each bucket, which axes actually move the answer for
-*that facet*? Those are its live ones; name them in `live`. `want` is how many of their
+**5. Derive `want` from the varies_by axes.** For each bucket, which axes actually move the answer for
+*that why_hard*? Those are its varies_by ones; name them in `varies_by`. `want` is how many of their
 combinations survive masking.
 
 **6. Mask, do not multiply.** Drop combinations that cannot happen or that collapse to the same

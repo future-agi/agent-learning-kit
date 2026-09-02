@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # Two angles sharing this much wording are the same angle twice. A backstop only: at angle length
-# one differing word swings the ratio hard, so ``facet`` is what dedup really keys on.
+# one differing word swings the ratio hard, so ``why_hard`` is what dedup really keys on.
 TOO_ALIKE = 0.7
 
 # Below this there is nothing to plan; the writing stage handles small suites directly.
@@ -146,11 +146,11 @@ class Angle:
     # The structural thing under test: `rule:surge-disclosure`, `precondition:book_ride`,
     # `data:expired-card`. Declared rather than inferred, which is what makes dedup work at a
     # length where comparing words does not.
-    facet: str = ""
+    why_hard: str = ""
     want: int = 1
     # Which state axes actually move the answer for this bucket. `want` is the number of their
     # combinations that survive masking, so a count stops being a guess and becomes a derivation.
-    live: list[str] = field(default_factory=list)
+    varies_by: list[str] = field(default_factory=list)
     # One of EXPECTS: what the agent should do here.
     expects: str = ""
     # One of OVERLAYS, or empty. What is deliberately making it hard, if anything.
@@ -171,8 +171,8 @@ class Angle:
 
     def line(self) -> str:
         held = f"{self.id} | {self.cell} | {self.angle} | x{self.want}"
-        if self.facet:
-            held += f" | {self.facet}"
+        if self.why_hard:
+            held += f" | {self.why_hard}"
         if self.done or self.state != "open":
             held += f" | {self.state} {self.done}/{self.want}"
         return held
@@ -251,7 +251,7 @@ class Canvas:
 
         known = {one.name for one in self.axes}
         stray = sorted(
-            {name for one in self.angles for name in one.live if name not in known}
+            {name for one in self.angles for name in one.varies_by if name not in known}
         )
         if stray:
             found.append(
@@ -284,7 +284,7 @@ class Canvas:
         unjustified = [
             one.id
             for one in self.angles
-            if one.want > 1 and not one.live and len(_words(one.differs)) < 2
+            if one.want > 1 and not one.varies_by and len(_words(one.differs)) < 2
         ]
         if unjustified:
             found.append(
@@ -317,7 +317,7 @@ class Canvas:
         return found
 
     def collisions(self) -> list[tuple[str, str, str]]:
-        """Angles that may be one angle twice: same facet on one cell, or near-identical wording.
+        """Angles that may be one angle twice: same why_hard on one cell, or near-identical wording.
 
         Reported, never refused. The first real canvas produced seven of these and six were
         legitimate: three different input *forms* for one address, four different reasons for
@@ -327,11 +327,11 @@ class Canvas:
         found: list[tuple[str, str, str]] = []
         seen: dict[tuple[str, str], str] = {}
         for one in self.angles:
-            if not one.facet:
+            if not one.why_hard:
                 continue
-            key = (one.cell, one.facet)
+            key = (one.cell, one.why_hard)
             if key in seen:
-                found.append((seen[key], one.id, f"same facet {one.facet!r} on {one.cell}"))
+                found.append((seen[key], one.id, f"same why_hard {one.why_hard!r} on {one.cell}"))
             else:
                 seen[key] = one.id
 
@@ -486,12 +486,12 @@ class Canvas:
 
         kinds: dict[str, int] = {}
         for one in self.angles:
-            kind = (one.facet.split(":", 1)[0] or "unnamed") if one.facet else "unnamed"
+            kind = (one.why_hard.split(":", 1)[0] or "unnamed") if one.why_hard else "unnamed"
             kinds[kind] = kinds.get(kind, 0) + 1
 
         tools = tools or []
         empty = sorted(cells - self.covered)
-        tested = " ".join(one.facet.lower() + " " + one.angle.lower() for one in self.angles)
+        tested = " ".join(one.why_hard.lower() + " " + one.angle.lower() for one in self.angles)
         # A rule with nothing resembling it anywhere in the plan is the gap worth shouting about:
         # these are the things the agent is forbidden to get wrong.
         untested = [
@@ -503,7 +503,7 @@ class Canvas:
         lines = [
             f"{len(cells)} cells, {len(self.covered)} with a bucket on them, "
             f"{len(empty)} with nothing.",
-            f"{len(self.angles)} buckets over {len(kinds)} facet kinds: "
+            f"{len(self.angles)} buckets over {len(kinds)} why_hard kinds: "
             + ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items(), key=lambda k: -k[1])),
             f"{len(self.axes)} state axes derived from the data.",
             f"{self.planned} scenarios planned: "
@@ -525,7 +525,7 @@ class Canvas:
             # Only the tools that refuse until something else has happened. Each one is a real
             # test - what does the agent do when somebody asks for it too early - and the grid
             # cannot show the hole, because a cell is an object and says nothing about order.
-            named = " ".join(one.angle.lower() + " " + one.facet.lower() for one in self.angles)
+            named = " ".join(one.angle.lower() + " " + one.why_hard.lower() for one in self.angles)
             missed = [one for one in tools if one.lower() not in named]
             lines.append(
                 f"  {len(tools) - len(missed)} of {len(tools)} tools with preconditions have a "
@@ -583,9 +583,9 @@ class Canvas:
                             "theme": one.theme,
                             "cell": one.cell,
                             "angle": one.angle,
-                            "facet": one.facet,
+                            "why_hard": one.why_hard,
                             "want": one.want,
-                            "live": one.live,
+                            "varies_by": one.varies_by,
                             "expects": one.expects,
                             "overlay": one.overlay,
                             "differs": one.differs,
@@ -640,9 +640,9 @@ def load(destination: Path) -> Canvas:
                     theme=str(one.get("theme") or ""),
                     cell=str(one.get("cell") or ""),
                     angle=str(one.get("angle") or ""),
-                    facet=str(one.get("facet") or ""),
+                    why_hard=str(one.get("why_hard") or ""),
                     want=max(1, int(one.get("want") or 1)),
-                    live=list(one.get("live") or []),
+                    varies_by=list(one.get("varies_by") or []),
                     expects=str(one.get("expects") or ""),
                     overlay=str(one.get("overlay") or ""),
                     differs=str(one.get("differs") or ""),

@@ -29,14 +29,14 @@ def where(tmp_path):
 
 
 def canvas(*rows, target: int = 0, themes=("TH01",)) -> Canvas:
-    """Rows are (id, theme, cell, angle) with optional facet and want."""
+    """Rows are (id, theme, cell, angle) with optional why_hard and want."""
     return Canvas(
         target=target,
         themes=[Theme(id=one, name=one) for one in themes],
         angles=[
             Angle(
                 id=row[0], theme=row[1], cell=row[2], angle=row[3],
-                facet=row[4] if len(row) > 4 else "",
+                why_hard=row[4] if len(row) > 4 else "",
                 want=row[5] if len(row) > 5 else 1,
             )
             for row in rows
@@ -93,7 +93,7 @@ class TestCollisionsAreAPromptNotAVerdict:
             ("A1", "TH01", "retrieve-ride", "booking missing", "data:missing"),
             ("A2", "TH01", "retrieve-ride", "nothing found for the phone", "data:missing"),
         )
-        assert any("same facet" in why for _, _, why in held.collisions())
+        assert any("same why_hard" in why for _, _, why in held.collisions())
 
     def test_the_same_facet_on_different_cells_is_not_flagged(self):
         """Three input forms for one address are three angles, not one repeated."""
@@ -269,13 +269,13 @@ class TestACountIsDerivedFromTheWorld:
     def test_naming_the_axes_a_bucket_crosses_justifies_its_count(self):
         held = canvas(("A1", "TH01", "retrieve-ride", "payment state at selection", "", 9))
         held.axes = self.axes()
-        held.angles[0].live = ["s.payment", "s.market"]
+        held.angles[0].varies_by = ["s.payment", "s.market"]
         assert held.problems({"retrieve-ride"}) == []
 
     def test_an_axis_nobody_derived_is_refused(self):
         held = canvas(("A1", "TH01", "retrieve-ride", "payment state", "", 9))
         held.axes = self.axes()
-        held.angles[0].live = ["s.invented"]
+        held.angles[0].varies_by = ["s.invented"]
         assert "never derived" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_a_count_with_neither_axes_nor_a_reason_is_still_refused(self):

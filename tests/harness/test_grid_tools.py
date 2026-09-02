@@ -403,10 +403,10 @@ class TestTheCanvasLoopEndToEnd:
                 "themes": [{"id": "TH01", "name": "Spine"}, {"id": "TH02", "name": "Rules"}],
                 "angles": [
                     {"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                     "angle": "booking cannot be found", "facet": "data:missing", "want": 3,
+                     "angle": "booking cannot be found", "why_hard": "data:missing", "want": 3,
                      "differs": "whether the booking exists at all or belongs to another rider"},
                     {"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                     "angle": "fee disclosed before consent", "facet": "rule:fee", "want": 3,
+                     "angle": "fee disclosed before consent", "why_hard": "rule:fee", "want": 3,
                      "differs": "the fee amount, and whether the caller agrees"},
                 ],
             },
@@ -491,7 +491,7 @@ class TestTheCanvasLoopEndToEnd:
                 "returns": [{"angle_id": "TH01-01", "wrote": 0, "short": "found more here"}],
                 "found": [
                     {"theme": "TH01", "cell": cells[0], "angle": "surge crosses mid-quote",
-                     "facet": "rule:surge", "want": 2}
+                     "why_hard": "rule:surge", "want": 2}
                 ],
             },
         )
@@ -513,7 +513,7 @@ class TestTheCanvasLoopEndToEnd:
                 ],
                 "found": [
                     {"theme": "TH02", "cell": cells[1], "angle": "driver already arrived",
-                     "facet": "state:arrived", "want": 3}
+                     "why_hard": "state:arrived", "want": 3}
                 ],
             },
         )
@@ -574,13 +574,13 @@ class TestTheCanvasLoopEndToEnd:
             "axes": [{"name": "s.market", "levels": ["a", "b"]}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
                         "angle": "one thing worth testing", "want": 2,
-                        "live": ["s.market"]}],
+                        "varies_by": ["s.market"]}],
         })
         said = call(server, "record_canvas", {
             "themes": [{"id": "TH02", "name": "Second"}],
             "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
                         "angle": "another thing worth testing", "want": 3,
-                        "live": ["s.market"]}],
+                        "varies_by": ["s.market"]}],
         })
         assert "2 buckets" in said
         assert {one.id for one in state.canvas.angles} == {"TH01-01", "TH02-01"}
@@ -613,7 +613,7 @@ class TestTheCanvasLoopEndToEnd:
             "themes": [{"id": "TH01", "name": "First"}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
                         "angle": "one thing worth testing", "want": 3,
-                        "live": ["s.market"]}],
+                        "varies_by": ["s.market"]}],
         })
         state.canvas.named("TH01-01").done = 2
         call(server, "record_canvas", {
