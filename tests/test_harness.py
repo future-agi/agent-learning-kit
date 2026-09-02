@@ -7067,3 +7067,38 @@ def test_platform_call_start_uses_existing_ongoing_status_flow():
     api = Recording()
     platform.mark_ongoing(platform.Reported(), "ce-started", platform=api)
     assert api.calls == ["ce-started"]
+
+
+def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
+    """The journal has to fire on the path that actually runs.
+
+    Its first home was the legacy fan-out, which the native worker path never calls, so a run
+    delegating to `scenario_writer` held its whole suite in memory and wrote nothing until the
+    final save. A writer sharing the destination has `persist=False`, and that is exactly the
+    case that needs the journal.
+    """
+    from fi.alk.harness.scenario_tools import JOURNAL, accept_scenario, journalled
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+
+    assert not said.get("is_error"), said
+    # No folder, because writing the suite here would delete a sibling writer's work.
+    assert not (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
+    # But it is on disk all the same, and readable back.
+    assert (root / JOURNAL).exists()
+    assert [one.name for one in journalled(root)] == ["adds-a-big-mac"]
+
+
+def test_a_writer_that_can_persist_does_not_also_journal(tmp_path):
+    """The folder is the truth once it exists; a journal beside it would be re-imported next run."""
+    from fi.alk.harness.scenario_tools import JOURNAL, accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[], persist=True)
+
+    assert (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
+    assert not (root / JOURNAL).exists()
