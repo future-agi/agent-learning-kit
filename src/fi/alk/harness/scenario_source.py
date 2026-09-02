@@ -368,11 +368,13 @@ class BundleScenarioSource:
         # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
         # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
         # terminal (or the fenced exit) -- nothing new to catch here.
+        contract = bundle_contract(bundle_dir)
         return await register_with_platform(
             scenarios_client,
             scenarios,
             run_name=job.run_id,
-            description=str(bundle_contract(bundle_dir).get("system_prompt_excerpt") or ""),
+            description=str(contract.get("system_prompt_excerpt") or ""),
+            modality=str(contract.get("modality") or ""),
         )
 
 
@@ -408,7 +410,10 @@ def bundle_contract(bundle_dir: Path) -> dict[str, Any]:
 
 
 def _provision_payload(
-    run_name: str, scenarios: Sequence[_CompiledScenario], description: str = ""
+    run_name: str,
+    scenarios: Sequence[_CompiledScenario],
+    description: str = "",
+    modality: str = "",
 ) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py:168-190): `operation`/`name`/`personas` (with
@@ -428,6 +433,11 @@ def _provision_payload(
     # `call.agent_prompt`; omitted, every hosted call reports an empty prompt.
     if description:
         payload["description"] = description
+    # Modality decides which schema the finished call renders through, so a voice run left to
+    # default lands as text and its calls do not appear as calls at all. The platform accepts
+    # only text or voice here, while a conversational agent's contract calls itself chat.
+    if modality:
+        payload["modality"] = "voice" if modality == "voice" else "text"
     return payload
 
 
@@ -512,6 +522,7 @@ async def register_with_platform(
     *,
     run_name: str,
     description: str = "",
+    modality: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -526,7 +537,8 @@ async def register_with_platform(
     failure) -> only then build and return the new scenario list with `scenario_id` filled in.
     """
     provision_result = await asyncio.to_thread(
-        scenarios_client.provision, _provision_payload(run_name, scenarios, description)
+        scenarios_client.provision,
+        _provision_payload(run_name, scenarios, description, modality),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:
