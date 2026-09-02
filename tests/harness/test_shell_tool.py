@@ -51,3 +51,12 @@ def test_output_is_clipped_rather_than_flooding_the_stage(tmp_path: Path):
     text = said["content"][0]["text"]
     assert len(text) <= MAX_OUTPUT_CHARS + 200
     assert "characters omitted" in text
+
+
+def test_python_resolves_to_the_interpreter_the_harness_runs_under(tmp_path: Path):
+    """Observed live: the stage ran `python -c "import psycopg"` to inspect the seeded world and
+    lost the turn to a missing module that was installed in the harness's own environment."""
+    import sys
+
+    said = run(tmp_path, "python -c 'import sys; print(sys.executable)'")["content"][0]["text"]
+    assert said.strip() == sys.executable

@@ -17,6 +17,8 @@ pass by changing the agent rather than by writing a better scenario.
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from pathlib import Path
 
 from .base import ToolSpec
@@ -43,9 +45,26 @@ def _clipped(text: str) -> str:
     return f"{text[:half]}\n\n... {dropped} characters omitted ...\n\n{text[-half:]}"
 
 
+def _environment() -> dict[str, str]:
+    """The command's environment, with this process's own interpreter first on the path.
+
+    A stage reaching for the shell in this harness almost always wants to look at the world, and
+    the world's libraries are installed where the harness runs, not wherever a bare ``python``
+    resolves to. Observed on a live run: the stage wrote ``python -c "import psycopg"`` to inspect
+    the seeded database and lost the turn to a missing module that was installed all along.
+    """
+    env = dict(os.environ)
+    here = str(Path(sys.executable).parent)
+    existing = env.get("PATH", "")
+    if here not in existing.split(os.pathsep):
+        env["PATH"] = f"{here}{os.pathsep}{existing}" if existing else here
+    return env
+
+
 def shell_tools(cwd: str | None) -> list[ToolSpec]:
     """A single ``Bash`` tool, rooted at the session's working directory."""
     base = Path(cwd) if cwd else Path.cwd()
+    env = _environment()
 
     async def run(args: dict) -> dict:
         command = str(args.get("command") or "").strip()
@@ -55,6 +74,7 @@ def shell_tools(cwd: str | None) -> list[ToolSpec]:
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(base),
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 # No stdin. A command that asks a question should fail saying so, rather than
