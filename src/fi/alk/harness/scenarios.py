@@ -30,7 +30,7 @@ from .config import (
     writer_effort,
 )
 from .blueprint import WORTH_PLANNING
-from .blueprint import load as load_blueprint
+from .blueprint import load as load_canvas
 from .grid_tools import GRID_SERVER, Coverage, grid_tools
 from .sample import Pick, coverage, plan as plan_picks
 from .catalogue import load_catalogue
@@ -123,13 +123,13 @@ def open_stage(
         share=shared,
     )
     grid_server, held = grid_tools(contract, destination, wanted=wanted)
-    held.blueprint = load_blueprint(destination)
+    held.canvas = load_canvas(destination)
     # Large suites are planned before they are written. Written one at a time they converge:
     # each scenario is composed with the last few in view, and by fifty the suite has settled
     # into one shape without anyone having done anything wrong.
     # Against the count asked for here, not the blueprint's own: an empty blueprint records a
     # target of zero, so asking it for its shortfall says nothing is missing.
-    planning = wanted >= WORTH_PLANNING and held.blueprint.scenarios < wanted
+    planning = wanted >= WORTH_PLANNING and held.canvas.planned < wanted
     spec = SessionSpec(
         # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(
@@ -148,11 +148,11 @@ def open_stage(
                 + ". Submitting one under an existing name replaces it."
             )
             + (
-                f"\n\n{held.blueprint.scenarios} scenarios are already planned as "
-                f"{len(held.blueprint.entries)} angles in "
-                "blueprint.json. Brief writers from it rather than planning again; "
-                "show_blueprint says which are still to write."
-                if held.blueprint.entries and not planning
+                f"\n\n{held.canvas.planned} scenarios are already planned as "
+                f"{len(held.canvas.angles)} angles. Work from the canvas rather than planning "
+                "again: show_canvas for what is left, claim_slice for the next writer's work, "
+                "fold_return when it comes back."
+                if held.canvas.angles and not planning
                 else ""
             )
         ),

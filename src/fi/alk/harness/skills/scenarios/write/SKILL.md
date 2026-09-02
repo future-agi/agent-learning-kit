@@ -473,11 +473,23 @@ complete.
 Delegating is not optional above a handful. Writing thirty scenarios yourself in one session is
 how a run stalls: the response grows until it stops coming back. Hand out slices instead.
 
-**If the suite was planned, brief from the plan.** `deal_blueprint` cuts it into one brief per
-writer, dealt so no writer is handed a single cell. Each line already says what the scenario is,
-so the writer's job is to make it real rather than to invent it, and two writers cannot converge
-on the same situation because no two lines are the same situation. Add the callers to each brief
-yourself; everything below still applies.
+**If the suite was planned, work from the canvas, one writer at a time.**
+
+`claim_slice` gives you the next writer's angles, ranked so an untouched theme outranks a nearly
+finished one, and never two angles from one cell. Brief one writer on exactly those, adding the
+callers yourself. When it returns, `fold_return` with one entry per angle: its own count and one
+sentence on what it actually covered.
+
+That sentence is what the next writer on the same theme reads, so it should say what was covered
+and what was not, not that the work is done. The count is recorded but not believed: what counts
+as written is read off disk, and a disagreement between the two is a bug worth looking at.
+
+An angle that comes back part-filled reopens and is usually given to somebody else next time,
+which is what breaks a deadlock: the second writer is not carrying the first one's assumptions.
+An angle nobody can fill after a few attempts is marked blocked, and that is how the suite's real
+ceiling gets measured instead of guessed.
+
+`show_canvas` shows the themes and how far each has got; pass a theme to see its angles.
 
 A good slice brief names:
 

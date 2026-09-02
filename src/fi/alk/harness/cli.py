@@ -393,6 +393,29 @@ async def _scenarios(args: argparse.Namespace) -> int:
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
     )
+    if getattr(args, "plan_only", False):
+        # The plan is worth several iterations of its own, and each full run costs the whole
+        # suite to find out whether the plan was any good. Stopping here makes that loop cheap.
+        from .blueprint import load as load_blueprint
+
+        await _converse(
+            stage,
+            f"Plan {wanted} scenarios and record the blueprint. Do not write any scenarios, "
+            "and do not brief any writers: stop once the blueprint is recorded.",
+            interactive=args.interactive,
+            until=lambda: bool(load_blueprint(destination).entries),
+            nudge="No blueprint was recorded. Call record_blueprint.",
+        )
+        held = load_blueprint(destination)
+        if not held.entries:
+            print("\nNo blueprint was recorded.", file=sys.stderr)
+            return 1
+        print(
+            f"\nblueprint: {held.scenarios} scenarios as {len(held.entries)} angles across "
+            f"{len(held.covered)} cells -> {destination / 'blueprint.json'}"
+        )
+        return 0
+
     await _converse(
         stage,
         scenario_opening(contract, wanted, existing) + _guidance(args),
@@ -1195,7 +1218,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="run unattended instead of staying open for corrections",
     )
-    scenarios.set_defaults(run=_scenarios, interactive=True)
+    scenarios.add_argument(
+        "--plan-only",
+        dest="plan_only",
+        action="store_true",
+        help="record the blueprint and stop, so the plan can be read before it is written",
+    )
+    scenarios.set_defaults(run=_scenarios, interactive=True, plan_only=False)
 
     live = sub.add_parser(
         "live", help="run the scenarios against the real agent, as a conversation"

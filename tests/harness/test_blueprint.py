@@ -1,23 +1,23 @@
-"""The plan for a suite, and the one thing it exists to catch.
+"""The canvas: what a suite intends to cover, and what has been written against it.
 
-A blueprint is cheap to change and a suite is not: every duplicate that survives planning costs
-a proof, a folder and a slot that a different scenario should have had. So the cases worth
-pinning are the ones where a plan looks fine and is not: the same situation reworded, a plan that
-quietly names a cell nobody has, and a cut that hands one writer the whole of one cell.
+A plan is cheap to change and a suite is not, so the cases worth pinning are the ones where a plan
+looks fine and is not, and the ones where the loop could lose track of what is left. The failure
+this whole structure exists to prevent is a run that reports success having written almost nothing.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.blueprint import Blueprint, Entry, load
+from fi.alk.harness.blueprint import MOST_ATTEMPTS, Angle, Canvas, Theme, load
 from fi.alk.harness.contract import AgentContract, ToolSpec
 
 
 @pytest.fixture()
 def contract():
     return AgentContract(
-        agent="ride", modality="voice",
+        agent="ride",
+        modality="voice",
         tools=[ToolSpec(name="get_rides"), ToolSpec(name="cancel_ride")],
         data_schema={"rides": {}, "users": {}, "fares": {}},
     )
@@ -28,287 +28,176 @@ def where(tmp_path):
     return tmp_path
 
 
-def plan(*rows, wanted: int = 0) -> Blueprint:
-    """Rows are (cell, angle) or (cell, angle, count)."""
-    return Blueprint(
-        wanted=wanted,
-        entries=[Entry(cell=row[0], angle=row[1], count=row[2] if len(row) > 2 else 1)
-                 for row in rows],
+def canvas(*rows, target: int = 0, themes=("TH01",)) -> Canvas:
+    """Rows are (id, theme, cell, angle) with optional facet and want."""
+    return Canvas(
+        target=target,
+        themes=[Theme(id=one, name=one) for one in themes],
+        angles=[
+            Angle(
+                id=row[0], theme=row[1], cell=row[2], angle=row[3],
+                facet=row[4] if len(row) > 4 else "",
+                want=row[5] if len(row) > 5 else 1,
+            )
+            for row in rows
+        ],
     )
-
-
-class TestSayingTheSameThingTwice:
-    def test_a_reworded_angle_is_caught(self):
-        held = plan(
-            ("retrieve-ride", "surge boundary confusion"),
-            ("retrieve-ride", "confusion at the surge boundary"),
-        )
-        assert len(held.duplicates()) == 1
-
-    def test_genuinely_different_angles_in_one_cell_are_left_alone(self):
-        held = plan(
-            ("retrieve-ride", "booking cannot be found"),
-            ("retrieve-ride", "surge boundary fare breakdown"),
-        )
-        assert held.duplicates() == []
-
-    def test_two_cells_may_share_a_situation(self):
-        """Retrieving and cancelling both start from a caller who cannot find their booking.
-
-        Comparing across cells would call that a duplicate and push the plan into making cells
-        artificially unlike each other, which is not what variety means here.
-        """
-        held = plan(
-            ("retrieve-ride", "booking cannot be found"),
-            ("cancel-ride", "booking cannot be found"),
-        )
-        assert held.duplicates() == []
-
-    def test_padding_an_angle_does_not_make_it_a_new_one(self):
-        """Scored against the smaller line, so restating it at greater length still collides.
-
-        Worth knowing the limit this exposes: an angle is a few words, so one word differing
-        swings the ratio hard. "booking cannot be found" and "cannot find the booking" score 0.5
-        and pass, where the same pair written as full situations would have been caught. Shorter
-        plans are cheaper and their duplicate check is weaker; that trade was made deliberately.
-        """
-        held = plan(
-            ("cancel-ride", "card declined"),
-            ("cancel-ride", "the card was unfortunately declined again"),
-        )
-        assert held.duplicates()
 
 
 class TestWhatAPlanMustSayBeforeAnyoneWritesFromIt:
     def test_a_cell_nobody_has_is_reported(self):
-        held = plan(("invent-thing", "something the agent cannot do"))
-        said = " ".join(held.problems({"retrieve-ride"}))
-        assert "not on the grid" in said
+        held = canvas(("A1", "TH01", "invent-thing", "something impossible"))
+        assert "not on the grid" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_an_angle_too_thin_to_write_from_is_reported(self):
-        held = plan(("retrieve-ride", "ride"))
+        held = canvas(("A1", "TH01", "retrieve-ride", "ride"))
         assert "say too little" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_an_angle_written_as_a_script_is_reported(self):
         """The failure that made a plan for a thousand impossible to emit at all."""
-        held = plan((
-            "retrieve-ride",
+        held = canvas((
+            "A1", "TH01", "retrieve-ride",
             "caller was charged 2.3x for a trip that started one minute before the surge "
             "window closed and the receipt shows the higher rate with no explanation",
         ))
         assert "scripts rather than angles" in " ".join(held.problems({"retrieve-ride"}))
 
-    def test_an_empty_plan_is_a_problem_not_a_crash(self):
-        assert Blueprint().problems({"retrieve-ride"}) == ["the blueprint is empty"]
+    def test_a_theme_nobody_declared_is_reported(self):
+        held = canvas(("A1", "TH99", "retrieve-ride", "booking cannot be found"))
+        assert "theme that is not declared" in " ".join(held.problems({"retrieve-ride"}))
 
-    def test_one_duplicate_pair_reads_as_one(self):
-        held = plan(
-            ("retrieve-ride", "surge boundary confusion"),
-            ("retrieve-ride", "confusion at the surge boundary"),
+    def test_a_repeated_id_is_reported(self):
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "booking cannot be found"),
+            ("A1", "TH01", "cancel-ride", "fee disclosed first"),
         )
-        assert "1 pair describe" in " ".join(held.problems({"retrieve-ride"}))
+        assert "appear twice" in " ".join(held.problems({"retrieve-ride", "cancel-ride"}))
 
-    def test_a_count_is_what_says_how_many_scenarios(self):
-        """The point of the redesign: lines and scenarios are no longer the same number."""
-        held = plan(("retrieve-ride", "booking cannot be found", 6),
-                    ("cancel-ride", "fee disclosed before consent", 4), wanted=10)
-        assert len(held.entries) == 2
-        assert held.scenarios == 10
+    def test_counts_are_what_say_how_many_scenarios(self):
+        """Lines and scenarios are deliberately no longer the same number."""
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "booking cannot be found", "data:missing", 6),
+            ("A2", "TH01", "cancel-ride", "fee disclosed before consent", "rule:fee", 4),
+            target=10,
+        )
+        assert len(held.angles) == 2
+        assert held.planned == 10
         assert held.shortfall() == 0
 
 
-class TestCuttingItUp:
-    def test_a_writer_is_not_handed_one_whole_cell(self):
-        """Entries arrive grouped by cell, so a contiguous cut gives one writer one cell.
+class TestCollisionsAreAPromptNotAVerdict:
+    """Building the first real canvas produced seven; six were legitimate."""
 
-        That writer then has to invent the whole of that cell's variety alone, which is the
-        position the blueprint exists to remove.
-        """
-        held = plan(
-            *[("retrieve-ride", f"finding a booking case {i}") for i in range(4)],
-            *[("cancel-ride", f"calling off a trip case {i}") for i in range(4)],
+    def test_one_facet_twice_on_one_cell_is_flagged(self):
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "booking missing", "data:missing"),
+            ("A2", "TH01", "retrieve-ride", "nothing found for the phone", "data:missing"),
         )
-        cuts = held.slices(4)
-        assert all(len({one.cell for one in cut}) > 1 for cut in cuts), (
-            "at least one writer was handed a single cell"
+        assert any("same facet" in why for _, _, why in held.collisions())
+
+    def test_the_same_facet_on_different_cells_is_not_flagged(self):
+        """Three input forms for one address are three angles, not one repeated."""
+        held = canvas(
+            ("A1", "TH01", "retrieve-address", "given as a landmark", "input:form"),
+            ("A2", "TH01", "compare-address", "given as a street", "input:form"),
         )
+        assert held.collisions() == []
 
-    def test_every_entry_is_dealt_exactly_once(self):
-        held = plan(*[("retrieve-ride", f"booking case {i}") for i in range(7)])
-        dealt = [one.angle for cut in held.slices(3) for one in cut]
-        assert sorted(dealt) == sorted(one.angle for one in held.entries)
-
-
-class TestItSurvivesABadFile:
-    def test_a_missing_plan_reads_as_empty(self, tmp_path):
-        assert load(tmp_path).entries == []
-
-    def test_a_damaged_plan_reads_as_empty_rather_than_raising(self, tmp_path):
-        (tmp_path / "blueprint.json").write_text("{not json", encoding="utf-8")
-        assert load(tmp_path).entries == []
-
-    def test_a_plan_survives_the_round_trip(self, tmp_path):
-        held = plan(("retrieve-ride", "booking cannot be found"), wanted=1)
-        held.written(tmp_path)
-        back = load(tmp_path)
-        assert back.wanted == 1
-        assert [one.line() for one in back.entries] == [one.line() for one in held.entries]
-
-
-class TestTheStagePlansBeforeItWrites:
-    """A large suite gets the planning skill; a small one does not.
-
-    The threshold is not decoration. Below it a single session writes the whole suite in one
-    context and can see everything it has written, so a plan buys nothing and costs a stage.
-    """
-
-    def test_a_large_suite_is_told_to_plan_first(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
-        said = stage._spec.system_prompt
-        assert "Plan all 200 scenarios first" in said
-        assert "Plan the suite before writing it" in said
-
-    def test_a_small_suite_is_not(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
-        said = stage._spec.system_prompt
-        assert "Write 4 scenarios." in said
-        assert "Plan the suite before writing it" not in said
-
-    def test_an_existing_plan_is_used_rather_than_replanned(self, contract, where, monkeypatch):
-        """Reopening a planned suite must not plan it again on top of itself."""
-        from fi.alk.harness import scenarios
-        from fi.alk.harness.blueprint import Blueprint, Entry
-
-        Blueprint(
-            wanted=200,
-            entries=[Entry(cell="retrieve-ride", angle=f"booking case {i}", count=1)
-                     for i in range(200)],
-        ).written(where)
-
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
-        said = stage._spec.system_prompt
-        assert "angles in blueprint.json" in said
-        assert "Plan all 200 scenarios first" not in said
-
-
-class TestThinkingIsAKnobNotADecision:
-    """Off by default, and separately settable for the planner and its writers.
-
-    The stage used to refuse thinking outright because one provider stalled with it on. That is
-    a run-time choice, not a fact about the harness, and planning a suite is the work most worth
-    paying for it. Nothing here turns it on; it makes turning it on possible.
-    """
-
-    def test_the_stage_does_not_think_unless_asked(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-
-        monkeypatch.delenv("ALK_SCENARIO_THINKING", raising=False)
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
-        assert stage._spec.thinking is False
-
-    def test_the_stage_thinks_when_the_run_asks(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-
-        monkeypatch.setenv("ALK_SCENARIO_THINKING", "on")
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
-        assert stage._spec.thinking is True
-
-    def test_a_writer_takes_its_own_setting_not_the_stage_one(self, contract, where, monkeypatch):
-        """The planner and the writers are different jobs, so they get different dials."""
-        from fi.alk.harness import scenarios
-
-        monkeypatch.setenv("ALK_SCENARIO_THINKING", "on")
-        monkeypatch.setenv("ALK_WRITER_EFFORT", "low")
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
-        worker = next(iter(stage._spec.workers.values()))
-        assert stage._spec.thinking is True
-        assert worker.effort == "low"
-
-    def test_a_writer_left_alone_carries_no_setting(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-
-        monkeypatch.delenv("ALK_WRITER_EFFORT", raising=False)
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
-        assert next(iter(stage._spec.workers.values())).effort == ""
-
-
-class TestWritersRunToCompletionBeforeTheStageEnds:
-    """A stage that does not wait for its writers loses everything they were writing.
-
-    Left to the default these launch in the background: the call returns "you will be notified",
-    the parent takes its next turn, decides it is done and exits, and the writers die with the
-    process. One run dealt fifty scenarios across five writers and saved one, reporting success.
-    """
-
-    def test_every_worker_is_declared_blocking(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-        from fi.alk.harness.backends import claude as backend
-
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
-        assert stage._spec.workers, "expected writers above the delegation threshold"
-
-        built: list[dict] = []
-
-        def capture(**rest):
-            built.append(rest)
-            return object()
-
-        monkeypatch.setattr(backend, "AgentDefinition", capture)
-        monkeypatch.setattr(backend, "ClaudeSession", lambda *a, **k: object())
-        backend.ClaudeBackend().create(stage._spec)
-
-        assert built, "no worker was defined; this test would otherwise check nothing"
-        assert all(one.get("background") is False for one in built), (
-            "a writer was left to run in the background, so the stage can outlive it"
+    def test_collisions_never_refuse_the_plan(self):
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "booking missing", "data:missing"),
+            ("A2", "TH01", "retrieve-ride", "nothing found for phone", "data:missing"),
         )
+        assert held.problems({"retrieve-ride"}) == []
 
 
-class TestTheStageCarriesOnlyWhatItNeeds:
-    """Every turn resends the system prompt, so what is in it is paid for repeatedly.
-
-    Measured before this: 93KB, of which 7KB was the harness preamble included twice and 44KB was
-    the writing skill held by a stage that was still planning.
-    """
-
-    def test_the_preamble_appears_once(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-        from fi.alk.harness.config import HARNESS
-
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        opening = HARNESS.read_text(encoding="utf-8")[:120]
-        for wanted in (4, 50):
-            stage, _ = scenarios.open_stage(contract, out=where, wanted=wanted)
-            assert stage._spec.system_prompt.count(opening) == 1
-
-    def test_a_planning_stage_does_not_carry_the_writing_method(
-        self, contract, where, monkeypatch
-    ):
-        from fi.alk.harness import scenarios
-
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        planning, _ = scenarios.open_stage(contract, out=where, wanted=50)
-        writing, _ = scenarios.open_stage(contract, out=where, wanted=4)
-        assert "Plan the suite before writing it" in planning._spec.system_prompt
-        assert len(planning._spec.system_prompt) < len(writing._spec.system_prompt), (
-            "the planner is carrying at least as much as the writer, so nothing was saved"
+class TestPickingTheNextWriterSWork:
+    def test_no_writer_is_handed_two_angles_from_one_cell(self):
+        held = canvas(
+            *[(f"A{i}", "TH01", "retrieve-ride", f"case {i}", "", 4) for i in range(4)],
+            *[(f"B{i}", "TH01", "cancel-ride", f"case {i}", "", 4) for i in range(4)],
         )
+        taken = held.next_slice(8)
+        assert len({one.cell for one in taken}) == len(taken)
 
-    def test_the_writers_still_get_the_writing_method(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
+    def test_an_untouched_theme_outranks_a_nearly_finished_one(self):
+        """What stops a suite covering the booking path and never testing the rules."""
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "almost done here", "", 10),
+            ("B1", "TH02", "cancel-ride", "nobody has started this", "", 3),
+            themes=("TH01", "TH02"),
+        )
+        held.named("A1").done = 9
+        assert held.next_slice(4)[0].id == "B1"
 
-        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
-        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
-        worker = next(iter(stage._spec.workers.values()))
-        assert "submit_scenario" in worker.instructions
+    def test_a_claimed_angle_is_not_dealt_again(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 4))
+        held.claim(held.next_slice(4), "w1")
+        assert held.next_slice(4) == []
+
+    def test_a_writer_that_never_returns_does_not_park_its_angles(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 4))
+        held.claim(held.next_slice(4), "w1")
+        assert held.reclaim() == 1
+        assert [one.id for one in held.next_slice(4)] == ["A1"]
+
+
+class TestFoldingAWriterSReturn:
+    def test_what_counts_as_written_comes_from_the_caller_not_the_writer(self):
+        """A stage once reported success having saved one scenario of fifty."""
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        held.claim(held.next_slice(5), "w1")
+        held.fold("A1", done=2, short="covered two")
+        assert held.named("A1").done == 2
+        assert held.written == 2
+
+    def test_a_partly_filled_angle_reopens_for_somebody_else(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        held.claim(held.next_slice(5), "w1")
+        assert held.fold("A1", done=2) == "open"
+
+    def test_a_filled_angle_is_done(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 2))
+        held.claim(held.next_slice(2), "w1")
+        assert held.fold("A1", done=2) == "done"
+
+    def test_an_angle_nobody_can_fill_becomes_evidence_of_the_ceiling(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        for _ in range(MOST_ATTEMPTS):
+            held.claim([held.named("A1")], "w")
+            held.fold("A1", done=1)
+        assert held.named("A1").state == "blocked"
+        assert "could not be filled" in held.reached()
+
+    def test_a_writer_saying_it_cannot_be_done_is_taken_at_its_word(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        held.claim([held.named("A1")], "w1")
+        assert held.fold("A1", done=0, blocked_reason="no second distinct case exists") == "blocked"
+
+    def test_the_summaries_are_kept_for_whoever_reads_it_next(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
+        held.fold("A1", done=1, short="covered the refusal only")
+        assert held.named("A1").notes == ["covered the refusal only"]
+
+    def test_a_finished_suite_claims_no_ceiling(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 2))
+        held.fold("A1", done=2)
+        assert held.reached() == ""
+
+
+class TestItSurvivesDiskAndReplanning:
+    def test_a_missing_canvas_reads_as_empty(self, where):
+        assert load(where).angles == []
+
+    def test_a_damaged_canvas_reads_as_empty_rather_than_raising(self, where):
+        (where / "blueprint.json").write_text("{not json", encoding="utf-8")
+        assert load(where).angles == []
+
+    def test_progress_survives_the_round_trip(self, where):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "data:missing", 5), target=5)
+        held.fold("A1", done=3, short="three of five")
+        held.written_to(where)
+        back = load(where)
+        assert back.written == 3
+        assert back.named("A1").notes == ["three of five"]
+        assert back.target == 5

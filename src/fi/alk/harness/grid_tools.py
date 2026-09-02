@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from .axes import AxisSet, axes_for
-from .blueprint import Blueprint, Entry
-from .blueprint import load as load_blueprint
+from .blueprint import SLICE_SCENARIOS, Angle, Canvas, Theme
+from .blueprint import load as load_canvas
 from .backends import ToolServer, tool, tool_server
 from .contract import AgentContract
 from .diversity import measure
@@ -55,7 +55,7 @@ class Coverage:
         self.axes = axes or axes_for(contract.modality)
         self.grid: Grid = derive(contract, self.axes)
         self.corrections: list[str] = []
-        self.blueprint: Blueprint = Blueprint()
+        self.canvas: Canvas = Canvas()
 
     def rebuild(self, objects: list[str]) -> None:
         """Re-derive against an object list the model has corrected."""
@@ -119,169 +119,281 @@ def grid_tools(
         )
 
     @tool(
-        "record_blueprint",
-        "Write down what this suite is going to cover, before any of it is written. A line is a "
-        "grid cell, an angle on it in a few words, and how many scenarios to write from that "
-        "angle.\n\n"
-        "An angle says what makes a case worth testing, never how it goes. \"surge boundary "
-        "confusion\" is an angle. \"charged 2.3x, receipt shows the higher rate, agent explains "
-        "the window closed\" is the scenario with its code removed, and writing that here is "
-        "what makes a plan for a thousand impossible: at that length a thousand lines is 57k "
-        "tokens to emit in one go. At angle length one line carries several scenarios and the "
-        "whole plan is a few thousand tokens.\n\n"
-        "You own coverage and spread. Whoever writes the scenarios owns the particulars, and "
-        "decides them with the agent's source open, which is the right place to decide them.\n\n"
-        "This exists because neither of the other two ways works at size. Asking for a thousand "
-        "finished scenarios in one go does not fit. Writing them one at a time makes each one "
-        "in the shadow of the last few, and the suite drifts toward whatever the opening ones "
-        "were. A thousand one-line intentions do fit, so you can see the whole suite at once "
-        "and tell whether it is actually varied while it is still cheap to change.\n\n"
-        "The grid gives you the skeleton and stops there. A thousand scenarios over forty cells "
-        "is twenty-five per cell, and the coordinates of those twenty-five are identical: what "
-        "separates them is the situation, and that is yours to invent. Do not reach for a "
-        "different persona to tell the same story twice; that is the same test.\n\n"
-        "What comes back names the problems rather than fixing them: repeated names, cells that "
-        "do not exist, situations too thin to write from, and pairs that say the same thing in "
-        "different words. Call it again with the plan corrected.",
+        "record_canvas",
+        "Write down what this suite will cover, before any of it is written. Themes group the "
+        "work; an angle is one thing worth testing on one grid cell, in a few words, with how "
+        "many variants exist where the correct answer genuinely differs.\n\n"
+        "An angle says what is worth testing, never how it goes. 'surge boundary confusion' "
+        "is an angle. 'charged 2.3x, receipt shows the higher rate, agent explains the window "
+        "closed' is the scenario with its code removed: at that length a plan for a thousand is "
+        "228KB and 57k tokens to emit in one response, which cannot be done.\n\n"
+        "Give each angle a `facet`: the structural thing under test, like `rule:surge-disclosure`, "
+        "`precondition:book_ride` or `data:expired-card`. Two angles claiming one facet on one "
+        "cell are probably one angle twice, and this is the only reliable way to notice at angle "
+        "length.\n\n"
+        "You own coverage and spread. Whoever writes the scenarios owns the particulars, decided "
+        "with the agent's source open. Recording again replaces the plan but keeps the progress "
+        "of any angle whose id you reuse.",
         schema(
             {
-                "entries": {
+                "themes": {
                     "type": "array",
-                    "description": "One per angle, in any order.",
+                    "description": "Groups of angles. The unit this is read and dispatched in.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "cell": {"type": "string"},
-                            "angle": {
-                                "type": "string",
-                                "description": "A few words on what makes this worth testing.",
-                            },
-                            "count": {
-                                "type": "integer",
-                                "description": "How many scenarios to write from this angle. "
-                                "Default 1.",
-                            },
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "why": {"type": "string"},
                         },
-                        "required": ["cell", "angle"],
+                        "required": ["id", "name"],
                     },
                 },
-                "wanted": {
-                    "type": "integer",
-                    "description": "The size of the finished suite, when this is one instalment "
-                    "of a larger plan.",
+                "angles": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "theme": {"type": "string"},
+                            "cell": {"type": "string"},
+                            "angle": {"type": "string"},
+                            "facet": {"type": "string"},
+                            "want": {"type": "integer"},
+                        },
+                        "required": ["id", "theme", "cell", "angle"],
+                    },
                 },
+                "target": {"type": "integer", "description": "The size of the finished suite."},
             },
-            ["entries"],
+            ["angles"],
         ),
     )
-    async def record_blueprint(args: dict[str, Any]) -> dict[str, Any]:
-        rows = args.get("entries") or []
+    async def record_canvas(args: dict[str, Any]) -> dict[str, Any]:
+        rows = args.get("angles") or []
         if not isinstance(rows, list) or not rows:
-            return _err("Nothing to record. Pass the planned scenarios as entries.")
-        held = Blueprint(
-            wanted=int(args.get("wanted") or state.blueprint.wanted or len(rows)),
-            entries=[
-                Entry(
+            return _err("Nothing to record. Pass the planned angles.")
+
+        before = {one.id: one for one in state.canvas.angles}
+        held = Canvas(
+            target=int(args.get("target") or state.canvas.target or 0),
+            themes=[
+                Theme(
+                    id=str((one or {}).get("id") or "").strip(),
+                    name=str((one or {}).get("name") or "").strip(),
+                    why=str((one or {}).get("why") or "").strip(),
+                )
+                for one in args.get("themes") or []
+                if isinstance(one, dict)
+            ],
+            angles=[
+                Angle(
+                    id=str((one or {}).get("id") or "").strip(),
+                    theme=str((one or {}).get("theme") or "").strip(),
                     cell=str((one or {}).get("cell") or "").strip(),
                     angle=str((one or {}).get("angle") or "").strip(),
-                    count=max(1, int((one or {}).get("count") or 1)),
+                    facet=str((one or {}).get("facet") or "").strip(),
+                    want=max(1, int((one or {}).get("want") or 1)),
                 )
                 for one in rows
                 if isinstance(one, dict)
             ],
         )
+        # Replanning mid-run must not throw away what writers have already done.
+        for one in held.angles:
+            was = before.get(one.id)
+            if was is not None:
+                one.done, one.refused, one.attempts = was.done, was.refused, was.attempts
+                one.state, one.notes = was.state, list(was.notes)
+
         problems = held.problems({cell.name for cell in state.grid.cells})
         if problems:
-            # Refused rather than stored: a plan is the cheapest thing in this pipeline to fix,
-            # and every fault left in it costs a proof and a folder once writers act on it.
+            # Refused rather than stored: a plan is the cheapest thing here to fix, and every
+            # fault left in it costs a proof and a folder once writers act on it.
             return _err(
                 "Not recorded. Fix these and record it again:\n  - " + "\n  - ".join(problems)
             )
 
-        state.blueprint = held
-        path = held.written(destination)
-        missing = sorted({cell.name for cell in state.grid.cells} - held.covered)
+        state.canvas = held
+        path = held.written_to(destination)
         said = [
-            f"{held.scenarios} scenarios planned as {len(held.entries)} angles across "
-            f"{len(held.covered)} cells. Written to "
-            f"{path.name}, so writers can be briefed from it and a later session can pick it up.",
+            f"{held.planned} scenarios planned as {len(held.angles)} angles in "
+            f"{len(held.themes)} themes, across {len(held.covered)} cells. Written to "
+            f"{path.name}."
         ]
         if held.shortfall():
             said.append(
-                f"{held.shortfall()} short of the {held.wanted} wanted. Record the rest, adding "
-                "to what is here rather than replacing it."
+                f"{held.shortfall()} short of the {held.target} asked for. Keep planning, or if "
+                "there is genuinely nothing else distinct left, say so and the run will report "
+                "what it reached rather than padding to the number."
             )
+        missing = sorted({cell.name for cell in state.grid.cells} - held.covered)
         if missing:
             said.append(
                 f"{len(missing)} cells have nothing planned on them: "
                 + ", ".join(missing[:12])
                 + ("" if len(missing) <= 12 else " ...")
             )
+        clashes = held.collisions()
+        if clashes:
+            said.append(
+                f"{len(clashes)} pairs may be the same angle twice. Worth a look, not "
+                "necessarily wrong: "
+                + "; ".join(f"{one}/{two} ({why})" for one, two, why in clashes[:6])
+            )
         return _ok("\n".join(said))
 
     @tool(
-        "show_blueprint",
-        "The plan for this suite as it stands, and which of it has been written. Read this "
-        "before briefing a writer, and when picking up a suite somebody else planned.",
-        schema({}, []),
+        "show_canvas",
+        "The plan and how far it has got. Without a theme, the theme table and the totals; with "
+        "one, every angle in that theme with its state. Read a theme at a time: the whole canvas "
+        "does not need to be in view, and at a few thousand angles it will not fit.",
+        schema({"theme": str}, []),
     )
-    async def show_blueprint(_args: dict[str, Any]) -> dict[str, Any]:
-        held = state.blueprint if state.blueprint.entries else load_blueprint(destination)
-        if not held.entries:
-            return _ok("No blueprint yet. Plan the suite with record_blueprint first.")
-        state.blueprint = held
-        written = len(load_scenarios(destination))
+    async def show_canvas(args: dict[str, Any]) -> dict[str, Any]:
+        held = state.canvas if state.canvas.angles else load_canvas(destination)
+        if not held.angles:
+            return _ok("No canvas yet. Plan the suite with record_canvas first.")
+        state.canvas = held
+        theme = str(args.get("theme") or "").strip()
+        if theme:
+            mine = held.of_theme(theme)
+            if not mine:
+                return _err(f"no theme called {theme!r}")
+            return _ok("\n".join([f"{theme}:"] + [f"  {one.line()}" for one in mine]))
+
+        owed = held.debt()
         lines = [
-            f"{held.scenarios} scenarios planned as {len(held.entries)} angles. "
-            f"{written} written so far."
+            f"{held.written} written of {held.planned} planned, as {len(held.angles)} angles "
+            f"in {len(held.themes)} themes."
         ]
-        lines += [f"  {one.line()}" for one in held.entries[:80]]
-        if len(held.entries) > 80:
-            lines.append(f"  ... and {len(held.entries) - 80} more angles")
+        for one in held.themes:
+            mine = held.of_theme(one.id)
+            asked = sum(max(1, angle.want) for angle in mine)
+            got = sum(angle.done for angle in mine)
+            stuck = sum(1 for angle in mine if angle.state == "blocked")
+            lines.append(
+                f"  {one.id} {one.name}: {got}/{asked} written, {len(mine)} angles"
+                + (f", {stuck} blocked" if stuck else "")
+                + f", {int(owed.get(one.id, 0) * 100)}% outstanding"
+            )
+        if held.reached():
+            lines.append("")
+            lines.append(held.reached())
         return _ok("\n".join(lines))
 
     @tool(
-        "deal_blueprint",
-        "Cut the plan into briefs, one per writer. Pass how many writers you intend to run.\n\n"
-        "Dealt round-robin rather than in blocks, because the plan comes out grouped by cell and "
-        "a block hands one writer every scenario for one cell. That writer then has to invent "
-        "the whole of that cell's variety alone, which is the position planning the suite up "
-        "front was meant to remove.\n\n"
-        "What comes back is the entries only. You add the callers: a name, an accent and a "
-        "location per scenario, distinct across the whole suite, because a writer cannot see "
-        "what its siblings were given and left to choose it converges on one kind of person.",
+        "claim_slice",
+        "The angles to give the next writer, marked as claimed so nothing is written twice. "
+        "Ranked by what is outstanding weighted by how much of its theme is untouched, so a "
+        "theme nobody has started outranks one nearly finished. Never two angles from one cell: "
+        "a writer handed a whole cell has to invent that cell's whole variety alone.\n\n"
+        "Dispatch one writer per slice and fold its return in with fold_return before claiming "
+        "again.",
         schema(
-            {"writers": {"type": "integer", "description": "How many writers to deal for."}},
-            ["writers"],
+            {
+                "scenarios": {
+                    "type": "integer",
+                    "description": "Roughly how many scenarios to put in front of one writer.",
+                },
+                "writer": {"type": "string", "description": "A name for the writer taking it."},
+            },
+            [],
         ),
     )
-    async def deal_blueprint(args: dict[str, Any]) -> dict[str, Any]:
-        held = state.blueprint if state.blueprint.entries else load_blueprint(destination)
-        if not held.entries:
-            return _err("No blueprint to deal. Plan the suite with record_blueprint first.")
-        state.blueprint = held
-        try:
-            writers = int(args.get("writers") or 0)
-        except (TypeError, ValueError):
-            return _err("writers has to be a whole number.")
-        if writers < 1:
-            return _err("Deal for at least one writer.")
-
-        size = max(1, (len(held.entries) + writers - 1) // writers)
-        cuts = held.slices(size)
-        lines = [
-            f"{held.scenarios} scenarios as {len(held.entries)} angles, dealt into "
-            f"{len(cuts)} briefs."
-        ]
-        for index, cut in enumerate(cuts, start=1):
-            due = sum(max(1, one.count) for one in cut)
-            lines.append("")
-            lines.append(
-                f"Brief {index} ({due} scenarios from {len(cut)} angles, cells: "
-                + ", ".join(sorted({one.cell for one in cut}))
-                + ")"
+    async def claim_slice(args: dict[str, Any]) -> dict[str, Any]:
+        held = state.canvas if state.canvas.angles else load_canvas(destination)
+        if not held.angles:
+            return _err("No canvas to deal. Plan the suite with record_canvas first.")
+        state.canvas = held
+        held.reclaim()
+        taken = held.next_slice(int(args.get("scenarios") or SLICE_SCENARIOS))
+        if not taken:
+            done = held.reached()
+            return _ok(
+                "Nothing is open. " + (done or f"{held.written} scenarios written as planned.")
             )
-            lines += [f"  {one.line()}" for one in cut]
+        held.claim(taken, str(args.get("writer") or "writer"))
+        held.written_to(destination)
+        due = sum(one.outstanding for one in taken)
+        lines = [
+            f"{len(taken)} angles, {due} scenarios, cells: "
+            + ", ".join(sorted({one.cell for one in taken})),
+            "",
+        ]
+        lines += [f"  {one.line()}" for one in taken]
+        lines.append("")
+        lines.append(
+            "Brief one writer on exactly these, and give it the callers: a name, an accent and "
+            "a location per scenario, distinct across the whole suite."
+        )
+        return _ok("\n".join(lines))
+
+    @tool(
+        "fold_return",
+        "Take back what a writer covered, and reopen what it did not. Pass one entry per angle "
+        "it was given, with its own count and one sentence on what it actually covered.\n\n"
+        "The count is not trusted: what counts as written is read off disk. A stage once "
+        "finished a run having saved one scenario of fifty and called it a success, so a "
+        "writer's own number is kept only to notice when it disagrees with what is there.",
+        schema(
+            {
+                "returns": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "angle_id": {"type": "string"},
+                            "wrote": {"type": "integer"},
+                            "short": {
+                                "type": "string",
+                                "description": "One sentence on what was covered.",
+                            },
+                            "blocked_reason": {
+                                "type": "string",
+                                "description": "Only if nothing more can be written here.",
+                            },
+                        },
+                        "required": ["angle_id"],
+                    },
+                }
+            },
+            ["returns"],
+        ),
+    )
+    async def fold_return(args: dict[str, Any]) -> dict[str, Any]:
+        held = state.canvas if state.canvas.angles else load_canvas(destination)
+        if not held.angles:
+            return _err("No canvas to fold into.")
+        state.canvas = held
+        saved = load_scenarios(destination)
+        lines: list[str] = []
+        for row in args.get("returns") or []:
+            if not isinstance(row, dict):
+                continue
+            angle_id = str(row.get("angle_id") or "").strip()
+            one = held.named(angle_id)
+            if one is None:
+                lines.append(f"  {angle_id}: no such angle")
+                continue
+            # Counted off disk by the id the writer was told to name its scenarios after.
+            on_disk = sum(1 for scenario in saved if angle_id in (scenario.branch or ""))
+            claimed = int(row.get("wrote") or 0)
+            was = held.fold(
+                angle_id,
+                done=on_disk,
+                short=str(row.get("short") or ""),
+                blocked_reason=str(row.get("blocked_reason") or ""),
+            )
+            note = f"  {angle_id}: {on_disk}/{one.want} on disk, now {was}"
+            if claimed and claimed != on_disk:
+                note += f" (writer said {claimed}, which does not match and is worth checking)"
+            lines.append(note)
+        held.written_to(destination)
+        lines.append("")
+        lines.append(f"{held.written} of {held.planned} written.")
+        if held.reached():
+            lines.append(held.reached())
         return _ok("\n".join(lines))
 
     @tool(
@@ -437,9 +549,10 @@ def grid_tools(
         tools=[
             show_grid,
             set_objects,
-            record_blueprint,
-            show_blueprint,
-            deal_blueprint,
+            record_canvas,
+            show_canvas,
+            claim_slice,
+            fold_return,
             show_diversity,
             plan_suite,
             list_scenarios,
@@ -497,9 +610,10 @@ def tool_names() -> tuple[str, ...]:
     return (
         "show_grid",
         "set_objects",
-        "record_blueprint",
-        "show_blueprint",
-        "deal_blueprint",
+        "record_canvas",
+        "show_canvas",
+        "claim_slice",
+        "fold_return",
         "show_diversity",
         "plan_suite",
         "list_scenarios",

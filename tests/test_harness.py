@@ -4302,9 +4302,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     # the same derived way rather than listing them here where they would go stale.
     import dataclasses
 
-    from fi.alk.harness.blueprint import Blueprint, Entry
+    from fi.alk.harness.blueprint import Angle, Canvas, Theme
 
-    for shape in (Blueprint, Entry):
+    for shape in (Canvas, Angle, Theme):
         fields |= {one.name for one in dataclasses.fields(shape)}
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import MODALITIES
