@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .axes import AxisSet, axes_for
-from .blueprint import SLICE_SCENARIOS, Angle, Canvas, Theme
+from .blueprint import SLICE_SCENARIOS, Angle, Canvas, StateAxis, Theme
 from .blueprint import load as load_canvas
 from .backends import ToolServer, tool, tool_server
 from .contract import AgentContract
@@ -136,6 +136,22 @@ def grid_tools(
         "of any angle whose id you reuse.",
         schema(
             {
+                "axes": {
+                    "type": "array",
+                    "description": "The state axes you derived from the agent's data and rules: "
+                    "dimensions whose value changes what the agent should do. A level must exist "
+                    "in the data or be reachable by seeding it, and must change the correct "
+                    "answer. Nine riders are nine names, not nine levels.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "levels": {"type": "array", "items": {"type": "string"}},
+                            "why": {"type": "string"},
+                        },
+                        "required": ["name", "levels"],
+                    },
+                },
                 "themes": {
                     "type": "array",
                     "description": "Groups of angles. The unit this is read and dispatched in.",
@@ -160,10 +176,17 @@ def grid_tools(
                             "angle": {"type": "string"},
                             "facet": {"type": "string"},
                             "want": {"type": "integer"},
+                            "live": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Which state axes move the answer for this "
+                                "bucket. `want` is how many of their combinations survive "
+                                "masking, so the count is derived rather than chosen.",
+                            },
                             "differs": {
                                 "type": "string",
                                 "description": "What changes between this bucket's scenarios. "
-                                "Required once want is more than one.",
+                                "Needed when want is more than one and no live axes are named.",
                             },
                         },
                         "required": ["id", "theme", "cell", "angle"],
@@ -182,6 +205,15 @@ def grid_tools(
         before = {one.id: one for one in state.canvas.angles}
         held = Canvas(
             target=int(args.get("target") or state.canvas.target or 0),
+            axes=[
+                StateAxis(
+                    name=str((one or {}).get("name") or "").strip(),
+                    levels=[str(x) for x in ((one or {}).get("levels") or [])],
+                    why=str((one or {}).get("why") or "").strip(),
+                )
+                for one in args.get("axes") or []
+                if isinstance(one, dict)
+            ],
             themes=[
                 Theme(
                     id=str((one or {}).get("id") or "").strip(),
@@ -199,6 +231,7 @@ def grid_tools(
                     angle=str((one or {}).get("angle") or "").strip(),
                     facet=str((one or {}).get("facet") or "").strip(),
                     want=max(1, int((one or {}).get("want") or 1)),
+                    live=[str(x) for x in ((one or {}).get("live") or [])],
                     differs=str((one or {}).get("differs") or "").strip(),
                 )
                 for one in rows
@@ -223,9 +256,10 @@ def grid_tools(
         state.canvas = held
         path = held.written_to(destination)
         said = [
-            f"{held.planned} scenarios planned as {len(held.angles)} angles in "
-            f"{len(held.themes)} themes, across {len(held.covered)} cells. Written to "
-            f"{path.name}."
+            held.coverage(
+                {cell.name for cell in state.grid.cells}, list(contract.hard_constraints or [])
+            ),
+            f"Written to {path.name}.",
         ]
         if held.shortfall():
             said.append(
@@ -283,6 +317,12 @@ def grid_tools(
                 + (f", {stuck} blocked" if stuck else "")
                 + f", {int(owed.get(one.id, 0) * 100)}% outstanding"
             )
+        lines.append("")
+        lines.append(
+            held.coverage(
+                {cell.name for cell in state.grid.cells}, list(contract.hard_constraints or [])
+            )
+        )
         if held.reached():
             lines.append("")
             lines.append(held.reached())

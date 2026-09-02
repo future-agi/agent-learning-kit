@@ -248,3 +248,64 @@ class TestACountMustSayWhatItVaries:
     def test_a_single_scenario_needs_no_justification(self):
         held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 1))
         assert held.problems({"retrieve-ride"}) == []
+
+
+class TestACountIsDerivedFromTheWorld:
+    """`want` stops being a guess once the axes it crosses are named.
+
+    The planner guessed 1 everywhere, and told to group would have guessed a flat number instead,
+    which is padding wearing a different hat. A count has to come from somewhere checkable: the
+    state axes derived from the agent's own data, and how many of their combinations survive.
+    """
+
+    def axes(self):
+        from fi.alk.harness.blueprint import StateAxis
+
+        return [
+            StateAxis("s.payment", ["valid", "expired", "none"], "decides if it can charge"),
+            StateAxis("s.market", ["SF", "NYC", "BLR"], "cash only in one of them"),
+        ]
+
+    def test_naming_the_axes_a_bucket_crosses_justifies_its_count(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "payment state at selection", "", 9))
+        held.axes = self.axes()
+        held.angles[0].live = ["s.payment", "s.market"]
+        assert held.problems({"retrieve-ride"}) == []
+
+    def test_an_axis_nobody_derived_is_refused(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "payment state", "", 9))
+        held.axes = self.axes()
+        held.angles[0].live = ["s.invented"]
+        assert "never derived" in " ".join(held.problems({"retrieve-ride"}))
+
+    def test_a_count_with_neither_axes_nor_a_reason_is_still_refused(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "payment state", "", 9))
+        held.axes = self.axes()
+        assert "what differs between them" in " ".join(held.problems({"retrieve-ride"}))
+
+
+class TestThePlanReportsWhatItCovers:
+    """A plan can only be checked against the agent, never against its own tidiness."""
+
+    def test_cells_with_nothing_on_them_are_named(self):
+        held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found"))
+        said = held.coverage({"retrieve-ride", "cancel-ride", "diagnose-fare"}, [])
+        assert "2 with nothing" in said
+        assert "cancel-ride" in said
+
+    def test_a_rule_with_no_bucket_is_the_gap_worth_shouting_about(self):
+        held = canvas(("A1", "TH01", "cancel-ride", "cancellation fee disclosed", "rule:fee"))
+        said = held.coverage(
+            {"cancel-ride"},
+            ["Disclose any cancellation fee before cancelling", "Never invent a fare or ETA"],
+        )
+        assert "1 of 2 rules have a bucket" in said
+        assert "Never invent a fare" in said
+
+    def test_facet_kinds_are_counted_so_a_lopsided_plan_shows(self):
+        held = canvas(
+            ("A1", "TH01", "retrieve-ride", "one", "rule:a"),
+            ("A2", "TH01", "cancel-ride", "two", "rule:b"),
+            ("A3", "TH01", "diagnose-fare", "three", "data:c"),
+        )
+        assert "2 rule, 1 data" in held.coverage({"retrieve-ride", "cancel-ride", "diagnose-fare"}, [])

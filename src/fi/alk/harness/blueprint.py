@@ -90,6 +90,24 @@ def _overlap(one: set[str], two: set[str]) -> float:
 
 
 @dataclass
+class StateAxis:
+    """A dimension of the world whose value changes what the agent should do.
+
+    Derived from the agent's own data and rules, never invented. Two rules keep the list honest:
+    a level has to exist in the seeded data or be reachable by seeding it, and a level has to
+    change the correct answer. Nine riders are nine names, not nine levels.
+
+    This is the axis PR 44 leaves as "domain entities, expand within each task". It is the only
+    one that produces different tests rather than different tellings of one test, which is why
+    it is the one that decides how many scenarios a bucket holds.
+    """
+
+    name: str
+    levels: list[str] = field(default_factory=list)
+    why: str = ""
+
+
+@dataclass
 class Theme:
     """A group of angles, and the unit the loop pages in and out.
 
@@ -115,6 +133,9 @@ class Angle:
     # length where comparing words does not.
     facet: str = ""
     want: int = 1
+    # Which state axes actually move the answer for this bucket. `want` is the number of their
+    # combinations that survive masking, so a count stops being a guess and becomes a derivation.
+    live: list[str] = field(default_factory=list)
     # What differs between this bucket's scenarios. Required once it claims more than one, because
     # a number is easy to write and "what changes between them" is the thing that has to be true.
     differs: str = ""
@@ -144,6 +165,7 @@ class Canvas:
 
     themes: list[Theme] = field(default_factory=list)
     angles: list[Angle] = field(default_factory=list)
+    axes: list[StateAxis] = field(default_factory=list)
     target: int = 0
     ceiling: str = ""
 
@@ -208,8 +230,21 @@ class Canvas:
                 + ". An angle names what makes a case worth testing, in a few words."
             )
 
+        known = {one.name for one in self.axes}
+        stray = sorted(
+            {name for one in self.angles for name in one.live if name not in known}
+        )
+        if stray:
+            found.append(
+                f"{len(stray)} buckets name a state axis that was never derived: "
+                + ", ".join(stray[:8])
+                + ". Every axis has to come from the agent's data or its rules."
+            )
+
         unjustified = [
-            one.id for one in self.angles if one.want > 1 and len(_words(one.differs)) < 2
+            one.id
+            for one in self.angles
+            if one.want > 1 and not one.live and len(_words(one.differs)) < 2
         ]
         if unjustified:
             found.append(
@@ -391,6 +426,45 @@ class Canvas:
             one.state = "open"
         return one.state
 
+    def coverage(self, cells: set[str], rules: list[str]) -> str:
+        """What this plan covers, said against something outside itself.
+
+        A plan can only be checked against the agent, not against its own tidiness, so this
+        reports the two things that are falsifiable: which cells nothing sits on, and whether
+        every rule the agent must obey has a bucket that tests it.
+        """
+        kinds: dict[str, int] = {}
+        for one in self.angles:
+            kind = (one.facet.split(":", 1)[0] or "unnamed") if one.facet else "unnamed"
+            kinds[kind] = kinds.get(kind, 0) + 1
+
+        empty = sorted(cells - self.covered)
+        tested = " ".join(one.facet.lower() + " " + one.angle.lower() for one in self.angles)
+        # A rule with nothing resembling it anywhere in the plan is the gap worth shouting about:
+        # these are the things the agent is forbidden to get wrong.
+        untested = [
+            one
+            for one in rules
+            if not any(word in tested for word in sorted(_words(one), key=len, reverse=True)[:3])
+        ]
+
+        lines = [
+            f"{len(cells)} cells, {len(self.covered)} with a bucket on them, "
+            f"{len(empty)} with nothing.",
+            f"{len(self.angles)} buckets over {len(kinds)} facet kinds: "
+            + ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items(), key=lambda k: -k[1])),
+            f"{len(self.axes)} state axes derived from the data.",
+            f"{self.planned} scenarios planned.",
+        ]
+        if empty:
+            lines.append("  nothing on: " + ", ".join(empty[:12]) + ("" if len(empty) <= 12 else " ..."))
+        if rules:
+            lines.append(
+                f"  {len(rules) - len(untested)} of {len(rules)} rules have a bucket."
+                + ("" if not untested else " Not covered: " + "; ".join(one[:60] for one in untested[:5]))
+            )
+        return "\n".join(lines)
+
     def reached(self) -> str:
         """What this suite supports, once nothing is open. Evidence, not a prediction."""
         stuck = [one for one in self.angles if one.state == "blocked"]
@@ -422,6 +496,10 @@ class Canvas:
                     "target": self.target,
                     "planned": self.planned,
                     "ceiling": self.ceiling,
+                    "axes": [
+                        {"name": one.name, "levels": one.levels, "why": one.why}
+                        for one in self.axes
+                    ],
                     "themes": [
                         {"id": one.id, "name": one.name, "why": one.why} for one in self.themes
                     ],
@@ -433,6 +511,7 @@ class Canvas:
                             "angle": one.angle,
                             "facet": one.facet,
                             "want": one.want,
+                            "live": one.live,
                             "differs": one.differs,
                             "done": one.done,
                             "refused": one.refused,
@@ -461,6 +540,15 @@ def load(destination: Path) -> Canvas:
         found = Canvas(
             target=int(held.get("target") or 0),
             ceiling=str(held.get("ceiling") or ""),
+            axes=[
+                StateAxis(
+                    name=str(one.get("name") or ""),
+                    levels=list(one.get("levels") or []),
+                    why=str(one.get("why") or ""),
+                )
+                for one in held.get("axes") or []
+                if one.get("name")
+            ],
             themes=[
                 Theme(
                     id=str(one.get("id") or ""),
@@ -478,6 +566,7 @@ def load(destination: Path) -> Canvas:
                     angle=str(one.get("angle") or ""),
                     facet=str(one.get("facet") or ""),
                     want=max(1, int(one.get("want") or 1)),
+                    live=list(one.get("live") or []),
                     differs=str(one.get("differs") or ""),
                     done=int(one.get("done") or 0),
                     refused=int(one.get("refused") or 0),

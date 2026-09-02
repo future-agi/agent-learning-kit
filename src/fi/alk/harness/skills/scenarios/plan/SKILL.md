@@ -108,6 +108,41 @@ If a bucket really does hold exactly one case, that is fine and common. If *ever
 then either the cases want grouping, or this agent supports fewer scenarios than were asked for
 and the honest move is to say so rather than to enumerate your way to the number.
 
+## The method, in order
+
+**1. Derive the grid.** `show_grid`. Operation x object, exhaustive by construction. Correct the
+object list with `set_objects` if reading the source shows the contract missed something.
+
+**2. Derive the state axes.** Read the seeded data and the rules, and write down every dimension
+whose value changes *what the agent should do*. Not what changes the wording: what changes the
+behaviour. Two rules keep this honest, and both matter:
+
+- a level must exist in the data, or be reachable by seeding it
+- a level must change the correct answer
+
+Nine riders are nine names, not nine levels. But a rider whose only card is expired, a rider with
+no card at all, and a rider with two cards are three levels of one axis, because the agent has to
+do something different for each.
+
+**3. Name the facets on each cell.** A facet is the structural thing under test, and there are
+five kinds, which between them cover how an agent fails:
+
+    rule:X          a constraint it must obey
+    precondition:X  something that must have happened first
+    data:X          a state the data can be in
+    ambiguity:X     the request has two readings
+    boundary:X      a value at a limit
+
+**4. A bucket is one cell and one facet.** That is the whole definition.
+
+**5. Derive `want` from the live axes.** For each bucket, which axes actually move the answer for
+*that facet*? Those are its live ones; name them in `live`. `want` is how many of their
+combinations survive masking.
+
+**6. Mask, do not multiply.** Drop combinations that cannot happen or that collapse to the same
+answer: a wheelchair-accessible product in a market that has none, cash where cash is not taken, a
+guest with saved places. Without masking, `want` is a product of levels and every bucket inflates.
+
 ## Size a bucket by the state it crosses, not by a flat number
 
 This is where the size of a suite actually comes from, and where plans go wrong in both
