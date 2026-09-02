@@ -627,6 +627,7 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
     assert (
         spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
     )
+    assert spec.environment.config["params"]["min_turn_messages"] == 6
 
 
 @pytest.mark.parametrize(
@@ -668,6 +669,10 @@ def test_provider_connect_only_builds_direct_target_spec(
     assert definition["target"][target_key] == target_id
     assert definition["target"]["provider"] == connector
     assert definition["transport"]["kind"] == transport
+    # Provider-hosted targets own their end-call tool. Five alternating messages are sufficient
+    # for a complete agent-first clarification flow; no sixth caller acknowledgement is possible
+    # after the provider disconnects.
+    assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
 
 
 def test_provider_import_calls_runtime_clone_instead_of_source_target(

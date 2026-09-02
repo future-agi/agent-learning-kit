@@ -441,6 +441,13 @@ def _build_spec(
                 "call_id_source": "originator_response",
             },
         )
+    # A provider-hosted agent owns termination and can legitimately finish an agent-first call
+    # after the fifth message: agent greeting, caller request, agent clarification, caller answer,
+    # agent confirmation followed by the provider's end-call tool. Requiring the simulator's
+    # sixth acknowledgement after Retell/Vapi has already disconnected misclassifies a complete
+    # call as infrastructure failure and prevents the tool trace from being graded. Native
+    # LiveKit keeps the stricter six-message floor because our simulator owns that hang-up path.
+    min_turn_messages = 5 if connector in {"vapi", "retell"} else 6
     return simulation_spec(
         run_id=run_id,
         room_name=room_name,
@@ -458,7 +465,7 @@ def _build_spec(
         simulator=simulator,
         direction="agent_first",
         max_seconds=call_timeout_seconds,
-        min_turn_messages=6,
+        min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
         # round-trip after the conversation has begun.  The previous 45-second value terminated
         # an otherwise healthy LiveKit call at exactly the watchdog boundary.  Keep a finite
