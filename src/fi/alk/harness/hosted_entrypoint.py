@@ -126,6 +126,8 @@ SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
 # complete set the in-process text/voice simulators may consume.
 _SIMULATOR_SECRET_ALIASES = frozenset(
     {
+        # Noise is off unless a run opts in, so a hosted job that is not told cannot ask.
+        "ALK_BACKGROUND_NOISE",
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
