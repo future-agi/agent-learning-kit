@@ -4317,7 +4317,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         # for an agent's own tool and for scenario names.
         | {"scenario_writer", "send_confirmation", "scenario_1", "edge_case_a"}
         # Argument names a skill tells the model to fill in, not tools.
-        | {"found", "returns", "angles", "themes", "target"}
+        | {"found", "returns", "angles", "themes", "target", "replace"}
         # Values a skill enumerates for a field, not tools.
         | {"succeed", "refuse", "ask", "escalate"}
         | {"impersonation", "injection", "fraud", "emergency", "pressure"}
