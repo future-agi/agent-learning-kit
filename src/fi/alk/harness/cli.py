@@ -410,6 +410,10 @@ async def _scenarios(args: argparse.Namespace) -> int:
         return 1
     print(f"\nscenarios: {len(written)} in {destination / 'scenarios.json'}")
     print(f"spent:     ${stage.spent_usd:.4f}")
+    # What the turns went on, beside the artifacts they produced. A turn count says a run was
+    # expensive; this says whether it was working or re-reading the same file.
+    stage.trace.write(destination)
+    print(stage.trace.summary())
     return 0
 
 

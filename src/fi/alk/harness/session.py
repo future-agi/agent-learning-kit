@@ -57,6 +57,9 @@ class StageIdleTimeout(TimeoutError):
     """The provider stream stayed open without producing any observable event."""
 
 
+from .trace import Trace
+
+
 @dataclass
 class Event:
     """One observable thing the stage did.
@@ -210,6 +213,9 @@ class Stage:
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
+        # Recorded as the run goes. Reconstructing where a stage spent its turns from a rendered
+        # log afterwards is possible and horrible, and the answer decides what to fix.
+        self.trace = Trace(name=name)
 
     @property
     def spec(self) -> SessionSpec:
@@ -346,6 +352,7 @@ class Stage:
         for attempt in range(STAGE_IDLE_RETRIES + 1):
             try:
                 async for event in self.stream(message):
+                    self.trace.record(event)
                     if on_event:
                         on_event(event)
                 return self.history[-1]
