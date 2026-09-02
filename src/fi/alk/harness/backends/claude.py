@@ -47,6 +47,22 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 _DELEGATION_TOOL = "Agent"
 
 
+def _ask_only(ask: Any) -> Any:
+    """Allow everything, but route the one tool that has a person on the other end.
+
+    An ungated stage is trusted with its tools; it is not therefore talking to nobody.
+    """
+
+    async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
+        from claude_agent_sdk.types import PermissionResultAllow
+
+        if tool_name == "AskUserQuestion":
+            return await ask(tool_name, payload, context)
+        return PermissionResultAllow(updated_input=payload)
+
+    return gate
+
+
 def _sdk_server(server: ToolServer) -> Any:
     """A ToolServer as the in-process MCP server the SDK routes calls to."""
     return create_sdk_mcp_server(
@@ -226,6 +242,13 @@ class ClaudeBackend:
             # list: it is reading an agent's own repository to write tests against it, and every
             # artifact it produces still goes through the three gates before it is kept.
             options.permission_mode = "bypassPermissions"
+            if spec.permission_override is not None:
+                options.can_use_tool = spec.permission_override
+            elif spec.ask is not None:
+                # Ungated does not mean unattended. In a conversation there is a person on the
+                # other side, and the stage asking them something is the point of keeping it
+                # open. Without this the question is approved silently and never reaches them.
+                options.can_use_tool = _ask_only(spec.ask)
         if spec.gated:
             # Not acceptEdits: that auto-approves Edit and Write before the permission callback
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose

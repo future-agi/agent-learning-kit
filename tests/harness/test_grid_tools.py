@@ -166,3 +166,44 @@ class TestChangingASuiteThatAlreadyExists:
     def test_expanding_nothing_is_refused_with_a_reason(self, contract, where):
         server, _ = grid_tools(contract, where)
         assert failed(server, "expand_suite")
+
+
+class TestUngatedStageStillTalksToTheOperator:
+    """The scenarios stage runs ungated so it can read the agent's own repository.
+
+    Ungated must not mean unattended. In a conversation there is a person on the other side, and
+    a stage that can no longer ask them anything has lost the reason it stays open.
+    """
+
+    def test_an_ungated_spec_routes_the_question_and_allows_the_rest(self):
+        import asyncio
+
+        from fi.alk.harness.backends.claude import _ask_only
+
+        seen: list[str] = []
+
+        async def ask(name, payload, context):
+            seen.append(name)
+            return "answered"
+
+        gate = _ask_only(ask)
+        assert asyncio.run(gate("AskUserQuestion", {}, None)) == "answered"
+        assert seen == ["AskUserQuestion"]
+        # Everything else is permitted rather than routed, which is what ungated means.
+        allowed = asyncio.run(gate("Bash", {"command": "ls"}, None))
+        assert type(allowed).__name__ == "PermissionResultAllow"
+        assert seen == ["AskUserQuestion"]
+
+    def test_the_scenarios_stage_is_ungated_and_carries_the_host_tools(
+        self, contract, tmp_path, monkeypatch
+    ):
+        from fi.alk.harness import scenarios
+
+        # The stage reads the built world to ground its prompt, which is not what is under test.
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=tmp_path / "s", wanted=5)
+        spec = stage._spec
+        assert spec.gated is False
+        assert "Bash" in spec.builtins and "Read" in spec.builtins
+        # And it has both tool servers: writing scenarios, and seeing the grid.
+        assert {"scenarios", "grid"} <= set(spec.servers)
