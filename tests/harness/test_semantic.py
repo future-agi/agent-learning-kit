@@ -106,10 +106,9 @@ class TestSpread:
 
 
 class TestNothingIsBilledWithoutBeingAskedTo:
-    """Embedding calls cost money, and which account pays is not this module's assumption to make.
+    """Embedding reaches a paid API, so it is off unless the run switches it on.
 
-    So it is off unless the run switches it on. A check that quietly decided it would be useful
-    is a check that spends somebody else's budget.
+    A duplicate check is useful and is not a good enough reason to spend without being asked.
     """
 
     def test_it_does_nothing_at_all_unless_switched_on(self, monkeypatch):
