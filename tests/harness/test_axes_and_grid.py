@@ -218,3 +218,37 @@ class TestPreconditionsReachTheGrid:
         )
         grid = derive(plain, axes)
         assert all(one.after == () for one in grid.cells)
+
+
+class TestNothingIsTunedToOneAgent:
+    """The universal file serves voice, chat, browser and coding agents alike.
+
+    Voice words leaking into it is the failure mode that matters: a coding agent would be given
+    cells about authenticating a caller it has never had, and guidance about how a call goes.
+    Each modality supplies its own vocabulary; the skeleton supplies none.
+    """
+
+    def test_the_universal_axes_name_no_modality(self):
+        import json
+        from pathlib import Path
+
+        import fi.alk.harness.axes as module
+
+        held = json.loads((Path(module.__file__).parent / "data" / "axes" / "universal.json").read_text())
+        # The note explains the rule and may quote the words it forbids; the axes may not use them.
+        held.pop("notes", None)
+        text = json.dumps(held).lower()
+        for word in ("caller", "on this call", "phone", "accent", "spoken", "dial tone"):
+            assert word not in text, f"{word!r} is voice-specific and the universal file uses it"
+
+    def test_each_modality_names_its_own_counterparty(self):
+        assert axes_for("voice").counterparty == "caller"
+        assert axes_for("chat").counterparty == "person"
+        assert axes_for("coding").counterparty == "person"
+
+    def test_conversation_cells_are_named_for_it(self):
+        """A coding agent must not get a cell about authenticating a caller."""
+        contract = contract_with(["get_tickets", "transfer_to_human"], {"tickets": {}, "users": {}, "notes": {}})
+        for modality, expected in (("voice", "authenticate-caller"), ("coding", "authenticate-person")):
+            grid = derive(contract.model_copy(update={"modality": modality}), axes_for(modality))
+            assert expected in {one.name for one in grid.cells}

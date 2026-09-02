@@ -140,6 +140,10 @@ class AxisSet:
     # worth running rather than four happy paths. Data, so what a small suite contains is tuned
     # by editing the axis file.
     priorities: tuple[dict[str, Any], ...] = ()
+    # What this kind of agent calls the party on the other side. Conversation-scoped operations
+    # are named for it, so a voice agent gets ``authenticate-caller`` and a coding agent does not
+    # get a cell about authenticating a caller it has never had.
+    counterparty: str = "person"
 
     def axis(self, name: str) -> Axis | None:
         for one in self.axes:
@@ -250,6 +254,8 @@ def _merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
         result["operations"] = over["operations"]
     if over.get("priorities"):
         result["priorities"] = over["priorities"]
+    if over.get("counterparty"):
+        result["counterparty"] = over["counterparty"]
     by_name = {
         str(one.get("name") or ""): one
         for one in base.get("axes") or []
@@ -335,6 +341,7 @@ def axes_for(modality: str = "") -> AxisSet:
         operations=operations,
         axes=axes,
         priorities=priorities,
+        counterparty=str(held.get("counterparty") or "person").strip() or "person",
     )
 
 

@@ -1,6 +1,6 @@
 {
   "modality": "universal",
-  "notes": "The agent-agnostic skeleton. A modality file overrides `axes` entry by entry, matched on `name`, and inherits everything it does not mention. Adding a dial, a setting, or a modality is an edit here, never a code change. `priorities` is the ladder a small suite is filled from, in order, so asking for four scenarios still yields four that are worth running.",
+  "notes": "The agent-agnostic skeleton. A modality file overrides `axes` entry by entry, matched on `name`, and inherits everything it does not mention. Adding a dial, a setting, or a modality is an edit here, never a code change. Written for any counterparty: a person on a phone, a user in a chat, a ticket author, an operator driving a browser. Say `the person` and `this exchange`, never `caller` or `call`; a modality file supplies its own words. `priorities` is the ladder a small suite is filled from, in order, so asking for four scenarios still yields four that are worth running.",
   "operations": [
     {
       "name": "retrieve",
@@ -192,7 +192,7 @@
       "name": "who",
       "label": "Who",
       "of": "the person on the other side",
-      "baseline": "verified account holder, ordinary literacy, speaking the default language",
+      "baseline": "the account holder themselves, verified, ordinary literacy, using the default language",
       "changes_world": "never",
       "weight": 1.0,
       "settings": [
@@ -206,10 +206,9 @@
         {
           "name": "second-language",
           "applies": {
-            "persona.accent": "Indian",
             "persona.communication_style": "Simple and clear"
           },
-          "guidance": "Speaks the service's language as a second language. Sentence order and idiom differ; comprehension is fine but phrasing is not native."
+          "guidance": "Uses the service's language as a second language. Sentence order and idiom differ; comprehension is fine but phrasing is not native."
         },
         {
           "name": "on-someone-behalf",
@@ -223,14 +222,14 @@
           "applies": {
             "persona.personality": "Cautious and skeptical"
           },
-          "guidance": "Cannot or will not complete verification on this call. The interesting behaviour is what the agent still does for them."
+          "guidance": "Cannot or will not complete verification in this exchange. The interesting behaviour is what the agent still does for them."
         }
       ]
     },
     {
       "name": "state",
       "label": "State",
-      "of": "what state they are in on this call",
+      "of": "what state they are in for this exchange",
       "baseline": "calm and cooperative",
       "changes_world": "never",
       "weight": 1.0,
@@ -265,7 +264,7 @@
             "persona.personality": "Emotional",
             "persona.communication_style": "Assertive"
           },
-          "guidance": "Starts civil and hardens as the call goes on. The agent's handling is what decides whether it boils over."
+          "guidance": "Starts civil and hardens as the exchange goes on. The agent's handling decides whether it boils over."
         }
       ]
     },
@@ -302,7 +301,7 @@
         {
           "name": "impersonation",
           "applies": {},
-          "needs_world": "the data has to say this caller is not who they claim to be, or the test proves nothing",
+          "needs_world": "the data has to say this person is not who they claim to be, or the test proves nothing",
           "guidance": "Claims to be someone they are not. The world must contradict the claim."
         },
         {
@@ -310,7 +309,7 @@
           "applies": {
             "persona.personality": "Anxious"
           },
-          "guidance": "Time-critical and consequential, and reported by the caller rather than written in the data. The graded behaviour is recognising it and routing, not solving it."
+          "guidance": "Time-critical and consequential, and asserted by the person rather than written in the data. The graded behaviour is recognising it and routing, not solving it."
         },
         {
           "name": "fraud",
@@ -344,14 +343,14 @@
       }
     },
     {
-      "want": "something has already gone wrong and the caller wants to know why",
+      "want": "something has already gone wrong and they want to know why",
       "prefer": [
         "diagnose"
       ],
       "dials": {}
     },
     {
-      "want": "the caller has to be handed to a human, and the agent has to notice",
+      "want": "it has to reach a human, and the agent has to notice",
       "prefer": [
         "handoff"
       ],
@@ -406,7 +405,7 @@
       }
     },
     {
-      "want": "the caller cannot say plainly what they need",
+      "want": "they cannot say plainly what they need",
       "prefer": [
         "diagnose",
         "explain"
@@ -416,7 +415,7 @@
       }
     },
     {
-      "want": "a caller who withholds what the agent needs until asked directly",
+      "want": "someone who withholds what the agent needs until asked directly",
       "kind": "change",
       "dials": {
         "state": "evasive"
@@ -446,11 +445,12 @@
       "dials": {}
     },
     {
-      "want": "the caller cannot complete verification and still wants the thing done",
+      "want": "they cannot complete verification and still want the thing done",
       "kind": "change",
       "dials": {
         "who": "unverified"
       }
     }
-  ]
+  ],
+  "counterparty": "person"
 }

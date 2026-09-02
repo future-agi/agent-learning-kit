@@ -353,7 +353,7 @@ def derive(
             dropped.append(operation.name)
             continue
         cells.append(
-            Cell(operation=operation.name, obj="caller", kind=operation.kind,
+            Cell(operation=operation.name, obj=axes.counterparty, kind=operation.kind,
                  tools=served, weight=1.0 if served else 0.8)
         )
 

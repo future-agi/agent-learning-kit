@@ -12,20 +12,32 @@
       "settings": [
         {
           "name": "street",
-          "applies": {"background_noise": "street"},
-          "needs_env": ["ALK_BACKGROUND_NOISE"],
+          "applies": {
+            "background_noise": "street"
+          },
+          "needs_env": [
+            "ALK_BACKGROUND_NOISE"
+          ],
           "guidance": "Calling from a pavement. Traffic under the voice, and they raise their own to compete with it."
         },
         {
           "name": "vehicle",
-          "applies": {"background_noise": "vehicle"},
-          "needs_env": ["ALK_BACKGROUND_NOISE"],
+          "applies": {
+            "background_noise": "vehicle"
+          },
+          "needs_env": [
+            "ALK_BACKGROUND_NOISE"
+          ],
           "guidance": "Hands-free in a moving car. Road noise, cabin echo, and attention on the road rather than the call."
         },
         {
           "name": "crowd",
-          "applies": {"background_noise": "retail"},
-          "needs_env": ["ALK_BACKGROUND_NOISE"],
+          "applies": {
+            "background_noise": "retail"
+          },
+          "needs_env": [
+            "ALK_BACKGROUND_NOISE"
+          ],
           "guidance": "A busy public place. Other voices carry, and some of what the agent hears was never said to it."
         },
         {
@@ -52,25 +64,36 @@
       "settings": [
         {
           "name": "senior",
-          "applies": {"persona.age_group": "60+", "persona.communication_style": "Detailed and elaborate"},
+          "applies": {
+            "persona.age_group": "60+",
+            "persona.communication_style": "Detailed and elaborate"
+          },
           "guidance": "An older caller, less fluent with the product's vocabulary. They answer in narrative rather than in the field the agent asked for, and they take longer to get to it."
         },
         {
           "name": "second-language",
-          "applies": {"persona.accent": "Indian", "persona.communication_style": "Simple and clear"},
+          "applies": {
+            "persona.accent": "Indian",
+            "persona.communication_style": "Simple and clear"
+          },
           "guidance": "Speaks the service's language as a second language. Comprehension is fine, phrasing is not native, and an accent the recogniser handles less well is part of the test."
         },
         {
           "name": "on-someone-behalf",
-          "applies": {"persona.personality": "Professional and formal"},
+          "applies": {
+            "persona.personality": "Professional and formal"
+          },
           "guidance": "Calling for the account holder, not the account holder. Everything they know is second hand, and some of it is wrong."
         },
         {
           "name": "unverified",
-          "applies": {"persona.personality": "Cautious and skeptical"},
+          "applies": {
+            "persona.personality": "Cautious and skeptical"
+          },
           "guidance": "Cannot or will not complete verification on this call. What the agent still does for them is the graded behaviour."
         }
       ]
     }
-  ]
+  ],
+  "counterparty": "caller"
 }
