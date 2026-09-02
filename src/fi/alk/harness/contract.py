@@ -102,9 +102,9 @@ class ToolSpec(BaseModel):
     #
     # This is the one fact about an agent that no instruction to a scenario writer can replace.
     # Without it a writer assumes the worst and replays the agent's whole flow to reach every
-    # cell, because doing so always works and deviating risks a refusal it cannot predict.
-    # Measured on a 20-tool voice agent: only 6 tools had a real precondition, and five of ten
-    # scenarios spent a dozen steps reaching cells that needed none.
+    # cell, because doing so always works and deviating risks a refusal it cannot predict. Agents
+    # usually gate far fewer tools than a reader would guess, so the difference between recording
+    # this and leaving it empty is most of a suite's shape.
     requires: list[str] = Field(default_factory=list)
 
 

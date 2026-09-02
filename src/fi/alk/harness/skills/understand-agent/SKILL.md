@@ -52,11 +52,11 @@ Find, in roughly this order:
    - A guard on identity the agent establishes **when the call opens** is not. A caller is
      already recognised by the time any tool runs, so a check on that is satisfied for free.
 
-   Leave `requires` empty when a tool can be called first thing, and most can. Getting this wrong
-   in the cautious direction is not safe: a scenario writer with no precondition data assumes the
-   worst and replays the agent's entire flow to reach every tool, because that always works.
-   Measured on a twenty-tool agent, six tools had a real precondition and half its test suite
-   wasted a dozen steps each reaching tools that had none.
+   Leave `requires` empty when a tool can be called first thing. Getting this wrong in the
+   cautious direction is not safe: a scenario writer with no precondition data assumes the worst
+   and replays the agent's entire flow to reach every tool, because that always works and
+   deviating risks a refusal it cannot predict. Every tool you mark as gated when it is not costs
+   every future test of it a preamble it never needed.
 
 5. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is

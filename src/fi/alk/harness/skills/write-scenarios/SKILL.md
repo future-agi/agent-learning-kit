@@ -251,8 +251,10 @@ about at the very end. A suite written that way tests the flow N times and each 
 which is the opposite of what a grid is for. It also makes every scenario fail for the same
 reason whenever the flow changes.
 
-Measured on a real suite: seven of nine scenarios booked a ride first, median twelve solution
-steps, including the one about explaining an address and the one about establishing identity.
+This is the commonest way a suite goes wrong, and it is easy to do without noticing, because
+every one of those scenarios passes. `show_grid` tells you what each cell's tools are reachable
+after. A cell whose tools have no precondition can be tested from a standing start; only build
+what a cell's own tools actually demand.
 
 So: build only the state your cell genuinely needs, and build it in `setup_code` rather than in
 reference steps. A shorter solution is not a weaker scenario, it is a scenario about the thing it
