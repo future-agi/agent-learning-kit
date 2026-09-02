@@ -128,6 +128,11 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        # The per-stage overrides travel with the run-wide ones. Without them a hosted job
+        # silently ignores the split and puts every stage on the run's backend, which is the
+        # opposite of what naming a stage was for and gives no sign it was dropped.
+        "ALK_SCENARIOS_HARNESS",
+        "ALK_SCENARIOS_MODEL",
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",

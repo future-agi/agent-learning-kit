@@ -116,3 +116,46 @@ class TestABackendIsCheckedAgainstTheModelItWillDrive:
         monkeypatch.setenv("ALK_HARNESS_MODEL", "claude-sonnet-4-6")
         with pytest.raises(ValueError, match="cannot drive"):
             resolve("vertex-gemini")
+
+
+class TestNoiseReachesTheRightPlace:
+    """Whoever writes a scenario picks the word for where its caller is, so the map cannot be a
+    closed list. A suite measured here used `city`, `airport` and `hotel`, none of them mapped,
+    and every one fell through to an office.
+    """
+
+    def source(self, environment, monkeypatch):
+        from fi.alk.harness.background_noise import scenario_source
+
+        monkeypatch.setenv("ALK_BACKGROUND_NOISE", "1")
+        return scenario_source(environment, {}, seed="s")
+
+    def test_the_environments_a_real_suite_used(self, monkeypatch):
+        got = {v: self.source(v, monkeypatch) for v in ("city", "airport", "hotel", "street")}
+        assert got["city"] == "CITY_AMBIENCE"
+        assert got["airport"] == "CROWDED_ROOM"
+        assert got["hotel"] == "CROWDED_ROOM"
+        assert got["street"] == "CITY_AMBIENCE"
+
+    def test_a_phrase_matches_on_its_words(self, monkeypatch):
+        assert self.source("in a moving vehicle", monkeypatch) == "CITY_AMBIENCE"
+        assert self.source("busy cafe", monkeypatch) == "CROWDED_ROOM"
+
+    def test_a_scenario_that_asked_for_none_stays_silent(self, monkeypatch):
+        assert self.source(False, monkeypatch) == ""
+
+    def test_nothing_plays_when_the_run_did_not_opt_in(self, monkeypatch):
+        from fi.alk.harness.background_noise import scenario_source
+
+        monkeypatch.delenv("ALK_BACKGROUND_NOISE", raising=False)
+        assert scenario_source("street", {}, seed="s") == ""
+
+
+def test_a_hosted_run_may_receive_the_per_stage_names():
+    """The sandbox only receives names on a closed allow-list. Without these two a hosted job
+    silently ignores the split and runs every stage on the run's backend, with no sign it was
+    dropped: the setting appears to work locally and does nothing where it matters."""
+    from fi.alk.harness.hosted_entrypoint import _SIMULATOR_SECRET_ALIASES
+
+    assert {"ALK_SCENARIOS_HARNESS", "ALK_SCENARIOS_MODEL"} <= _SIMULATOR_SECRET_ALIASES
+    assert {"ALK_HARNESS", "ALK_HARNESS_MODEL"} <= _SIMULATOR_SECRET_ALIASES
