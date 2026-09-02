@@ -437,6 +437,16 @@ class AgentContract(BaseModel):
     one_liner: str = ""
     modality: str = "chat"
     conversational: bool = True
+    # Which way a call goes, from this agent's side, and a property of the agent rather than of
+    # any one scenario: an agent that answers a line answers every time, and one that dials out
+    # dials out every time. Read from the agent at understand time, usually from its own prompt
+    # ("callers dial in ...") or from the endpoint it declares. Every scenario inherits it.
+    #
+    # ``inbound`` is somebody ringing the agent and is the default, because it is what every
+    # contract written before this field described. ``outbound`` is the agent ringing a person,
+    # which changes who speaks first and, more importantly, changes the person: they did not
+    # place the call and have no errand of their own.
+    direction: str = "inbound"
     system_prompt_excerpt: str = ""
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)

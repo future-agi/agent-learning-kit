@@ -372,7 +372,9 @@ def _build_spec(
     def setting(name: str) -> str:
         return str(simulator_config.get(name.lower()) or environ.get(name) or "")
 
-    simulator = simulator_definition(setting, doc.get("persona"))
+    simulator = simulator_definition(
+        setting, doc.get("persona"), direction=str(doc.get("direction") or "inbound")
+    )
     return simulation_spec(
         run_id=run_id,
         room_name=room_name,
@@ -388,7 +390,11 @@ def _build_spec(
             tts_provider=simulator.tts.provider,
         ),
         simulator=simulator,
-        direction="agent_first",
+        # Who speaks first follows from which way the call goes: a service that was rung answers
+        # and greets, a person who was rung says hello and waits to be told why.
+        direction=(
+            "simulator_first" if str(doc.get("direction")) == "outbound" else "agent_first"
+        ),
         max_seconds=call_timeout_seconds,
         min_turn_messages=6,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool

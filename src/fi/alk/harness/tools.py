@@ -211,6 +211,16 @@ def contract_tools(destination: Path) -> Any:
                     "description": "True if a person talks with it turn by turn. False for an "
                     "agent given one task and left to it.",
                 },
+                "direction": {
+                    "type": "string",
+                    "enum": ["inbound", "outbound"],
+                    "description": "Which way a call goes, for a voice agent. 'inbound' is "
+                    "somebody ringing this agent; 'outbound' is this agent ringing a person. "
+                    "The agent usually says which in its own prompt ('callers dial in', 'you "
+                    "are calling to collect ...') or in the endpoint it declares. It decides "
+                    "who speaks first and what the person on the other end is doing there, so "
+                    "read it rather than assuming inbound.",
+                },
                 "system_prompt_excerpt": {
                     "type": "string",
                     "description": "The agent's own instructions, quoted. Often lives away from "

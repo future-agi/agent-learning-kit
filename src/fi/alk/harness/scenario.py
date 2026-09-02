@@ -236,6 +236,15 @@ class Scenario(BaseModel):
     # twice; a coin flip here made a seeded run unreproducible.
     background_noise: bool | str = ""
 
+    # Which way the call goes, from the tested agent's side. ``inbound`` is somebody ringing the
+    # agent, which is every scenario written before this field existed and so is the default.
+    # ``outbound`` is the agent ringing a person, which is a different situation and not a
+    # different person: the persona is unchanged, but the person did not place the call, does not
+    # know who is on the line, and has no errand of their own. An agent that collects information
+    # is only tested honestly this way, because the whole conversation is it asking and them
+    # answering rather than them arriving with something to do.
+    direction: str = "inbound"
+
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
     RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
@@ -247,6 +256,17 @@ class Scenario(BaseModel):
         if self.background_noise == "":
             self.background_noise = _decided_by(self.name)
         return self
+
+    @property
+    def agent_speaks_first(self) -> bool:
+        """Whether the tested agent opens the call.
+
+        It does when it was rung: a service answers and greets. It does not when it placed the
+        call, because a person picking up their own phone speaks first, and an agent that opens
+        an outbound call with the greeting of one that was rung is not being tested on the call
+        it actually makes.
+        """
+        return self.direction != "outbound"
 
     def slots(self) -> dict[str, str]:
         """Every value this scenario offers the simulator prompt."""

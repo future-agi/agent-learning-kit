@@ -47,22 +47,56 @@ _MULTILINGUAL_STT = ("ar", "es")
 SIMULATOR_INSTRUCTIONS = (
     "Act as the customer described by the scenario. Speak naturally and briefly.\n"
     "These rules override anything else when they conflict:\n"
-    "1. Use ONLY the facts you were given. Never invent an account detail, address, "
-    "payment state, or verification code.\n"
-    "2. If the agent asks about something you were given no fact for, say plainly that "
-    "you do not know or cannot tell. Never guess, and never claim something happened on "
-    "your end when you were not told it did.\n"
-    "3. Do not volunteer private data. Agree when asked whether a verification code "
+    "1. The facts you were given are true and are what you work from.\n"
+    "2. If the agent asks something ordinary you were given no fact for - your age, your "
+    "job, why you need this, roughly when something happened, a nearby landmark - answer "
+    "the way a real person would: give a plausible answer that fits who you are, and keep "
+    "it consistent for the rest of the call. Say you do not know only where a real person "
+    "would not know.\n"
+    "3. Anything the agent checks against its own records is different: an account number, "
+    "a booking reference, a verification code, what you were charged, what it has on file. "
+    "If you were not given it, say you do not have it to hand. Never make one up: an "
+    "invented one is checked, fails, and tells nobody anything. Never claim something "
+    "happened on your end when you were not told it did.\n"
+    "4. Anything you do make up has to sound like a real person's rather than a "
+    "placeholder. Not 1234567890 for a number, not 123 Main Street, not a birthday of "
+    "01/01/2000. Fit it to where you live and how old you are.\n"
+    "5. Do not volunteer private data. Agree when asked whether a verification code "
     "should be sent, and read the code out only after the agent says it was sent and "
     "asks you for it.\n"
-    "4. Answer a repair question with the missing fact, not by restarting your request.\n"
-    "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
+    "6. Answer a repair question with the missing fact, not by restarting your request.\n"
+    "7. Say where you are or what you are doing only if the agent asks or it genuinely "
+    "matters. It is background, not something to announce.\n"
+    "8. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
     "the same thing without the task moving forward, do not try a fifth time and do not "
     "rephrase the same point again. Say once that this is not working and you will try "
     "later, then end the call.\n"
-    "6. Otherwise let the agent finish. Say yes when it asks to proceed and wait for it "
+    "9. Otherwise let the agent finish. Say yes when it asks to proceed and wait for it "
     "to confirm the outcome rather than hanging up early.\n"
-    "7. Once the outcome is confirmed, thank the agent and end the call."
+    "10. Once the outcome is confirmed, thank the agent and end the call."
+)
+
+# What a person who did not place the call is doing there. Appended for an outbound agent, so
+# the two prompts differ only where the situation genuinely differs.
+#
+# The failure this exists to prevent is a caller who answers the phone already knowing why it
+# rang: "yes, I'm ready for my questions". A person who is rung does not know that yet, and an
+# agent whose whole job is to introduce itself and get someone to stay on the line is not tested
+# by somebody who has already agreed.
+OUTBOUND_INSTRUCTIONS = (
+    "\nThis call came to you. You did not place it and you do not know who is on the line "
+    "until they say so.\n"
+    "A. Answer the way anyone answers a ringing phone: a short hello, nothing more. Do not "
+    "state a reason for calling, because you have none.\n"
+    "B. Let them say who they are and what they want. Until they do, you have nothing to go "
+    "on and should not guess at it or help them along.\n"
+    "C. You have no errand of your own here. You are not trying to get anything done; you "
+    "are deciding whether to give this person your time and answering what they ask.\n"
+    "D. Once you know what it is about, behave as the person described: cooperative, "
+    "hurried, wary, whatever fits. If they ask for a lot, it is reasonable to ask how long "
+    "it will take or to say it is a bad moment.\n"
+    "E. End the call when they have finished with you, not when you have got what you came "
+    "for, because you came for nothing."
 )
 
 _LANGUAGE_CODES: dict[str, str] = {
@@ -459,7 +493,9 @@ def aura_voice_for(persona: dict) -> str:
 
 
 def simulator_definition(
-    get: Callable[[str], str], persona: Mapping[str, Any] | None = None
+    get: Callable[[str], str],
+    persona: Mapping[str, Any] | None = None,
+    direction: str = "inbound",
 ) -> "simulate.SimulatorAgentDefinition":
     """The caller's brain and voice. `get` resolves one setting for the calling lane.
 
@@ -514,7 +550,11 @@ def simulator_definition(
             "model": model("tts", tts_provider),
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
         },
-        instructions=SIMULATOR_INSTRUCTIONS,
+        instructions=(
+            SIMULATOR_INSTRUCTIONS + OUTBOUND_INSTRUCTIONS
+            if direction == "outbound"
+            else SIMULATOR_INSTRUCTIONS
+        ),
         allow_interruptions=True,
     )
 
@@ -680,6 +720,7 @@ __all__ = [
     "CLEANUP_TIMEOUT_SECONDS",
     "CONNECT_TIMEOUT_SECONDS",
     "READINESS_TIMEOUT_SECONDS",
+    "OUTBOUND_INSTRUCTIONS",
     "SIMULATOR_INSTRUCTIONS",
     "aura_voice_for",
     "caller_scenario",
