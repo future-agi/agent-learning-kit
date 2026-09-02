@@ -218,6 +218,20 @@ def writer_workers(
                 "done.\n\nIf your brief names the callers to use, use those and no others: "
                 "their names, accents and locations were dealt across the whole suite, and "
                 "you cannot see what your siblings were given."
+                "\n\n## What to report back"
+                "\n\nFor each bucket you were given: its id, how many scenarios you wrote for "
+                "it, and one sentence on what you actually covered and what you did not. Say "
+                "plainly if a bucket holds fewer real cases than it was sized for."
+                "\n\nThen, separately, **anything worth testing that your brief did not ask "
+                "for**. You are the first person to look inside this part of the agent with its "
+                "source open, so you will find cases nobody could see from outside: a branch two "
+                "calls deep, a state the data only reaches after something else, a refusal that "
+                "is not written down. List each as a grid cell, a few words on what makes it "
+                "worth testing, and roughly how many scenarios it holds."
+                "\n\nDo not widen the bucket you were given to swallow those, and do not write "
+                "them yourself. Report them: the stage opens a bucket for each and somebody is "
+                "given it properly. Absorbing them quietly hides the discovery and makes the "
+                "count wrong."
             ),
             builtins=(),
             servers={SCENARIO_SERVER: server},

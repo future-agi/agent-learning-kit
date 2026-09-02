@@ -531,3 +531,28 @@ class TestTheCanvasLoopEndToEnd:
             )
         ids = [one.id for one in state.canvas.angles]
         assert len(ids) == len(set(ids))
+
+    def test_a_writer_cannot_reach_the_canvas_so_the_stage_must_transcribe(
+        self, contract, where, monkeypatch
+    ):
+        """The writer has no canvas tools, so telling it to call one is telling it nothing.
+
+        Discoveries travel as text in the writer's reply and the stage puts them into the canvas.
+        This pins the split, because the skill on the writer's side once told it to call a tool
+        that was never on its server.
+        """
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
+        writer = next(iter(stage._spec.workers.values()))
+        writer_tools = {one.name for server in writer.servers.values() for one in server.tools}
+        stage_tools = {one.name for server in stage._spec.servers.values() for one in server.tools}
+
+        assert "submit_scenario" in writer_tools
+        for canvas_tool in ("fold_return", "claim_slice", "record_canvas", "show_canvas"):
+            assert canvas_tool not in writer_tools, f"{canvas_tool} is not the writer's to call"
+            assert canvas_tool in stage_tools
+        # And the writer is told to report them instead, since it cannot record them.
+        assert "report" in writer.instructions.lower()
+        assert "did not ask for" in writer.instructions
