@@ -486,18 +486,38 @@ turns long before the suite is done.
 
 **Delegate to `scenario_writer`.** It is a tool like any other: call it with a brief and it
 writes and proves that slice, then reports back. To get real concurrency, **call it several
-times in the same turn** rather than waiting for each to return. Keep going until the sample is
-complete.
+times in the same turn** rather than waiting for each to return: several calls issued together
+run together, while the same calls made one per turn run one after another. Keep going until the
+sample is complete.
 
 Delegating is not optional above a handful. Writing thirty scenarios yourself in one session is
 how a run stalls: the response grows until it stops coming back. Hand out slices instead.
 
-**If the suite was planned, work from the canvas, one writer at a time.**
+**If the suite was planned, work from the canvas, and run several writers at once.**
 
-`claim_slice` gives you the next writer's angles, ranked so an untouched theme outranks a nearly
-finished one, and never two angles from one cell. Brief one writer on exactly those, adding the
-people yourself. When it returns, `fold_return` with one entry per angle: its own count and one
-sentence on what it actually covered.
+`claim_slice` gives you one writer's angles, ranked so an untouched theme outranks a nearly
+finished one, and never two angles from one cell. **Claim once per writer, then dispatch them
+all in the same turn.** Each claim marks its angles as taken, so a second claim returns different
+work: the slices cannot overlap, and two writers can never be handed the same scenario. Give each
+claim a distinct writer name, because that name is what records who holds the work.
+
+Sequential dispatch is the difference between a suite that finishes and one that does not. A
+writer spends most of its life waiting on a model, so writers that wait in parallel cost almost
+the same wall-clock as one. Four to six at a time is the usual range: enough to matter, few
+enough that the provider does not start refusing. Add more only if none of them are being
+refused.
+
+Two things stay serial no matter how many writers run, and neither is a reason to dispatch fewer.
+They share one world, so proving is queued behind whoever holds it; and the canvas is yours
+alone, so you do the claiming and the folding while they write.
+
+**If a provider starts refusing (rate limits, resource-exhausted), reduce how many you run at
+once and keep going.** Fold the failed writer's angles back so they return to the pool. A refusal
+is a reason to slow down, never a reason to abandon the run.
+
+When a writer returns, `fold_return` with one entry per angle: its own count and one sentence on
+what it actually covered. Fold each writer as it comes back rather than waiting for the whole
+batch, so its angles are available again immediately.
 
 That sentence is what the next writer on the same theme reads, so it should say what was covered
 and what was not, not that the work is done. The count is recorded but not believed: what counts

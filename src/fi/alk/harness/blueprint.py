@@ -18,8 +18,10 @@ source open, which is the only place they can be checked.
 ## Why it is a ledger and not a document
 
 A plan handed out whole cannot answer the question the loop actually has, which is what is left.
-So each angle carries its own state, the loop dispatches one writer at a time against what is
-still open, folds back what returned, and re-ranks. Two consequences worth naming.
+So each angle carries its own state, the loop deals what is still open to as many writers as it
+wants to run, folds back what returns, and re-ranks. Claiming is what makes several writers safe:
+it takes those angles out of the pool, so a second claim cannot return the first one's work. Two
+consequences worth naming.
 
 ``done`` is counted from disk and never from the writer's report. A stage once finished a run
 having saved one scenario of fifty and described it as a success; the writer's own count is kept

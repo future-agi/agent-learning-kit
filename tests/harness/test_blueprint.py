@@ -700,3 +700,45 @@ class TestProgressNeverMovesBackwards:
         held.credit("A1", ["one", "two", "three"])
         held.fold("A1", done=0, short="writer died")
         assert held.named("A1").done == 3
+
+
+class TestSeveralWritersCanRunAtOnce:
+    """Scale comes from parallel writers, and it is only safe because a claim takes its angles
+    out of the pool. Two writers must never be handed the same scenario."""
+
+    def some(self, n: int = 8):
+        return canvas(
+            *[(f"A{i}", "TH01", f"cell-{i}", f"case number {i} that goes wrong", "", 2)
+              for i in range(n)],
+            target=200,
+        )
+
+    def test_a_second_claim_returns_different_work(self):
+        held = self.some()
+        first = held.next_slice(4)
+        held.claim(first, "writer_1")
+        second = held.next_slice(4)
+        held.claim(second, "writer_2")
+
+        assert first and second
+        assert not ({one.id for one in first} & {one.id for one in second})
+
+    def test_each_writer_is_recorded_as_holding_its_own(self):
+        held = self.some()
+        held.claim(held.next_slice(4), "writer_1")
+        held.claim(held.next_slice(4), "writer_2")
+
+        holders = {one.claimed_by for one in held.angles if one.state == "claimed"}
+        assert holders == {"writer_1", "writer_2"}
+
+    def test_claiming_until_dry_never_repeats_an_angle(self):
+        held = self.some(6)
+        seen: list[str] = []
+        for n in range(10):
+            taken = held.next_slice(2)
+            if not taken:
+                break
+            held.claim(taken, f"writer_{n}")
+            seen += [one.id for one in taken]
+
+        assert len(seen) == len(set(seen)) == 6
