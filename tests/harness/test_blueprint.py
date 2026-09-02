@@ -8,7 +8,24 @@ quietly names a cell nobody has, and a cut that hands one writer the whole of on
 
 from __future__ import annotations
 
+import pytest
+
 from fi.alk.harness.blueprint import Blueprint, Entry, load
+from fi.alk.harness.contract import AgentContract, ToolSpec
+
+
+@pytest.fixture()
+def contract():
+    return AgentContract(
+        agent="ride", modality="voice",
+        tools=[ToolSpec(name="get_rides"), ToolSpec(name="cancel_ride")],
+        data_schema={"rides": {}, "users": {}, "fares": {}},
+    )
+
+
+@pytest.fixture()
+def where(tmp_path):
+    return tmp_path
 
 
 def plan(*rows: tuple[str, str, str], wanted: int = 0) -> Blueprint:
@@ -118,3 +135,48 @@ class TestItSurvivesABadFile:
         back = load(tmp_path)
         assert back.wanted == 1
         assert [one.line() for one in back.entries] == [one.line() for one in held.entries]
+
+
+class TestTheStagePlansBeforeItWrites:
+    """A large suite gets the planning skill; a small one does not.
+
+    The threshold is not decoration. Below it a single session writes the whole suite in one
+    context and can see everything it has written, so a plan buys nothing and costs a stage.
+    """
+
+    def test_a_large_suite_is_told_to_plan_first(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
+        said = stage._spec.system_prompt
+        assert "Plan all 200 scenarios first" in said
+        assert "plan-scenarios" in said or "Plan the suite before writing it" in said
+
+    def test_a_small_suite_is_not(self, contract, where, monkeypatch):
+        from fi.alk.harness import scenarios
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
+        said = stage._spec.system_prompt
+        assert "Write 4 scenarios." in said
+        assert "Plan the suite before writing it" not in said
+
+    def test_an_existing_plan_is_used_rather_than_replanned(self, contract, where, monkeypatch):
+        """Reopening a planned suite must not plan it again on top of itself."""
+        from fi.alk.harness import scenarios
+        from fi.alk.harness.blueprint import Blueprint, Entry
+
+        Blueprint(
+            wanted=200,
+            entries=[
+                Entry(f"s{i}", "retrieve-ride", f"situation number {i} about finding a booking")
+                for i in range(200)
+            ],
+        ).written(where)
+
+        monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
+        said = stage._spec.system_prompt
+        assert "already planned in blueprint.json" in said
+        assert "Plan all 200 scenarios first" not in said

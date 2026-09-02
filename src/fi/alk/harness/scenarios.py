@@ -22,6 +22,8 @@ from .axes import axes_for
 from .backends import SessionSpec, ToolServer, WorkerSpec, tool, tool_server
 
 from .config import artifact_dir, chosen_model, load_skill
+from .blueprint import WORTH_PLANNING
+from .blueprint import load as load_blueprint
 from .grid_tools import GRID_SERVER, Coverage, grid_tools
 from .sample import Pick, coverage, plan as plan_picks
 from .catalogue import load_catalogue
@@ -41,6 +43,7 @@ from .tools import schema
 logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
+PLAN_SKILL = "plan-scenarios"
 
 # What the stage may reach for beyond its own tools. Everything the host offers, because the
 # scenarios worth writing come from reading the agent rather than from reading its contract.
@@ -112,18 +115,35 @@ def open_stage(
         share=shared,
     )
     grid_server, held = grid_tools(contract, destination, wanted=wanted)
+    held.blueprint = load_blueprint(destination)
+    # Large suites are planned before they are written. Written one at a time they converge:
+    # each scenario is composed with the last few in view, and by fifty the suite has settled
+    # into one shape without anyone having done anything wrong.
+    # Against the count asked for here, not the blueprint's own: an empty blueprint records a
+    # target of zero, so asking it for its shortfall says nothing is missing.
+    planning = wanted >= WORTH_PLANNING and len(held.blueprint.entries) < wanted
     spec = SessionSpec(
         # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
+            + (f"\n\n{load_skill(PLAN_SKILL)}" if planning else "")
             + (
-                f"\n\nWrite {wanted} scenarios."
+                f"\n\nPlan all {wanted} scenarios first, then write them."
+                if planning
+                else f"\n\nWrite {wanted} scenarios."
                 if not kept
                 else f"\n\n{len(kept)} scenarios already exist and are loaded: "
                 + ", ".join(scenario.name for scenario in kept)
                 + ". Submitting one under an existing name replaces it."
+            )
+            + (
+                f"\n\n{len(held.blueprint.entries)} scenarios are already planned in "
+                "blueprint.json. Brief writers from it rather than planning again; "
+                "show_blueprint says which are still to write."
+                if held.blueprint.entries and not planning
+                else ""
             )
         ),
         servers={SCENARIO_SERVER: server, GRID_SERVER: grid_server},
