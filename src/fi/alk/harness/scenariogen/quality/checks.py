@@ -199,10 +199,19 @@ def validate_scenario(
             if len(word.strip("\"'(),.:_-")) > 3
         }
         graded = " ".join(scenario.sub_goals).lower().replace("_", " ").replace("-", " ")
-        solution_args = " ".join(
-            str(value).lower() for step in scenario.solution for value in (step.arguments or {}).values()
+        # Look at what the checks actually inspect, not only at their names. Five scenarios about
+        # five different account conditions shared one check set: each named its condition in the
+        # reference call's arguments, which satisfied a name-level test, while no check asserted
+        # which condition applied. An agent that transferred everybody passed all five.
+        graded_source = " ".join(
+            (found.check or "") + " " + (found.judged or "")
+            for name in scenario.sub_goals
+            if (found := catalogue.named(name)) is not None
+        ).lower()
+        looked_at = set(graded.split()) | set(
+            word.strip("\"'(),.:_-") for word in graded_source.replace("_", " ").split()
         )
-        if particulars and not (particulars & set(graded.split())) and not (particulars & set(solution_args.split())):
+        if particulars and not (particulars & looked_at):
             problems.append(
                 "nothing grades the hazard: no sub-goal and no reference argument mentions what "
                 f"{scenario.hazard.strip()[:60]!r} turns on. An agent that ignored it would pass, "
