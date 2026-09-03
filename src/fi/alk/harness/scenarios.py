@@ -275,7 +275,16 @@ def writer_workers(
     }
 
 
-def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
+def opening(
+    contract: AgentContract,
+    wanted: int = 10,
+    existing: int = 0,
+    delegates: bool | None = None,
+) -> str:
+    # Whether writers exist follows the same threshold the stage itself uses, so a caller that
+    # does not track it still describes the run it actually gets.
+    if delegates is None:
+        delegates = wanted >= FEWEST_WORTH_DELEGATING
     if existing and existing < wanted:
         # A suite short of what was asked for is being *continued*, not edited. Told only that
         # scenarios exist and to say what it wants changed, a stage reads a large number, finds
@@ -328,9 +337,16 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
         "the scenario still claims to test. Then save_scenarios, and finish with show_coverage "
         "so what was left untested is on the record rather than implied by a count."
         + (
-            "\n\nFor a suite rather than one scenario, split the plan across writers and run "
-            "them at the same time, one brief per writer naming its coordinates."
-            if parallel_suites()
+            # How wide to fan out is the model's call, not a number this file can know: it
+            # depends on how many buckets are open and how alike they are. Say that the writers
+            # exist and that they run at the same time, and leave the count to whoever can see
+            # the canvas. Hiding this behind a flag left every suite written one at a time.
+            "\n\nWriters run at the same time. claim_slice a slice per writer and brief them "
+            "together, one brief each naming its coordinates, rather than waiting for one to "
+            "finish before starting the next. Judge how many to run from what the canvas has "
+            "open and how much they would overlap; more writers on near-identical buckets buys "
+            "nothing. fold_return each one's result so what it did not cover reopens."
+            if delegates
             else ""
         )
     )
