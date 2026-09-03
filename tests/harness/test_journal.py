@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fi.alk.harness.scenario import Scenario
-from fi.alk.harness.catalogue import Catalogue
+from fi.alk.harness.scenariogen.model.scenario import Scenario
+from fi.alk.harness.scenariogen.model.catalogue import Catalogue
 from fi.alk.harness.scenariogen.store.suite import (
     JOURNAL,
     forget_journal,

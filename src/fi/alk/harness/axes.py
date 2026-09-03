@@ -26,6 +26,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .scenariogen import BUNDLED as _BUNDLED
+
 logger = logging.getLogger(__name__)
 
 # Points at a file or a directory of them, so a deployment can carry its own axes without a
@@ -33,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ``universal.json``.
 AXES_ENV = "HARNESS_SCENARIO_AXES"
 
-BUNDLED = Path(__file__).parent / "data" / "axes"
+BUNDLED = _BUNDLED / "axes"
 UNIVERSAL = "universal"
 
 # What a setting can require of the world. Ordered from cheapest to most expensive, because the
@@ -352,7 +354,7 @@ def unrecognised_persona_values(axes: AxisSet) -> list[str]:
     to an accent nothing recognises renders correctly and then selects no voice, so the suite
     varies on paper and not in the calls.
     """
-    from .persona_guides import ENFORCED, vocabulary
+    from .scenariogen.model.persona import ENFORCED, vocabulary
 
     known = vocabulary()
     if not known:

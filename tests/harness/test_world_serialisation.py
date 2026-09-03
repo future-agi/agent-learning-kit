@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from fi.alk.harness import scenario_tools
-from fi.alk.harness.catalogue import Catalogue
+from fi.alk.harness.scenariogen.model.catalogue import Catalogue
 
 
 @pytest.fixture()
@@ -97,7 +97,7 @@ class TestReadingTheWorldAlsoRewritesIt:
 
     def test_reading_the_world_is_serialised_with_proving(self, monkeypatch, tmp_path, payload):
         from fi.alk.harness import scenario_tools
-        from fi.alk.harness.catalogue import Catalogue
+        from fi.alk.harness.scenariogen.model.catalogue import Catalogue
         from fi.alk.harness.contract import AgentContract, ToolSpec
 
         contract = AgentContract(

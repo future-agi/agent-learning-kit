@@ -760,7 +760,7 @@ class TestTheSpreadIsDealtNotRequested:
         assert first != second
 
     def test_locations_are_dealt_as_well_as_accents(self):
-        from fi.alk.harness.persona_guides import offered
+        from fi.alk.harness.scenariogen.model.persona import offered
         from fi.alk.harness.scenarios import callers_for
 
         places = offered("location")

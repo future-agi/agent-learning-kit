@@ -8,7 +8,7 @@ passes all three gates without noticing.
 from __future__ import annotations
 
 from fi.alk.harness.diversity import measure
-from fi.alk.harness.scenario import Persona, Scenario
+from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 
 
 def one(name: str, tests: str = "", who: str = "", where: str = "", accent: str = "American"):

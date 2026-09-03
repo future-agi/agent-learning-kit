@@ -19,7 +19,7 @@ from typing import Any
 from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
-from .catalogue import (
+from .scenariogen.model.catalogue import (
     Catalogue,
     SubGoal,
     load_catalogue,
@@ -29,7 +29,7 @@ from .catalogue import (
 from .contract import AgentContract
 from .scenariogen.store.folder import apply_setup
 from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
-from .scenario import (
+from .scenariogen.model.scenario import (
     Scenario,
     Step,
     contract_sequence_problems,
@@ -74,7 +74,7 @@ def persona_field(name: str) -> dict[str, Any]:
     Offered as an enum so the values arrive right the first time. Without the platform's model
     to read, it stays a plain string rather than an enum of nothing.
     """
-    from .persona_guides import offered
+    from .scenariogen.model.persona import offered
 
     allowed = offered(name)
     return {"type": "string", "enum": allowed} if allowed else {"type": "string"}
@@ -82,7 +82,7 @@ def persona_field(name: str) -> dict[str, Any]:
 
 def persona_vocabulary_note() -> str:
     """A sentence about why the persona fields are constrained, when they are."""
-    from .persona_guides import vocabulary
+    from .scenariogen.model.persona import vocabulary
 
     if not vocabulary():
         return ""

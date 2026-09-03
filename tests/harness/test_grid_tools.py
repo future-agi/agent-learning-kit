@@ -15,7 +15,7 @@ import pytest
 
 from fi.alk.harness.contract import AgentContract, ToolSpec
 from fi.alk.harness.grid_tools import grid_tools
-from fi.alk.harness.scenario import Persona, Scenario
+from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
 
@@ -227,7 +227,7 @@ class TestAScenarioMustMeanWhatItsNameClaims:
     """
 
     def refused(self, name: str, setup: str = "", ready: str = "") -> list[str]:
-        from fi.alk.harness.scenario import Scenario
+        from fi.alk.harness.scenariogen.model.scenario import Scenario
         from fi.alk.harness.scenario_tools import unbacked_condition_problems
 
         return unbacked_condition_problems(
@@ -636,7 +636,7 @@ class TestTheCanvasLoopEndToEnd:
         while its scenarios sat on disk, and a whole run would have ended reporting everything
         blocked.
         """
-        from fi.alk.harness.scenario import Scenario
+        from fi.alk.harness.scenariogen.model.scenario import Scenario
         from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
         server, state = grid_tools(contract, where)
@@ -705,7 +705,7 @@ def test_folding_credits_journalled_scenarios_not_only_folders(contract, tmp_pat
     import asyncio
 
     from fi.alk.harness.grid_tools import grid_tools
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenariogen.store.suite import record_written
 
     server, state = grid_tools(contract, tmp_path, wanted=200)
@@ -770,7 +770,7 @@ def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_p
     import asyncio
 
     from fi.alk.harness.grid_tools import grid_tools
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenariogen.store.suite import record_written
 
     server, state = grid_tools(contract, tmp_path, wanted=200)

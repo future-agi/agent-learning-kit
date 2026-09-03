@@ -234,7 +234,7 @@ class TestNothingIsTunedToOneAgent:
 
         import fi.alk.harness.axes as module
 
-        held = json.loads((Path(module.__file__).parent / "data" / "axes" / "universal.json").read_text())
+        held = json.loads((module.BUNDLED / "universal.json").read_text())
         # The note explains the rule and may quote the words it forbids; the axes may not use them.
         held.pop("notes", None)
         text = json.dumps(held).lower()

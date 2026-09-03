@@ -8,7 +8,7 @@ every scenario written before this existed gave the person an errand of their ow
 from __future__ import annotations
 
 from fi.alk.harness.contract import AgentContract
-from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.scenariogen.model.scenario import Scenario
 from fi.alk.harness.simulator_voice import (
     OUTBOUND_INSTRUCTIONS,
     SIMULATOR_INSTRUCTIONS,

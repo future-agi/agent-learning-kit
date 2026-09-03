@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from statistics import median
 
 from .blueprint import TOO_ALIKE, _overlap, _words
-from .scenario import Scenario
+from .scenariogen.model.scenario import Scenario
 
 
 @dataclass

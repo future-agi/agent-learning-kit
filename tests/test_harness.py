@@ -13,7 +13,7 @@ import re
 
 import pytest
 from fi.alk.harness.cli import build_parser
-from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.scenariogen.model.scenario import Scenario
 from fi.alk.harness.session import ARTIFACT, DONE, TEXT, TOOL, Event
 from fi.alk.harness.tools import accept_contract, qualified
 from fi.alk.harness.understand import load, opening
@@ -2221,7 +2221,7 @@ def test_sqlite_world_seed_encodes_structured_values_as_json():
 
 def test_a_sub_goal_that_settles_nothing_is_rejected():
     """Every scenario referencing it would report a result nobody should believe."""
-    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, validate_sub_goal
 
     assert validate_sub_goal(SubGoal(name="x", what="means something")) != []
     settled = SubGoal(
@@ -2239,7 +2239,7 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
 
 
 def test_a_check_must_actually_define_one():
-    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, validate_sub_goal
 
     problems = validate_sub_goal(
         SubGoal(name="x", what="y", check="rows = world.state()['orders']")
@@ -2284,7 +2284,7 @@ def test_a_conversational_simulator_prompt_requires_a_persona_slot():
 
 
 def test_a_persona_is_a_structured_simulator_prompt_slot():
-    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
     from fi.alk.harness.simulator import fill
 
     scenario = Scenario(
@@ -2318,8 +2318,8 @@ def test_a_persona_is_a_structured_simulator_prompt_slot():
 
 
 def test_an_empty_persona_is_rejected():
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Persona, Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, validate_scenario
 
     scenario = Scenario(
         name="empty-persona",
@@ -2342,8 +2342,8 @@ def test_an_empty_persona_is_rejected():
 
 
 def test_a_persona_must_contain_the_profile_that_drives_variation():
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Persona, Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, validate_scenario
 
     scenario = Scenario(
         name="thin-persona",
@@ -2367,7 +2367,7 @@ def test_a_persona_must_contain_the_profile_that_drives_variation():
 
 
 def test_same_call_contract_state_cannot_be_hidden_in_scenario_setup():
-    from fi.alk.harness.scenario import Scenario, contract_sequence_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario, contract_sequence_problems
 
     impossible = Scenario(
         name="cancel-an-old-ride",
@@ -2448,7 +2448,7 @@ def test_a_check_can_insist_on_the_arguments_not_just_the_call():
 
 def _built_environment(tmp_path):
     """A saved world plus a catalogue, which is what the environment step leaves behind."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.world.snapshot import save
 
     world, contract = _cart_world()
@@ -2557,7 +2557,7 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     import logging
 
     from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import GeneratedWorld
 
     world = GeneratedWorld()
@@ -2580,7 +2580,7 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
     """Proof may drive the real backend, but must only credit what the agent could call."""
     from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
     world = GeneratedWorld()
@@ -2631,7 +2631,7 @@ def test_source_reference_step_separates_agent_arguments_from_dependency_payload
 
 def test_source_reference_step_records_a_purely_local_agent_tool():
     from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import GeneratedWorld
 
     world = GeneratedWorld()
@@ -2651,7 +2651,7 @@ def test_source_reference_step_records_a_purely_local_agent_tool():
 
 def test_source_reference_step_can_use_an_earlier_dependency_result():
     from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
     world = GeneratedWorld()
@@ -2702,7 +2702,7 @@ def test_source_reference_step_can_use_an_earlier_dependency_result():
 
 def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     """A check that passes without the agent acting grades nothing while reporting a result."""
-    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, save_catalogue
     from fi.alk.harness.scenario_tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -2726,9 +2726,9 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
     """A check comparing calls against rows holds when there are no calls at all, so it reports
     itself as held for an agent that did nothing. Another strong check must not hide that defect:
     every checkpoint shown to a user needs its own evidence."""
-    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, save_catalogue
     from fi.alk.harness.prove import prove
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenario_tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -2758,7 +2758,7 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
 
 
 def test_predictable_and_reused_otp_fixtures_are_rejected():
-    from fi.alk.harness.scenario import (
+    from fi.alk.harness.scenariogen.model.scenario import (
         Persona,
         Scenario,
         fixture_problems,
@@ -2799,7 +2799,7 @@ def test_predictable_and_reused_otp_fixtures_are_rejected():
 
 
 def test_demo_payment_and_booking_values_are_rejected():
-    from fi.alk.harness.scenario import Scenario, fixture_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario, fixture_problems
     from fi.alk.harness.world.tools import _base_data_problems
 
     scenario = Scenario(
@@ -2885,7 +2885,7 @@ def test_submitted_fixture_demo_values_are_preserved_but_generated_copies_are_re
 
 
 def test_diversity_gate_catches_one_person_reworded_as_a_suite():
-    from fi.alk.harness.scenario import Persona, Scenario, suite_diversity_problems
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, suite_diversity_problems
 
     scenarios = [
         Scenario(
@@ -2912,7 +2912,7 @@ def test_diversity_gate_catches_one_person_reworded_as_a_suite():
 
 
 def test_diversity_does_not_treat_generated_noop_setup_files_as_reused_data():
-    from fi.alk.harness.scenario import Scenario, suite_diversity_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario, suite_diversity_problems
 
     scenarios = [
         Scenario(
@@ -3706,8 +3706,8 @@ def test_a_scenario_with_no_solution_cannot_be_proved(tmp_path):
 
 def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
     """If a payment step appears in 50 scenarios, the results should say where payment fails."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenario_tools import not_ready
 
     catalogue = Catalogue(
@@ -3726,7 +3726,7 @@ def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
 
 
 def test_the_simulator_prompt_slots_a_scenario_leaves_unfilled_are_caught(tmp_path):
-    from fi.alk.harness.scenario import Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario, validate_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     prompt = (
@@ -3824,7 +3824,7 @@ def test_repointing_changes_only_where_the_agents_tools_are_answered():
 
 def test_a_scenario_fills_the_simulator_prompt_before_a_call_is_placed(tmp_path):
     from fi.alk.harness.run.live import prepare
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.simulator import save_simulator_prompt
 
     root, _contract, _catalogue = _built_environment(tmp_path)
@@ -3846,7 +3846,7 @@ def test_a_scenario_that_leaves_a_slot_empty_never_reaches_a_call(tmp_path):
     """An unfilled slot would be read out to the caller verbatim."""
     import pytest as _pytest
     from fi.alk.harness.run.live import prepare
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.simulator import save_simulator_prompt
 
     root, _contract, _catalogue = _built_environment(tmp_path)
@@ -4314,9 +4314,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     }
     # A skill also backticks the names of fields it is telling the model to fill in. Those are
     # not tools, and the list of them is derived rather than hand-kept so it cannot go stale.
-    from fi.alk.harness.catalogue import SubGoal
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal
     from fi.alk.harness.contract import AgentContract, ToolSpec
-    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 
     fields = set()
     for model in (AgentContract, ToolSpec, Scenario, Persona, SubGoal):
@@ -5052,7 +5052,7 @@ def test_a_timestamped_suite_replaces_a_stale_legacy_runs_file(tmp_path):
 
 def test_voice_scenario_phone_is_bound_from_nested_fixture():
     from fi.alk.harness.run.live import fixture_phone
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     scenario = Scenario(
         name="one",
@@ -5910,7 +5910,7 @@ def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said
     Judged on that alone, the gate rejects exactly the scenarios that test a refusal. An agent that
     did nothing also said nothing, so a judged sub-goal cannot be passed by an empty run.
     """
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
     from fi.alk.harness.checks import Outcome
     from fi.alk.harness.prove import Proof
 
@@ -6155,8 +6155,8 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     """The folders are the truth and they are what gets read back. Writing the survivors without
     taking the others away means a dropped scenario returns on the next load, still failing, and
     dropping it appears to do nothing at all."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
 
     catalogue = Catalogue(
@@ -6332,7 +6332,7 @@ def test_judged_scenario_check_cannot_pass_vacuously_without_actions():
         _voice_attempt_should_retry,
         _voice_infrastructure_failure,
     )
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.model.scenario import Step
 
     scenario = type(
         "ExecutableScenario",
@@ -6447,7 +6447,7 @@ def test_the_closing_line_is_kept():
 
     # The person is asked for that line, and told not to leave while the agent is waiting.
     from fi.alk.harness.contract import AgentContract
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     asked = customer_prompt(
         Scenario(name="s", instruction="you want a thing", sub_goals=[]),
@@ -6516,12 +6516,12 @@ def test_the_platform_is_used_only_when_it_is_configured():
 
 
 def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
-    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.scenariogen.model.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Exchange, Transcript
     from fi.alk.harness.run.grade import judge_suite_evals
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     calls = []
 
@@ -6573,12 +6573,12 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
 def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
     monkeypatch,
 ):
-    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.scenariogen.model.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Transcript
     from fi.alk.harness.run.grade import judge_suite_evals
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
     monkeypatch.setattr(platform_evals, "configured", lambda: False)
@@ -6595,12 +6595,12 @@ def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
 
 
 def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
-    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.scenariogen.model.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Transcript
     from fi.alk.harness.run.grade import judge_suite_evals
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     monkeypatch.setattr(platform_evals, "configured", lambda: True)
     monkeypatch.setattr(

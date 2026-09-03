@@ -36,9 +36,9 @@ from .blueprint import SLICE_SCENARIOS, WORTH_PLANNING
 from .blueprint import load as load_canvas
 from .grid_tools import GRID_SERVER, Coverage, grid_tools
 from .sample import Pick, coverage, plan as plan_picks
-from .catalogue import load_catalogue
+from .scenariogen.model.catalogue import load_catalogue
 from .contract import AgentContract
-from .scenario import Scenario
+from .scenariogen.model.scenario import Scenario
 from .scenario_tools import (
     SCENARIO_SERVER,
     parallel_suites,
@@ -525,7 +525,7 @@ def callers_for(index: int, wanted: int) -> str:
     suggestion rather than a rule, because the caller still has to suit the scenario: a stolen
     phone is not a cheerful call whatever this hands out.
     """
-    from .persona_guides import offered
+    from .scenariogen.model.persona import offered
 
     people = offered("personality")
     accents = offered("accent")

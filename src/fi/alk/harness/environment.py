@@ -71,7 +71,7 @@ except (
 
 # Compatibility exports: the environment artifact was split into focused catalogue and
 # simulator modules. Existing ALK integrations may keep importing the original surface.
-from .catalogue import (  # noqa: E402
+from .scenariogen.model.catalogue import (  # noqa: E402
     Catalogue,
     SubGoal,
     load_catalogue,

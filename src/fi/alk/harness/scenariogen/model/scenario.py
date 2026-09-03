@@ -21,9 +21,9 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
-from .scenariogen.store.setup_code import fingerprint
+from ..store.setup_code import fingerprint
 from .catalogue import Catalogue
-from .simulator import variables_in
+from ...simulator import variables_in
 
 
 class Step(BaseModel):
@@ -305,7 +305,7 @@ def validate_scenario(
     elif scenario.persona is not None:
         # A persona in words of its own renders fine and then does nothing: no behaviour guidance
         # attaches, and the accent it names selects no voice.
-        from .persona_guides import unrecognised
+        from .persona import unrecognised
 
         problems.extend(unrecognised(scenario.persona.model_dump()))
     if not scenario.sub_goals:

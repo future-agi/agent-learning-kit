@@ -10,7 +10,7 @@ import pytest
 
 from fi.alk.harness.checks import run_check
 from fi.alk.harness.scenariogen.store.folder import _run, check_ready
-from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.scenariogen.model.scenario import Scenario
 
 # --- checks.py: run_check's return convention -------------------------------------------------
 

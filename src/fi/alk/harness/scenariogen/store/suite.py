@@ -19,9 +19,9 @@ import os
 import shutil
 from pathlib import Path
 
-from ...catalogue import Catalogue, load_catalogue
+from ..model.catalogue import Catalogue, load_catalogue
 from .folder import SCENARIOS, read_all, write_folder, write_index
-from ...scenario import Scenario
+from ..model.scenario import Scenario
 
 def write_scenarios(
     scenarios: list[Scenario], destination: Path, catalogue: Catalogue | None = None

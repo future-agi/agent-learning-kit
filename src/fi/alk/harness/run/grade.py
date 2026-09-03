@@ -26,10 +26,10 @@ from ..backends import SessionSpec, tool, tool_server
 
 from ..config import chosen_model
 from ..contract import AgentContract
-from ..scenario import Scenario
+from ..scenariogen.model.scenario import Scenario
 from ..session import Stage
 from ..checks import Outcome, run_check
-from ..catalogue import Catalogue, SuiteEval
+from ..scenariogen.model.catalogue import Catalogue, SuiteEval
 from ..world.runtime import GeneratedWorld
 from .conversation import Transcript
 

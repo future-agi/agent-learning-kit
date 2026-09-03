@@ -2,7 +2,7 @@
 on the on-disk layout `folder.py` documents) and turns them into the `Scenario`/`SubGoal` objects
 `hosted_scheduler.py` actually drives.
 
-Deliberately does NOT import `fi.alk.harness.scenariogen.store.folder` or `fi.alk.harness.scenario` for the model:
+Deliberately does NOT import `fi.alk.harness.scenariogen.store.folder` or `fi.alk.harness.scenariogen.model.scenario` for the model:
 both exist at HEAD, but HEAD's `Scenario` carries no `scenario_key`/`scenario_id` (those are
 pr63-only) and its default `extra="ignore"` would silently discard exactly the two fields the
 scheduler needs off a `scenario.json` written in the newer shape. So this module reads
@@ -216,7 +216,7 @@ def _validate_subgoal_name(name: str, *, folder_name: str) -> None:
 def _load_one(folder: Path) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
-    `scenario.json` itself as a plain dict rather than through `fi.alk.harness.scenario.Scenario`
+    `scenario.json` itself as a plain dict rather than through `fi.alk.harness.scenariogen.model.scenario.Scenario`
     -- see the module docstring. `folder.py`'s `read_folder` restores only `setup_code`/
     `ready_code` from a folder; it does not read `checks/` at all, so every `checks/<goal>.py` for
     each name in the document's `sub_goals` is read here, by this module, directly.

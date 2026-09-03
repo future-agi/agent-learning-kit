@@ -37,7 +37,7 @@ from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 
 # =================================================================================================
 # Scenario-folder fixture writer -- `folder.py`'s documented layout, hand-written (never through
-# `fi.alk.harness.scenariogen.store.folder`/`fi.alk.harness.scenario`, matching the module under test).
+# `fi.alk.harness.scenariogen.store.folder`/`fi.alk.harness.scenariogen.model.scenario`, matching the module under test).
 # =================================================================================================
 
 
@@ -866,8 +866,8 @@ def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_sched
 
 def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Path) -> None:
     from fi.alk.harness.scenariogen.store import folder as fmod
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     catalogue = Catalogue(
         sub_goals=[

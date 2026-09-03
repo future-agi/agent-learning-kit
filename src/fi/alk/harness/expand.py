@@ -20,7 +20,7 @@ import logging
 from typing import Any
 
 from .axes import Axis, AxisSet, Setting
-from .scenario import Persona, Scenario
+from .scenariogen.model.scenario import Persona, Scenario
 
 logger = logging.getLogger(__name__)
 

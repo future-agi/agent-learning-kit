@@ -26,7 +26,7 @@ from .diversity import measure
 from .expand import expand_all, summarise
 from .grid import Grid, derive
 from .sample import coverage, plan
-from .scenario import Scenario
+from .scenariogen.model.scenario import Scenario
 from .semantic import duplicates as semantic_duplicates
 from .scenariogen.store.suite import journalled, load_scenarios, write_scenarios
 from .tools import schema

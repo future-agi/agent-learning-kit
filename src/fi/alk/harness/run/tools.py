@@ -27,7 +27,7 @@ from typing import Any
 from ..backends import tool, tool_server
 
 from .. import platform
-from ..catalogue import load_catalogue
+from ..scenariogen.model.catalogue import load_catalogue
 from ..config import ARTIFACTS_ROOT
 from ..scenariogen.store.suite import load_scenarios
 from ..tools import schema
