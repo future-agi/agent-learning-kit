@@ -430,6 +430,29 @@ A check that never compares two positions is not testing an order, however the s
 reads. When what you wrote says before, after or once, either the check compares positions or the
 sub-goal belongs in judged.
 
+**A refusal is checked by what did not happen, never by requiring it to happen.** This is the
+easiest check in the world to write backwards, and backwards it rewards the agent that misbehaves.
+If the rule is that a locked account may not be charged, do not write "the charge call was not
+attempted, so there is nothing to judge" and do not insist the attempt appear. Assert the end
+state: no charge exists, the balance is unchanged, the record was not created. An agent that
+declined so early it never reached for the tool has passed the hardest version of the test, and a
+check that fails it is telling the customer their better agent is worse.
+
+```python
+# WRONG: an agent that correctly refuses never makes the call, and this fails it
+def check(world, calls):
+    tried = [c for c in calls if c.name == "charge_card"]
+    if not tried:
+        return "charge_card was never attempted"
+    return None if tried[0].refused else "the charge went through"
+
+# RIGHT: the world says whether the thing that must not happen happened
+def check(world, calls):
+    if world.state()["charges"]:
+        return "a charge exists on a locked account"
+    return None
+```
+
 Return a sentence when something is wrong, `None` when it held.
 
 Use `judged` **only** where nothing observable settles it: whether a refusal was explained,
