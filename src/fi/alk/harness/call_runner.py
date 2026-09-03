@@ -986,6 +986,12 @@ class CallRunnerImpl:
                 if failure is not None
                 else f"no failure recorded (status={report.status.value})"
             )
+            # The engine marks an infrastructure loss (a dropped LiveKit transport, say) as
+            # retryable. Scoring that as a scenario failure fails every checkpoint for a reason
+            # the agent had no part in, so it is retried on another world like any other
+            # world-level fault. The scheduler bounds this at two attempts.
+            if failure is not None and failure.retryable:
+                raise WorldUnavailable(f"voice_call_no_test_case: {detail}")
             raise CallAborted(
                 f"voice_call_no_test_case: {detail}",
                 partial=base,

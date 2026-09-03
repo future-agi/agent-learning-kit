@@ -11,6 +11,7 @@ touch a real `SimulationRunner`, `rtc.Room`, or `AgentSession`.
 from __future__ import annotations
 
 import asyncio
+import pytest
 import json
 import sys
 from dataclasses import dataclass, field
@@ -750,6 +751,37 @@ def test_caseless_report_surfaces_the_engine_failure_reason(tmp_path: Path) -> N
     )
     assert "readiness/worker_never_ready" in str(exc)
     assert "no livekit worker registered within 90s" in str(exc)
+
+
+def test_a_retryable_caseless_report_is_retried_not_scored_as_a_failure(
+    tmp_path: Path,
+) -> None:
+    """A dropped transport is not the agent's doing. Scoring it fails every checkpoint for a
+    reason the agent had no part in, so it retries on another world instead."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            status=RunStatus.FAILED,
+            no_cases=True,
+            run_failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="transport_closed",
+                message="room session transport is closed",
+                retryable=True,
+            ),
+        )
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    with pytest.raises(WorldUnavailable) as caught:
+        asyncio.run(
+            runner.run(
+                _FakeScenario("k1"),
+                _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+            )
+        )
+    assert "transport_closed" in str(caught.value)
 
 
 def test_place_call_exception_raises_call_aborted_with_timing_partial_never_raw(
