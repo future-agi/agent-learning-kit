@@ -103,6 +103,26 @@ def validate_scenario(
             "show this scenario can be passed at all"
         )
     problems.extend(fixture_problems(scenario))
+    # Refused here rather than counted later, because a scenario that plants nothing cannot be
+    # repaired by anything downstream: there is no failure in it to find. The suite gate says a
+    # suite is toothless after the fact; this stops one being written.
+    if not (
+        scenario.hazard.strip()
+        or scenario.withheld
+        or scenario.tempting.strip()
+        or scenario.invariant.strip()
+    ):
+        problems.append(
+            "nothing is planted in the agent's way: name a hazard, a fact the caller withholds, a "
+            "shortcut policy forbids, or an invariant to hold. A scenario a competent agent passes "
+            "by doing the obvious thing measures nothing"
+        )
+    if not scenario.failure_modes:
+        problems.append(
+            "no failure mode named: say how this is failed, not only how it is passed, or a red "
+            "result cannot say what went wrong"
+        )
+
     return problems
 
 

@@ -1543,6 +1543,8 @@ def _scenario(**overrides):
         "persona": "brisk",
         "opening": "one big mac please",
         "expect_state": {"cart.count": 1},
+        "hazard": "a record the caller relies on is not what they believe it is",
+        "failure_modes": ["acts on the stale value"],
     }
     payload.update(overrides)
     return payload
@@ -2494,6 +2496,9 @@ def _delta(**overrides):
         "fixture": {"origin": "seed", "item_id": "big_mac"},
         "solution": [{"tool": "add", "arguments": {"item_id": "big_mac"}}],
         "sub_goals": ["item-added", "right-item"],
+        # A scenario that plants nothing is refused, so fixtures carry what a real one carries.
+        "hazard": "the item the caller names is out of stock at this location",
+        "failure_modes": ["adds a different item without saying so"],
     }
     payload.update(overrides)
     return payload
