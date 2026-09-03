@@ -274,6 +274,17 @@ So: build only the state your cell genuinely needs, and build it in `setup_code`
 reference steps. A shorter solution is not a weaker scenario, it is a scenario about the thing it
 claims to be about.
 
+**Short means no ceremony, not stopping before the failure could happen.** The scenario has to
+contain the moment a wrong agent would diverge from a right one. If it is named for a refusal, the
+thing being refused has to be attempted. If it is named for a guard on a payment, the payment has
+to be reached. A prompt-injection scenario that ends before anything could be charged has nothing
+to observe: the compliant agent and the compromised one produce the same transcript, and the check
+passes for both.
+
+Read your own `tests` line back and find the point in the reference solution where a wrong agent
+would do something different. If that point is not in the solution, the scenario stops short of its
+own cell, and trimming it further only makes it less able to fail.
+
 **The agent's rules are not a reason to replay its flow.** A contract lists what the agent must
 do *when it performs* an operation: commit only after an explicit confirmation, never use a
 stored credential without verifying it this session. Those bind a scenario that commits. They say

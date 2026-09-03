@@ -71,6 +71,17 @@ mean to write.
 **It is not another dressing of one you already have.** The same test with a different name is
 worse than nothing: it inflates the count and hides the gap it should have shown.
 
+**Name it for what it tests, never for who called.** The folder name is how a failure gets read
+weeks later, so it has to say which behaviour broke: `cancel-ride__fee-disclosed-before-charge`,
+not `cancel-ride__dana-standard`. A caller's name in the folder name is a sign the caller was
+carrying the difference the test should have been carrying.
+
+**Who the caller is is not a lever.** A different name, job or city is the same test in a different
+costume. What can change a result is the caller's situation and how they behave: what they are
+entitled to, what they can prove, what they already have, whether they are calm or in a hurry,
+cooperative or withholding, consistent or contradicting themselves. Vary those, and let the name
+follow. Two scenarios that differ only in who is speaking are one scenario.
+
 ## Write the check that would catch the failure
 
 A scenario is only as good as the thing that decides whether it passed. The usual failure is

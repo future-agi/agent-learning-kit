@@ -410,6 +410,26 @@ You get the world afterwards and every call that was made, each with `.name`, `.
 `.ok` and `.refused`. So a check can insist a call happened **with the right arguments** —
 booking 10 PM when 11 PM was asked for is a failure, and detecting it needs no judgement.
 
+The list is in the order things happened, so a check can also insist on **when** one call happened
+relative to another. Most rules worth testing are about order: verify before charging, quote the
+fee before cancelling, read back before booking. A check that only asks whether both calls appear
+passes an agent that did them backwards.
+
+```python
+def check(world, calls):
+    names = [c.name for c in calls if c.ok]
+    for needed in ("verify_identity", "charge_card"):
+        if needed not in names:
+            return f"{needed} was never called"
+    if names.index("verify_identity") > names.index("charge_card"):
+        return "charged the card before verifying identity"
+    return None
+```
+
+A check that never compares two positions is not testing an order, however the sentence above it
+reads. When what you wrote says before, after or once, either the check compares positions or the
+sub-goal belongs in judged.
+
 Return a sentence when something is wrong, `None` when it held.
 
 Use `judged` **only** where nothing observable settles it: whether a refusal was explained,
