@@ -36,7 +36,7 @@ from fi.alk.harness import sessions  # noqa: E402
 from fi.alk.harness.chat import Conversation  # noqa: E402
 from fi.alk.harness.config import chosen_model, credentials_hint  # noqa: E402
 from fi.alk.harness.run import run_suite  # noqa: E402
-from fi.alk.harness.scenarios import load as load_scenarios  # noqa: E402
+from fi.alk.harness.scenariogen.store.suite import load_scenarios  # noqa: E402
 from fi.alk.harness.understand import load as load_contract  # noqa: E402
 
 app = FastAPI(title="harness")
@@ -469,8 +469,8 @@ async def scenarios():
     shown as unknown.
     """
     from fi.alk.harness.environment import load_catalogue
-    from fi.alk.harness.folder import folder_for
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.store.folder import folder_for
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     out = current.path if current else None
     if not out:
@@ -518,7 +518,7 @@ async def scenario_file(name: str, path: str):
     Resolved and then checked to be inside that scenario's own folder: the path comes from a
     query string, and a page is not a trustworthy source of one.
     """
-    from fi.alk.harness.folder import folder_for
+    from fi.alk.harness.scenariogen.store.folder import folder_for
 
     out = current.path if current else None
     if not out:

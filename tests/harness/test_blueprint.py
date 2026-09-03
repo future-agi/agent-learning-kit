@@ -622,8 +622,10 @@ class TestThePlannerMayProbeFreely:
 
     def test_a_planning_stage_is_not_pushed_to_submit(self, contract, where, monkeypatch):
         from fi.alk.harness.scenariogen.write import stage as scenarios
+        from fi.alk.harness.scenariogen.write import delegation as writer_fanout
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
         said = self.probes(stage, monkeypatch, times=16)
         assert not any("throwaway probes have run" in one for one in said)
@@ -753,7 +755,7 @@ class TestTheSpreadIsDealtNotRequested:
     offered five, the same collapse accents had before they were dealt."""
 
     def test_each_slice_starts_from_a_different_place(self):
-        from fi.alk.harness.scenariogen.write.stage import callers_for
+        from fi.alk.harness.scenariogen.write.delegation import callers_for
 
         first, second = callers_for(0, 4), callers_for(1, 4)
         assert first and second
@@ -761,7 +763,7 @@ class TestTheSpreadIsDealtNotRequested:
 
     def test_locations_are_dealt_as_well_as_accents(self):
         from fi.alk.harness.scenariogen.model.persona import offered
-        from fi.alk.harness.scenariogen.write.stage import callers_for
+        from fi.alk.harness.scenariogen.write.delegation import callers_for
 
         places = offered("location")
         if not places:
@@ -793,7 +795,7 @@ def test_a_writer_gets_enough_turns_for_the_slice_it_can_be_handed():
     writes anything, so slices came back part-filled and the next writer paid that reading cost
     again to finish somebody else's work."""
     from fi.alk.harness.scenariogen.plan.canvas import SLICE_SCENARIOS
-    from fi.alk.harness.scenariogen.write.stage import TURNS_EACH, WRITER_TURNS
+    from fi.alk.harness.scenariogen.write.delegation import TURNS_EACH, WRITER_TURNS
 
     biggest = SLICE_SCENARIOS * 2  # what claim_slice clamps to
     assert WRITER_TURNS >= biggest * TURNS_EACH, "not even the writing fits"

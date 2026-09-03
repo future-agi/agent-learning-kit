@@ -15,6 +15,8 @@ import pytest
 
 from fi.alk.harness.contract import AgentContract, ToolSpec
 from fi.alk.harness.scenariogen.plan.tools import grid_tools
+from fi.alk.harness.scenariogen.write import delegation as writer_fanout
+from fi.alk.harness.scenariogen.write.tools import SCENARIO_SERVER
 from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
@@ -208,6 +210,7 @@ class TestUngatedStageStillTalksToTheOperator:
 
         # The stage reads the built world to ground its prompt, which is not what is under test.
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+        monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=tmp_path / "s", wanted=5)
         spec = stage._spec
         assert spec.gated is False
@@ -323,6 +326,8 @@ class TestAFanOutCanActuallySave:
         from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+
+        monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
         seen: list = []
         real = scenario_tools
 
@@ -332,6 +337,7 @@ class TestAFanOutCanActuallySave:
             return server, kept
 
         monkeypatch.setattr(scenarios, "scenario_tools", spy)
+        monkeypatch.setattr(writer_fanout, "scenario_tools", spy)
         # Above the delegation threshold, so writers are declared.
         scenarios.open_stage(contract, out=where, wanted=50)
         assert len(seen) >= 2, "expected a server for the stage and one for its writers"
@@ -368,13 +374,15 @@ class TestAFanOutCanActuallySave:
         from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         monkeypatch.setattr(stage_module, "world_summary", lambda _root: "(no world here)")
+        monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
+
         shared: list = []
         stage, kept = scenario_tools(contract, where, where, wanted=1, share=shared)
-        writers = stage_module.writer_workers(contract, where, share=shared)
-        writer = writers[stage_module.WRITER].servers[stage_module.SCENARIO_SERVER]
+        writers = writer_fanout.writer_workers(contract, where, share=shared)
+        writer = writers[writer_fanout.WRITER].servers[SCENARIO_SERVER]
 
         # What accept_scenario does once all three gates pass: the writer's list gets it.
-        writers_list = next(iter(writers.values())).servers[stage_module.SCENARIO_SERVER]
+        writers_list = next(iter(writers.values())).servers[SCENARIO_SERVER]
         assert writers_list is writer
         shared.append(Scenario(name="only-one", setup_code="", ready_code=""))
 
@@ -550,6 +558,8 @@ class TestTheCanvasLoopEndToEnd:
         from fi.alk.harness.scenariogen.write import stage as scenarios
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
+
+        monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
         writer = next(iter(stage._spec.workers.values()))
         writer_tools = {one.name for server in writer.servers.values() for one in server.tools}
@@ -844,10 +854,11 @@ def test_a_small_ask_keeps_its_own_pen(contract, tmp_path, monkeypatch):
 
     # A worker's prompt embeds the seeded world; this test is about the tool list beside it.
     monkeypatch.setattr(stage_module, "world_summary", lambda _where: "a world")
+    monkeypatch.setattr(writer_fanout, "world_summary", lambda _where: "a world")
 
     for wanted, expected in ((5, True), (10, True), (19, True), (20, False), (200, False)):
         workers = (
-            stage_module.writer_workers(contract, tmp_path)
+            writer_fanout.writer_workers(contract, tmp_path)
             if wanted >= stage_module.FEWEST_WORTH_DELEGATING
             else {}
         )

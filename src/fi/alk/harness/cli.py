@@ -28,7 +28,7 @@ from .config import (
     permission_gate,
 )
 from .run.targets import supported as target_kinds
-from .scenariogen.write.stage import load as load_written
+from .scenariogen.store.suite import load_scenarios as load_written
 from .scenariogen.write.stage import open_stage as scenario_stage
 from .scenariogen.write.stage import opening as scenario_opening
 from .session import TEXT, Event

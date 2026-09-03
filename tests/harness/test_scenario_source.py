@@ -1469,7 +1469,7 @@ def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
     import inspect
     from fi.alk.harness.scenariogen.plan import tools as grid_tools
     from fi.alk.harness.backends.base import MOST_WORKERS_AT_ONCE
-    from fi.alk.harness.scenariogen.write.stage import AT_ONCE
+    from fi.alk.harness.scenariogen.write.delegation import AT_ONCE
 
     assert MOST_WORKERS_AT_ONCE == 12, "the enforced ceiling"
     assert AT_ONCE == 10, "what a stage is told to aim at"
