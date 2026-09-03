@@ -408,6 +408,7 @@ def test_bundle_preserves_sqlite_column_defaults(tmp_path: Path) -> None:
             "CREATE TABLE bookings ("
             "booking_ref TEXT PRIMARY KEY, "
             "status TEXT NOT NULL DEFAULT 'pending', "
+            "cash_supported BOOLEAN NOT NULL DEFAULT 0, "
             "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
         database.execute("INSERT INTO bookings (booking_ref) VALUES ('UB1')")
@@ -429,6 +430,10 @@ def test_bundle_preserves_sqlite_column_defaults(tmp_path: Path) -> None:
     # authored world accepted it.
     assert "NOT NULL DEFAULT CURRENT_TIMESTAMP" in seed_sql
     assert "NOT NULL DEFAULT 'pending'" in seed_sql
+    # SQLite keeps booleans as 0/1; Postgres refuses that against a boolean column outright
+    # ("default expression is of type integer"), which failed a real hosted job at seed.
+    assert "NOT NULL DEFAULT FALSE" in seed_sql
+    assert "DEFAULT 0" not in seed_sql
 
 
 def test_bundle_preserves_sqlite_unique_constraints_for_upserts(tmp_path: Path) -> None:
