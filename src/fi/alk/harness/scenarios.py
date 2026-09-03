@@ -342,12 +342,13 @@ def opening(
             # the canvas. Hiding this behind a flag left every suite written one at a time.
             "\n\nWriters run at the same time. claim_slice a slice per writer and brief them "
             "together, one brief each naming its coordinates, rather than waiting for one to "
-            "finish before starting the next. Judge how many to run from what the canvas has "
-            "open and how much they would overlap; more writers on near-identical buckets buys "
-            f"nothing. Never run more than {MOST_AT_ONCE} at a time: past that they contend for "
-            "the same machine and the whole suite slows down. If writers come back empty or "
-            "refused, run fewer and find out why before claiming more. fold_return each one's "
-            "result so what it did not cover reopens."
+            f"finish before starting the next. Run {MOST_AT_ONCE} at a time whenever the canvas "
+            "has that much open, and never more: past that they contend for the same machine and "
+            "the whole suite slows down. Running fewer than the canvas can feed is the common "
+            "mistake, and it is what makes a large suite take hours. Use fewer only when the "
+            "buckets left would overlap, since several writers on near-identical buckets buy "
+            "nothing, or when writers come back empty or refused, in which case find out why "
+            "before claiming more. fold_return each one's result so what it did not cover reopens."
             if delegates
             else ""
         )

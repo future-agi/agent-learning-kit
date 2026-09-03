@@ -336,7 +336,17 @@ class VertexGeminiSession:
             model=Gemini(
                 model=self._model,
                 retry_options=types.HttpRetryOptions(
-                    attempts=4,
+                    attempts=5,
+                    # Backs off rather than retrying on a fixed beat: a proxy that just returned
+                    # 502 is usually under load, and evenly spaced retries from every writer at
+                    # once are what turn a blip into an outage. Jitter spreads them apart, since
+                    # the writers all fail at the same moment and would otherwise all return
+                    # together. Every field is set because each defaults to None, which leaves
+                    # the pacing to whatever the client happens to do.
+                    initial_delay=1.0,
+                    exp_base=2.0,
+                    max_delay=30.0,
+                    jitter=1.0,
                     http_status_codes=[408, 429, 500, 502, 503, 504],
                 ),
             ),
