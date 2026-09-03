@@ -172,6 +172,53 @@ def _project() -> str:
     )
 
 
+def _retrying_vertex_credentials():
+    """Application-default credentials whose token fetch survives a flaky proxy.
+
+    The sandbox reaches Google through an egress proxy, and that proxy intermittently refuses the
+    CONNECT tunnel to the token endpoint with a 502. google-auth fetches the token over its own
+    requests session, which has no retry, so a single refusal raises and takes the whole stage
+    down. Nothing in the model client covers this: the token fetch happens below it, before any
+    model call is made.
+
+    Retrying at `connect` is the part that matters, because the failure is the tunnel itself
+    rather than a response to a request.
+    """
+    import google.auth
+    import requests
+    from google.auth.transport.requests import Request as AuthRequest
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+
+    session = requests.Session()
+    session.mount(
+        "https://",
+        HTTPAdapter(
+            max_retries=Retry(
+                total=5,
+                connect=5,
+                read=5,
+                backoff_factor=1.0,
+                status_forcelist=(408, 429, 500, 502, 503, 504),
+                allowed_methods=None,
+            )
+        ),
+    )
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+
+    # Later refreshes have to go the same way, so the wrapper keeps the retrying session rather
+    # than only pre-warming the first token. A run outlives one token.
+    class _Retrying(type(credentials)):  # type: ignore[misc]
+        def refresh(self, request):  # noqa: D102 - matches the credentials contract
+            return super().refresh(AuthRequest(session=session))
+
+    credentials.__class__ = _Retrying
+    credentials.refresh(AuthRequest(session=session))
+    return credentials
+
+
 def _api_key() -> str:
     """The Gemini API key to use instead of Vertex, or empty when Vertex should be used.
 
@@ -335,6 +382,13 @@ class VertexGeminiSession:
             name=self.session_id.replace("-", "_"),
             model=Gemini(
                 model=self._model,
+                # Vertex mints a token before any model call, and that fetch is the one the
+                # sandbox proxy has been refusing. Handing the client credentials that retry
+                # their own refresh is the only place that failure can be caught, since the
+                # retry options below cover model calls and never see it.
+                client_kwargs=(
+                    {} if _api_key() else {"credentials": _retrying_vertex_credentials()}
+                ),
                 retry_options=types.HttpRetryOptions(
                     attempts=5,
                     # Backs off rather than retrying on a fixed beat: a proxy that just returned

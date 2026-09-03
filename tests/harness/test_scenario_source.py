@@ -1488,3 +1488,23 @@ def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
     said = opening(AgentContract(agent="a", one_liner="b", modality="voice"), 200)
     assert f"up to {AT_ONCE} at once" in said
     assert str(MOST_WORKERS_AT_ONCE) not in said
+
+
+def test_vertex_credentials_retry_their_token_fetch():
+    """The sandbox proxy intermittently refuses the CONNECT tunnel to the token endpoint with a
+    502. google-auth has no retry there, and the model client's retry options never see that
+    fetch, so a single refusal killed whole runs. Retrying at connect is the part that matters."""
+    import inspect
+    from fi.alk.harness.backends import vertex_gemini
+
+    helper = inspect.getsource(vertex_gemini._retrying_vertex_credentials)
+    assert "connect=" in helper, "the failure is the tunnel, not a response"
+    assert "502" in helper
+    assert "backoff_factor" in helper
+
+    # The refresh has to keep using the retrying session: a run outlives one token.
+    assert "def refresh" in helper
+
+    start = inspect.getsource(vertex_gemini.VertexGeminiSession.start)
+    assert "_retrying_vertex_credentials" in start, "wired into the client"
+    assert "_api_key()" in start, "and skipped when a key makes the token fetch unnecessary"
