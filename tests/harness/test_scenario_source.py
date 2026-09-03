@@ -1449,3 +1449,15 @@ def test_contract_brief_tells_every_stage_which_way_the_call_goes():
 
     inbound = AgentContract(agent="ride", one_liner="books rides", modality="voice").brief()
     assert "DIRECTION: inbound" in inbound
+
+
+def test_the_gemini_backend_retries_a_transient_gateway_error():
+    """One 502 from the sandbox egress proxy used to fail the ADK root node and take the whole
+    stage down, losing every scenario already proved. The client must retry instead."""
+    import inspect
+    from fi.alk.harness.backends import vertex_gemini
+
+    source = inspect.getsource(vertex_gemini.VertexGeminiSession.start)
+    assert "retry_options" in source
+    for code in ("429", "502", "503"):
+        assert code in source, f"{code} should be retried, not fatal"

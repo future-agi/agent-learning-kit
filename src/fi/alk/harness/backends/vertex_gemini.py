@@ -305,6 +305,7 @@ class VertexGeminiSession:
 
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
+        from google.adk.models.google_llm import Gemini
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
@@ -326,9 +327,19 @@ class VertexGeminiSession:
         # static_instruction, not instruction: the skills are full of literal JSON braces,
         # and ADK templates {placeholders} in `instruction` from session state. Static
         # content is sent verbatim and is what ADK context-caches.
+        # A bare model name leaves the client with no retry policy, so one bad response from the
+        # sandbox egress proxy fails the root node and takes the whole stage down with it. A
+        # 502 there is transient and has cost two full runs; retrying the request is the
+        # difference between a blip and losing forty minutes of proved work.
         agent = LlmAgent(
             name=self.session_id.replace("-", "_"),
-            model=self._model,
+            model=Gemini(
+                model=self._model,
+                retry_options=types.HttpRetryOptions(
+                    attempts=4,
+                    http_status_codes=[408, 429, 500, 502, 503, 504],
+                ),
+            ),
             static_instruction=types.Content(
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]
             ),
