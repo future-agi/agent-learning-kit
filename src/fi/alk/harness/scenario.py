@@ -12,7 +12,6 @@ same way, and it needs no model to do it.
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import re
@@ -22,6 +21,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
+from .scenariogen.setup_code import fingerprint
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -571,7 +571,7 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
             "verification codes are reused across scenarios: "
             + ", ".join(duplicated_codes)
         )
-    setups = [signature for one in scenarios if (signature := _setup_signature(one))]
+    setups = [signature for one in scenarios if (signature := fingerprint(one.setup_code))]
     if len(set(setups)) != len(setups):
         problems.append("identical scenario setup data is reused more than once")
 
@@ -600,30 +600,3 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
     return problems
 
 
-def _setup_signature(scenario: Scenario) -> str:
-    """Comparable setup code, excluding the generated no-op function/documentation."""
-    source = scenario.setup_code.strip()
-    if not source:
-        return ""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return " ".join(source.split())
-    function = next(
-        (node for node in tree.body if isinstance(node, ast.FunctionDef)), None
-    )
-    if function is None:
-        return " ".join(source.split())
-    meaningful = [
-        node
-        for node in function.body
-        if not isinstance(node, ast.Pass)
-        and not (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        )
-    ]
-    return (
-        "" if not meaningful else ast.dump(ast.Module(body=meaningful, type_ignores=[]))
-    )

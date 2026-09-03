@@ -7100,7 +7100,8 @@ def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
     final save. A writer sharing the destination has `persist=False`, and that is exactly the
     case that needs the journal.
     """
-    from fi.alk.harness.scenario_tools import JOURNAL, accept_scenario, journalled
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.suite import JOURNAL, journalled
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
@@ -7118,7 +7119,8 @@ def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
 
 def test_a_writer_that_can_persist_does_not_also_journal(tmp_path):
     """The folder is the truth once it exists; a journal beside it would be re-imported next run."""
-    from fi.alk.harness.scenario_tools import JOURNAL, accept_scenario
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.suite import JOURNAL
 
     root, _contract, catalogue = _built_environment(tmp_path)
     accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[], persist=True)

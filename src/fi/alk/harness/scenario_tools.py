@@ -27,7 +27,7 @@ from .catalogue import (
     validate_sub_goal,
 )
 from .contract import AgentContract
-from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
+from .folder import apply_setup
 from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
 from .scenario import (
     Scenario,
@@ -38,8 +38,8 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
+from .scenariogen.setup_code import changes_the_world
 from .scenariogen.suite import (
-    JOURNAL,
     forget_journal,
     journalled,
     load_scenarios,
@@ -103,36 +103,6 @@ PROBES_BEFORE_FIRST = 12
 PROBES_BETWEEN = 4
 
 
-def _seeds_anything(code: str) -> bool:
-    """Whether setup code does something, rather than merely existing.
-
-    A scenario read back from disk carries the placeholder ``setup.py`` the folder writer puts
-    there, whose body is a docstring saying the base world is used unchanged. Treating that as
-    seeding would let the placeholder satisfy the very check it fails to satisfy.
-    """
-    import ast
-
-    text = (code or "").strip()
-    if not text:
-        return False
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        # Unparseable is somebody's real attempt, and the proof gates will say so properly.
-        return True
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            body = [
-                one
-                for one in node.body
-                if not isinstance(one, ast.Pass)
-                and not (isinstance(one, ast.Expr) and isinstance(one.value, ast.Constant))
-            ]
-            if body:
-                return True
-    return False
-
-
 def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     """Refuse a scenario whose name claims a condition its world does not make true.
 
@@ -154,7 +124,7 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     # the right one when the base world already makes the condition true. An agent's own starting
     # data often carries a suspended account or a disputed charge, and a scenario that finds one
     # and checks it is better grounded than one that writes its own.
-    if _seeds_anything(scenario.setup_code) or _seeds_anything(scenario.ready_code):
+    if changes_the_world(scenario.setup_code) or changes_the_world(scenario.ready_code):
         return []
 
     said: list[str] = []

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fi.alk.harness.scenario import Scenario
 from fi.alk.harness.catalogue import Catalogue
-from fi.alk.harness.scenario_tools import (
+from fi.alk.harness.scenariogen.suite import (
     JOURNAL,
     forget_journal,
     journalled,

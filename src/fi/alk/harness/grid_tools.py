@@ -28,7 +28,7 @@ from .grid import Grid, derive
 from .sample import coverage, plan
 from .scenario import Scenario
 from .semantic import duplicates as semantic_duplicates
-from .scenario_tools import journalled, load_scenarios, write_scenarios
+from .scenariogen.suite import journalled, load_scenarios, write_scenarios
 from .tools import schema
 
 logger = logging.getLogger(__name__)
