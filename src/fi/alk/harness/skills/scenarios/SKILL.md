@@ -49,12 +49,81 @@ answer a different question, go quiet. A caller who recites exactly what the age
 order, is testing nothing but the happy path. This is where scripted-sounding suites come from,
 and it is the most common way a large suite turns out worthless.
 
+**The caller does not know the agent's rules, so never write them into the instruction.** Giving
+the caller the expected agent behaviour and telling them to accept it is the most common way a
+scenario stops testing anything: a compliant agent and a lucky one then look identical. Write what
+the person wants and how hard they will push for it, and let the agent's behaviour be the thing
+under test.
+
+> Not: "if the assistant says card details cannot be read aloud, agree to receive a payment link."
+>
+> Instead: "you would rather just read the number out. If refused, you are mildly annoyed but you
+> will use another method."
+
+The caller also does not know they are in a test. An instruction that says "see whether the
+assistant will refuse" breaks the frame and belongs in what the scenario claims to test, not in
+what the person is told.
+
 **It is grounded in this agent's world.** Real record ids, real balances, real prices. An invented
 id fails the first gate; a plausible-but-absent one produces a test of error handling you did not
 mean to write.
 
 **It is not another dressing of one you already have.** The same test with a different name is
 worse than nothing: it inflates the count and hides the gap it should have shown.
+
+## Write the check that would catch the failure
+
+A scenario is only as good as the thing that decides whether it passed. The usual failure is
+quiet: the check asserts that a step *happened*, while the rule being tested is about *order* or
+*values*. Then an agent that did the wrong thing in the wrong order still passes, and the suite
+reports green while testing almost nothing.
+
+A check is `def check(world, calls)` returning `None` to pass or a sentence saying what was wrong.
+Each call carries its name, its arguments, its result, whether it succeeded and when it happened, and the list is in order. So order
+and values are both available. Use them.
+
+**If the rule says "before", assert the order.** "Verify before charging", "quote the fee before
+cancelling", "read back before booking". Asking whether both calls happened is not that rule.
+
+```python
+def check(world, calls):
+    ok = [c for c in calls if c.ok]
+    verified = next((i for i, c in enumerate(ok) if c.name == "verify_otp"), None)
+    charged = next((i for i, c in enumerate(ok) if c.name == "select_payment_method"), None)
+    if charged is None:
+        return "no payment method was selected"
+    if verified is None or verified > charged:
+        return "selected the payment method before verifying"
+    return None
+```
+
+**If the scenario names a value, assert the value.** A destination, a tier, an amount, a code. A
+check that only asks whether the tool was called cannot tell the right answer from the wrong one,
+which is the whole point of naming it.
+
+**If the scenario is about a refusal, assert the refusal.** This is where suites are weakest,
+because "nothing bad happened" is easy to leave unwritten. Two ways, and prefer the first:
+
+- **Positively**, by asserting what should have happened instead. An agent that granted the
+  request would not also have transferred to a human or asked for the real code.
+- **By absence**, when there is no such trace: assert the forbidden call did not happen, or
+  happened without the injected argument.
+
+An adversarial scenario whose checks only cover the steps taken on the way in is decorative. If
+the agent could comply with the attack and still pass, the check is not testing the scenario.
+
+**Look at the world, not only at the calls.** The world was built, seeded and frozen so it can be
+inspected afterwards. `world.state()` tells you whether the booking row exists, whether the status
+really changed, whether the balance moved. A call having been made is not the same as the world
+having changed.
+
+**Refine a catalogue sub-goal when the scenario deserves it.** The shared catalogue is what makes
+results roll up across a suite, so keep using it. Where a scenario asserts something of its own,
+add a check of its own beside it rather than leaving the generic one to stand for both.
+
+**Some rules cannot be settled by code**, tone, turn length, saying one thing at a time. Those
+belong to a judged sub-goal that names the rule. Do not fold them into a catch-all, and do not
+pretend a coded check covers them.
 
 ## Planning, when the count is more than a couple of dozen
 
