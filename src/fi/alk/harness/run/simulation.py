@@ -340,7 +340,7 @@ async def _run_one(
     second is graded against.
     """
 
-    from ..folder import apply_setup, check_ready
+    from ..scenariogen.store.folder import apply_setup, check_ready
     from ..world.snapshot import restore
 
     spoken = spoken_to(contract)
@@ -427,7 +427,7 @@ async def _typed_to(
     leaves behind is what the checks read.
     """
     from ..catalogue import load_catalogue
-    from . import converse
+    from ..run import converse
     from .grade import (
         checkpoints,
         grade_sub_goals,

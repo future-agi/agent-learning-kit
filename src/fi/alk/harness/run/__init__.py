@@ -20,7 +20,7 @@ from ..contract import AgentContract
 from ..catalogue import load_catalogue
 from ..simulator import load_simulator_prompt
 from ..scenario import Scenario
-from ..folder import apply_setup, check_ready
+from ..scenariogen.store.folder import apply_setup, check_ready
 from ..world.snapshot import restore
 from .conversation import FINISHED, Exchange, Transcript, converse
 from .grade import (

@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 from ..config import artifact_dir
-from ..scenariogen.suite import load_scenarios
+from ..scenariogen.store.suite import load_scenarios
 from .live import grade, wire
 
 CASE = os.environ.get("HARNESS_VOICE_CASE", "2.1.2")

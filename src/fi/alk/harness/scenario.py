@@ -21,7 +21,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
-from .scenariogen.setup_code import fingerprint
+from .scenariogen.store.setup_code import fingerprint
 from .catalogue import Catalogue
 from .simulator import variables_in
 

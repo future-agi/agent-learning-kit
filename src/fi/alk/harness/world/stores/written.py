@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import Snapshot, StoreError, register_store
+from ..stores import Snapshot, StoreError, register_store
 from .container import ContainerStore
 
 # The functions a written store defines. Fewer would not be enough for an arbitrary engine, and

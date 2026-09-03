@@ -29,7 +29,7 @@ from ..backends import tool, tool_server
 from .. import platform
 from ..catalogue import load_catalogue
 from ..config import ARTIFACTS_ROOT
-from ..scenariogen.suite import load_scenarios
+from ..scenariogen.store.suite import load_scenarios
 from ..tools import schema
 from ..world.snapshot import require_source_implementation
 from .call import CASE, place_the_call
@@ -301,7 +301,7 @@ def run_tools(
 
     async def _run_here(scenario: Any) -> dict[str, Any]:
         """The scenario against the agent stood up from its contract, over the same world."""
-        from . import run_suite
+        from ..run import run_suite
 
         if authenticity_error:
             return _err(authenticity_error)

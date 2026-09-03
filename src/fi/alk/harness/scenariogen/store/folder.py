@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .catalogue import Catalogue
-from .scenario import Scenario
-from .world.runtime import GeneratedWorld
+from ...catalogue import Catalogue
+from ...scenario import Scenario
+from ...world.runtime import GeneratedWorld
 
 SCENARIOS = "scenarios"
 INDEX = "scenarios.json"

@@ -21,7 +21,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-from . import Held, StoreError
+from ..stores import Held, StoreError
 
 # How long to wait for a fresh container to start answering. The first run on a machine pulls
 # the image, which dominates; afterwards this is a second or two.

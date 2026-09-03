@@ -4827,7 +4827,7 @@ def test_broken_setup_is_ours_and_says_so(tmp_path):
 def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
     """The files are the artifact, not a rendering of one. Something you can open and run is
     something you can argue with."""
-    from fi.alk.harness.folder import folder_for, read_folder
+    from fi.alk.harness.scenariogen.store.folder import folder_for, read_folder
     from fi.alk.harness.scenario_tools import write_scenarios
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -4867,7 +4867,7 @@ def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):
     import subprocess
     import sys
 
-    from fi.alk.harness.folder import folder_for, write_folder
+    from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
     from fi.alk.harness.prove import prepared
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -5952,7 +5952,7 @@ def test_a_setup_or_ready_that_says_nothing_is_not_a_complaint():
     """The convention is that a complaint is a sentence. An empty string reads as "no complaint" to
     whoever wrote it, and taking it as a failure produces a rejection with no reason attached: the
     author is then sent hunting for a problem that is not there."""
-    from fi.alk.harness.folder import _run
+    from fi.alk.harness.scenariogen.store.folder import _run
 
     for returning in ("''", "'   '", "None", "True"):
         outcome = _run(
@@ -7111,7 +7111,7 @@ def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
     case that needs the journal.
     """
     from fi.alk.harness.scenario_tools import accept_scenario
-    from fi.alk.harness.scenariogen.suite import JOURNAL, journalled
+    from fi.alk.harness.scenariogen.store.suite import JOURNAL, journalled
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
@@ -7130,7 +7130,7 @@ def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
 def test_a_writer_that_can_persist_does_not_also_journal(tmp_path):
     """The folder is the truth once it exists; a journal beside it would be re-imported next run."""
     from fi.alk.harness.scenario_tools import accept_scenario
-    from fi.alk.harness.scenariogen.suite import JOURNAL
+    from fi.alk.harness.scenariogen.store.suite import JOURNAL
 
     root, _contract, catalogue = _built_environment(tmp_path)
     accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[], persist=True)

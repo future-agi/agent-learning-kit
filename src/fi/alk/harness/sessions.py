@@ -90,7 +90,7 @@ class Session:
         really there — which is what makes reopening a session trustworthy.
         """
         from .catalogue import load_catalogue
-        from .folder import read_all
+        from .scenariogen.store.folder import read_all
         from .world.snapshot import saved as world_saved
 
         scenarios = read_all(self.path) if self.path.exists() else []

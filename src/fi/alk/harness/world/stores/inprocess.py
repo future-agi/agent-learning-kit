@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from . import Snapshot, StoreError
+from ..stores import Snapshot, StoreError
 
 # Carried alongside a record whose group is keyed rather than listed, because the key is usually
 # the id a check needs to name and rebuilding the group without it would throw it away.

@@ -33,7 +33,7 @@ from pathlib import Path
 
 from .catalogue import Catalogue
 from .checks import Outcome, run_check
-from .folder import apply_setup, check_ready
+from .scenariogen.store.folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import restore

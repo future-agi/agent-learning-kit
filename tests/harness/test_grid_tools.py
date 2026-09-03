@@ -16,7 +16,7 @@ import pytest
 from fi.alk.harness.contract import AgentContract, ToolSpec
 from fi.alk.harness.grid_tools import grid_tools
 from fi.alk.harness.scenario import Persona, Scenario
-from fi.alk.harness.scenariogen.suite import write_scenarios
+from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
 
 def call(server, name: str, args: dict | None = None) -> str:
@@ -156,7 +156,7 @@ class TestChangingASuiteThatAlreadyExists:
         server, _ = grid_tools(contract, where)
         said = call(server, "expand_suite")
         assert "no model call" in said
-        from fi.alk.harness.scenariogen.suite import load_scenarios
+        from fi.alk.harness.scenariogen.store.suite import load_scenarios
 
         grown = load_scenarios(where)
         assert len(grown) > 1
@@ -166,7 +166,7 @@ class TestChangingASuiteThatAlreadyExists:
         self.saved(where, ["cancel-ride__baseline", "diagnose-fare__baseline"])
         server, _ = grid_tools(contract, where)
         call(server, "expand_suite", {"total": 6})
-        from fi.alk.harness.scenariogen.suite import load_scenarios
+        from fi.alk.harness.scenariogen.store.suite import load_scenarios
 
         assert len(load_scenarios(where)) == 6
 
@@ -637,7 +637,7 @@ class TestTheCanvasLoopEndToEnd:
         blocked.
         """
         from fi.alk.harness.scenario import Scenario
-        from fi.alk.harness.scenariogen.suite import write_scenarios
+        from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
         server, state = grid_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
@@ -706,7 +706,7 @@ def test_folding_credits_journalled_scenarios_not_only_folders(contract, tmp_pat
 
     from fi.alk.harness.grid_tools import grid_tools
     from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenariogen.suite import record_written
+    from fi.alk.harness.scenariogen.store.suite import record_written
 
     server, state = grid_tools(contract, tmp_path, wanted=200)
     record = next(one for one in server.tools if one.name == "record_canvas")
@@ -771,7 +771,7 @@ def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_p
 
     from fi.alk.harness.grid_tools import grid_tools
     from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenariogen.suite import record_written
+    from fi.alk.harness.scenariogen.store.suite import record_written
 
     server, state = grid_tools(contract, tmp_path, wanted=200)
     record = next(one for one in server.tools if one.name == "record_canvas")

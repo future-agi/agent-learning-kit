@@ -27,7 +27,7 @@ from pathlib import Path
 from ..simulator_voice import fixture_caller_phone
 from ..catalogue import load_catalogue
 from ..checks import Outcome, run_check
-from ..folder import apply_setup, check_ready
+from ..scenariogen.store.folder import apply_setup, check_ready
 from ..scenario import Scenario
 from ..simulator import fill, load_simulator_prompt
 from ..world.runtime import GeneratedWorld

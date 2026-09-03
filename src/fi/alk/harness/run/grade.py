@@ -229,7 +229,7 @@ def _on_platform(
     its judgements happen. A platform that is unreachable, out of credit or slow is not a reason
     to lose the run: it falls back, and says so in the reason.
     """
-    from . import platform_evals
+    from ..run import platform_evals
 
     # The same evidence the judge below is given. An eval handed only what was said cannot settle
     # whether an answer was right, because the answer's truth is in what the tools returned, and
@@ -274,7 +274,7 @@ def judge_suite_evals(
     These are intentionally platform-only. A missing account must not silently turn reusable,
     versioned templates into private, ad-hoc local judgements.
     """
-    from . import platform_evals
+    from ..run import platform_evals
 
     if contract.modality != "voice" or not suite_evals:
         return []
@@ -411,7 +411,7 @@ async def judge(
     if not claims:
         return [], 0.0
 
-    from . import platform_evals
+    from ..run import platform_evals
 
     if platform_evals.configured():
         # The product's own evals, when there is an account to run them on. Each claim is a

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import WorldQueryRejected
-from . import Held, Snapshot, StoreError
+from ..stores import Held, Snapshot, StoreError
 from .container import ContainerStore, docker
 
 SCHEMA = "schema.sql"
@@ -441,12 +441,12 @@ class AttachedPostgresStore(PostgresStore):
         # Compose owns the schema and reruns the repository's migrations/initialisers whenever
         # the project is recreated. The harness snapshot therefore owns only mutable rows and
         # counters, avoiding a second generated schema that can drift from the submitted code.
-        from . import Held
+        from ..stores import Held
 
         Held.save_to(self, path)
 
     def load_from(self, path: str | Path) -> None:
-        from . import Held
+        from ..stores import Held
 
         Held.load_from(self, path)
 

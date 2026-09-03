@@ -2,7 +2,7 @@
 on the on-disk layout `folder.py` documents) and turns them into the `Scenario`/`SubGoal` objects
 `hosted_scheduler.py` actually drives.
 
-Deliberately does NOT import `fi.alk.harness.folder` or `fi.alk.harness.scenario` for the model:
+Deliberately does NOT import `fi.alk.harness.scenariogen.store.folder` or `fi.alk.harness.scenario` for the model:
 both exist at HEAD, but HEAD's `Scenario` carries no `scenario_key`/`scenario_id` (those are
 pr63-only) and its default `extra="ignore"` would silently discard exactly the two fields the
 scheduler needs off a `scenario.json` written in the newer shape. So this module reads

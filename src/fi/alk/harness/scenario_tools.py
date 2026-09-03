@@ -27,7 +27,7 @@ from .catalogue import (
     validate_sub_goal,
 )
 from .contract import AgentContract
-from .folder import apply_setup
+from .scenariogen.store.folder import apply_setup
 from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
 from .scenario import (
     Scenario,
@@ -38,8 +38,8 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
-from .scenariogen.setup_code import changes_the_world
-from .scenariogen.suite import (
+from .scenariogen.store.setup_code import changes_the_world
+from .scenariogen.store.suite import (
     forget_journal,
     journalled,
     load_scenarios,

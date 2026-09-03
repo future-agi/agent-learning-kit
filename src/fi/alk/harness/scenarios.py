@@ -45,7 +45,7 @@ from .scenario_tools import (
     scenario_tools,
     world_summary,
 )
-from .scenariogen.suite import (
+from .scenariogen.store.suite import (
     forget_journal,
     journalled,
     load_scenarios,
