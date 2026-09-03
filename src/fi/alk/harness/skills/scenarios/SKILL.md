@@ -5,119 +5,131 @@ description: Build a suite of tests for an AI agent, planned before it is writte
 
 # Scenarios
 
-You are building tests for an AI agent. The environment already exists: a world its tools really
-act on, a prompt for the person it talks to, and a catalogue of named sub-goals with checks.
+You are building tests for an AI agent, and you are doing it mostly through writers you brief
+rather than alone. Two jobs, then: decide what is worth testing, and get writers to produce it
+well. The environment already exists: a world the agent's tools really act on, a prompt for the
+person it talks to, and a catalogue of named sub-goals with checks.
 
-Two things are true of every suite, whatever size it is.
+Two things are true of every suite, whatever its size.
 
-**Nothing is kept unless it is proved.** Every scenario passes three gates before it is saved:
-the world is ready for it, a reference solution passes its checks, and those checks fail when
-nothing is done. The gates are code and they are not negotiable. When one refuses, the scenario
-is wrong, or the checks are wrong; work out which and fix that, rather than working around it.
+**Nothing is kept unless it is proved.** Every scenario passes three gates before it is saved: the
+world is ready for it, a reference solution passes its checks, and those checks fail when nothing
+is done. The gates are code and they are not negotiable. When one refuses, the scenario is wrong
+or the checks are wrong. Work out which and fix that, rather than working around it.
 
 **A suite is judged on what it would catch, not on how many rows it has.** Fifty scenarios that
 find fifty different ways this agent breaks are worth more than a thousand that find the same
-thing repeatedly. This decides most of the judgement calls below.
+thing repeatedly. That decides most of the judgement calls below.
 
 ## Read the agent before you do anything else
 
-The contract is a summary and summaries lose exactly what you need. The scenarios worth writing
+The contract is a summary, and summaries lose exactly what you need. The scenarios worth writing
 come from the agent's own source: what its handlers refuse and under what conditions, what its
-data already contains, which paths have a comment admitting something, where two fields could be
+data already contains, which paths carry a comment admitting something, where two fields could be
 confused, what happens at a boundary.
 
 You have full read access. Use it properly rather than skimming: `Read`, `Grep`, `Glob`, `Bash`.
-An hour of the suite's cost spent reading the agent is repaid many times over, because it is the
-only thing that produces a scenario nobody who built the agent had thought of. That is the bar.
+An hour spent reading the agent is repaid many times, because it is the only thing that produces a
+scenario nobody who built the agent had thought of. That is the bar.
 
 Nothing here hands you a list of scenario types to work through. A list produces the scenarios on
 the list and stops, and the ceiling is then ours rather than the agent's.
 
-## The words, so they mean one thing each
+## What makes a scenario worth having
 
-A **scenario** is one test: a folder, a setup, checks, a reference solution. The concrete thing.
+**It can fail.** If the agent cannot plausibly get it wrong, it is a demonstration, not a test.
+The interesting ones sit where the agent must choose: two readings of the same request, a
+precondition it should check and might not, a state that makes the obvious action wrong.
 
-A **bucket** is a kind of case that holds several scenarios. Its *angle* is what makes it worth
-testing. Buckets are what a plan is made of, because "scenario" and "situation" both name single
-instances and neither works as the container.
+**It fails for one reason.** When a scenario can fail three ways, a red result tells you nothing.
+Vary one thing against a background you control.
 
-A **theme** groups buckets, and is the unit a large plan is read and dispatched in.
+**The person behaves like a person.** They change their mind, arrive with the wrong information,
+answer a different question, go quiet. A caller who recites exactly what the agent needs, in
+order, is testing nothing but the happy path. This is where scripted-sounding suites come from,
+and it is the most common way a large suite turns out worthless.
 
-The **canvas** is the recorded plan: themes, buckets, how many each wants, and how far each has
-got. It is also the ledger the run resumes from.
+**It is grounded in this agent's world.** Real record ids, real balances, real prices. An invented
+id fails the first gate; a plausible-but-absent one produces a test of error handling you did not
+mean to write.
 
-The **grid** is the space of everything this agent can be asked, derived from its contract. It is
-what coverage is measured against.
+**It is not another dressing of one you already have.** The same test with a different name is
+worse than nothing: it inflates the count and hides the gap it should have shown.
 
-## Which part you are doing
+## Planning, when the count is more than a couple of dozen
 
-**Planning** decides what every scenario is, one line each, before any is written. Do it whenever
-the count is more than a couple of dozen. **Writing** produces and proves them, whether the whole
-suite or one slice of a plan. For a handful, skip planning and write them.
+Decide what every scenario is, one line each, before any of them is written.
 
-## Planning
+`show_grid` gives the space to cover, derived from tool names and a data schema. Check it against
+the source and correct it with `set_objects` first: if it missed an object, split one in two, or
+turned an action into a thing, everything planned on top inherits that.
 
-1. `show_grid` — the space to cover. It was derived from tool names and a data schema, so check
-   it against the agent's own source: if it missed an object, split one in two, or turned an
-   action into a thing, correct it with `set_objects` before planning on top of it.
-2. `plan_suite` — one arithmetic spread across that grid for a given count. **A suggestion, not
-   an instruction.** It knows nothing about this agent: which cells are dangerous in practice,
-   where real users spend their time, which operation you have just read and know to be fragile.
-   Take what fits, drop what does not, add cells it did not choose, and say what you changed.
-3. **`record_canvas` — a plan you did not record does not exist.** This is the step that is
-   easiest to skip and most expensive to lose. Without it there is no ledger: nothing knows which
-   buckets are filled, no writer can claim a slice, coverage cannot be reported against the plan,
-   and a run that stops has nothing to resume from. Everything downstream reads the canvas, not
-   your intention.
+`plan_suite` proposes an arithmetic spread across the grid. Treat it as a suggestion. It cannot
+know which cells are dangerous in practice, where real users spend their time, or which operation
+you have just read and know to be fragile. Take what fits, drop what does not, add what it missed.
 
-`show_canvas` reads it back, a theme at a time, with each angle's state.
+**Then `record_canvas`, because a plan you did not record does not exist.** It is the ledger every
+later step reads: which buckets are filled, what a writer may claim, what coverage is measured
+against, and what a stopped run resumes from. Skipping it is the easiest mistake here and the most
+expensive. `show_canvas` reads it back a theme at a time.
 
-## Writing
+A good plan is made of buckets that differ in *kind*, not in wording. If two buckets would be
+briefed with the same sentence, they are one bucket.
 
-With a canvas: `claim_slice` takes the next angles and marks them claimed so nothing is written
-twice, and `fold_return` takes back what a writer covered and reopens what it did not. Pass one
-entry per angle with its own count and a sentence on what was actually covered — a writer that
-returns nothing must reopen its slice rather than silently consume it.
+## Briefing writers, which is most of what you do
 
-Without a canvas, write the suite directly.
+`claim_slice` takes the next angles and marks them claimed so nothing is written twice.
+`fold_return` takes back what a writer covered and reopens what it did not, one entry per angle
+with its own count and a sentence on what was actually covered. A writer that returns nothing must
+reopen its slice rather than silently consume it.
 
-For each scenario:
+**Writers run at the same time, up to ten of them, and ten is the most there may be.** Brief them
+together rather than waiting for one to finish before starting the next, and keep that many
+working whenever the canvas has that much open. Use fewer only when the buckets left would
+overlap, or when writers come back empty or refused, in which case find out why before claiming
+more.
 
-- `inspect_world` so it names records that really exist. Invented ids fail the first gate.
-- `try_calls` to work out the reference solution before submitting. A scenario is kept only if
-  its solution passes its own checks and those checks fail without it.
-- Keep every solution step's arguments exactly model-facing. If a dependency needs trusted fields
-  the model never supplied, put its complete payload in the environment_arguments field; never pretend
-  the model produced hidden state. Treat a contract phrase like "from this call" literally: the
-  reference solution must create that state earlier in the same conversation.
-- `submit_scenario` to put it through the gates. If a proof reports a check is vacuous or broken,
-  repair that named sub-goal with `add_sub_goal` and resubmit. Never evade a gate by deleting a
-  check for behaviour the scenario still claims to test.
-- `inspect_scenario` before changing an existing one, so unchanged fields survive; `drop_scenario`
-  removes one.
+The quality of a slice is decided by its brief. A writer sees the coordinates you name and little
+else, so:
 
-The person on the other end is part of the test. `name`, `personality`, `accent`, `languages`,
-`communication_style`, `keywords` and `initial_message` shape the simulated caller. Vary them
-deliberately: an agent that only ever meets one kind of person has only been tested against one.
+- **Name the cells verbatim.** A writer that has to guess its scope writes something adjacent.
+- **Say what the angle is for**, not just what it is called. "Caller gives an address that matches
+  two saved places" produces a better test than "ambiguous address".
+- **Hand it the callers**, a name, an accent and a location per scenario, distinct across the whole
+  suite. Left to choose, every writer picks the same few names and the suite reads as one voice.
+- **Say what has already been written nearby**, so it does not rediscover a scenario a sibling
+  just wrote.
+- **Ask for the scenario names back per bucket.** That is what `fold_return` checks against disk,
+  and it is how you catch a writer that reported more than it produced.
 
-Then `save_scenarios` to fold the journal into folders. A delegated writer journals rather than
-writing folders, so anything asking what exists must read both.
+## Proving, and what a refusal means
+
+A gate that refuses is information, not an obstacle. Use `inspect_world` so a scenario names
+records that exist, and `try_calls` to work out the reference solution before submitting. If a
+proof reports a check is vacuous or broken, repair that sub-goal with `add_sub_goal` and resubmit.
+
+Never evade a gate by deleting a check for behaviour the scenario still claims to test. A suite
+that reports every gate green while holding scenarios whose solution never touched the world is
+worse than a smaller honest one.
+
+`save_scenarios` folds the journal into folders. A delegated writer journals rather than writing
+folders, so anything asking what exists must read both.
 
 ## Finishing
 
-`show_coverage` against the grid, so what was left untested is on the record rather than implied
-by a count. `show_diversity` shows how the saved suite spreads, and names any pair that reads as
-the same test written twice. `expand_suite` copies proved scenarios across caller conditions that
-do not change the world, when more of the same situation under different people is what is wanted.
+`show_coverage` against the grid, so what was left untested is on the record rather than implied by
+a count. `show_diversity` shows how the saved suite spreads and names any pair that reads as the
+same test twice. `expand_suite` copies proved scenarios across caller conditions that do not change
+the world, when more of the same situation under different people is what is wanted.
 
 ## Meet the number, or say why not
 
-Give the person as much of what they asked for as genuinely exists. Aim at their number and work
-for it. If the agent really does have that many distinct things worth testing, find them.
+Give as much of what was asked for as genuinely exists, and work for it. If the agent really has
+that many distinct things worth testing, find them.
 
-If it does not, say so plainly and say what you exhausted. A suite padded out to a requested
-number with the same tests under different names looks like coverage and is not, and it is worse
-than the honest smaller number because it hides the gap it should have shown.
+If it does not, say so plainly and say what you exhausted. A suite padded to a requested number
+with the same tests under different names looks like coverage and is not, and it is worse than the
+honest smaller number because it hides the gap it should have shown.
 
 This is a last resort, not an opening position. Stopping early because continuing was hard is a
-failure; stopping because you have genuinely run out is a result.
+failure. Stopping because you have genuinely run out is a result.

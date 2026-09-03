@@ -1461,3 +1461,30 @@ def test_the_gemini_backend_retries_a_transient_gateway_error():
     assert "retry_options" in source
     for code in ("429", "502", "503"):
         assert code in source, f"{code} should be retried, not fatal"
+
+
+def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
+    """A brief is guidance; the safety limit has to hold whatever the model asks for. claim_slice
+    is the only place a slice is handed out, so it is the only place the limit can bind."""
+    import inspect
+    from fi.alk.harness import grid_tools
+    from fi.alk.harness.backends.base import MOST_WORKERS_AT_ONCE
+    from fi.alk.harness.scenarios import AT_ONCE
+
+    assert MOST_WORKERS_AT_ONCE == 12, "the enforced ceiling"
+    assert AT_ONCE == 10, "what a stage is told to aim at"
+    assert AT_ONCE < MOST_WORKERS_AT_ONCE, "aim below the ceiling so normal work never trips it"
+
+    source = inspect.getsource(grid_tools)
+    assert "MOST_WORKERS_AT_ONCE" in source, "claim_slice must consult the ceiling"
+    assert "Every writer is already holding a slice" in source, "and refuse past it"
+
+    # What the model is told names ten as the most there may be. The enforced ceiling is higher
+    # so a brief overshoot is not a refusal mid-suite, and that number is ours: a brief or a
+    # refusal quoting it would read as the instruction being wrong.
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenarios import opening
+
+    said = opening(AgentContract(agent="a", one_liner="b", modality="voice"), 200)
+    assert f"up to {AT_ONCE} at once" in said
+    assert str(MOST_WORKERS_AT_ONCE) not in said

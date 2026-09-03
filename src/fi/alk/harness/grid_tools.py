@@ -20,6 +20,7 @@ from .axes import AxisSet, axes_for
 from .blueprint import EXPECTS, OVERLAYS, SLICE_SCENARIOS, Angle, Canvas, StateAxis, Theme
 from .blueprint import load as load_canvas
 from .backends import ToolServer, tool, tool_server
+from .backends.base import MOST_WORKERS_AT_ONCE
 from .contract import AgentContract
 from .diversity import measure
 from .expand import expand_all, summarise
@@ -444,6 +445,22 @@ def grid_tools(
         if not held.angles:
             return _err("No canvas to deal. Plan the suite with record_canvas first.")
         state.canvas = held
+        # The ceiling on writers running at once is enforced here rather than trusted to the
+        # brief: a slice is only ever handed out by this tool, so refusing one is the only place
+        # the limit can actually hold. Counted from the canvas, so a writer that returned or died
+        # frees its place without any bookkeeping of our own.
+        working = {
+            str(one.claimed_by)
+            for one in held.angles
+            if one.state == "claimed" and one.claimed_by
+        }
+        if len(working) >= MOST_WORKERS_AT_ONCE:
+            # Says nothing about the ceiling's value: the brief names ten as the most, and a
+            # refusal quoting a different number would read as the instruction being wrong.
+            return _err(
+                "Every writer is already holding a slice. Wait for one to report and "
+                "fold_return it before claiming again."
+            )
         # Clamped to twice the recommended size, because a writer's turn budget is finite and a
         # thirty-scenario slice comes back part-filled, burning an attempt on every bucket in it.
         asked = int(args.get("scenarios") or SLICE_SCENARIOS)

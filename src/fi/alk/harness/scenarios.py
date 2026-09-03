@@ -342,13 +342,13 @@ def opening(
             # the canvas. Hiding this behind a flag left every suite written one at a time.
             "\n\nWriters run at the same time. claim_slice a slice per writer and brief them "
             "together, one brief each naming its coordinates, rather than waiting for one to "
-            f"finish before starting the next. Run {MOST_AT_ONCE} at a time whenever the canvas "
-            "has that much open, and never more: past that they contend for the same machine and "
-            "the whole suite slows down. Running fewer than the canvas can feed is the common "
-            "mistake, and it is what makes a large suite take hours. Use fewer only when the "
-            "buckets left would overlap, since several writers on near-identical buckets buy "
-            "nothing, or when writers come back empty or refused, in which case find out why "
-            "before claiming more. fold_return each one's result so what it did not cover reopens."
+            f"finish before starting the next. Use the writers well: run up to {AT_ONCE} at "
+            f"once, which is the most there may be, and keep {AT_ONCE} of them working whenever "
+            "the canvas has that much open, spread over as much of what is open as you can. Use "
+            "fewer only when the buckets left would overlap, since "
+            "several writers on near-identical buckets buy nothing, or when writers come back "
+            "empty or refused, in which case find out why before claiming more. fold_return "
+            "each one's result so what it did not cover reopens."
             if delegates
             else ""
         )
@@ -372,7 +372,8 @@ MOST_AT_ONCE = MOST_WORKERS_AT_ONCE
 
 # How many scenarios one pass writes is whatever was asked for. A cap here used to serve a large
 # ask a batch at a time, which meant the number the person asked for was not the number they got.
-AT_ONCE = MOST_AT_ONCE
+# What a stage is told to aim at, below the enforced ceiling so normal work never trips it.
+AT_ONCE = 10
 
 # Below this, one session writes the suite itself. Delegation buys parallelism and costs turns:
 # each worker is briefed, runs, and reports, and for a handful of scenarios that overhead is the

@@ -36,7 +36,11 @@ ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 # machine, and it is a constant rather than an environment variable because a setting
 # nobody remembers makes every run behave differently for reasons nothing on screen
 # explains. The scenarios stage imports this as its own ceiling and tells the model.
-MOST_WORKERS_AT_ONCE = 10
+# The hard ceiling on writers running at once, enforced by claim_slice rather than asked
+# for: a prompt is guidance and this is a safety limit on the machine. Ten is the number
+# a stage is told to aim at; the extra two are headroom so a brief overshoot is not a
+# refusal in the middle of a suite.
+MOST_WORKERS_AT_ONCE = 12
 
 
 def qualified(server: str, tool_name: str) -> str:
