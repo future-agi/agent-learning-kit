@@ -1259,3 +1259,10 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
         == "/run/futureagi/platform-vertex.json"
     )
     assert runner._missing_config is None
+
+
+def test_the_call_budget_fits_a_real_conversation() -> None:
+    """A call that overruns is discarded, not failed: the engine returns a caseless report and
+    every checkpoint defaults to Failed. Successful runs have measured 315.8s, so a 300s budget
+    let the clock decide the outcome rather than the agent."""
+    assert cr._DEFAULT_CALL_TIMEOUT_SECONDS >= 600.0

@@ -106,7 +106,12 @@ _SIMULATOR_PLATFORM_ALIAS_MAP = {
     "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
 }
 
-_DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
+# A call that overruns is not failed, it is discarded: the engine returns a caseless report and
+# every checkpoint defaults to Failed, losing a conversation that actually happened. Five minutes
+# was under what real runs already take -- a successful 25-turn booking measured 315.8s -- so the
+# budget, not the agent, decided the outcome. Ten gives a long scenario room; a call that ends
+# normally still costs only what it uses.
+_DEFAULT_CALL_TIMEOUT_SECONDS = 600.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
