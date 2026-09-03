@@ -2499,6 +2499,8 @@ def _delta(**overrides):
         # A scenario that plants nothing is refused, so fixtures carry what a real one carries.
         "hazard": "the item the caller names is out of stock at this location",
         "failure_modes": ["adds a different item without saying so"],
+        # Scenarios stand up the state they turn on, so fixtures do too.
+        "setup_code": "def setup(world):\n    world.state()\n",
     }
     payload.update(overrides)
     return payload

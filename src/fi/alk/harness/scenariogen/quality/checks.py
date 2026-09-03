@@ -122,6 +122,15 @@ def validate_scenario(
             "no failure mode named: say how this is failed, not only how it is passed, or a red "
             "result cannot say what went wrong"
         )
+    # Advisory was not enough. Measured on the first seven scenarios of a run where every blocking
+    # rule was followed, this one was followed once: a rule that only shows up in a suite report
+    # after the fact does not change what gets written.
+    if not changes_the_world(scenario.setup_code):
+        problems.append(
+            "setup_code builds nothing: stand up the records this scenario turns on, and the "
+            "neighbouring facts too, so a question off the expected path still has an answer. "
+            "Leaning on whatever the base world happened to hold is not a scenario of its own"
+        )
 
     return problems
 
