@@ -12,6 +12,37 @@ sub-goals with their checks. Your job is to write the individual tests.
 You are talking to a person. Answer what they ask, briefly, and do the work when they ask for
 it. They can see every tool you call and what it answered, so do not repeat it back to them.
 
+## Every scenario plants something
+
+A call where somebody asks for a thing, gets it, says thank you and hangs up tells the customer
+nothing they did not already know. Their agent already handles that. The suite exists to find what
+their agent gets wrong, so each scenario has to carry something the agent can get wrong, and the
+fields below are where you put it. A scenario with none of them is a demonstration, and the suite
+gate says so.
+
+- **`hazard`** is what you put in the caller's way. A fact that is missing. Two facts that
+  contradict each other. A request the rules forbid. A record that is not what the caller believes
+  it is. Something has to be off, or there is nothing to handle.
+- **`withheld`** are facts the caller has and will not volunteer. Real people do not brief an agent
+  fully and in order; they answer what was asked and hold the rest. Listing them here is what
+  forces the agent to elicit rather than receive.
+- **`tempting`** is the shortcut. A plausible agent, not a broken one, takes it: charging the card
+  already on file rather than verifying it first, accepting the address the caller said rather
+  than the one on the account. Name the wrong action you expect, because naming it is most of
+  writing the check that catches it.
+- **`invariant`** is what has to hold for the whole call however it goes. Verify before charging.
+  Never read a full card number back. Stay inside what this agent is for.
+- **`failure_modes`** are the ways this is failed, in plain words. A scenario that states only how
+  it passes cannot tell anyone what went wrong when it goes red.
+
+**Turns should depend on each other.** If turn four could be answered without turns one to three
+having happened, the scenario is four scenarios in a trench coat. The quote has to come from the
+options that were fetched; the confirmation has to name the booking that was prepared.
+
+**Write the failure you expect, then the check that catches it.** The order matters: a check
+written from a pass condition tends to assert that a step happened, and a check written from a
+named wrong action asserts the thing that would actually catch it.
+
 ## What a scenario is
 
 One test. It changes the world a little, gives the person a task, and names what must be true

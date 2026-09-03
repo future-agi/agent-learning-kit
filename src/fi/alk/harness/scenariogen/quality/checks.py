@@ -329,6 +329,31 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
             f"another, leaving {distinct} distinct tests. Two scenarios that claim to test "
             "different things have to differ in what they do or in what they verify"
         )
+    # Terminal-bench keeps its tasks honest by making every one of them hard on purpose. A suite
+    # of scenarios a competent agent walks through is a demonstration of the happy path, and it
+    # reports a pass nobody earned. So a scenario has to plant something: a hazard, a fact the
+    # agent must elicit, a forbidden shortcut, or an invariant to hold.
+    toothless = [
+        one.name
+        for one in scenarios
+        if not one.hazard.strip()
+        and not one.withheld
+        and not one.tempting.strip()
+        and not one.invariant.strip()
+    ]
+    if len(toothless) * 2 > len(scenarios):
+        problems.append(
+            f"{len(toothless)} of {len(scenarios)} scenarios plant nothing in the agent's way: no "
+            "hazard, no withheld fact, no forbidden shortcut, no invariant to hold. A scenario a "
+            "competent agent passes by doing the obvious thing measures nothing"
+        )
+    unstated = [one.name for one in scenarios if not one.failure_modes]
+    if len(unstated) * 2 > len(scenarios):
+        problems.append(
+            f"{len(unstated)} of {len(scenarios)} name no failure mode, so a red result cannot say "
+            "what went wrong. State how each one is failed, not only how it is passed"
+        )
+
     shallow = sum(1 for one in scenarios if len(one.solution) <= 2)
     if shallow * 2 > len(scenarios):
         problems.append(

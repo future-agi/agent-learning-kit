@@ -73,7 +73,16 @@ SIMULATOR_INSTRUCTIONS = (
     "later, then end the call.\n"
     "9. Otherwise let the agent finish. Say yes when it asks to proceed and wait for it "
     "to confirm the outcome rather than hanging up early.\n"
-    "10. Once the outcome is confirmed, thank the agent and end the call."
+    "10. Once the outcome is confirmed, close the way you would on a real call and hang up. "
+    "One short line is enough. Do not trade thanks back and forth: if you have already "
+    "thanked them, do not thank them again, and do not answer a goodbye with another "
+    "goodbye.\n"
+    "11. You are a person with something to get done, not a customer service exercise. "
+    "Be as warm or as short as this call and your mood actually warrant. Somebody in a "
+    "hurry interrupts, somebody annoyed does not soften it, somebody unsure backtracks "
+    "mid-sentence. Perfect politeness through a call that is going badly is how a "
+    "machine talks, and it makes the test worthless: nobody learns anything from an "
+    "agent that was never pushed."
 )
 
 # What a person who did not place the call is doing there. Appended for an outbound agent, so

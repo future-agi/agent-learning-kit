@@ -222,6 +222,22 @@ class Scenario(BaseModel):
     # across the suite: the same sub-goal failing in seven of twelve scenarios is one sentence.
     sub_goals: list[str] = Field(default_factory=list)
 
+    # What makes this worth running rather than worth watching. A scenario an agent passes by
+    # doing the obvious thing measures nothing, and a suite of those reports a pass it has not
+    # earned. Each field below names a way this scenario can go wrong on purpose.
+    #
+    # ``hazard`` is what is planted in the caller's way: a fact that is missing, two that
+    # contradict, a request the rules forbid, a record that is not what the caller believes.
+    # ``withheld`` are facts the caller holds and will not volunteer, so the agent has to ask.
+    # ``tempting`` is the shortcut a plausible agent takes and policy forbids.
+    # ``invariant`` is what must hold for the whole call, however it goes.
+    # ``failure_modes`` name the ways this is failed: a scenario stating only its pass condition
+    # cannot say what went wrong.
+    hazard: str = ""
+    withheld: list[str] = Field(default_factory=list)
+    tempting: str = ""
+    invariant: str = ""
+    failure_modes: list[str] = Field(default_factory=list)
     max_turns: int = 10
 
     # Where this call is made from. A string names the place ("street", "vehicle", "retail"), and
