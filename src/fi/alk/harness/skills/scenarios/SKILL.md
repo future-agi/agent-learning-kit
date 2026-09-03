@@ -83,7 +83,23 @@ Each call carries its name, its arguments, its result, whether it succeeded and 
 and values are both available. Use them.
 
 **If the rule says "before", assert the order.** "Verify before charging", "quote the fee before
-cancelling", "read back before booking". Asking whether both calls happened is not that rule.
+cancelling", "read back before booking".
+
+This is the one most often got wrong, and the wrong version looks right. A check that gathers two
+calls and asserts each happened is testing occurrence, and an agent that did them in the forbidden
+order passes it:
+
+```python
+# WRONG for an ordering rule: passes even when the card was charged first
+def check(world, calls):
+    if not [c for c in calls if c.name == "send_otp" and c.ok]:
+        return "send_otp was not called"
+    if not [c for c in calls if c.name == "verify_otp" and c.ok]:
+        return "verify_otp was not called"
+    return None
+```
+
+If your check never compares two positions, it cannot be testing an order. Compare them:
 
 ```python
 def check(world, calls):
