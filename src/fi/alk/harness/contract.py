@@ -502,6 +502,19 @@ class AgentContract(BaseModel):
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
             f"MODALITY: {self.modality}",
+            # Which way the call goes changes what a scenario *is*, so every stage that writes
+            # one has to be told. Without this the writer gives an outbound agent's callers an
+            # errand of their own, and the person opens by asking for the thing the agent rang
+            # them about.
+            (
+                "DIRECTION: outbound - this agent places the call. The person did not ring it, "
+                "has no errand of their own, and does not know who is calling until told. A "
+                "scenario here is the agent's reason for calling and what the person does with "
+                "it, never a person arriving with a request."
+                if self.direction == "outbound"
+                else "DIRECTION: inbound - somebody rings this agent, arriving with something "
+                "they want done."
+            ),
             "REAL TOOLS (use ONLY these, with these exact arg names and types):\n"
             + ("\n".join(lines) or "  (none)"),
         ]

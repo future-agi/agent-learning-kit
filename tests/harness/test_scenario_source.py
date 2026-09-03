@@ -1434,3 +1434,18 @@ def test_provision_payload_carries_the_contract_direction():
 
     # Absent stays absent, so an older guest does not start asserting a direction it never read.
     assert "direction" not in ss._provision_payload("run", [_One()], "prompt", "voice")
+
+
+def test_contract_brief_tells_every_stage_which_way_the_call_goes():
+    """The writer never sees `direction` otherwise, so it gives an outbound agent's callers an
+    errand and the person opens by asking for the thing the agent rang them about."""
+    from fi.alk.harness.contract import AgentContract
+
+    outbound = AgentContract(
+        agent="ride", one_liner="books rides", modality="voice", direction="outbound"
+    ).brief()
+    assert "DIRECTION: outbound" in outbound
+    assert "has no errand of their own" in outbound
+
+    inbound = AgentContract(agent="ride", one_liner="books rides", modality="voice").brief()
+    assert "DIRECTION: inbound" in inbound
