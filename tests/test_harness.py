@@ -2319,7 +2319,8 @@ def test_a_persona_is_a_structured_simulator_prompt_slot():
 
 def test_an_empty_persona_is_rejected():
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import validate_scenario
 
     scenario = Scenario(
         name="empty-persona",
@@ -2343,7 +2344,8 @@ def test_an_empty_persona_is_rejected():
 
 def test_a_persona_must_contain_the_profile_that_drives_variation():
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import validate_scenario
 
     scenario = Scenario(
         name="thin-persona",
@@ -2367,7 +2369,8 @@ def test_a_persona_must_contain_the_profile_that_drives_variation():
 
 
 def test_same_call_contract_state_cannot_be_hidden_in_scenario_setup():
-    from fi.alk.harness.scenariogen.model.scenario import Scenario, contract_sequence_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import contract_sequence_problems
 
     impossible = Scenario(
         name="cancel-an-old-ride",
@@ -2758,12 +2761,8 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
 
 
 def test_predictable_and_reused_otp_fixtures_are_rejected():
-    from fi.alk.harness.scenariogen.model.scenario import (
-        Persona,
-        Scenario,
-        fixture_problems,
-        suite_diversity_problems,
-    )
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import fixture_problems, suite_diversity_problems
 
     def made(name: str, code: str) -> Scenario:
         return Scenario(
@@ -2799,7 +2798,8 @@ def test_predictable_and_reused_otp_fixtures_are_rejected():
 
 
 def test_demo_payment_and_booking_values_are_rejected():
-    from fi.alk.harness.scenariogen.model.scenario import Scenario, fixture_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import fixture_problems
     from fi.alk.harness.world.tools import _base_data_problems
 
     scenario = Scenario(
@@ -2885,7 +2885,8 @@ def test_submitted_fixture_demo_values_are_preserved_but_generated_copies_are_re
 
 
 def test_diversity_gate_catches_one_person_reworded_as_a_suite():
-    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, suite_diversity_problems
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import suite_diversity_problems
 
     scenarios = [
         Scenario(
@@ -2912,7 +2913,8 @@ def test_diversity_gate_catches_one_person_reworded_as_a_suite():
 
 
 def test_diversity_does_not_treat_generated_noop_setup_files_as_reused_data():
-    from fi.alk.harness.scenariogen.model.scenario import Scenario, suite_diversity_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import suite_diversity_problems
 
     scenarios = [
         Scenario(
@@ -3726,7 +3728,8 @@ def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
 
 
 def test_the_simulator_prompt_slots_a_scenario_leaves_unfilled_are_caught(tmp_path):
-    from fi.alk.harness.scenariogen.model.scenario import Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import validate_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     prompt = (

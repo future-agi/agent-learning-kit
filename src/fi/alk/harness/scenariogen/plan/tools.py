@@ -22,8 +22,8 @@ from .canvas import load as load_canvas
 from ...backends import ToolServer, tool, tool_server
 from ...backends.base import MOST_WORKERS_AT_ONCE
 from ...contract import AgentContract
-from ...diversity import measure
-from ...expand import expand_all, summarise
+from ..quality.diversity import measure
+from ..quality.expand import expand_all, summarise
 from .grid import Grid, derive
 from ...sample import coverage, plan
 from ..model.scenario import Scenario

@@ -231,7 +231,7 @@ class TestAScenarioMustMeanWhatItsNameClaims:
 
     def refused(self, name: str, setup: str = "", ready: str = "") -> list[str]:
         from fi.alk.harness.scenariogen.model.scenario import Scenario
-        from fi.alk.harness.scenariogen.write.tools import unbacked_condition_problems
+        from fi.alk.harness.scenariogen.quality.checks import unbacked_condition_problems
 
         return unbacked_condition_problems(
             Scenario(name=name, setup_code=setup, ready_code=ready)

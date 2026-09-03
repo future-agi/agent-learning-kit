@@ -25,8 +25,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from statistics import median
 
-from .scenariogen.plan.canvas import TOO_ALIKE, _overlap, _words
-from .scenariogen.model.scenario import Scenario
+from ..plan.canvas import TOO_ALIKE, _overlap, _words
+from ..model.scenario import Scenario
 
 
 @dataclass

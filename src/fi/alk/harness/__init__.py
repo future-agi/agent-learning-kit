@@ -25,7 +25,8 @@ from .config import (
 )
 from .contract import AgentContract, Runtime, RuntimeInterface, ToolSpec, validate_contract
 from .job import ExecutionMode, HarnessJob, HarnessStage
-from .scenariogen.model.scenario import Scenario, validate_scenario
+from .scenariogen.model.scenario import Scenario
+from .scenariogen.quality.checks import validate_scenario
 from .session import Stage, Turn
 from .sources import (
     AgentSource,

@@ -7,7 +7,7 @@ passes all three gates without noticing.
 
 from __future__ import annotations
 
-from fi.alk.harness.diversity import measure
+from fi.alk.harness.scenariogen.quality.diversity import measure
 from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 
 
