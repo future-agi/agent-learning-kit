@@ -2727,7 +2727,12 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     )
     save_catalogue(catalogue, root)
     said = accept_scenario(
-        _delta(sub_goals=["always"]), world_root=root, catalogue=catalogue, kept=[]
+        # The hazard is reworded so the vacuous sub-goal still grades it by name: this test is
+        # about a check that passes with nothing done, not about an ungraded hazard.
+        _delta(sub_goals=["always"], hazard="the item is always out of stock here"),
+        world_root=root,
+        catalogue=catalogue,
+        kept=[],
     )
     assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
 

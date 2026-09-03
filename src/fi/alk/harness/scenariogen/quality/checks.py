@@ -187,6 +187,28 @@ def validate_scenario(
             "than that nothing was created at all"
         )
 
+    # A scenario can name a hazard, be credited to its bucket, and have nothing that would fail if
+    # the agent ignored the hazard entirely. Six of forty eight were like this: the wheelchair, the
+    # luxury tier and the comfort tier scenarios shared one check set with no assertion on which
+    # product was chosen, so an agent booking the ordinary one passed all three identically. The
+    # hazard names a particular; something has to look at that particular.
+    if scenario.hazard.strip() and scenario.sub_goals:
+        particulars = {
+            word.strip("\"'(),.:_-").lower()
+            for word in scenario.hazard.split()
+            if len(word.strip("\"'(),.:_-")) > 3
+        }
+        graded = " ".join(scenario.sub_goals).lower().replace("_", " ").replace("-", " ")
+        solution_args = " ".join(
+            str(value).lower() for step in scenario.solution for value in (step.arguments or {}).values()
+        )
+        if particulars and not (particulars & set(graded.split())) and not (particulars & set(solution_args.split())):
+            problems.append(
+                "nothing grades the hazard: no sub-goal and no reference argument mentions what "
+                f"{scenario.hazard.strip()[:60]!r} turns on. An agent that ignored it would pass, "
+                "which means the bucket is filled rather than verified"
+            )
+
     if not scenario.failure_modes:
         problems.append(
             "no failure mode named: say how this is failed, not only how it is passed, or a red "
