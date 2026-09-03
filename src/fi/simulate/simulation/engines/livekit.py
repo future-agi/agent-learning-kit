@@ -2706,6 +2706,10 @@ def _record_simulator_setup(
             "stt": settings(stt_config),
             "tts": settings(tts_config),
             "turn_handling": settings(turn_handling),
+            # Whether this caller was heard through ambience, and which clip. Recording it here
+            # makes a finished call say so itself; without it the only way to tell noise from
+            # silence afterwards is to catch the process mid-call and read its environment.
+            "background_noise": os.environ.get("HARNESS_BACKGROUND_NOISE", "") or None,
         }
         payload.update(extra or {})
         (case_directory / "simulator-setup.json").write_text(
