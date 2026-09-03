@@ -38,6 +38,14 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
+from .scenariogen.suite import (
+    JOURNAL,
+    forget_journal,
+    journalled,
+    load_scenarios,
+    record_written,
+    write_scenarios,
+)
 from .world.snapshot import restore
 
 SCENARIO_SERVER = "scenarios"
@@ -85,106 +93,14 @@ def persona_vocabulary_note() -> str:
     )
 
 
-def write_scenarios(
-    scenarios: list[Scenario], destination: Path, catalogue: Catalogue | None = None
-) -> Path:
-    """Write every scenario out as its own folder, and regenerate the index over them."""
-    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
-    for one in scenarios:
-        write_folder(one, catalogue, destination)
-    _forget_dropped(scenarios, destination)
-    return write_index(scenarios, destination)
-
-
-def _forget_dropped(scenarios: list[Scenario], destination: Path) -> None:
-    """Remove the folders of scenarios that are no longer in the suite.
-
-    The folders are the truth, and they are what gets read back. Writing the survivors without
-    taking the others away means a dropped scenario returns on the next load, still failing, and
-    dropping it appears to do nothing at all.
-    """
-    import shutil
-
-    root = Path(destination) / SCENARIOS
-    if not root.exists():
-        return
-    keeping = {one.name for one in scenarios}
-    for folder in root.iterdir():
-        if folder.is_dir() and folder.name not in keeping:
-            shutil.rmtree(folder)
-
-
-JOURNAL = "written.jsonl"
-
-
-def record_written(scenarios: list[Scenario], destination: Path) -> None:
-    """Append what a writer proved, so a run that dies still has it.
-
-    Under delegation the writers hold their work in memory and the stage saves once at the end,
-    because saving rewrites the index and deletes folders it does not know about, so two writers
-    saving at once would delete each other. That is the right call for the index and the wrong
-    one for durability: a suite of five hundred is hours of proving, and until the final save
-    none of it is anywhere but RAM.
-
-    This is the cheap half of the fix. It is append-only and touches neither the folders nor the
-    index, so it cannot race the writers; it exists to be replayed by ``journalled`` if the final
-    save never happens.
-    """
-    if not scenarios:
-        return
-    path = Path(destination) / JOURNAL
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for one in scenarios:
-            handle.write(one.model_dump_json() + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def journalled(destination: Path) -> list[Scenario]:
-    """What the journal holds, for a run picking up after one that died.
-
-    A killed process can leave a half-written final line, so an unreadable line is dropped rather
-    than raising: the point of the journal is to save what survived, and refusing to read it
-    because of the one record that did not would throw away the rest.
-    """
-    path = Path(destination) / JOURNAL
-    if not path.is_file():
-        return []
-    kept: list[Scenario] = []
-    # Keyed by name, because a retried slice journals what it had already proved a second time and
-    # the caller renames folder-name collisions rather than dropping them, so a repeat would come
-    # back as a `-2` folder holding the same test.
-    taken: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            one = Scenario.model_validate_json(line)
-        except Exception:  # noqa: BLE001 - a torn last line is expected, not exceptional
-            continue
-        if one.name in taken:
-            continue
-        taken.add(one.name)
-        kept.append(one)
-    return kept
-
-
-def forget_journal(destination: Path) -> None:
-    """Drop the journal once the suite is on disk, so the next run starts from nothing."""
-    path = Path(destination) / JOURNAL
-    if path.is_file():
-        path.unlink()
-
-
-def load_scenarios(destination: Path) -> list[Scenario]:
-    """Every scenario on disk, read from its folder.
-
-    The folders are the truth. The index beside them is regenerated from these, so it can
-    describe them but never contradict them.
-    """
-    return read_all(destination)
+# How many throwaway probes a guarded writer may run. A writer has to learn the world before it can
+# ground anything in it, and four was not enough to find the records a real instruction names:
+# across a two hundred scenario suite every delegated writer produced instructions a third the
+# length of the orchestrator's, and not one fixture carried an address. The guard exists to stop a
+# writer mapping the whole suite before saving any of it, so it bites after the first scenario is
+# in rather than before the writer has seen anything.
+PROBES_BEFORE_FIRST = 12
+PROBES_BETWEEN = 4
 
 
 def _seeds_anything(code: str) -> bool:
@@ -438,7 +354,7 @@ def scenario_tools(
     # planner has nothing to submit yet: exploring the agent is its whole job at that point, and
     # the same guard blocks it from doing what it was asked to do. Measured: a planning run spent
     # twenty-five minutes refused on every probe.
-    exploration = {"since_submit": 0, "guarded": not probing}
+    exploration = {"since_submit": 0, "guarded": not probing, "submitted": 0}
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -527,10 +443,11 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
-        if exploration["guarded"] and exploration["since_submit"] >= 4:
+        allowed = PROBES_BETWEEN if exploration["submitted"] else PROBES_BEFORE_FIRST
+        if exploration["guarded"] and exploration["since_submit"] >= allowed:
             return _err(
-                "Four throwaway probes have run since the last saved scenario. Submit and prove "
-                "one scenario now; if its gate identifies a concrete problem, use the next "
+                f"{allowed} throwaway probes have run since the last saved scenario. Submit and "
+                "prove one scenario now; if its gate identifies a concrete problem, use the next "
                 "probe to correct that problem. Do not map the whole suite before saving work."
             )
         exploration["since_submit"] += 1
@@ -789,6 +706,7 @@ def scenario_tools(
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
+            exploration["submitted"] += 1
         return result
 
     @tool(
@@ -1025,7 +943,14 @@ def scenario_tools(
         # session's own accepts are not doubled; forgotten after the write because the folders
         # are the truth from then on and a stale journal would re-import them next run.
         held = {one.name for one in kept}
-        kept.extend(one for one in journalled(destination) if one.name not in held)
+        # The folders already on disk as well as the journal. Saving prunes every folder it is not
+        # given, and the journal is dropped by the save that consumed it, so work proved before an
+        # earlier save lives only on disk: folding just the journal let a second save delete it.
+        for one in (*journalled(destination), *load_scenarios(destination)):
+            if one.name in held:
+                continue
+            held.add(one.name)
+            kept.append(one)
         path = write_scenarios(kept, destination, catalogue)
         forget_journal(destination)
         diversity = suite_diversity_problems(kept)

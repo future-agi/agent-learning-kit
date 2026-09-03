@@ -11,11 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.catalogue import Catalogue
 from fi.alk.harness.scenario_tools import (
     JOURNAL,
     forget_journal,
     journalled,
+    load_scenarios,
     record_written,
+    write_scenarios,
 )
 
 
@@ -72,3 +75,30 @@ def test_a_scenario_journalled_twice_comes_back_once(tmp_path: Path) -> None:
     record_written([Scenario(name="one")], tmp_path)
 
     assert [one.name for one in journalled(tmp_path)] == ["one", "two"]
+
+
+def test_a_second_save_keeps_what_an_earlier_save_put_on_disk(tmp_path: Path) -> None:
+    """Saving prunes every folder it is not given, and the save that consumes the journal drops it.
+
+    So work proved before an earlier save exists only on disk by the time the next save runs. Folding
+    only the journal deleted it: six proved scenarios were lost this way on a two hundred run.
+    """
+    catalogue = Catalogue(sub_goals=[])
+    (tmp_path / "scenarios").mkdir(parents=True, exist_ok=True)
+
+    def saved(kept: list[Scenario]) -> None:
+        held = {one.name for one in kept}
+        for one in (*journalled(tmp_path), *load_scenarios(tmp_path)):
+            if one.name not in held:
+                held.add(one.name)
+                kept.append(one)
+        write_scenarios(kept, tmp_path, catalogue)
+        forget_journal(tmp_path)
+
+    record_written([Scenario(name="alpha"), Scenario(name="beta")], tmp_path)
+    saved([])
+    assert sorted(one.name for one in load_scenarios(tmp_path)) == ["alpha", "beta"]
+
+    record_written([Scenario(name="gamma")], tmp_path)
+    saved([])
+    assert sorted(one.name for one in load_scenarios(tmp_path)) == ["alpha", "beta", "gamma"]
