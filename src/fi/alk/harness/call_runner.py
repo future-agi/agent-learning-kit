@@ -977,8 +977,17 @@ class CallRunnerImpl:
         )
 
         if case is None:
+            # A caseless report is always the engine's `_failure_report` (runtime/runner.py),
+            # which carries the real reason on `report.failure`. Surfacing it is the difference
+            # between a diagnosable receipt and an opaque one.
+            failure = report.failure
+            detail = (
+                f"{failure.stage.value}/{failure.code}: {failure.message}"
+                if failure is not None
+                else f"no failure recorded (status={report.status.value})"
+            )
             raise CallAborted(
-                "voice_call_no_test_case: SimulationReport carried no test case",
+                f"voice_call_no_test_case: {detail}",
                 partial=base,
             )
 

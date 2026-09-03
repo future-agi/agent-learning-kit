@@ -267,6 +267,7 @@ def _report(
     transcript: str = "hello there",
     messages: list[dict[str, str]] | None = None,
     failure: SimulationFailure | None = None,
+    run_failure: SimulationFailure | None = None,
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
     no_cases: bool = False,
@@ -300,6 +301,7 @@ def _report(
         ended_at=ended_at,
         test_cases=cases,
         artifacts=ArtifactManifest(run_id=run_id),
+        failure=run_failure,
     )
 
 
@@ -721,6 +723,33 @@ def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(
     assert exc.partial is not None
     assert exc.partial.turns == 0
     assert exc.partial.calls == ()
+
+
+def test_caseless_report_surfaces_the_engine_failure_reason(tmp_path: Path) -> None:
+    """A caseless report is the engine's `_failure_report`, which carries the real reason on
+    `report.failure`. The receipt must name it, not just "no test case"."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            status=RunStatus.FAILED,
+            no_cases=True,
+            run_failure=SimulationFailure(
+                stage=FailureStage.READINESS,
+                code="worker_never_ready",
+                message="no livekit worker registered within 90s",
+            ),
+        )
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert "readiness/worker_never_ready" in str(exc)
+    assert "no livekit worker registered within 90s" in str(exc)
 
 
 def test_place_call_exception_raises_call_aborted_with_timing_partial_never_raw(
