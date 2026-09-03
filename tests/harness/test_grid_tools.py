@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from fi.alk.harness.contract import AgentContract, ToolSpec
-from fi.alk.harness.grid_tools import grid_tools
+from fi.alk.harness.scenariogen.plan.tools import grid_tools
 from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
@@ -668,8 +668,8 @@ def test_the_stage_s_count_wins_over_the_target_the_model_types(contract, where,
     them. The stage knows what was asked for; the model does not get to lower it."""
     import asyncio
 
-    from fi.alk.harness.blueprint import load as load_canvas
-    from fi.alk.harness.grid_tools import grid_tools
+    from fi.alk.harness.scenariogen.plan.canvas import load as load_canvas
+    from fi.alk.harness.scenariogen.plan.tools import grid_tools
 
     server, _state = grid_tools(contract, tmp_path, wanted=500)
     record = next(one for one in server.tools if one.name == "record_canvas")
@@ -704,7 +704,7 @@ def test_folding_credits_journalled_scenarios_not_only_folders(contract, tmp_pat
     buckets whose scenarios existed all along."""
     import asyncio
 
-    from fi.alk.harness.grid_tools import grid_tools
+    from fi.alk.harness.scenariogen.plan.tools import grid_tools
     from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenariogen.store.suite import record_written
 
@@ -769,7 +769,7 @@ def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_p
     come back invented. Measured: every fold reported names that were nowhere on disk."""
     import asyncio
 
-    from fi.alk.harness.grid_tools import grid_tools
+    from fi.alk.harness.scenariogen.plan.tools import grid_tools
     from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenariogen.store.suite import record_written
 

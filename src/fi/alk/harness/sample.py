@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from .axes import AxisSet
-from .grid import Cell, Grid
+from .scenariogen.plan.axes import AxisSet
+from .scenariogen.plan.grid import Cell, Grid
 
 logger = logging.getLogger(__name__)
 

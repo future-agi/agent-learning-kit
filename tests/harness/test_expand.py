@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.axes import axes_for
+from fi.alk.harness.scenariogen.plan.axes import axes_for
 from fi.alk.harness.expand import CONDITION, axes_to_vary, expand, expand_all, summarise
 from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario, Step
 

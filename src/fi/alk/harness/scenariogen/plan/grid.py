@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 
 from .axes import AxisSet, Operation
-from .contract import AgentContract
+from ...contract import AgentContract
 
 logger = logging.getLogger(__name__)
 

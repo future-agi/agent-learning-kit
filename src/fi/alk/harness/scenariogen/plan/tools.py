@@ -17,19 +17,19 @@ from pathlib import Path
 from typing import Any
 
 from .axes import AxisSet, axes_for
-from .blueprint import EXPECTS, OVERLAYS, SLICE_SCENARIOS, Angle, Canvas, StateAxis, Theme
-from .blueprint import load as load_canvas
-from .backends import ToolServer, tool, tool_server
-from .backends.base import MOST_WORKERS_AT_ONCE
-from .contract import AgentContract
-from .diversity import measure
-from .expand import expand_all, summarise
+from .canvas import EXPECTS, OVERLAYS, SLICE_SCENARIOS, Angle, Canvas, StateAxis, Theme
+from .canvas import load as load_canvas
+from ...backends import ToolServer, tool, tool_server
+from ...backends.base import MOST_WORKERS_AT_ONCE
+from ...contract import AgentContract
+from ...diversity import measure
+from ...expand import expand_all, summarise
 from .grid import Grid, derive
-from .sample import coverage, plan
-from .scenariogen.model.scenario import Scenario
-from .semantic import duplicates as semantic_duplicates
-from .scenariogen.store.suite import journalled, load_scenarios, write_scenarios
-from .tools import schema
+from ...sample import coverage, plan
+from ..model.scenario import Scenario
+from ...semantic import duplicates as semantic_duplicates
+from ..store.suite import journalled, load_scenarios, write_scenarios
+from ...tools import schema
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def entity_labels(destination: Path) -> dict[str, str]:
     if destination in _LABELS:
         return _LABELS[destination]
     try:
-        from .scenario_tools import world_state
+        from ...scenario_tools import world_state
 
         held: dict[str, str] = {}
         for collection, rows in (world_state(destination) or {}).items():

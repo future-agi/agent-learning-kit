@@ -1467,7 +1467,7 @@ def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
     """A brief is guidance; the safety limit has to hold whatever the model asks for. claim_slice
     is the only place a slice is handed out, so it is the only place the limit can bind."""
     import inspect
-    from fi.alk.harness import grid_tools
+    from fi.alk.harness.scenariogen.plan import tools as grid_tools
     from fi.alk.harness.backends.base import MOST_WORKERS_AT_ONCE
     from fi.alk.harness.scenarios import AT_ONCE
 

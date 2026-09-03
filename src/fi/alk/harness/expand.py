@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .axes import Axis, AxisSet, Setting
+from .scenariogen.plan.axes import Axis, AxisSet, Setting
 from .scenariogen.model.scenario import Persona, Scenario
 
 logger = logging.getLogger(__name__)

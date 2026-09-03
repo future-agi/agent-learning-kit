@@ -396,7 +396,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
     if getattr(args, "plan_only", False):
         # The plan is worth several iterations of its own, and each full run costs the whole
         # suite to find out whether the plan was any good. Stopping here makes that loop cheap.
-        from .blueprint import load as load_blueprint
+        from .scenariogen.plan.canvas import load as load_blueprint
 
         await _converse(
             stage,

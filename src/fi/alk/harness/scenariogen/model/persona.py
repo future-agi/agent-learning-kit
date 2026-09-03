@@ -19,7 +19,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from .. import BUNDLED
+from ...scenariogen import BUNDLED
 
 logger = logging.getLogger(__name__)
 

@@ -115,7 +115,7 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     The axis file already declares which settings need the world changed. This holds a scenario
     to that declaration: claim one in the name, and there has to be setup code making it true.
     """
-    from .axes import axes_for
+    from .scenariogen.plan.axes import axes_for
 
     _, _, condition = scenario.name.partition("__")
     if not condition:

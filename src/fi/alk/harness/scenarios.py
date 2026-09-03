@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .axes import axes_for
+from .scenariogen.plan.axes import axes_for
 from .backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
 from .backends.base import MOST_WORKERS_AT_ONCE
 
@@ -32,9 +32,9 @@ from .config import (
     stage_model,
     writer_effort,
 )
-from .blueprint import SLICE_SCENARIOS, WORTH_PLANNING
-from .blueprint import load as load_canvas
-from .grid_tools import GRID_SERVER, Coverage, grid_tools
+from .scenariogen.plan.canvas import SLICE_SCENARIOS, WORTH_PLANNING
+from .scenariogen.plan.canvas import load as load_canvas
+from .scenariogen.plan.tools import GRID_SERVER, Coverage, grid_tools
 from .sample import Pick, coverage, plan as plan_picks
 from .scenariogen.model.catalogue import load_catalogue
 from .contract import AgentContract

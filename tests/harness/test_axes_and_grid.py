@@ -12,9 +12,9 @@ import json
 
 import pytest
 
-from fi.alk.harness.axes import axes_for
+from fi.alk.harness.scenariogen.plan.axes import axes_for
 from fi.alk.harness.contract import AgentContract, ToolSpec
-from fi.alk.harness.grid import _singular, derive, object_of, objects_in
+from fi.alk.harness.scenariogen.plan.grid import _singular, derive, object_of, objects_in
 
 
 @pytest.fixture()
@@ -166,7 +166,7 @@ class TestAxisSet:
 
     def test_axis_settings_only_name_persona_values_the_platform_knows(self):
         """A setting mapping to an accent nothing recognises renders and then selects no voice."""
-        from fi.alk.harness.axes import unrecognised_persona_values
+        from fi.alk.harness.scenariogen.plan.axes import unrecognised_persona_values
 
         for modality in ("universal", "voice"):
             assert unrecognised_persona_values(axes_for(modality)) == []
@@ -232,7 +232,7 @@ class TestNothingIsTunedToOneAgent:
         import json
         from pathlib import Path
 
-        import fi.alk.harness.axes as module
+        import fi.alk.harness.scenariogen.plan.axes as module
 
         held = json.loads((module.BUNDLED / "universal.json").read_text())
         # The note explains the rule and may quote the words it forbids; the axes may not use them.

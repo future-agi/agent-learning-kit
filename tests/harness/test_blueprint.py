@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.blueprint import _WORD, MOST_ATTEMPTS, Angle, Canvas, Theme, load
+from fi.alk.harness.scenariogen.plan.canvas import _WORD, MOST_ATTEMPTS, Angle, Canvas, Theme, load
 from fi.alk.harness.contract import AgentContract, ToolSpec
 
 
@@ -235,7 +235,7 @@ class TestAPlanThatIsReallyAList:
         assert "not a plan" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_buckets_that_carry_several_scenarios_pass(self):
-        from fi.alk.harness.blueprint import StateAxis
+        from fi.alk.harness.scenariogen.plan.canvas import StateAxis
 
         held = canvas(
             *[(f"A{i}", "TH01", "retrieve-ride", f"case number {i} of many", "", 5)
@@ -259,7 +259,7 @@ class TestACountMustSayWhatItVaries:
         assert "without naming the" in " ".join(held.problems({"retrieve-ride"}))
 
     def test_naming_the_axes_is_what_makes_a_count_stand(self):
-        from fi.alk.harness.blueprint import StateAxis
+        from fi.alk.harness.scenariogen.plan.canvas import StateAxis
 
         held = canvas(("A1", "TH01", "retrieve-ride", "booking cannot be found", "", 5))
         held.axes = [StateAxis("record_state", ["a", "b", "c", "d", "e"], "")]
@@ -280,7 +280,7 @@ class TestACountIsDerivedFromTheWorld:
     """
 
     def axes(self):
-        from fi.alk.harness.blueprint import StateAxis
+        from fi.alk.harness.scenariogen.plan.canvas import StateAxis
 
         return [
             StateAxis("s.payment", ["valid", "expired", "none"], "decides if it can charge"),
@@ -369,7 +369,7 @@ class TestCoverageIsStatedAgainstWhatIsCheckable:
 
     def test_cause_and_outcome_are_recorded_separately(self):
         """An injection expects a refusal AND carries an injection overlay. Not a choice."""
-        from fi.alk.harness.blueprint import StateAxis
+        from fi.alk.harness.scenariogen.plan.canvas import StateAxis
 
         held = self.plan()
         held.axes = [StateAxis("region", ["a", "b", "c"], "")]
@@ -436,7 +436,7 @@ class TestACountCannotExceedWhatItsAxesAllow:
     """
 
     def axes(self):
-        from fi.alk.harness.blueprint import StateAxis
+        from fi.alk.harness.scenariogen.plan.canvas import StateAxis
 
         return [
             StateAxis("payment_state", ["valid", "expired", "none"], ""),
@@ -497,7 +497,7 @@ class TestAnAxisOfNamesIsNotAnAxis:
         }
 
     def plan_with(self, axis_name, levels, want=4):
-        from fi.alk.harness.blueprint import StateAxis
+        from fi.alk.harness.scenariogen.plan.canvas import StateAxis
 
         held = canvas(("A1", "TH01", "retrieve-ride", "greeted by name", "data:name", want))
         held.axes = [StateAxis(axis_name, levels, "")]
@@ -774,7 +774,7 @@ def test_the_credit_ledger_survives_a_save_and_load(tmp_path):
     """Without this the ledger evaporates on every restart, and the two-round fold it exists for
     is exactly the case that spans one: a writer dies, the run is restarted, and the bucket it
     part-filled has to remember what it already holds."""
-    from fi.alk.harness.blueprint import load
+    from fi.alk.harness.scenariogen.plan.canvas import load
 
     held = canvas(("A1", "TH01", "retrieve-ride", "booking missing", "", 5))
     held.credit("A1", ["one", "two"])
@@ -792,7 +792,7 @@ def test_a_writer_gets_enough_turns_for_the_slice_it_can_be_handed():
     """A flat sixty gave 3.8 turns per scenario including the reading a writer does before it
     writes anything, so slices came back part-filled and the next writer paid that reading cost
     again to finish somebody else's work."""
-    from fi.alk.harness.blueprint import SLICE_SCENARIOS
+    from fi.alk.harness.scenariogen.plan.canvas import SLICE_SCENARIOS
     from fi.alk.harness.scenarios import TURNS_EACH, WRITER_TURNS
 
     biggest = SLICE_SCENARIOS * 2  # what claim_slice clamps to

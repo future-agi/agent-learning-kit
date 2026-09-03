@@ -26,7 +26,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .scenariogen import BUNDLED as _BUNDLED
+from ...scenariogen import BUNDLED as _BUNDLED
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +354,7 @@ def unrecognised_persona_values(axes: AxisSet) -> list[str]:
     to an accent nothing recognises renders correctly and then selects no voice, so the suite
     varies on paper and not in the calls.
     """
-    from .scenariogen.model.persona import ENFORCED, vocabulary
+    from ..model.persona import ENFORCED, vocabulary
 
     known = vocabulary()
     if not known:

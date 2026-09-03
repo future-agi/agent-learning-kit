@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.axes import axes_for
+from fi.alk.harness.scenariogen.plan.axes import axes_for
 from fi.alk.harness.contract import AgentContract, ToolSpec
-from fi.alk.harness.grid import derive
+from fi.alk.harness.scenariogen.plan.grid import derive
 from fi.alk.harness.sample import coverage, plan
 
 
@@ -112,7 +112,7 @@ class TestDegenerateInputs:
         assert len({pick.name for pick in picks}) == len(picks)
 
     def test_an_empty_grid_plans_nothing_rather_than_crashing(self, axes):
-        from fi.alk.harness.grid import Grid
+        from fi.alk.harness.scenariogen.plan.grid import Grid
 
         assert plan(Grid(), axes, 10, env={}) == []
 
