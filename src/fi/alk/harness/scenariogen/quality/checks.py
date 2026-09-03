@@ -66,7 +66,7 @@ def validate_scenario(
     elif scenario.persona is not None:
         # A persona in words of its own renders fine and then does nothing: no behaviour guidance
         # attaches, and the accent it names selects no voice.
-        from .persona import unrecognised
+        from ..model.persona import unrecognised
 
         problems.extend(unrecognised(scenario.persona.model_dump()))
     if not scenario.sub_goals:

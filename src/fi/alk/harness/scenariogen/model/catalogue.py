@@ -12,6 +12,7 @@ invented here would fit only the first.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -100,6 +101,28 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         problems.append(
             f"{sub_goal.name}: a check must define check(world, calls) and return a problem as "
             "a string, or None when the sub-goal held"
+        )
+    # A refusal graded by demanding the forbidden call fails the agent that correctly declined and
+    # passes the one that tried. Nine of thirty one scenarios in one run were graded this way, and
+    # the suite would have told a customer that its better agent was worse. The shape gives it
+    # away: the sub-goal is about something not happening, and the check errors when it did not
+    # happen.
+    about_refusal = re.search(
+        r"\b(refus|declin|reject|must not|never|block|deny|denied|without|unverified|invalid)\b",
+        f"{sub_goal.name} {sub_goal.what}",
+        re.I,
+    )
+    demands_attempt = re.search(
+        r"return\s+f?[\"'][^\"']*\b(was never called|not called|did not attempt|never attempted|"
+        r"was not attempted|no \w+ calls?)\b",
+        sub_goal.check,
+        re.I,
+    )
+    if about_refusal and demands_attempt:
+        problems.append(
+            f"{sub_goal.name}: this grades a refusal by requiring the forbidden call to appear, so "
+            "an agent that correctly declined fails and one that tried passes. Assert the end "
+            "state instead: that the thing which must not happen did not happen"
         )
     return problems
 
