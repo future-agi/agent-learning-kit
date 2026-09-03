@@ -7,6 +7,6 @@ make the other import it, and the dependency between them is deliberately one wa
 
 # Which skill each session is opened under. `scenarios` is the parent that plans and saves,
 # `scenarios/write` is what a writer runs, `scenarios/plan` is the planning pass.
-PARENT_SKILL = "scenarios"
-SKILL = "scenarios/write"
-PLAN_SKILL = "scenarios/plan"
+PARENT_SKILL = "overview"
+SKILL = "write"
+PLAN_SKILL = "plan"

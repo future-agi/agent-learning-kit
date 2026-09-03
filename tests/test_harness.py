@@ -4299,7 +4299,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     catches that, because both halves are individually valid."""
     import re
 
-    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.config import skill_path
     from fi.alk.harness.run import tools as run_tools
     from fi.alk.harness.tools import CONTRACT_SERVER  # noqa: F401
     from fi.alk.harness.world import tools as world_tools
@@ -4312,9 +4312,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     surface = {
         "understand-agent": {"submit_contract"},
         "build-environment": set(world_tools.TOOL_NAMES),
-        "scenarios": suite,
-        "scenarios/plan": suite,
-        "scenarios/write": suite,
+        "overview": suite,
+        "plan": suite,
+        "write": suite,
         "run-scenarios": set(run_tools.TOOL_NAMES),
     }
     # A skill also backticks the names of fields it is telling the model to fill in. Those are
@@ -4352,7 +4352,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     )
 
     for stage, tools in surface.items():
-        text = (SKILLS_ROOT / stage / "SKILL.md").read_text(encoding="utf-8")
+        text = skill_path(stage).read_text(encoding="utf-8")
         # `name` or `name(` — the way a skill refers to a tool it wants called.
         mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
         unknown = {
@@ -4367,9 +4367,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
 
 def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
     """A transfer/refusal scenario cannot also require work after the conversation ends."""
-    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.config import skill_path
 
-    text = (SKILLS_ROOT / "scenarios" / "write" / "SKILL.md").read_text(encoding="utf-8")
+    text = skill_path("write").read_text(encoding="utf-8")
     assert "one coherent terminal outcome" in text
     assert "must not also require a transaction to finish after that transfer" in text
     assert "split them into" in text and "separate scenarios" in text
@@ -4908,7 +4908,7 @@ def test_every_stage_is_told_what_the_harness_is_for():
     for stage in (
         "understand-agent",
         "build-environment",
-        "scenarios/write",
+        "write",
         "run-scenarios",
     ):
         text = load_skill(stage)

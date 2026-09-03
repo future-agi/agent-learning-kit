@@ -28,6 +28,7 @@ from ...config import (
     chosen_model,
     compose_skills,
     load_skill,
+    skill_overlay,
     scenario_thinking,
     stage_backend,
     stage_model,
@@ -134,6 +135,7 @@ def writer_workers(
                 f"## This agent\n\n{contract.brief(with_data=True)}"
                 f"\n\n## Its world\n\n{world_summary(destination)}"
                 f"\n\n{compose_skills(PARENT_SKILL, SKILL)}"
+                f"{skill_overlay(f'kinds/{contract.modality}')}"
                 "\n\n## Your slice\n\nYou are one writer among several working on the same "
                 "suite at the same time. Write only the slice you were given, submit each "
                 "scenario as you prove it, and report which cells you covered and any you "
@@ -535,6 +537,7 @@ async def _write_slice(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
+            f"{skill_overlay(f'kinds/{contract.modality}')}"
             f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
         servers={

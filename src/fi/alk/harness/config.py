@@ -21,6 +21,19 @@ from .backends import SessionSpec, resolve
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 SKILLS_ROOT = Path(__file__).parent / "skills"
+# A stage that owns a package keeps its skills inside it, so the method and the code that runs it
+# are read together. Looked up here rather than at each call site, so a stage names its skill the
+# same way wherever the file happens to live.
+SKILL_ROOTS = (SKILLS_ROOT, Path(__file__).parent / "scenariogen" / "skills")
+
+
+def skill_path(name: str) -> Path:
+    """Where a named skill's SKILL.md is, whichever root holds it."""
+    for root in SKILL_ROOTS:
+        found = root / name / "SKILL.md"
+        if found.exists():
+            return found
+    return SKILLS_ROOT / name / "SKILL.md"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
 
@@ -109,7 +122,7 @@ def compose_skills(*names: str) -> str:
     This also lets a stage carry only the method for the job in hand. A planner loaded the whole
     44KB of the writing skill it was not going to use until after it had finished planning.
     """
-    parts = [(SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8") for name in names]
+    parts = [skill_path(name).read_text(encoding="utf-8") for name in names]
     body = "\n\n---\n\n".join(parts)
     if not HARNESS.exists():
         return body
@@ -119,6 +132,20 @@ def compose_skills(*names: str) -> str:
         "# The stage you are in now\n\n"
         f"{body}"
     )
+
+
+def skill_overlay(name: str) -> str:
+    """A skill fragment that exists only for some agents, or not at all.
+
+    The write skill is the spine and holds the craft once; what a *kind* of agent adds on top
+    (its dials, its traps, what a scenario for it must exercise) lives in a short overlay named
+    for the contract's modality. Missing is normal: an agent kind with no overlay gets the spine
+    alone, and adding a kind is adding one file here, not touching code.
+    """
+    path = Path(__file__).parent / "scenariogen" / "skills" / f"{name}.md"
+    if not path.exists():
+        return ""
+    return f"\n\n---\n\n{path.read_text(encoding='utf-8')}"
 
 
 def scenario_thinking() -> bool:
@@ -336,7 +363,7 @@ def load_skill(name: str) -> str:
     The stage's own method follows. Both are files, so how any of this works can be changed
     without touching code.
     """
-    path = SKILLS_ROOT / name / "SKILL.md"
+    path = skill_path(name)
     if not path.exists():
         raise FileNotFoundError(f"no skill at {path}")
     stage = path.read_text(encoding="utf-8")
