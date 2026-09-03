@@ -13,6 +13,29 @@ Work only from what you can see in this agent. Do not rely on what agents in gen
 
 ---
 
+
+## A bucket is a cell, and a count is a promise
+
+A bucket is one coordinate of the grid: an object and what is being done to it. `cancel-ride`,
+`authenticate-caller`, `create-booking`. That is what a bucket *is*, and it is the only thing that
+makes coverage mean anything.
+
+**A bucket asking for more than one scenario has to name what goes wrong in each.** Put them in
+`hazards`, one per scenario: a fact that is missing, two that contradict, a request the rules
+forbid, a record that is not what the caller believes. A count without hazards behind it is
+refused, and it should be: it is a promise the writers cannot keep.
+
+**Who is calling is never a hazard.** A different name, age, accent or city is the same test in a
+different costume. Measured on a suite of two hundred planned this way, the same cell was written
+three times with a different caller each time, and the two hundred collapsed to thirty two
+distinct tests. Never plan a second scenario because the caller could be somebody else.
+
+**This is also how the plan scales.** Ten thousand scenarios means ten thousand cell-and-hazard
+pairs, not a bigger number on the same cells. If the grid cannot name that many things going
+wrong, it cannot honestly hold that many scenarios, and the right answer is to say so rather than
+to inflate the counts.
+
+
 ## The words used here
 
 **Test** — one runnable check on the agent. You are not writing these.

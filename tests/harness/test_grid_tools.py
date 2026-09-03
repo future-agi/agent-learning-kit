@@ -413,11 +413,11 @@ class TestTheCanvasLoopEndToEnd:
                 "angles": [
                     {"id": "TH01-01", "theme": "TH01", "cell": cells[0],
                      "angle": "a stored record cannot be matched against the identifying details somebody supplied during the exchange",
-                     "why_hard": "data:missing", "expects": "ask", "want": 3,
+                     "why_hard": "data:missing", "expects": "ask", "want": 3, "hazards": ["h1", "h2", "h3"],
                      "varies_by": ["record_state"]},
                     {"id": "TH02-01", "theme": "TH02", "cell": cells[1],
                      "angle": "a cost must be disclosed clearly and explicitly agreed before the irreversible step proceeds",
-                     "why_hard": "rule:fee", "expects": "ask", "want": 3,
+                     "why_hard": "rule:fee", "expects": "ask", "want": 3, "hazards": ["h1", "h2", "h3"],
                      "varies_by": ["record_state"]},
                 ],
             },
@@ -586,13 +586,13 @@ class TestTheCanvasLoopEndToEnd:
             "themes": [{"id": "TH01", "name": "First"}],
             "axes": [{"name": "s.market", "levels": ["a", "b", "c", "d"]}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask", "want": 2,
+                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask", "want": 2, "hazards": ["h1", "h2"],
                         "varies_by": ["s.market"]}],
         })
         said = call(server, "record_canvas", {
             "themes": [{"id": "TH02", "name": "Second"}],
             "angles": [{"id": "TH02-01", "theme": "TH02", "cell": cells[1],
-                        "angle": "two stored records resemble each other closely enough that choosing wrongly between them matters", "why_hard": "ambiguity:x", "expects": "ask", "want": 3,
+                        "angle": "two stored records resemble each other closely enough that choosing wrongly between them matters", "why_hard": "ambiguity:x", "expects": "ask", "want": 3, "hazards": ["h1", "h2", "h3"],
                         "varies_by": ["s.market"]}],
         })
         assert "2 buckets" in said
@@ -625,7 +625,7 @@ class TestTheCanvasLoopEndToEnd:
             "axes": [{"name": "s.market", "levels": ["a", "b", "c", "d"]}],
             "themes": [{"id": "TH01", "name": "First"}],
             "angles": [{"id": "TH01-01", "theme": "TH01", "cell": cells[0],
-                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask", "want": 3,
+                        "angle": "a stored record is missing the particular field that the following step depends upon entirely", "why_hard": "data:x", "expects": "ask", "want": 3, "hazards": ["h1", "h2", "h3"],
                         "varies_by": ["s.market"]}],
         })
         state.canvas.named("TH01-01").done = 2
@@ -734,7 +734,7 @@ def test_folding_credits_journalled_scenarios_not_only_folders(contract, tmp_pat
                             "alike and the wrong one is chosen first"
                         ),
                         "why_hard": "data:two-records",
-                        "want": 2,
+                        "want": 2, "hazards": ["h1", "h2"],
                         "varies_by": ["record_state"],
                     }
                 ],
@@ -799,7 +799,7 @@ def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_p
                             "alike and the wrong one is chosen first"
                         ),
                         "why_hard": "data:two-records",
-                        "want": 2,
+                        "want": 2, "hazards": ["h1", "h2"],
                         "varies_by": ["record_state"],
                     }
                 ],

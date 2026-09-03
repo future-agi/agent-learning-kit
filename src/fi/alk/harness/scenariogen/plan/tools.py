@@ -217,6 +217,16 @@ def planning_tools(
                             "angle": {"type": "string"},
                             "why_hard": {"type": "string"},
                             "want": {"type": "integer"},
+                            "hazards": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "What goes wrong in each scenario this bucket "
+                                "holds, one entry per scenario: a fact that is missing, two that "
+                                "contradict, a request the rules forbid, a record that is not "
+                                "what the caller believes. A bucket wanting several scenarios "
+                                "without a hazard for each is refused, because a different "
+                                "caller in the same situation is the same test written twice.",
+                            },
                             "expects": {
                                 "type": "string",
                                 "enum": list(EXPECTS),
@@ -295,6 +305,11 @@ def planning_tools(
                     angle=str((one or {}).get("angle") or "").strip(),
                     why_hard=str((one or {}).get("why_hard") or "").strip(),
                     want=max(1, int((one or {}).get("want") or 1)),
+                    hazards=[
+                        str(x).strip()
+                        for x in ((one or {}).get("hazards") or [])
+                        if str(x).strip()
+                    ],
                     varies_by=[str(x) for x in ((one or {}).get("varies_by") or [])],
                     expects=str((one or {}).get("expects") or "").strip().lower(),
                     overlay=str((one or {}).get("overlay") or "").strip().lower(),
@@ -632,6 +647,11 @@ def planning_tools(
                     angle=str((row or {}).get("angle") or "").strip(),
                     why_hard=str((row or {}).get("why_hard") or "").strip(),
                     want=max(1, int((row or {}).get("want") or 1)),
+                    hazards=[
+                        str(x).strip()
+                        for x in ((row or {}).get("hazards") or [])
+                        if str(x).strip()
+                    ],
                 )
                 for row in args.get("found") or []
                 if isinstance(row, dict)

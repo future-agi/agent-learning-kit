@@ -169,6 +169,16 @@ class Angle:
     expects: str = ""
     # One of OVERLAYS, or empty. What is deliberately making it hard, if anything.
     overlay: str = ""
+    # What is planted in the agent's way, one entry per scenario this bucket holds. A bucket is a
+    # cell of the grid, and a cell asked for three scenarios can only honestly give three if it
+    # can name three different things going wrong in it: a missing fact, two that contradict, a
+    # request the rules forbid, a record that is not what the caller believes.
+    #
+    # This is what stops a count becoming a lie. Measured on a two hundred scenario suite whose
+    # buckets named no hazards, the same cell was written three times with a different caller each
+    # time, and two hundred scenarios collapsed to thirty two distinct tests. Who is calling is
+    # never a hazard, and never a reason for a second scenario.
+    hazards: list[str] = field(default_factory=list)
     done: int = 0
     refused: int = 0
     attempts: int = 0
@@ -386,6 +396,25 @@ class Canvas:
                 + "; ".join(overreach[:6])
                 + ". Name the other axis that varies, or lower the count. Different data with the "
                 "same answer is one test repeated, not several."
+            )
+
+        # A cell can only honestly give N scenarios if it can name N different things going wrong
+        # in it. Naming a state axis was not enough: axes like the caller's language or an
+        # accessibility flag have levels but change neither the reference solution nor the checks,
+        # so buckets varying only on those produced the same test under different names. A hazard
+        # is behavioural by construction, which is what makes this scale: ten thousand scenarios
+        # means ten thousand cell-and-hazard pairs, not a higher count on the same cells.
+        thin = [
+            f"{one.id} wants {one.want} from {len(one.hazards)} hazard(s)"
+            for one in self.angles
+            if one.want > 1 and len(one.hazards) < one.want
+        ]
+        if thin:
+            found.append(
+                f"{len(thin)} buckets ask for more scenarios than they can name a hazard for: "
+                + "; ".join(thin[:6])
+                + ". Name what goes wrong in each, or lower the count. A different caller in the "
+                "same situation is the same test written twice."
             )
 
         unjustified = [one.id for one in self.angles if one.want > 1 and not one.varies_by]

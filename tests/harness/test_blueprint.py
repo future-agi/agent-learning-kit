@@ -46,6 +46,13 @@ def canvas(*rows, target: int = 0, themes=("TH01",)) -> Canvas:
                 angle=(row[3] if len(_WORD.findall(row[3])) >= 8 else row[3] + SAID),
                 why_hard=row[4] if len(row) > 4 else "",
                 want=row[5] if len(row) > 5 else 1,
+                # A bucket wanting several has to name what goes wrong in each, or the plan is
+                # refused. Fixtures get one hazard per wanted scenario so they model a plan that
+                # would be accepted, rather than testing that refusal by accident.
+                hazards=[
+                    f"hazard {index + 1} for {row[0]}"
+                    for index in range(row[5] if len(row) > 5 else 1)
+                ],
             )
             for row in rows
         ],
