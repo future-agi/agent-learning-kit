@@ -582,7 +582,8 @@ class TestThePlannerMayProbeFreely:
     """The probe guard belongs to writers, and it was stopping the planner from planning.
 
     A writer that probes the agent repeatedly without submitting anything is stalling, and the
-    guard says so after four. A planner has nothing to submit yet: reading and probing the agent
+    guard says so: after twelve while it is still learning the world, then after four between
+    scenarios. A planner has nothing to submit yet: reading and probing the agent
     *is* its work at that point. Measured before the fix, a planning run spent twenty-five minutes
     refused on every probe it attempted.
     """
@@ -624,16 +625,18 @@ class TestThePlannerMayProbeFreely:
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
-        said = self.probes(stage, monkeypatch)
-        assert not any("Four throwaway probes" in one for one in said)
+        said = self.probes(stage, monkeypatch, times=16)
+        assert not any("throwaway probes have run" in one for one in said)
 
     def test_a_writing_stage_still_is(self, contract, where, monkeypatch):
         from fi.alk.harness import scenarios
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
-        said = self.probes(stage, monkeypatch)
-        assert any("Four throwaway probes" in one for one in said)
+        # Past the first-look allowance, which is wider than the between-scenarios one because a
+        # writer cannot ground an instruction in a world it has not been allowed to look at.
+        said = self.probes(stage, monkeypatch, times=16)
+        assert any("throwaway probes have run" in one for one in said)
 
 
 class TestOrderingIsPlannedForRatherThanMentioned:

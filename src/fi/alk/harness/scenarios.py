@@ -562,6 +562,29 @@ def callers_for(index: int, wanted: int) -> str:
             " Place them in different locations from the offered set rather than all in one, "
             f"choosing what the scenario supports: {', '.join(here)}."
         )
+    styles = offered("communication_style")
+    if styles:
+        # Dealt for the reason personality and accent are, and it was the one field left out:
+        # undealt across a suite of two hundred it collapsed to a single value on 158 of them,
+        # where the platform offered ten. How someone says a thing decides whether the agent has
+        # to work to understand them, so it is a test dimension and not a label.
+        ways = [
+            styles[(index + step) % len(styles)]
+            for step in range(min(len(styles), max(2, wanted)))
+        ]
+        said += (
+            " Vary how they speak as well as who they are, a different one per caller where the "
+            f"scenario supports it: {', '.join(ways)}."
+        )
+    said += (
+        " A caller who is cooperative, articulate and patient is the one an agent handles best, "
+        "so a suite made only of those reports a pass it has not earned. Across your callers, "
+        "spread in the ones that are harder to serve: somebody impatient who pushes before you "
+        "have finished, somebody anxious who needs reassurance first, somebody sceptical who "
+        "will not accept the first answer, somebody who volunteers three facts at once and "
+        "somebody who answers a near-miss of the question. Let the situation choose which, and "
+        "never soften a caller because it makes the scenario easier to prove."
+    )
     return said
 
 
