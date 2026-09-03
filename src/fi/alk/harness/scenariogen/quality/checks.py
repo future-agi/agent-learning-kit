@@ -37,6 +37,16 @@ def validate_scenario(
     # doing. When they name two different people the caller opens the call correcting the agent
     # about its own records, and the scenario tests an argument about a name instead of the thing
     # it was written for. Twenty three of two hundred scenarios shipped this way.
+    # Twelve of thirty one were still named for the caller after the skill asked them not to be.
+    # The folder name is how a failure is read weeks later, and a caller's name in it says the
+    # caller was carrying the difference the test should have been carrying.
+    caller = str(getattr(scenario.persona, "name", "") or "").strip().lower()
+    if caller and caller in scenario.name.lower().replace("-", " ").replace("_", " ").split():
+        problems.append(
+            f"the folder name contains the caller's name ({caller!r}). Name it for the behaviour "
+            "under test, so a red result says which rule broke rather than who was on the phone"
+        )
+
     named = str(getattr(scenario.persona, "name", "") or "").strip()
     if named:
         spoken = re.search(r"\bYou are ([A-Z][a-z]+)", scenario.instruction)
