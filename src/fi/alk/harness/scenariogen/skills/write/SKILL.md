@@ -683,9 +683,21 @@ Watch for these, which look like tests and are not:
 
 ## Fixture quality is part of correctness
 
-Use source seed data where it exists, but do not make every scenario the same seeded person with
-different prose. Add scenario-local records with `setup_code` when coverage needs a person,
-credential, address, balance, status, code, or prior transaction the base world does not contain.
+**Build the world your scenario needs, rather than borrowing one.** Write the records it turns on
+in `setup_code`: the person, their credential, their history, the state that makes this case the
+case it is. A scenario that leans on whatever the base world happened to be seeded with is not
+self-contained, and it breaks in ways that have nothing to do with the agent: the seeded values are
+regenerated per build, so a value the scenario was written against is stale by the time it runs.
+Measured on a two hundred scenario suite, most scenarios stood up nothing of their own, and the
+ones that did were the only ones worth reading.
+
+**Set up more than the call strictly needs.** The caller is a person, and a person can be asked
+something the script did not anticipate: what else is on the account, when the last one was, what
+the other option costs. If the world holds only the two rows the happy path touches, the agent
+either invents an answer or stalls, and the scenario has tested your setup rather than the agent.
+Seed the neighbouring facts too, so an off-script question has a real answer behind it.
+
+`ready_code` verifies those exact records, so a scenario that presumes something proves it.
 `ready_code` must verify those exact records.
 
 There is one important exception: when the contract says the target's store is hardcoded and

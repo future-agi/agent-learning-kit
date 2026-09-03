@@ -359,6 +359,19 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
             "hazard, no withheld fact, no forbidden shortcut, no invariant to hold. A scenario a "
             "competent agent passes by doing the obvious thing measures nothing"
         )
+    # A scenario that stands up nothing of its own is only as good as whatever the base world
+    # happened to hold, and the base world is rebuilt per run: the values it was written against
+    # are stale by the time it executes. Measured on a two hundred scenario suite, 164 of them
+    # seeded nothing, and the handful that did were the only ones worth reading.
+    borrowed = [one.name for one in scenarios if not changes_the_world(one.setup_code)]
+    if len(borrowed) * 2 > len(scenarios):
+        problems.append(
+            f"{len(borrowed)} of {len(scenarios)} scenarios stand up no state of their own and run "
+            "on whatever the base world holds. Build the records the scenario turns on in "
+            "setup_code, and the neighbouring facts too, so a question off the expected path still "
+            "has an answer behind it"
+        )
+
     unstated = [one.name for one in scenarios if not one.failure_modes]
     if len(unstated) * 2 > len(scenarios):
         problems.append(
