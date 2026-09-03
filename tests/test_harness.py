@@ -1544,6 +1544,7 @@ def _scenario(**overrides):
         "opening": "one big mac please",
         "expect_state": {"cart.count": 1},
         "hazard": "a record the caller relies on is not what they believe it is",
+        "invariant": "never act on a value the caller has not confirmed",
         "failure_modes": ["acts on the stale value"],
     }
     payload.update(overrides)
@@ -2498,6 +2499,7 @@ def _delta(**overrides):
         "sub_goals": ["item-added", "right-item"],
         # A scenario that plants nothing is refused, so fixtures carry what a real one carries.
         "hazard": "the item the caller names is out of stock at this location",
+        "invariant": "never add an item the caller did not agree to",
         "failure_modes": ["adds a different item without saying so"],
         # Scenarios stand up the state they turn on, so fixtures do too.
         "setup_code": "def setup(world):\n    stock = world.state()\n",
