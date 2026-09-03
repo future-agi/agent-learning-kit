@@ -36,8 +36,8 @@ gate says so.
   it passes cannot tell anyone what went wrong when it goes red.
 
 **Turns should depend on each other.** If turn four could be answered without turns one to three
-having happened, the scenario is four scenarios in a trench coat. The quote has to come from the
-options that were fetched; the confirmation has to name the booking that was prepared.
+having happened, the scenario is four scenarios in a trench coat. What the agent commits to at the
+end has to be the thing it looked up earlier, under the identifier it was actually given.
 
 **Write the failure you expect, then the check that catches it.** The order matters: a check
 written from a pass condition tends to assert that a step happened, and a check written from a

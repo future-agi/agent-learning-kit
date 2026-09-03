@@ -23,7 +23,7 @@ from ...config import (
     chosen_model,
     compose_skills,
     load_skill,
-    skill_overlay,
+    discovered_skills,
     scenario_thinking,
     stage_backend,
     stage_model,
@@ -134,7 +134,7 @@ def open_stage(
             # Only the method for the job in hand. A planner does not need the writing skill,
             # and carrying it cost 44KB on every turn of the stage that plans.
             + f"\n\n{compose_skills(PARENT_SKILL, PLAN_SKILL if planning else SKILL)}"
-            + ("" if planning else skill_overlay(f"kinds/{contract.modality}"))
+            + ("" if planning else discovered_skills(modality=contract.modality))
             + (
                 f"\n\nPlan all {wanted} scenarios first, then write them."
                 if planning

@@ -33,6 +33,18 @@ def validate_scenario(
     problems: list[str] = []
     if not scenario.name.strip():
         problems.append("no name")
+    # The persona is who the simulator is told it is, and the instruction is what that person is
+    # doing. When they name two different people the caller opens the call correcting the agent
+    # about its own records, and the scenario tests an argument about a name instead of the thing
+    # it was written for. Twenty three of two hundred scenarios shipped this way.
+    named = str(getattr(scenario.persona, "name", "") or "").strip()
+    if named:
+        spoken = re.search(r"\bYou are ([A-Z][a-z]+)", scenario.instruction)
+        if spoken and spoken.group(1).lower() != named.lower():
+            problems.append(
+                f"the persona is {named} but the instruction says 'You are {spoken.group(1)}'. "
+                "They have to be the same person"
+            )
     if not scenario.instruction.strip():
         problems.append("no instruction: there is nothing for the run to be about")
     if scenario.persona is not None and not scenario.persona.described():

@@ -1,3 +1,8 @@
+---
+name: voice
+applies_to: modality=voice
+---
+
 # Writing scenarios for a voice agent
 
 The craft is the same. What changes is that the caller is speaking, in real time, and cannot see
@@ -5,11 +10,11 @@ anything. These are the parts of a scenario that only exist because of that.
 
 ## What a voice scenario can test that a chat one cannot
 
-- **The caller says several things at once.** "It's Dana, 4155550101, going to the airport, and I
-  want the cheap one." A real caller does this constantly. An agent that handles one field per
-  turn fails here and passes every chat test.
-- **The caller changes their mind mid-sentence.** "Take me to the Ferry Building, actually no, the
-  airport."
+- **The caller answers three questions in one breath**, in their own order, before being asked.
+  Real callers do this constantly. An agent that collects one field per turn fails here and passes
+  every written test.
+- **The caller changes their mind mid-sentence**, and the correction lands after the original. The
+  second value is the real one.
 - **A value has to be read back and heard.** Codes, prices, times. A digit misheard is a real
   failure, and it only exists out loud.
 - **Interruption.** The caller talks over the agent's confirmation. What the agent believes was

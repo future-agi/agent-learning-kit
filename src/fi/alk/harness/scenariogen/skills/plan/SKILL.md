@@ -16,9 +16,10 @@ Work only from what you can see in this agent. Do not rely on what agents in gen
 
 ## A bucket is a cell, and a count is a promise
 
-A bucket is one coordinate of the grid: an object and what is being done to it. `cancel-ride`,
-`authenticate-caller`, `create-booking`. That is what a bucket *is*, and it is the only thing that
-makes coverage mean anything.
+A bucket is one coordinate of the grid: an object this agent works with, and one of the things it
+can do to that object. Take both from the agent's own contract rather than inventing a vocabulary;
+the grid is derived from what its tools actually operate on. That is what a bucket *is*, and it is
+the only thing that makes coverage mean anything.
 
 **A bucket asking for more than one scenario has to name what goes wrong in each.** Put them in
 `hazards`, one per scenario: a fact that is missing, two that contradict, a request the rules

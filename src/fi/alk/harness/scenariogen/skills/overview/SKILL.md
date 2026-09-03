@@ -72,8 +72,8 @@ mean to write.
 worse than nothing: it inflates the count and hides the gap it should have shown.
 
 **Name it for what it tests, never for who called.** The folder name is how a failure gets read
-weeks later, so it has to say which behaviour broke: `cancel-ride__fee-disclosed-before-charge`,
-not `cancel-ride__dana-standard`. A caller's name in the folder name is a sign the caller was
+weeks later, so it has to say which behaviour broke: name it for the rule or the step that failed,
+never for the person who called. A caller's name in the folder name is a sign the caller was
 carrying the difference the test should have been carrying.
 
 **Who the caller is is not a lever.** A different name, job or city is the same test in a different
@@ -94,7 +94,7 @@ Each call carries its name, its arguments, its result, whether it succeeded and 
 and values are both available. Use them.
 
 **If the rule says "before", assert the order.** "Verify before charging", "quote the fee before
-cancelling", "read back before booking".
+committing", "read the total back before taking payment".
 
 This is the one most often got wrong, and the wrong version looks right. A check that gathers two
 calls and asserts each happened is testing occurrence, and an agent that did them in the forbidden
@@ -140,7 +140,7 @@ An adversarial scenario whose checks only cover the steps taken on the way in is
 the agent could comply with the attack and still pass, the check is not testing the scenario.
 
 **Look at the world, not only at the calls.** The world was built, seeded and frozen so it can be
-inspected afterwards. `world.state()` tells you whether the booking row exists, whether the status
+inspected afterwards. `world.state()` tells you whether the record exists, whether the status
 really changed, whether the balance moved. A call having been made is not the same as the world
 having changed.
 
