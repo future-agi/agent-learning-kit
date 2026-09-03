@@ -532,7 +532,10 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
     personas = [one.persona for one in scenarios if one.persona]
     names = [one.name.strip().lower() for one in personas if one and one.name.strip()]
     unique_names = len(set(names))
-    required_names = min(len(scenarios), max(3, ceil(len(scenarios) * 0.9)))
+    # Enough that a suite is not one caller repeated, and no more. Requiring a distinct name of
+    # nearly every scenario made the caller's name the cheapest way to look diverse, so suites came
+    # back with two hundred names running thirty tests between them. Substance is gated below.
+    required_names = min(len(scenarios), max(3, ceil(len(scenarios) * 0.5)))
     if unique_names < required_names:
         repeated = [name for name, count in Counter(names).items() if count > 2]
         problems.append(
@@ -571,6 +574,29 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
     setups = [signature for one in scenarios if (signature := _setup_signature(one))]
     if len(set(setups)) != len(setups):
         problems.append("identical scenario setup data is reused more than once")
+
+    # What a scenario does and what it checks, which is the only thing that makes it a distinct
+    # test. Nothing here measured that before, so a suite could pass on callers alone while every
+    # scenario exercised the same prefix of the same pipeline.
+    signatures = [
+        (tuple(step.tool for step in one.solution), tuple(sorted(one.sub_goals)))
+        for one in scenarios
+    ]
+    distinct = len(set(signatures))
+    shared = sum(count for count in Counter(signatures).values() if count > 1)
+    if shared > len(scenarios) // 2:
+        problems.append(
+            f"{shared} of {len(scenarios)} scenarios share a reference solution and check set with "
+            f"another, leaving {distinct} distinct tests. Two scenarios that claim to test "
+            "different things have to differ in what they do or in what they verify"
+        )
+    shallow = sum(1 for one in scenarios if len(one.solution) <= 2)
+    if shallow * 2 > len(scenarios):
+        problems.append(
+            f"{shallow} of {len(scenarios)} reference solutions stop within two steps; a scenario "
+            "that ends before the action it is named for cannot observe whether that action was "
+            "done correctly"
+        )
     return problems
 
 
