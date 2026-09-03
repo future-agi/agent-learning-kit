@@ -137,6 +137,9 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_SCENARIOS_HARNESS",
         "ALK_SCENARIOS_MODEL",
         "ALK_VERTEX_LOCATION",
+        # How many writers a stage may run at once. A hosted job could not be told before, so
+        # every run silently used the in-code default however wide the machine actually was.
+        "HARNESS_WORKERS_AT_ONCE",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
         "GEMINI_API_KEY",
