@@ -257,6 +257,12 @@ def _sqlite_sql(path: Path) -> str:
                 )
                 if int(row[3] or 0) and not int(row[5] or 0):
                     suffix += " NOT NULL"
+                # `PRAGMA table_info` reports the default in row[4]. Dropping it while keeping
+                # NOT NULL leaves a column the authored world fills implicitly and the compiled
+                # one rejects, so every insert relying on it fails against Postgres alone.
+                default = row[4]
+                if default is not None and str(default).strip():
+                    suffix += f" DEFAULT {default}"
                 definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
                 columns.append(name)
                 column_types.append(sql_type)
