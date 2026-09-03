@@ -332,7 +332,17 @@ def callers_for(index: int, wanted: int) -> str:
     places = offered("location")
     if not people:
         return ""
-    picks = [people[(index + step) % len(people)] for step in range(max(1, wanted))]
+    # Dealt hardest first, because the vocabulary happens to lead with the easiest temperament and
+    # a rotation from the front hands every writer an accommodating caller to open with. Measured
+    # on a forty eight scenario suite dealt that way: fifteen friendly and five easy-going against
+    # five impatient, one anxious, one sceptical. The suite is meant to be mostly people who are
+    # hard to serve, since an agent that only meets the patient ones is never really tested.
+    demanding = ("impatient", "anxious", "skeptical", "sceptical", "emotional", "reserved", "talkative")
+    ranked = sorted(
+        people,
+        key=lambda one: 0 if any(word in one.lower() for word in demanding) else 1,
+    )
+    picks = [ranked[(index + step) % len(ranked)] for step in range(max(1, wanted))]
     said = (
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
