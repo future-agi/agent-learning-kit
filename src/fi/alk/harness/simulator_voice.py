@@ -396,6 +396,8 @@ _CARTESIA_LANGUAGE_TO_LANG: dict[str, str] = {
     "gujarati": "gu",
     "croatian": "hr",
 }
+
+
 def _norm(value) -> str:
     return str(value or "").strip().lower().replace("-", " ")
 
@@ -455,9 +457,6 @@ def cartesia_voice_for(persona: dict) -> str:
         voices
     )
     return voices[index]
-
-
-
 
 
 _AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
@@ -658,7 +657,7 @@ def simulation_spec(
     *,
     run_id: str,
     room_name: str,
-    agent_name: str,
+    agent_name: str | None,
     system_prompt: str,
     livekit_url: str,
     recording_dir: Path,
@@ -669,8 +668,14 @@ def simulation_spec(
     min_turn_messages: int,
     agent_first_silence_seconds: float,
     run_seconds: float,
+    agent_definition: "simulate.AgentDefinition | None" = None,
 ) -> SimulationSpec:
-    """The voice run both lanes execute. Only the values differ between them."""
+    """The voice run both lanes execute. Only the target definition differs.
+
+    LiveKit workers use ``agent_name``. Provider-hosted targets (Vapi/Retell) pass an explicit
+    definition while retaining the exact same managed LiveKit caller runtime, timeout policy,
+    recording behavior, and simulated customer as the local/LiveKit lanes.
+    """
     params = {
         "record_audio": True,
         "recording_root": str(recording_dir),
@@ -683,12 +688,16 @@ def simulation_spec(
         "conversation_direction": direction,
         "agent_first_silence_timeout_seconds": agent_first_silence_seconds,
     }
-    agent = simulate.AgentDefinition(
-        name=_TARGET_NAME,
-        agent_name=agent_name,
-        system_prompt=system_prompt,
-        transport={"kind": "webrtc"},
-    )
+    agent = agent_definition
+    if agent is None:
+        if not agent_name:
+            raise ValueError("livekit_agent_name_unavailable")
+        agent = simulate.AgentDefinition(
+            name=_TARGET_NAME,
+            agent_name=agent_name,
+            system_prompt=system_prompt,
+            transport={"kind": "webrtc"},
+        )
     runtime = simulate.LiveKitSimulatorRuntime(
         url=livekit_url, room_name=room_name, room_mode="managed"
     )

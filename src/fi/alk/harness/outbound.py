@@ -328,11 +328,14 @@ class HostedEndpoints(BaseModel):
     results: str
     artifacts: str
     scenarios: str
+    ingress: str | None = None
 
     @model_validator(mode="after")
     def _shape(self) -> "HostedEndpoints":
-        for name in ("events", "results", "artifacts", "scenarios"):
+        for name in ("events", "results", "artifacts", "scenarios", "ingress"):
             value = getattr(self, name)
+            if value is None:
+                continue
             if not value or not value.endswith("/"):
                 raise ValueError(f"{name} endpoint must end with '/'")
             if not value.startswith("https://"):

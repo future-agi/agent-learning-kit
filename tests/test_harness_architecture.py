@@ -430,6 +430,52 @@ def test_hosted_authoring_persists_adjusted_scenario_count_for_bundling(
     assert persisted.scenario_count == 2
 
 
+def test_hosted_authoring_inspects_imported_target_once_then_reuses_safe_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import authoring_entrypoint
+
+    job = HarnessJob(
+        job_id="job-provider-import",
+        run_id="run-provider-import",
+        execution="hosted",
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={
+            "connector": "retell",
+            "mode": "provider_import",
+            "config": {"agent_id": "source-agent"},
+            "secret_refs": {
+                "RETELL_API_KEY": {
+                    "manager": "platform-vault",
+                    "key": "secret-id",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+    secrets = tmp_path / "target-secrets.json"
+    secrets.write_text('{"RETELL_API_KEY":"retell-secret"}', encoding="utf-8")
+    cache = tmp_path / "provider-profile.json"
+    calls = []
+
+    def inspect(provider, **kwargs):
+        calls.append((provider, kwargs))
+        return {"provider": "retell", "general_prompt": "Use the exact tool schema."}
+
+    monkeypatch.setattr(authoring_entrypoint, "inspect_provider_target", inspect)
+
+    first = authoring_entrypoint._load_provider_import_profile(job, secrets, cache)
+    second = authoring_entrypoint._load_provider_import_profile(job, secrets, cache)
+
+    assert first == second
+    assert len(calls) == 1
+    assert calls[0][1]["api_key"] == "retell-secret"
+    assert not secrets.exists()
+    assert "retell-secret" not in cache.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("modality", ["voice", "chat"])
 def test_deferred_hosted_authoring_never_starts_or_imports_the_submitted_runtime(
     tmp_path: Path,

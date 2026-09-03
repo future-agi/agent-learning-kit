@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
+from fi import simulate
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -52,7 +53,7 @@ from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, HarnessJob
+from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .simulator_voice import (
@@ -83,6 +84,8 @@ GOOGLE_CLOUD_PROJECT_ALIAS = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
 OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
+VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
+RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
 SIMULATOR_LLM_MODEL_ALIAS = "SIMULATOR_LLM_MODEL"
 SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
@@ -93,6 +96,9 @@ LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
 _SIMULATOR_PLATFORM_ALIAS_MAP = {
+    "SIMULATOR_LIVEKIT_URL": LIVEKIT_URL_ALIAS,
+    "SIMULATOR_LIVEKIT_API_KEY": LIVEKIT_API_KEY_ALIAS,
+    "SIMULATOR_LIVEKIT_API_SECRET": LIVEKIT_API_SECRET_ALIAS,
     "SIMULATOR_DEEPGRAM_API_KEY": DEEPGRAM_API_KEY_ALIAS,
     "SIMULATOR_CARTESIA_API_KEY": CARTESIA_API_KEY_ALIAS,
     "SIMULATOR_GEMINI_API_KEY": GEMINI_API_KEY_ALIAS,
@@ -231,19 +237,27 @@ def _check_config(
         or "deepgram"
     ).lower()
 
+    connector = job.agent.connector.strip().lower()
+    livekit_values = (
+        target_provider_secret_values if connector == "livekit" else simulator_values
+    )
     required = [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS]
+    if connector == "vapi":
+        required.append(VAPI_API_KEY_ALIAS)
+    elif connector == "retell":
+        required.append(RETELL_API_KEY_ALIAS)
     if "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
-    missing_aliases = [
-        alias
-        for alias in required
-        if not (
-            target_provider_secret_values.get(alias)
-            if alias in {LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS}
-            else simulator_value(alias)
-        )
-    ]
+
+    def credential(alias: str) -> str | None:
+        if alias in {LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS}:
+            return livekit_values.get(alias)
+        if alias in {VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS}:
+            return target_provider_secret_values.get(alias)
+        return simulator_value(alias)
+
+    missing_aliases = [alias for alias in required if not credential(alias)]
 
     if llm_provider == "google":
         has_api_key = bool(
@@ -265,8 +279,7 @@ def _check_config(
         missing_aliases.append(OPENAI_API_KEY_ALIAS)
 
     has_livekit_url = bool(
-        config.get(LIVEKIT_URL_CONFIG_KEY)
-        or target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+        config.get(LIVEKIT_URL_CONFIG_KEY) or livekit_values.get(LIVEKIT_URL_ALIAS)
     )
     missing_config_keys = [] if has_livekit_url else [LIVEKIT_URL_CONFIG_KEY]
     if not missing_aliases and not missing_config_keys:
@@ -360,7 +373,7 @@ def _build_spec(
     *,
     run_id: str,
     room_name: str,
-    agent_name: str,
+    agent_name: str | None,
     doc: Mapping[str, Any],
     livekit_url: str,
     call_timeout_seconds: float,
@@ -368,6 +381,8 @@ def _build_spec(
     recordings_root: Path,
     simulator_config: Mapping[str, Any],
     environ: Mapping[str, str],
+    connector: str = "livekit",
+    provider_target_id: str | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
 
@@ -380,6 +395,66 @@ def _build_spec(
     simulator = simulator_definition(
         setting, doc.get("persona"), direction=str(doc.get("direction") or "inbound")
     )
+    connector = connector.strip().lower()
+    provider_agent: simulate.AgentDefinition | None = None
+    if connector == "vapi":
+        if not provider_target_id:
+            raise ValueError("vapi_target_id_unavailable")
+        provider_agent = simulate.AgentDefinition(
+            name="harness-vapi-target",
+            system_prompt=str(
+                simulator_config.get("target_system_prompt")
+                or "Provider-hosted Vapi target under test."
+            ),
+            target={
+                "provider": "vapi",
+                "assistant_id": provider_target_id,
+                "api_base_url": str(
+                    simulator_config.get("vapi_api_base_url") or "https://api.vapi.ai"
+                ),
+                "api_key_env": VAPI_API_KEY_ALIAS,
+            },
+            transport={"kind": "vapi_websocket"},
+            provider_evidence={
+                "provider": "vapi",
+                "call_id_source": "originator_response",
+            },
+        )
+    elif connector == "retell":
+        if not provider_target_id:
+            raise ValueError("retell_target_id_unavailable")
+        provider_agent = simulate.AgentDefinition(
+            name="harness-retell-target",
+            system_prompt=str(
+                simulator_config.get("target_system_prompt")
+                or "Provider-hosted Retell target under test."
+            ),
+            target={
+                "provider": "retell",
+                "agent_id": provider_target_id,
+                "api_url": str(
+                    simulator_config.get("retell_api_url")
+                    or "https://api.retellai.com/v2/create-web-call"
+                ),
+                "livekit_url": str(
+                    simulator_config.get("retell_livekit_url")
+                    or "wss://retell-ai-4ihahnq7.livekit.cloud"
+                ),
+                "api_key_env": RETELL_API_KEY_ALIAS,
+            },
+            transport={"kind": "retell_webcall"},
+            provider_evidence={
+                "provider": "retell",
+                "call_id_source": "originator_response",
+            },
+        )
+    # A provider-hosted agent owns termination and can legitimately finish an agent-first call
+    # after the fifth message: agent greeting, caller request, agent clarification, caller answer,
+    # agent confirmation followed by the provider's end-call tool. Requiring the simulator's
+    # sixth acknowledgement after Retell/Vapi has already disconnected misclassifies a complete
+    # call as infrastructure failure and prevents the tool trace from being graded. Native
+    # LiveKit keeps the stricter six-message floor because our simulator owns that hang-up path.
+    min_turn_messages = 5 if connector in {"vapi", "retell"} else 6
     return simulation_spec(
         run_id=run_id,
         room_name=room_name,
@@ -401,13 +476,14 @@ def _build_spec(
             "simulator_first" if str(doc.get("direction")) == "outbound" else "agent_first"
         ),
         max_seconds=call_timeout_seconds,
-        min_turn_messages=6,
+        min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
         # round-trip after the conversation has begun.  The previous 45-second value terminated
         # an otherwise healthy LiveKit call at exactly the watchdog boundary.  Keep a finite
         # liveness guard, but align it with the engine's 60-second conversation-silence backstop.
         agent_first_silence_seconds=60.0,
         run_seconds=run_seconds,
+        agent_definition=provider_agent,
     )
 
 
@@ -590,6 +666,65 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
+    """Translate provider-reported tool evidence into scheduler calls.
+
+    LiveKit's legacy report conversion stores per-case evidence in
+    ``result.metadata.evidence``; canonical reports may populate
+    ``case.evidence`` directly. Accept both shapes so hosted execution is not
+    coupled to the report representation.
+    """
+    sources: list[Any] = list(getattr(case, "evidence", None) or [])
+    result = getattr(case, "result", None)
+    result_metadata = getattr(result, "metadata", None)
+    if isinstance(result_metadata, Mapping):
+        embedded = result_metadata.get("evidence")
+        if isinstance(embedded, list):
+            sources.extend(embedded)
+
+    calls: list[Call] = []
+    for source in sources:
+        if hasattr(source, "model_dump"):
+            source = source.model_dump(mode="json", exclude_none=True)
+        if not isinstance(source, Mapping):
+            continue
+        metadata = source.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        raw_calls = metadata.get("tool_calls")
+        if not isinstance(raw_calls, list):
+            continue
+        for raw in raw_calls:
+            if not isinstance(raw, Mapping):
+                continue
+            name = raw.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            arguments: Any = raw.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    arguments = {"raw": arguments}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            ok = bool(raw.get("ok", True))
+            raw_at = raw.get("at")
+            at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
+            calls.append(
+                Call(
+                    name=name,
+                    arguments=arguments,
+                    result=raw.get("result") if ok else None,
+                    ok=ok,
+                    error=str(raw.get("error") or ""),
+                    refused=not ok,
+                    at=at,
+                )
+            )
+    return tuple(calls)
+
+
 def _truncate(value: str, *, limit: int = _RESULT_TRUNCATE_CHARS) -> str:
     return value if len(value) <= limit else value[:limit]
 
@@ -659,6 +794,9 @@ class CallRunnerImpl:
         # come from platform configuration and must not be confused with customer-agent keys.
         if context.job.execution is ExecutionMode.LOCAL:
             for alias in (
+                LIVEKIT_URL_ALIAS,
+                LIVEKIT_API_KEY_ALIAS,
+                LIVEKIT_API_SECRET_ALIAS,
                 DEEPGRAM_API_KEY_ALIAS,
                 CARTESIA_API_KEY_ALIAS,
                 GEMINI_API_KEY_ALIAS,
@@ -687,15 +825,20 @@ class CallRunnerImpl:
         # process but against a per-world sandboxed agent process reached over the network; no
         # other in-process worker races this job-level environment.
         target_environ = os.environ if environ is None else environ
-        for alias in (
-            LIVEKIT_API_KEY_ALIAS,
-            LIVEKIT_API_SECRET_ALIAS,
-            LIVEKIT_URL_ALIAS,
-        ):
+        connector = context.job.agent.connector.strip().lower()
+        target_aliases = [VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS]
+        if connector == "livekit":
+            target_aliases.extend(
+                [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS, LIVEKIT_URL_ALIAS]
+            )
+        for alias in target_aliases:
             value = context.target_provider_secret_values.get(alias)
             if value:
                 target_environ[alias] = value
         for alias in (
+            LIVEKIT_URL_ALIAS,
+            LIVEKIT_API_KEY_ALIAS,
+            LIVEKIT_API_SECRET_ALIAS,
             DEEPGRAM_API_KEY_ALIAS,
             CARTESIA_API_KEY_ALIAS,
             GEMINI_API_KEY_ALIAS,
@@ -726,11 +869,17 @@ class CallRunnerImpl:
         atexit.register(self._cleanup_credentials)
         self._livekit_url = str(
             context.job.agent.config.get(LIVEKIT_URL_CONFIG_KEY)
-            or context.target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+            or (
+                context.target_provider_secret_values.get(LIVEKIT_URL_ALIAS)
+                if connector == "livekit"
+                else simulator_secret_values.get(LIVEKIT_URL_ALIAS)
+            )
             or ""
         )
         self._missing_config = _check_config(
-            context.job, context.target_provider_secret_values, target_environ
+            context.job,
+            context.target_provider_secret_values,
+            simulator_secret_values,
         )
         self._scenario_attempt_counts: dict[str, int] = {}
 
@@ -761,8 +910,9 @@ class CallRunnerImpl:
             # job-level voice config gap).
             raise CallAborted(self._missing_config.message())
 
-        agent_name = _dispatch_agent_name(runtime)
-        if agent_name is None:
+        connector = self._context.job.agent.connector.strip().lower()
+        agent_name = _dispatch_agent_name(runtime) if connector == "livekit" else None
+        if connector == "livekit" and agent_name is None:
             raise CallAborted(
                 "voice_dispatch_identity_unavailable: runtime.metadata['livekit_agent_name'] is "
                 f"not set for world {runtime.world_index}"
@@ -812,10 +962,34 @@ class CallRunnerImpl:
         else:
             self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
 
+        provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
+            connector
+        )
+        provider_target_id: str | None = None
+        if provider_target_key and self._context.job.agent.mode in {
+            None,
+            ProviderExecutionMode.CONNECT_ONLY,
+        }:
+            provider_target_id = str(
+                self._context.job.agent.config.get(provider_target_key) or ""
+            ).strip()
+        if provider_target_key and self._context.job.agent.mode not in {
+            None,
+            ProviderExecutionMode.CONNECT_ONLY,
+        }:
+            dynamic_target = runtime.metadata.get("provider_target_id")
+            provider_target_id = (
+                dynamic_target.strip()
+                if isinstance(dynamic_target, str) and dynamic_target.strip()
+                else None
+            )
+
         spec = _build_spec(
             run_id=new_run_id(),
             room_name=room_name,
+            connector=connector,
             agent_name=agent_name,
+            provider_target_id=provider_target_id,
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=self._environ,
@@ -913,6 +1087,14 @@ class CallRunnerImpl:
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
         calls = self._collect_calls(runtime) if case is not None else ()
+        # Provider-hosted agents execute tools outside the guest process, so their
+        # authoritative call evidence is returned by Vapi/Retell after the call.
+        # Preserve provider-native controls such as ``end_call`` because scenario
+        # checks may verify termination ordering. Fall back to that observed stream
+        # when the submitted backend exposes no local trace seam; never infer calls
+        # from transcript prose.
+        if not calls and case is not None:
+            calls = _collect_provider_tool_calls(case)
         if calls:
             tool_trace = "\n".join(
                 json.dumps(

@@ -50,8 +50,11 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .job import HarnessJob
+from .job import ProviderExecutionMode
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
+from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
+from .provider_import import ProviderImportSpec
 
 
 class BundleAuthorError(RuntimeError):
@@ -292,9 +295,7 @@ def _sqlite_sql(path: Path) -> str:
             # tool semantics: a source statement such as ``ON CONFLICT (phone)`` becomes invalid
             # even though it worked against the authored world.  Preserve every concrete,
             # non-partial unique index except the primary-key index already represented above.
-            for index in connection.execute(
-                f"PRAGMA index_list({_identifier(table)})"
-            ):
+            for index in connection.execute(f"PRAGMA index_list({_identifier(table)})"):
                 unique = bool(index[2])
                 origin = str(index[3] or "")
                 partial = bool(index[4])
@@ -649,6 +650,15 @@ def resolve_environment_plan(
     if not root.is_dir():
         raise BundleAuthorError(f"source_unavailable: {root}")
     connector = job.agent.connector.lower()
+    if job.agent.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
+        declaration = load_provider_manifest(
+            root, str(job.agent.config.get("lifecycle_manifest") or "alk.yaml")
+        )
+        if declaration.provider.type.value != connector:
+            raise BundleAuthorError(
+                "provider_lifecycle_connector_mismatch: "
+                f"job={connector}, manifest={declaration.provider.type.value}"
+            )
     # Hosted repository submissions normally arrive as ``connector=auto``.  In the unified
     # Daytona lane the contract is authored *after* dispatch, so the control plane cannot rewrite
     # that field before this compiler runs.  The frozen contract is therefore the authoritative
@@ -1033,6 +1043,7 @@ def author_bundle_v2(
     output_root = Path(output).resolve()
     contract_modality: str | None = None
     contract_interface_kind: str | None = None
+    contract_body: dict[str, Any] = {}
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -1100,6 +1111,69 @@ def author_bundle_v2(
                 expected="ready",
             ),
         )
+        provider_manifest: ProviderRepositoryManifest | None = None
+        provider_import: ProviderImportSpec | None = None
+        if job.agent.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
+            provider_manifest = load_provider_manifest(
+                source_root,
+                str(job.agent.config.get("lifecycle_manifest") or "alk.yaml"),
+            )
+            declared = set(provider_manifest.provider.required_secrets)
+            supplied = set(job.agent.secret_refs)
+            missing = sorted(declared - supplied)
+            if missing:
+                raise BundleAuthorError(
+                    "provider_lifecycle_secrets_missing: " + ", ".join(missing)
+                )
+        elif job.agent.mode is ProviderExecutionMode.PROVIDER_IMPORT:
+            connector = job.agent.connector.strip().lower()
+            secret_name = "VAPI_API_KEY" if connector == "vapi" else "RETELL_API_KEY"
+            if secret_name not in job.agent.secret_refs:
+                raise BundleAuthorError(
+                    f"provider_import_secret_missing: {secret_name}"
+                )
+            configured_capability = str(
+                job.agent.config.get("public_capability") or ""
+            ).strip()
+            http_capabilities = sorted(
+                name
+                for name, capability in plan.capabilities.items()
+                if capability.protocol.value == "http"
+            )
+            if configured_capability:
+                if configured_capability not in http_capabilities:
+                    raise BundleAuthorError(
+                        "provider_import_public_capability_invalid: "
+                        f"{configured_capability!r} is not an HTTP capability"
+                    )
+                public_capability = configured_capability
+            elif len(http_capabilities) == 1:
+                public_capability = http_capabilities[0]
+            else:
+                raise BundleAuthorError(
+                    "provider_import_public_capability_ambiguous: configure public_capability; "
+                    f"found {http_capabilities}"
+                )
+            target_key = "assistant_id" if connector == "vapi" else "agent_id"
+            provider_import = ProviderImportSpec(
+                type=connector,
+                source_target_id=str(job.agent.config[target_key]),
+                public_capability=public_capability,
+                environment_tools=sorted(
+                    {
+                        str(tool.get("name") or "").strip()
+                        for tool in contract_body.get("tools", [])
+                        if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+                    }
+                ),
+                event_path=str(
+                    job.agent.config.get("event_path") or "/provider/events"
+                ),
+                tool_path=str(job.agent.config.get("tool_path") or "/provider/tools"),
+                api_base_url=str(job.agent.config.get("provider_api_base_url") or "")
+                or None,
+            )
+
         manifest = EnvironmentBundleV2(
             schema_version=BUNDLE_V2_SCHEMA_VERSION,
             digest="sha256:" + "0" * 64,
@@ -1127,6 +1201,20 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **(
+                    {
+                        "provider_lifecycle": provider_manifest.provider.model_dump(
+                            mode="json"
+                        )
+                    }
+                    if provider_manifest is not None
+                    else {}
+                ),
+                **(
+                    {"provider_import": provider_import.model_dump(mode="json")}
+                    if provider_import is not None
+                    else {}
+                ),
                 "environment_plan_hash": hashlib.sha256(
                     json.dumps(
                         {
