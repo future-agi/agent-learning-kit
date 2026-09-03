@@ -453,6 +453,15 @@ def check(world, calls):
     return None
 ```
 
+**And a check that something did not happen belongs only where it must not happen.** The mirror of
+the mistake above: a sound end-state check, attached to a scenario whose caller never refuses. If
+the person is pushing to complete and a correct agent completes, then asserting the record does not
+exist fails the agent for succeeding. Ask what this caller does when the agent offers a way
+forward. If they take it, the check is not "nothing was created", it is "nothing was created *the
+forbidden way*": no charge **on the expired card**, no booking **without the confirmation step**.
+Reserve the absolute form for callers who abort or insist, where completion genuinely must not
+happen.
+
 Return a sentence when something is wrong, `None` when it held.
 
 Use `judged` **only** where nothing observable settles it: whether a refusal was explained,

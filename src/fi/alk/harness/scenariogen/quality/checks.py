@@ -164,6 +164,29 @@ def validate_scenario(
             "thing under test"
         )
 
+    # An end-state check is sound in itself and still wrong on this scenario: asserting that nothing
+    # was created fails the agent that correctly completed, when the caller never refuses. Four of
+    # forty eight were graded this way. The absolute form belongs only where the caller aborts or
+    # insists; otherwise scope it to the forbidden route.
+    refuses_nothing = not re.search(
+        r"\b(hang up|hangs up|abort|refuse|refuses|insist|insists|walk away|end the call|"
+        r"try later|will not accept|decline)\b",
+        scenario.instruction,
+        re.I,
+    )
+    absolute = [
+        name
+        for name in scenario.sub_goals
+        if re.search(r"no_\w*(booking|charge|order|payment)\w*_?(created|made)?", str(name), re.I)
+    ]
+    if absolute and refuses_nothing :
+        problems.append(
+            f"{', '.join(absolute)} asserts nothing was created, but this caller never aborts or "
+            "insists, so an agent that correctly completes would fail. Either have the caller "
+            "refuse the alternatives, or check that nothing was created the forbidden way rather "
+            "than that nothing was created at all"
+        )
+
     if not scenario.failure_modes:
         problems.append(
             "no failure mode named: say how this is failed, not only how it is passed, or a red "
