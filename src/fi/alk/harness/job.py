@@ -80,8 +80,58 @@ class RepositorySource(BaseModel):
 
 class AgentConnection(BaseModel):
     connector: str
+    mode: "ProviderExecutionMode | None" = None
     config: dict[str, JsonValue] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _provider_mode_is_explicit_and_safe(self) -> "AgentConnection":
+        connector = self.connector.strip().lower()
+        if self.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
+            if connector not in {"vapi", "retell"}:
+                raise ValueError("environment_backed_requires_vapi_or_retell")
+            manifest = str(self.config.get("lifecycle_manifest") or "alk.yaml")
+            if manifest.startswith("/") or ".." in manifest.split("/"):
+                raise ValueError("provider_lifecycle_manifest_must_be_source_relative")
+            forbidden = {"assistant_id", "agent_id"} & set(self.config)
+            if forbidden:
+                raise ValueError(
+                    "environment_backed_target_is_provision_output: "
+                    + ", ".join(sorted(forbidden))
+                )
+        elif self.mode is ProviderExecutionMode.PROVIDER_IMPORT:
+            if connector not in {"vapi", "retell"}:
+                raise ValueError("provider_import_requires_vapi_or_retell")
+            target_key = {"vapi": "assistant_id", "retell": "agent_id"}[connector]
+            if not str(self.config.get(target_key) or "").strip():
+                raise ValueError(f"provider_import_requires_{target_key}")
+            for path_key in ("event_path", "tool_path"):
+                value = str(self.config.get(path_key) or "")
+                if value and (
+                    not value.startswith("/")
+                    or value.startswith("//")
+                    or ".." in value.split("/")
+                ):
+                    raise ValueError(f"provider_import_{path_key}_invalid")
+        elif self.mode is ProviderExecutionMode.CONNECT_ONLY:
+            target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(connector)
+            if target_key and not str(self.config.get(target_key) or "").strip():
+                raise ValueError(f"connect_only_requires_{target_key}")
+        elif self.mode is not None and connector not in {"vapi", "retell"}:
+            raise ValueError("provider_mode_only_supported_for_vapi_or_retell")
+        return self
+
+
+class ProviderExecutionMode(str, Enum):
+    """How a provider-hosted target enters a harness run.
+
+    ``None`` on :class:`AgentConnection` preserves existing LiveKit/HTTP jobs and legacy
+    connector-only payloads. New Vapi/Retell submissions must choose one of these modes.
+    """
+
+    CONNECT_ONLY = "connect_only"
+    ENVIRONMENT_BACKED = "environment_backed"
+    PROVIDER_IMPORT = "provider_import"
 
 
 class ArtifactLevel(str, Enum):

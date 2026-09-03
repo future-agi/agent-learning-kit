@@ -137,6 +137,9 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_GENAI_USE_VERTEXAI",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
         "OPENAI_API_KEY",
         "SIMULATOR_LLM_MODEL",
         "SIMULATOR_LLM_PROVIDER",
@@ -552,7 +555,7 @@ class NotWiredCallRunner:
         )
 
 
-_LIVEKIT_CONNECTOR = "livekit"
+_VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
 
 
 def _bundle_contract_modality(bundle_dir: Path) -> str | None:
@@ -580,7 +583,7 @@ def _default_build_call_runner(
     the contract itself calls it "a follow-up, not shipped with this text")."""
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
-    if connector == _LIVEKIT_CONNECTOR or (connector == "auto" and modality == "voice"):
+    if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
@@ -1474,6 +1477,55 @@ def default_install_sigterm_handler(cancel_state: CancelState) -> Callable[[], N
     return install_sigterm_handler(cancel_state)
 
 
+def _resolve_hosted_public_url(
+    capabilities: ob.HostedCapabilities,
+    transport: ob.Transport,
+    *,
+    port: int,
+    expires_in_seconds: int,
+) -> str:
+    endpoint = capabilities.endpoints.ingress
+    if not endpoint:
+        raise ProcessRuntimeError(
+            "provider_lifecycle",
+            "spawn_failed",
+            "the platform did not grant an ingress capability for provider webhooks",
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    try:
+        response = transport.request(
+            "POST",
+            endpoint,
+            headers=capabilities.auth_headers(),
+            json_body={
+                "port": port,
+                "expires_in_seconds": expires_in_seconds,
+            },
+            timeout=30.0,
+        )
+    except ob.TransportError as exc:
+        raise ProcessRuntimeError(
+            "provider_lifecycle",
+            "spawn_failed",
+            f"platform ingress request failed: {exc}",
+            domain=FailureDomain.INFRASTRUCTURE,
+        ) from exc
+    body = response.body or {}
+    url = body.get("url")
+    if (
+        response.status_code != 200
+        or not isinstance(url, str)
+        or not url.startswith("https://")
+    ):
+        raise ProcessRuntimeError(
+            "provider_lifecycle",
+            "spawn_failed",
+            f"platform ingress request was rejected with HTTP {response.status_code}",
+            domain=FailureDomain.INFRASTRUCTURE,
+        )
+    return url
+
+
 # =================================================================================================
 # Dependency injection -- every seam a test needs to replace with a fake, gathered in one place so
 # `run_job` itself stays pure orchestration.
@@ -1494,9 +1546,17 @@ class HostedEntrypointDeps:
     # overrides, so the guest cannot setuid/chown to the bundle's svc-agent/svc-tools/svc-data
     # users -- every process runs uniformly as svc-control. The bundle may still DECLARE those
     # users (the model validates them); they are simply not enforced at runtime here.
-    build_provider: Callable[[], WorldProvisioner] = field(
-        default=lambda: ProcessRuntimeProvider(
-            user_resolver=lambda _name: None, require_declared_user=False
+    build_provider: Callable[
+        [ob.HostedCapabilities, ob.Transport], WorldProvisioner
+    ] = field(
+        default=lambda capabilities, transport: ProcessRuntimeProvider(
+            user_resolver=lambda _name: None,
+            require_declared_user=False,
+            public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
+                capabilities, transport, port=port, expires_in_seconds=ttl
+            ),
+            provider_attempt_id=capabilities.attempt_id,
+            provider_expires_at=capabilities.expires_at,
         )
     )
     # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that
@@ -1519,9 +1579,7 @@ class HostedEntrypointDeps:
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     cancel_path: Path = field(default_factory=lambda: Path(CANCEL_SIGNAL_PATH))
     secrets_path: Path = field(default_factory=lambda: SECRETS_PATH)
-    simulator_secrets_path: Path = field(
-        default_factory=lambda: SIMULATOR_SECRETS_PATH
-    )
+    simulator_secrets_path: Path = field(default_factory=lambda: SIMULATOR_SECRETS_PATH)
     flush_window_seconds: float = ob.FLUSH_WINDOW_SECONDS
     install_sigterm_handler: Callable[[CancelState], Callable[[], None]] = field(
         default=default_install_sigterm_handler
@@ -1871,9 +1929,14 @@ async def run_job(
         target_provider_secret_values = deps.peek_target_provider_secret_values(
             secret_purposes
         )
-        simulator_provider_secret_values = deps.peek_simulator_provider_secret_values(
-            secret_purposes
-        )
+        # Platform simulator credentials arrive through simulator-secrets.json, not the
+        # customer-controlled secrets.json. Preserve that separately loaded channel all the way
+        # into CallRunnerContext. Any legacy simulator-purpose refs are merged first so the
+        # platform channel wins on alias collisions and cannot be overridden by a submitted job.
+        simulator_provider_secret_values = {
+            **deps.peek_simulator_provider_secret_values(secret_purposes),
+            **simulator_secret_values,
+        }
         adapter.configure_artifacts(
             job.artifacts
         )  # level table + budget, now that job.json is known.
@@ -1925,7 +1988,7 @@ async def run_job(
         # opt-out is a construction-site concern, not this module's). §4.5b's provider mutex is
         # `WorldPool`'s own `_provider_lock` now (mutation-verified: it serializes
         # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
-        provider = deps.build_provider()
+        provider = deps.build_provider(capabilities, transport)
         pool = WorldPool(
             provider,
             bundle=manifest,

@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from fi.alk.harness import call_runner as cr
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
@@ -25,6 +27,7 @@ from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
     HarnessJob,
+    ProviderExecutionMode,
     RepositorySource,
     SourceKind,
     SourceVisibility,
@@ -49,6 +52,7 @@ LIVEKIT_API_KEY = "LIVEKIT_API_KEY"
 LIVEKIT_API_SECRET = "LIVEKIT_API_SECRET"
 DEEPGRAM_API_KEY = "DEEPGRAM_API_KEY"
 GEMINI_API_KEY = "GEMINI_API_KEY"
+RETELL_API_KEY = "RETELL_API_KEY"
 
 _ALL_SECRETS = {
     LIVEKIT_API_KEY: "lk-key",
@@ -69,6 +73,7 @@ def _job(
     connector: str = "livekit",
     config: dict[str, Any] | None = None,
     execution: ExecutionMode = ExecutionMode.HOSTED,
+    mode: ProviderExecutionMode | None = None,
 ) -> HarnessJob:
     return HarnessJob(
         job_id="job-abcdef12-xyz",
@@ -88,7 +93,7 @@ def _job(
                 commit_sha="a" * 40,
             )
         ),
-        agent=AgentConnection(connector=connector, config=config or {}),
+        agent=AgentConnection(connector=connector, mode=mode, config=config or {}),
         scenario_count=1,
         runtime=RuntimeRequirements(
             isolation=RuntimeIsolation.DEDICATED_VM,
@@ -165,6 +170,60 @@ def test_file_tool_trace_clear_removes_previous_attempt(tmp_path: Path) -> None:
     assert not trace.exists()
 
 
+def test_provider_reported_tool_call_is_used_when_guest_trace_is_empty(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="retell",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={"agent_id": "source-retell-agent"},
+        secrets={RETELL_API_KEY: "retell-key"},
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        report = _report(
+            transcript="user: window\nagent: saved",
+            messages=[
+                {"role": "user", "content": "window"},
+                {"role": "assistant", "content": "saved"},
+            ],
+        )
+        assert report.test_cases[0].result is not None
+        report.test_cases[0].result.metadata["evidence"] = [
+            {
+                "adapter": "retell",
+                "metadata": {
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "name": "record_preference",
+                            "arguments": {"preference": "window"},
+                            "result": {"recorded": True},
+                            "ok": True,
+                            "at": 4.25,
+                        }
+                    ]
+                },
+            }
+        ]
+        return report
+
+    adapter = FakeAdapter()
+    outcome = _run(
+        cr.CallRunnerImpl(adapter, context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"provider_target_id": "cloned-retell-agent"}),
+    )
+
+    assert len(outcome.calls) == 1
+    assert outcome.calls[0].name == "record_preference"
+    assert outcome.calls[0].arguments == {"preference": "window"}
+    assert outcome.calls[0].result == {"recorded": True}
+    assert any(kind is cr.ArtifactKind.TOOL_TRACE for kind, _, _ in adapter.uploads)
+
+
 def _context(
     *,
     tmp_path: Path,
@@ -175,11 +234,13 @@ def _context(
     execution: ExecutionMode = ExecutionMode.HOSTED,
     evidence_seam: EvidenceSeam | None = EvidenceSeam.HTTP_TOOL,
     attempt_number: int = 1,
+    mode: ProviderExecutionMode | None = None,
 ) -> tuple[HarnessJob, cr.CallRunnerContext]:
     job = _job(
         connector=connector,
         config=config if config is not None else dict(_ALL_CONFIG),
         execution=execution,
+        mode=mode,
     )
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -196,6 +257,9 @@ def _context(
             simulator_secrets
             if simulator_secrets is not None
             else {
+                "SIMULATOR_LIVEKIT_URL": "wss://platform-livekit.example",
+                "SIMULATOR_LIVEKIT_API_KEY": "platform-livekit-key",
+                "SIMULATOR_LIVEKIT_API_SECRET": "platform-livekit-secret",
                 "SIMULATOR_DEEPGRAM_API_KEY": _ALL_SECRETS[DEEPGRAM_API_KEY],
                 "SIMULATOR_GEMINI_API_KEY": _ALL_SECRETS[GEMINI_API_KEY],
             }
@@ -563,6 +627,83 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
     assert (
         spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
     )
+    assert spec.environment.config["params"]["min_turn_messages"] == 6
+
+
+@pytest.mark.parametrize(
+    ("connector", "target_key", "target_id", "provider_key", "transport"),
+    [
+        ("vapi", "assistant_id", "assistant-123", "VAPI_API_KEY", "vapi_websocket"),
+        ("retell", "agent_id", "agent-123", "RETELL_API_KEY", "retell_webcall"),
+    ],
+)
+def test_provider_connect_only_builds_direct_target_spec(
+    tmp_path: Path,
+    connector: str,
+    target_key: str,
+    target_id: str,
+    provider_key: str,
+    transport: str,
+) -> None:
+    secrets = {**_ALL_SECRETS, provider_key: "provider-key"}
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector=connector,
+        config={
+            cr.LIVEKIT_URL_CONFIG_KEY: "wss://custom.livekit.cloud",
+            target_key: target_id,
+        },
+        secrets=secrets,
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="provider-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(runner, _FakeScenario("provider-call"), _runtime())
+
+    definition = captured["spec"].environment.config["agent_definition"]
+    assert definition["target"][target_key] == target_id
+    assert definition["target"]["provider"] == connector
+    assert definition["transport"]["kind"] == transport
+    # Provider-hosted targets own their end-call tool. Five alternating messages are sufficient
+    # for a complete agent-first clarification flow; no sixth caller acknowledgement is possible
+    # after the provider disconnects.
+    assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
+
+
+def test_provider_import_calls_runtime_clone_instead_of_source_target(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="vapi",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={
+            cr.LIVEKIT_URL_CONFIG_KEY: "wss://custom.livekit.cloud",
+            "assistant_id": "source-assistant",
+        },
+        secrets={**_ALL_SECRETS, "VAPI_API_KEY": "provider-key"},
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="provider-import-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("provider-import-call"),
+        _runtime(metadata={"provider_target_id": "cloned-assistant"}),
+    )
+
+    definition = captured["spec"].environment.config["agent_definition"]
+    assert definition["target"]["assistant_id"] == "cloned-assistant"
 
 
 def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(
@@ -1197,4 +1338,38 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
         fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
         == "/run/futureagi/platform-vertex.json"
     )
+    assert runner._missing_config is None
+
+
+def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
+    tmp_path: Path,
+) -> None:
+    fake_environ: dict[str, str] = {}
+    target = {
+        RETELL_API_KEY: "customer-retell-key",
+        LIVEKIT_API_KEY: "customer-livekit-must-not-export",
+        LIVEKIT_API_SECRET: "customer-livekit-secret-must-not-export",
+    }
+    simulator = {
+        "SIMULATOR_LIVEKIT_URL": "wss://platform-livekit.example",
+        "SIMULATOR_LIVEKIT_API_KEY": "platform-livekit-key",
+        "SIMULATOR_LIVEKIT_API_SECRET": "platform-livekit-secret",
+        "SIMULATOR_DEEPGRAM_API_KEY": "platform-deepgram",
+        "SIMULATOR_GEMINI_API_KEY": "platform-gemini",
+    }
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="retell",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={"agent_id": "source-agent"},
+        secrets=target,
+        simulator_secrets=simulator,
+    )
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+
+    assert fake_environ[LIVEKIT_API_KEY] == "platform-livekit-key"
+    assert fake_environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
+    assert fake_environ[RETELL_API_KEY] == "customer-retell-key"
+    assert runner._livekit_url == "wss://platform-livekit.example"
     assert runner._missing_config is None

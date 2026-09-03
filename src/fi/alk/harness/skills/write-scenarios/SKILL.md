@@ -259,6 +259,20 @@ independently, and it hides the branches nobody wrote behind a suite that looks 
 spread across every use case is a warning sign, not a goal: real agents have use cases worth five
 scenarios and use cases worth one.
 
+## One scenario must have one coherent terminal outcome
+
+Do not combine branches whose correct outcomes stop one another. A scenario that asks the agent to
+transfer an out-of-scope request must not also require a transaction to finish after that transfer;
+a scenario that correctly refuses, escalates, cancels, or ends the conversation must not carry a
+sub-goal for work that only happens when the conversation continues. Provider web calls may record
+an attempted phone transfer without being able to complete the PSTN handoff, so test the offer or
+attempt in that scenario and test the transaction in a separate scenario.
+
+Before keeping a scenario, read its instruction, solution, and every named sub-goal as a single
+path. If satisfying one sub-goal can correctly prevent another from being reached, split them into
+separate scenarios. Never add an unrelated transactional sub-goal merely to make every scenario
+exercise a tool.
+
 ## The bar every scenario has to clear
 
 - **A competent agent could plausibly fail it.** If any correct implementation passes for free, it

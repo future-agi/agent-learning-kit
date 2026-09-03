@@ -52,6 +52,12 @@ from fi.alk.harness.bundle_v2 import (
 )
 from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.job import FailureDomain
+from fi.alk.harness.provider_lifecycle import (
+    ProviderCleanupReceipt,
+    ProviderProvisionReceipt,
+    ProviderResource,
+    ProviderTarget,
+)
 
 # --- shared manifest builder -----------------------------------------------------------------
 #
@@ -4634,6 +4640,162 @@ def test_provision_reconciles_to_exactly_w_ready_worlds(tmp_path: Path) -> None:
     assert build_output["requested_parallelism"] == 3
     assert build_output["effective_parallelism"] == 3
     assert build_output["degrade_reason"] is None
+
+
+def test_environment_backed_provider_is_created_exposed_and_destroyed(
+    tmp_path: Path,
+) -> None:
+    lifecycle_calls: list[str] = []
+
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if "provider.py" in argv:
+            assert kwargs["cwd"] == tmp_path / "build" / "agent"
+            assert (kwargs["cwd"] / "provider.py").is_file()
+        if argv[-1] == "provision":
+            lifecycle_calls.append("provision")
+            context = json.loads(
+                Path(kwargs["env"]["ALK_PROVIDER_CONTEXT"]).read_text()
+            )
+            Path(kwargs["env"]["ALK_PROVIDER_OUTPUT"]).write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1",
+                        "provider": "vapi",
+                        "attempt_id": context["attempt_id"],
+                        "world_id": context["world_id"],
+                        "target": {"kind": "assistant", "id": "asst-test"},
+                        "resources": [
+                            {"kind": "assistant", "id": "asst-test", "owned": True}
+                        ],
+                        "cleanup": {
+                            "receipt_version": "1",
+                            "idempotency_key": context["idempotency_key"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+        elif argv[-1] == "destroy":
+            lifecycle_calls.append("destroy")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_lifecycle": {
+                    "type": "vapi",
+                    "scope": "world",
+                    "process": "agent",
+                    "public_capability": "tools",
+                    "provision": {"command": ["python", "provider.py", "provision"]},
+                    "destroy": {"command": ["python", "provider.py", "destroy"]},
+                    "required_secrets": ["VAPI_API_KEY"],
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (source / "provider.py").write_text("# lifecycle", encoding="utf-8")
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(
+        json.dumps({"VAPI_API_KEY": "test-secret"}), encoding="utf-8"
+    )
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        sync_run=lifecycle_run,
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    assert runtimes[0].metadata["provider_target_id"] == "asst-test"
+    assert lifecycle_calls == ["provision"]
+
+    asyncio.run(provider.close(work_directory=tmp_path))
+    assert lifecycle_calls == ["provision", "destroy"]
+
+
+def test_provider_import_is_cloned_after_readiness_and_destroyed_from_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def clone(spec, *, context, api_key):
+        assert api_key == "test-secret"
+        assert context.tool_base_url.startswith("https://signed.example/")
+        calls.append(("clone", spec.source_target_id))
+        return ProviderProvisionReceipt(
+            schema_version="1",
+            provider="vapi",
+            attempt_id=context.attempt_id,
+            world_id=context.world_id,
+            target=ProviderTarget(kind="assistant", id="cloned-assistant"),
+            resources=[
+                ProviderResource(kind="assistant", id="cloned-assistant", owned=True)
+            ],
+            cleanup=ProviderCleanupReceipt(idempotency_key=context.idempotency_key),
+        )
+
+    def destroy(spec, *, receipt, api_key):
+        assert api_key == "test-secret"
+        calls.append(("destroy", receipt.target.id))
+
+    monkeypatch.setattr(pr, "clone_provider_target", clone)
+    monkeypatch.setattr(pr, "destroy_imported_target", destroy)
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_import": {
+                    "type": "vapi",
+                    "source_target_id": "source-assistant",
+                    "public_capability": "tools",
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(
+        json.dumps({"VAPI_API_KEY": "test-secret"}), encoding="utf-8"
+    )
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+
+    assert runtimes[0].metadata["provider_target_id"] == "cloned-assistant"
+    assert (
+        runtimes[0].metadata["provider_import_source_target_id"] == "source-assistant"
+    )
+    assert calls == [("clone", "source-assistant")]
+    asyncio.run(provider.close(work_directory=tmp_path))
+    assert calls == [
+        ("clone", "source-assistant"),
+        ("destroy", "cloned-assistant"),
+    ]
 
 
 def test_provision_fixed_port_at_w1_records_no_degrade(tmp_path: Path) -> None:
