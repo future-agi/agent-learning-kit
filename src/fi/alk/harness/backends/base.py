@@ -32,7 +32,11 @@ ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 # How many workers a backend may run at once. Both SDKs cap this themselves (one at twenty by
 # default), so this is the harness's own ceiling, set below theirs and shared so that the turn
 # budget reserved for a fan-out matches what can actually be in flight.
-MOST_WORKERS_AT_ONCE = int(os.environ.get("HARNESS_WORKERS_AT_ONCE") or 8)
+# The one ceiling on fan-out: how many workers may run at the same time. It protects the
+# machine, and it is a constant rather than an environment variable because a setting
+# nobody remembers makes every run behave differently for reasons nothing on screen
+# explains. The scenarios stage imports this as its own ceiling and tells the model.
+MOST_WORKERS_AT_ONCE = 10
 
 
 def qualified(server: str, tool_name: str) -> str:

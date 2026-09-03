@@ -52,13 +52,12 @@ def _err(text: str) -> dict[str, Any]:
 
 
 def parallel_suites() -> bool:
-    """Whether a suite is written by several writers at once.
+    """Whether a session that saves also offers generate_suite.
 
-    Off by default. Writing one scenario at a time is slower but is the path the base branch runs
-    on, and a suite that is written slowly is worth more than one that is not written at all.
-    Set HARNESS_PARALLEL_SCENARIOS=1 to fan out instead.
+    True now. This was an environment flag that defaulted off, which meant a suite was written one
+    scenario at a time unless somebody remembered to set it, and nothing on screen said why.
     """
-    return os.environ.get("HARNESS_PARALLEL_SCENARIOS", "").strip() == "1"
+    return True
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -959,7 +958,7 @@ def scenario_tools(
         ),
     )
     async def generate_suite(args: dict[str, Any]) -> dict[str, Any]:
-        from .scenarios import MOST_AT_ONCE, MOST_IN_ONE_GO, write_in_parallel
+        from .scenarios import MOST_AT_ONCE, write_in_parallel
 
         asked = int(args.get("count") or 0)
         if asked < 1:
@@ -972,10 +971,10 @@ def scenario_tools(
                 "across. Write them one at a time with submit_scenario, or fix the contract."
             )
 
-        # A large ask is served a batch at a time. Spinning up a writer per scenario would put
-        # hundreds of model sessions on one machine, and the person waiting would see nothing
-        # for an hour. A batch they can read, and an offer of the rest, is the better trade.
-        count = min(asked, MOST_IN_ONE_GO)
+        # Whatever was asked for is what gets written. Writers run at most MOST_AT_ONCE at a
+        # time, which is what protects the machine; capping the count as well meant the number
+        # asked for was not the number returned.
+        count = asked
         at_once = max(1, min(int(args.get("at_once") or 0) or 4, MOST_AT_ONCE))
 
         produced = await write_in_parallel(
@@ -1001,13 +1000,11 @@ def scenario_tools(
             f"{len(produced)} scenarios across {len(by_case)} use cases, {at_once} writers at a "
             f"time. Each cleared all three gates and the suite is saved.\n{lines}"
         )
-        if asked > count:
+        if len(produced) < asked:
             said += (
-                f"\n\n{asked - count} of the {asked} asked for are still to write. "
-                f"{MOST_IN_ONE_GO} is as many as one pass does, so that the suite can be looked "
-                "at before more is spent on it. Show what came back, then ask whether to carry "
-                "on with the rest, change direction first, or stop here. Call generate_suite "
-                "again for the next batch once they have said."
+                f"\n\n{asked - len(produced)} of the {asked} asked for are still to write. "
+                "Say what stopped them rather than reporting the smaller number as the result: "
+                "call generate_suite again for the rest, or say what the suite has run out of."
             )
         return _ok(said)
 

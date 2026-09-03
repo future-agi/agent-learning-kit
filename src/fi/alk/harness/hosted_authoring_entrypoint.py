@@ -26,15 +26,11 @@ _PASSTHROUGH = {
     "GOOGLE_CLOUD_LOCATION",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_GENAI_USE_VERTEXAI",
-    "HARNESS_WORKERS_AT_ONCE",
     "OPENAI_API_KEY",
     # Authoring runs in its own process, so a stage-scoped backend choice has to be copied in
     # here as well; without it a hosted run silently ignores the split and uses the run-wide one.
     "ALK_SCENARIOS_HARNESS",
     "ALK_SCENARIOS_MODEL",
-    "HARNESS_PARALLEL_SCENARIOS",
-    "HARNESS_SUITE_BATCH",
-    "HARNESS_WRITERS_AT_ONCE",
 }
 
 

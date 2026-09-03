@@ -20,6 +20,7 @@ from typing import Any
 
 from .axes import axes_for
 from .backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
+from .backends.base import MOST_WORKERS_AT_ONCE
 
 from .config import (
     artifact_dir,
@@ -94,9 +95,7 @@ TURNS_FLOOR = 120
 # of them a writer reads the agent under test. At a flat sixty it had 3.8 turns per scenario
 # including that reading, so slices came back part-filled, their buckets reopened, and the next
 # writer paid the same reading cost again to finish somebody else's work.
-WRITER_TURNS = int(
-    os.environ.get("HARNESS_WRITER_TURNS") or (SLICE_SCENARIOS * 2 * (TURNS_EACH + 1) + 24)
-)
+WRITER_TURNS = SLICE_SCENARIOS * 2 * (TURNS_EACH + 1) + 24
 
 
 def turns_for(wanted: int) -> int:
@@ -345,7 +344,10 @@ def opening(
             "together, one brief each naming its coordinates, rather than waiting for one to "
             "finish before starting the next. Judge how many to run from what the canvas has "
             "open and how much they would overlap; more writers on near-identical buckets buys "
-            "nothing. fold_return each one's result so what it did not cover reopens."
+            f"nothing. Never run more than {MOST_AT_ONCE} at a time: past that they contend for "
+            "the same machine and the whole suite slows down. If writers come back empty or "
+            "refused, run fewer and find out why before claiming more. fold_return each one's "
+            "result so what it did not cover reopens."
             if delegates
             else ""
         )
@@ -362,19 +364,20 @@ def load(destination: Path) -> list[Scenario]:
 # Writers run as separate model sessions, so wall clock is roughly the number of scenarios
 # divided by how many run at once. The two ceilings below exist for different reasons: one
 # protects the machine, the other protects the person waiting. Asking for a thousand scenarios
-# is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
-# served a batch at a time with the rest offered back.
-# One setting decides both the default fan-out and its ceiling. They were 4 and 8, so a run that
-# asked for more writers was silently held at four however wide the machine was.
-MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
-AT_ONCE = min(int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4), MOST_AT_ONCE)
-MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 50)
+# The ceiling on fan-out, defined once in backends.base. It is told to the model rather than used
+# to quietly override it: how many writers to actually run is the model's call, from what the
+# canvas has open.
+MOST_AT_ONCE = MOST_WORKERS_AT_ONCE
+
+# How many scenarios one pass writes is whatever was asked for. A cap here used to serve a large
+# ask a batch at a time, which meant the number the person asked for was not the number they got.
+AT_ONCE = MOST_AT_ONCE
 
 # Below this, one session writes the suite itself. Delegation buys parallelism and costs turns:
 # each worker is briefed, runs, and reports, and for a handful of scenarios that overhead is the
 # whole bill. Measured on two N=10 runs of the same suite: 54 turns without workers, 119 with,
 # for output that was identical scenario by scenario.
-FEWEST_WORTH_DELEGATING = int(os.environ.get("HARNESS_DELEGATE_ABOVE") or 20)
+FEWEST_WORTH_DELEGATING = 20
 
 # How many times the suite is reviewed and topped up after the first pass. One is enough to
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop
