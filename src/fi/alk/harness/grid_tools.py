@@ -598,6 +598,25 @@ def grid_tools(
                 blocked_reason=str(row.get("blocked_reason") or ""),
             )
             note = f"  {angle_id}: {on_disk}/{one.want} on disk, now {was}"
+            # A bucket asking for several says which axes tell them apart, and the plan is checked
+            # against that. Nothing checked the delivery, so a bucket could be credited with three
+            # scenarios that move the caller and nothing else, and still report done.
+            if one.want > 1 and len(one.credited) > 1:
+                by_name = {s.name: s for s in saved}
+                shapes = {
+                    (
+                        tuple(step.tool for step in got.solution),
+                        tuple(sorted(got.sub_goals)),
+                    )
+                    for name in one.credited
+                    if (got := by_name.get(name)) is not None
+                }
+                if len(shapes) == 1:
+                    note += (
+                        f" -- all {len(one.credited)} run the same tools and check the same "
+                        f"sub-goals, so they are one test written {len(one.credited)} times; "
+                        f"they were meant to differ by {', '.join(one.varies_by) or 'nothing named'}"
+                    )
             missing = [x for x in claimed_names if x not in {s.name for s in saved}]
             if missing:
                 note += f" ({len(missing)} named but not on disk: {', '.join(missing[:3])})"
