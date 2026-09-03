@@ -61,7 +61,7 @@ def entity_labels(destination: Path) -> dict[str, str]:
     if destination in _LABELS:
         return _LABELS[destination]
     try:
-        from ...scenario_tools import world_state
+        from ..write.tools import world_state
 
         held: dict[str, str] = {}
         for collection, rows in (world_state(destination) or {}).items():

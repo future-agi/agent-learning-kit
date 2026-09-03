@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import scenario_tools
+from fi.alk.harness.scenariogen.write import tools as scenario_tools
 from fi.alk.harness.scenariogen.model.catalogue import Catalogue
 
 
@@ -96,7 +96,7 @@ class TestReadingTheWorldAlsoRewritesIt:
     """
 
     def test_reading_the_world_is_serialised_with_proving(self, monkeypatch, tmp_path, payload):
-        from fi.alk.harness import scenario_tools
+        from fi.alk.harness.scenariogen.write import tools as scenario_tools
         from fi.alk.harness.scenariogen.model.catalogue import Catalogue
         from fi.alk.harness.contract import AgentContract, ToolSpec
 
@@ -128,7 +128,7 @@ class TestReadingTheWorldAlsoRewritesIt:
         )
 
     def test_the_world_summary_holds_it_too(self, monkeypatch, tmp_path):
-        from fi.alk.harness import scenario_tools
+        from fi.alk.harness.scenariogen.write import tools as scenario_tools
 
         held = []
 

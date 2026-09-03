@@ -18,11 +18,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .scenariogen.plan.axes import axes_for
-from .backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
-from .backends.base import MOST_WORKERS_AT_ONCE
+from ..plan.axes import axes_for
+from ...backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
+from ...backends.base import MOST_WORKERS_AT_ONCE
 
-from .config import (
+from ...config import (
     artifact_dir,
     chosen_model,
     compose_skills,
@@ -32,27 +32,27 @@ from .config import (
     stage_model,
     writer_effort,
 )
-from .scenariogen.plan.canvas import SLICE_SCENARIOS, WORTH_PLANNING
-from .scenariogen.plan.canvas import load as load_canvas
-from .scenariogen.plan.tools import GRID_SERVER, Coverage, grid_tools
-from .sample import Pick, coverage, plan as plan_picks
-from .scenariogen.model.catalogue import load_catalogue
-from .contract import AgentContract
-from .scenariogen.model.scenario import Scenario
-from .scenario_tools import (
+from ..plan.canvas import SLICE_SCENARIOS, WORTH_PLANNING
+from ..plan.canvas import load as load_canvas
+from ..plan.tools import GRID_SERVER, Coverage, grid_tools
+from ...sample import Pick, coverage, plan as plan_picks
+from ..model.catalogue import load_catalogue
+from ...contract import AgentContract
+from ..model.scenario import Scenario
+from .tools import (
     SCENARIO_SERVER,
     parallel_suites,
     scenario_tools,
     world_summary,
 )
-from .scenariogen.store.suite import (
+from ..store.suite import (
     forget_journal,
     journalled,
     load_scenarios,
     write_scenarios,
 )
-from .session import Stage
-from .tools import schema
+from ...session import Stage
+from ...tools import schema
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +525,7 @@ def callers_for(index: int, wanted: int) -> str:
     suggestion rather than a rule, because the caller still has to suit the scenario: a stolen
     phone is not a cheerful call whatever this hands out.
     """
-    from .scenariogen.model.persona import offered
+    from ..model.persona import offered
 
     people = offered("personality")
     accents = offered("accent")

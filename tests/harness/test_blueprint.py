@@ -605,7 +605,7 @@ class TestThePlannerMayProbeFreely:
         """
         import asyncio
 
-        from fi.alk.harness import scenario_tools
+        from fi.alk.harness.scenariogen.write import tools as scenario_tools
 
         def no_world(*_args, **_rest):
             raise RuntimeError("no world in this test")
@@ -621,7 +621,7 @@ class TestThePlannerMayProbeFreely:
         return said
 
     def test_a_planning_stage_is_not_pushed_to_submit(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
+        from fi.alk.harness.scenariogen.write import stage as scenarios
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=200)
@@ -629,7 +629,7 @@ class TestThePlannerMayProbeFreely:
         assert not any("throwaway probes have run" in one for one in said)
 
     def test_a_writing_stage_still_is(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
+        from fi.alk.harness.scenariogen.write import stage as scenarios
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=4)
@@ -753,7 +753,7 @@ class TestTheSpreadIsDealtNotRequested:
     offered five, the same collapse accents had before they were dealt."""
 
     def test_each_slice_starts_from_a_different_place(self):
-        from fi.alk.harness.scenarios import callers_for
+        from fi.alk.harness.scenariogen.write.stage import callers_for
 
         first, second = callers_for(0, 4), callers_for(1, 4)
         assert first and second
@@ -761,7 +761,7 @@ class TestTheSpreadIsDealtNotRequested:
 
     def test_locations_are_dealt_as_well_as_accents(self):
         from fi.alk.harness.scenariogen.model.persona import offered
-        from fi.alk.harness.scenarios import callers_for
+        from fi.alk.harness.scenariogen.write.stage import callers_for
 
         places = offered("location")
         if not places:
@@ -793,7 +793,7 @@ def test_a_writer_gets_enough_turns_for_the_slice_it_can_be_handed():
     writes anything, so slices came back part-filled and the next writer paid that reading cost
     again to finish somebody else's work."""
     from fi.alk.harness.scenariogen.plan.canvas import SLICE_SCENARIOS
-    from fi.alk.harness.scenarios import TURNS_EACH, WRITER_TURNS
+    from fi.alk.harness.scenariogen.write.stage import TURNS_EACH, WRITER_TURNS
 
     biggest = SLICE_SCENARIOS * 2  # what claim_slice clamps to
     assert WRITER_TURNS >= biggest * TURNS_EACH, "not even the writing fits"
@@ -814,26 +814,26 @@ class TestContinuingAnUnfinishedSuite:
         )
 
     def test_it_says_how_many_are_outstanding(self):
-        from fi.alk.harness.scenarios import opening
+        from fi.alk.harness.scenariogen.write.stage import opening
 
         said = opening(self.contract(), 500, 146)
         assert "354" in said and "still to write" in said
 
     def test_it_names_finishing_as_the_work(self):
-        from fi.alk.harness.scenarios import opening
+        from fi.alk.harness.scenariogen.write.stage import opening
 
         said = opening(self.contract(), 500, 146).lower()
         assert "claim_slice" in said
         assert "nothing is open" in said
 
     def test_a_finished_suite_is_offered_for_editing_instead(self):
-        from fi.alk.harness.scenarios import opening
+        from fi.alk.harness.scenariogen.write.stage import opening
 
         said = opening(self.contract(), 500, 500)
         assert "still to write" not in said
         assert "changed" in said
 
     def test_a_fresh_suite_is_unaffected(self):
-        from fi.alk.harness.scenarios import opening
+        from fi.alk.harness.scenariogen.write.stage import opening
 
         assert "show_grid" in opening(self.contract(), 500, 0)

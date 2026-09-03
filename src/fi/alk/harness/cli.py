@@ -28,9 +28,9 @@ from .config import (
     permission_gate,
 )
 from .run.targets import supported as target_kinds
-from .scenarios import load as load_written
-from .scenarios import open_stage as scenario_stage
-from .scenarios import opening as scenario_opening
+from .scenariogen.write.stage import load as load_written
+from .scenariogen.write.stage import open_stage as scenario_stage
+from .scenariogen.write.stage import opening as scenario_opening
 from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported

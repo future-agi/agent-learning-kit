@@ -1727,7 +1727,7 @@ def test_github_source_refuses_urls_that_cannot_be_public_https_clones(tmp_path,
 
 
 def test_how_many_scenarios_is_something_you_say():
-    from fi.alk.harness.scenario_tools import TOOL_NAMES
+    from fi.alk.harness.scenariogen.write.tools import TOOL_NAMES
 
     assert "aim_for" in TOOL_NAMES
 
@@ -1914,7 +1914,7 @@ def test_every_stage_publishes_exactly_the_tools_it_claims(tmp_path):
     from fi.alk.harness.run import tools as runs
     from fi.alk.harness.world import tools as world
 
-    from fi.alk.harness import scenario_tools as scenarios
+    from fi.alk.harness.scenariogen.write import tools as scenarios
 
     root, contract = _saved_world(tmp_path)
     server, _kept = scenarios.scenario_tools(contract, root, root, wanted=1)
@@ -2497,7 +2497,7 @@ def _delta(**overrides):
 
 
 def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
@@ -2511,7 +2511,7 @@ def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
 def test_a_scenario_inherits_the_contract_direction(tmp_path):
     """Direction belongs to the agent, not the writer, which never sets it. An outbound agent
     whose scenarios say inbound has every call opened by the wrong side."""
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
@@ -2533,7 +2533,7 @@ def test_a_scenario_inherits_the_contract_direction(tmp_path):
 
 def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_path):
     """Either the scenario is impossible or the checks are wrong. Both have happened."""
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
@@ -2556,7 +2556,7 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     """
     import logging
 
-    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
     from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import GeneratedWorld
 
@@ -2564,7 +2564,7 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     world.runtime_tools = {"lookup_rider_by_phone"}
     world.endpoint_for = {}
     try:
-        with caplog.at_level(logging.WARNING, logger="fi.alk.harness.prove"):
+        with caplog.at_level(logging.WARNING, logger="fi.alk.harness.scenariogen.write.prove"):
             call = play_reference_step(
                 world, Step(tool="lookup_rider_by_phone", arguments={"phone": "+14155550101"})
             )
@@ -2579,7 +2579,7 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
 
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
     """Proof may drive the real backend, but must only credit what the agent could call."""
-    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
     from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
@@ -2630,7 +2630,7 @@ def test_source_reference_step_separates_agent_arguments_from_dependency_payload
 
 
 def test_source_reference_step_records_a_purely_local_agent_tool():
-    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
     from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import GeneratedWorld
 
@@ -2650,7 +2650,7 @@ def test_source_reference_step_records_a_purely_local_agent_tool():
 
 
 def test_source_reference_step_can_use_an_earlier_dependency_result():
-    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
     from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
@@ -2703,7 +2703,7 @@ def test_source_reference_step_can_use_an_earlier_dependency_result():
 def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     """A check that passes without the agent acting grades nothing while reporting a result."""
     from fi.alk.harness.scenariogen.model.catalogue import SubGoal, save_catalogue
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     catalogue.sub_goals.append(
@@ -2727,9 +2727,9 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
     itself as held for an agent that did nothing. Another strong check must not hide that defect:
     every checkpoint shown to a user needs its own evidence."""
     from fi.alk.harness.scenariogen.model.catalogue import SubGoal, save_catalogue
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
     from fi.alk.harness.scenariogen.model.scenario import Scenario
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     catalogue.sub_goals.append(
@@ -3681,7 +3681,7 @@ def test_the_adoption_fields_survive_the_write_path(tmp_path):
 
 
 def test_a_scenario_naming_a_sub_goal_nobody_defined_is_refused(tmp_path):
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
@@ -3695,7 +3695,7 @@ def test_a_scenario_naming_a_sub_goal_nobody_defined_is_refused(tmp_path):
 
 
 def test_a_scenario_with_no_solution_cannot_be_proved(tmp_path):
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
@@ -3708,7 +3708,7 @@ def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
     """If a payment step appears in 50 scenarios, the results should say where payment fails."""
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenariogen.model.scenario import Scenario
-    from fi.alk.harness.scenario_tools import not_ready
+    from fi.alk.harness.scenariogen.write.tools import not_ready
 
     catalogue = Catalogue(
         sub_goals=[SubGoal(name=f"g{i}", what="x", judged="y") for i in range(4)]
@@ -4008,7 +4008,8 @@ def test_every_stage_gates_with_the_hook_not_only_the_callback():
 
     from fi.alk.harness.run import grade, stage, targets
 
-    from fi.alk.harness import build, reception, scenarios
+    from fi.alk.harness import build, reception
+    from fi.alk.harness.scenariogen.write import stage as scenarios
 
     for module in (build, reception, scenarios, stage, targets, grade):
         source = inspect.getsource(module)
@@ -4300,7 +4301,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.tools import CONTRACT_SERVER  # noqa: F401
     from fi.alk.harness.world import tools as world_tools
 
-    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenariogen.write import tools as scenario_tools
     from fi.alk.harness.scenariogen.plan import tools as grid_tools
 
     # The scenarios stage carries both servers, so its skills may name tools from either.
@@ -4748,7 +4749,7 @@ def test_the_ready_gate_refuses_a_scenario_whose_world_was_never_set_up(tmp_path
     """The precondition gate. A scenario about the last five items is only a test of the agent
     if there really are five; otherwise the agent fails for something we got wrong, and it reads
     as the agent's fault."""
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4770,7 +4771,7 @@ def test_the_ready_gate_refuses_a_scenario_whose_world_was_never_set_up(tmp_path
 
 def test_setup_code_makes_the_world_the_scenario_presumes(tmp_path):
     """setup runs, then ready confirms it worked, and only then is anything else asked."""
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4793,7 +4794,7 @@ def test_setup_code_makes_the_world_the_scenario_presumes(tmp_path):
 
 def test_the_setups_own_calls_are_not_credited_to_the_agent(tmp_path):
     """A check that counts calls must not see the ones the scenario made on its own behalf."""
-    from fi.alk.harness.prove import prepared
+    from fi.alk.harness.scenariogen.write.prove import prepared
 
     root, _contract, _catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4813,7 +4814,7 @@ def test_the_setups_own_calls_are_not_credited_to_the_agent(tmp_path):
 
 
 def test_broken_setup_is_ours_and_says_so(tmp_path):
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4829,7 +4830,7 @@ def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
     """The files are the artifact, not a rendering of one. Something you can open and run is
     something you can argue with."""
     from fi.alk.harness.scenariogen.store.folder import folder_for, read_folder
-    from fi.alk.harness.scenario_tools import write_scenarios
+    from fi.alk.harness.scenariogen.write.tools import write_scenarios
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4869,7 +4870,7 @@ def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):
     import sys
 
     from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
-    from fi.alk.harness.prove import prepared
+    from fi.alk.harness.scenariogen.write.prove import prepared
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(_delta())
@@ -5913,7 +5914,7 @@ def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said
     """
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
     from fi.alk.harness.checks import Outcome
-    from fi.alk.harness.prove import Proof
+    from fi.alk.harness.scenariogen.write.prove import Proof
 
     catalogue = Catalogue(
         sub_goals=[
@@ -6158,7 +6159,7 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     dropping it appears to do nothing at all."""
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenariogen.model.scenario import Scenario
-    from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
+    from fi.alk.harness.scenariogen.write.tools import load_scenarios, write_scenarios
 
     catalogue = Catalogue(
         sub_goals=[
@@ -7111,7 +7112,7 @@ def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
     final save. A writer sharing the destination has `persist=False`, and that is exactly the
     case that needs the journal.
     """
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
     from fi.alk.harness.scenariogen.store.suite import JOURNAL, journalled
 
     root, _contract, catalogue = _built_environment(tmp_path)
@@ -7130,7 +7131,7 @@ def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
 
 def test_a_writer_that_can_persist_does_not_also_journal(tmp_path):
     """The folder is the truth once it exists; a journal beside it would be re-imported next run."""
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
     from fi.alk.harness.scenariogen.store.suite import JOURNAL
 
     root, _contract, catalogue = _built_environment(tmp_path)

@@ -18,7 +18,7 @@ import tempfile
 from .cli import _auto
 from .job import HarnessJob, ProviderExecutionMode
 from .provider_import import inspect_provider_target
-from .scenarios import load as load_written
+from .scenariogen.write.stage import load as load_written
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
 

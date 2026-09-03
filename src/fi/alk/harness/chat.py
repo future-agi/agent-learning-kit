@@ -19,7 +19,7 @@ from typing import Any
 
 from . import build as build_stage
 from . import reception as reception_stage
-from . import scenarios as scenario_stage
+from .scenariogen.write import stage as scenario_stage
 from . import understand as understand_stage
 from .config import artifact_dir
 from .contract import AgentContract

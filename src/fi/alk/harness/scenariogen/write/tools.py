@@ -16,37 +16,37 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .backends import tool, tool_server
+from ...backends import tool, tool_server
 
-from .amend import add_rule, drop_rule, fix_tool, widen
-from .scenariogen.model.catalogue import (
+from ...amend import add_rule, drop_rule, fix_tool, widen
+from ..model.catalogue import (
     Catalogue,
     SubGoal,
     load_catalogue,
     save_catalogue,
     validate_sub_goal,
 )
-from .contract import AgentContract
-from .scenariogen.store.folder import apply_setup
+from ...contract import AgentContract
+from ..store.folder import apply_setup
 from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
-from .scenariogen.model.scenario import (
+from ..model.scenario import (
     Scenario,
     Step,
     contract_sequence_problems,
     suite_diversity_problems,
     validate_scenario,
 )
-from .simulator import load_simulator_prompt
-from .tools import brief, schema
-from .scenariogen.store.setup_code import changes_the_world
-from .scenariogen.store.suite import (
+from ...simulator import load_simulator_prompt
+from ...tools import brief, schema
+from ..store.setup_code import changes_the_world
+from ..store.suite import (
     forget_journal,
     journalled,
     load_scenarios,
     record_written,
     write_scenarios,
 )
-from .world.snapshot import restore
+from ...world.snapshot import restore
 
 SCENARIO_SERVER = "scenarios"
 
@@ -74,7 +74,7 @@ def persona_field(name: str) -> dict[str, Any]:
     Offered as an enum so the values arrive right the first time. Without the platform's model
     to read, it stays a plain string rather than an enum of nothing.
     """
-    from .scenariogen.model.persona import offered
+    from ..model.persona import offered
 
     allowed = offered(name)
     return {"type": "string", "enum": allowed} if allowed else {"type": "string"}
@@ -82,7 +82,7 @@ def persona_field(name: str) -> dict[str, Any]:
 
 def persona_vocabulary_note() -> str:
     """A sentence about why the persona fields are constrained, when they are."""
-    from .scenariogen.model.persona import vocabulary
+    from ..model.persona import vocabulary
 
     if not vocabulary():
         return ""
@@ -115,7 +115,7 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
     The axis file already declares which settings need the world changed. This holds a scenario
     to that declaration: claim one in the name, and there has to be setup code making it true.
     """
-    from .scenariogen.plan.axes import axes_for
+    from ..plan.axes import axes_for
 
     _, _, condition = scenario.name.partition("__")
     if not condition:
@@ -846,7 +846,7 @@ def scenario_tools(
         ),
     )
     async def generate_suite(args: dict[str, Any]) -> dict[str, Any]:
-        from .scenarios import MOST_AT_ONCE, write_in_parallel
+        from .stage import MOST_AT_ONCE, write_in_parallel
 
         asked = int(args.get("count") or 0)
         if asked < 1:

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import scenarios
+from fi.alk.harness.scenariogen.write import stage as scenarios
 from fi.alk.harness.contract import AgentContract, ToolSpec
-from fi.alk.harness.scenarios import Slice
+from fi.alk.harness.scenariogen.write.stage import Slice
 
 
 @pytest.fixture()

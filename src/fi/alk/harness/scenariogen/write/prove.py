@@ -31,12 +31,12 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .scenariogen.model.catalogue import Catalogue
-from .checks import Outcome, run_check
-from .scenariogen.store.folder import apply_setup, check_ready
-from .scenariogen.model.scenario import Scenario
-from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import restore
+from ..model.catalogue import Catalogue
+from ...checks import Outcome, run_check
+from ..store.folder import apply_setup, check_ready
+from ..model.scenario import Scenario
+from ...world.runtime import Call, GeneratedWorld
+from ...world.snapshot import restore
 
 
 @dataclass

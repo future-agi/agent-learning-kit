@@ -204,7 +204,7 @@ class TestUngatedStageStillTalksToTheOperator:
     def test_the_scenarios_stage_is_ungated_and_carries_the_host_tools(
         self, contract, tmp_path, monkeypatch
     ):
-        from fi.alk.harness import scenarios
+        from fi.alk.harness.scenariogen.write import stage as scenarios
 
         # The stage reads the built world to ground its prompt, which is not what is under test.
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
@@ -228,7 +228,7 @@ class TestAScenarioMustMeanWhatItsNameClaims:
 
     def refused(self, name: str, setup: str = "", ready: str = "") -> list[str]:
         from fi.alk.harness.scenariogen.model.scenario import Scenario
-        from fi.alk.harness.scenario_tools import unbacked_condition_problems
+        from fi.alk.harness.scenariogen.write.tools import unbacked_condition_problems
 
         return unbacked_condition_problems(
             Scenario(name=name, setup_code=setup, ready_code=ready)
@@ -304,7 +304,7 @@ class TestAFanOutCanActuallySave:
     """
 
     def test_share_hands_back_the_same_list_not_a_copy(self, contract, where):
-        from fi.alk.harness.scenario_tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         mine: list = []
         _, kept = scenario_tools(contract, where, where, wanted=0, share=mine)
@@ -312,15 +312,15 @@ class TestAFanOutCanActuallySave:
 
     def test_start_from_still_copies(self, contract, where):
         """The other case is unchanged: a writer seeded from disk must not alias it."""
-        from fi.alk.harness.scenario_tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         seed: list = []
         _, kept = scenario_tools(contract, where, where, wanted=0, start_from=seed)
         assert kept is not seed
 
     def test_the_stage_and_its_writers_share_one_list(self, contract, where, monkeypatch):
-        from fi.alk.harness import scenarios
-        from fi.alk.harness.scenario_tools import scenario_tools
+        from fi.alk.harness.scenariogen.write import stage as scenarios
+        from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         seen: list = []
@@ -343,7 +343,7 @@ class TestAFanOutCanActuallySave:
         With one shared list a writer holding `drop_scenario` could clear a sibling's proved work
         out from under the stage, and `drop_scenario('*')` would empty the suite on disk mid-run.
         """
-        from fi.alk.harness.scenario_tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         writer, _ = scenario_tools(contract, where, where, wanted=0, can_save=False, share=[])
         offered = {spec.name for spec in writer.tools}
@@ -352,7 +352,7 @@ class TestAFanOutCanActuallySave:
         assert "submit_scenario" in offered, "a writer must still be able to contribute"
 
     def test_a_saving_session_keeps_it(self, contract, where):
-        from fi.alk.harness.scenario_tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         stage, _ = scenario_tools(contract, where, where, wanted=10)
         assert "drop_scenario" in {spec.name for spec in stage.tools}
@@ -364,8 +364,8 @@ class TestAFanOutCanActuallySave:
         after them, so this puts a proved scenario into the writers' list the way an acceptance
         does and asks the stage to save.
         """
-        from fi.alk.harness import scenarios as stage_module
-        from fi.alk.harness.scenario_tools import scenario_tools
+        from fi.alk.harness.scenariogen.write import stage as stage_module
+        from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
         monkeypatch.setattr(stage_module, "world_summary", lambda _root: "(no world here)")
         shared: list = []
@@ -547,7 +547,7 @@ class TestTheCanvasLoopEndToEnd:
         This pins the split, because the skill on the writer's side once told it to call a tool
         that was never on its server.
         """
-        from fi.alk.harness import scenarios
+        from fi.alk.harness.scenariogen.write import stage as scenarios
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
         stage, _ = scenarios.open_stage(contract, out=where, wanted=50)
@@ -824,7 +824,7 @@ def test_a_stage_with_writers_cannot_submit_scenarios_itself(contract, tmp_path)
     """Offered both, the model does the work itself: measured on a 200 run, the stage made 59 of
     the submissions and dispatched four writers, then spent its turns proving instead of dealing.
     The same argument already withholds generate_suite."""
-    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.scenariogen.write.tools import scenario_tools
 
     delegating, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=200, delegates=True)
     alone, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=200, delegates=False)
@@ -840,7 +840,7 @@ def test_a_stage_with_writers_cannot_submit_scenarios_itself(contract, tmp_path)
 def test_a_small_ask_keeps_its_own_pen(contract, tmp_path, monkeypatch):
     """Withholding writing must not reach a stage that has nobody to delegate to. Asking for five
     or ten scenarios declares no writers, so the stage writes them itself as it always did."""
-    from fi.alk.harness import scenarios as stage_module
+    from fi.alk.harness.scenariogen.write import stage as stage_module
 
     # A worker's prompt embeds the seeded world; this test is about the tool list beside it.
     monkeypatch.setattr(stage_module, "world_summary", lambda _where: "a world")

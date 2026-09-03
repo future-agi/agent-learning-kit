@@ -1469,7 +1469,7 @@ def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
     import inspect
     from fi.alk.harness.scenariogen.plan import tools as grid_tools
     from fi.alk.harness.backends.base import MOST_WORKERS_AT_ONCE
-    from fi.alk.harness.scenarios import AT_ONCE
+    from fi.alk.harness.scenariogen.write.stage import AT_ONCE
 
     assert MOST_WORKERS_AT_ONCE == 12, "the enforced ceiling"
     assert AT_ONCE == 10, "what a stage is told to aim at"
@@ -1483,7 +1483,7 @@ def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
     # so a brief overshoot is not a refusal mid-suite, and that number is ours: a brief or a
     # refusal quoting it would read as the instruction being wrong.
     from fi.alk.harness.contract import AgentContract
-    from fi.alk.harness.scenarios import opening
+    from fi.alk.harness.scenariogen.write.stage import opening
 
     said = opening(AgentContract(agent="a", one_liner="b", modality="voice"), 200)
     assert f"up to {AT_ONCE} at once" in said
