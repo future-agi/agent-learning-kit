@@ -869,7 +869,12 @@ async def _auto(args: argparse.Namespace) -> int:
                 repair_attempt = 0
                 wanted = int(stage_args.count)
                 written_count = len(load_written(destination))
-                while written_count != wanted and repair_attempt < 2:
+                # Short only. Overshooting is not worth a repair: asked to remove six of two
+                # hundred and six, the stage deleted the six deepest scenarios in the run, the
+                # only ones that reached a booking, against an instruction that told it not to.
+                # A suite that is over is reconciled by the bundler afterwards, which costs
+                # nothing and destroys nothing.
+                while written_count < wanted and repair_attempt < 2:
                     repair_attempt += 1
                     missing = wanted - written_count
                     # Count alone is the wrong instruction: asked only for a number, the
@@ -887,11 +892,6 @@ async def _auto(args: argparse.Namespace) -> int:
                                 "when the agent does the wrong thing. Do not pad with "
                                 "variations of a scenario that already exists, and do not "
                                 "add a happy path that an existing scenario already covers."
-                                if missing > 0
-                                else f"Remove exactly {-missing} excess scenario(s), preserve "
-                                "the strongest coverage, and call save_scenarios. Drop the "
-                                "ones that duplicate a branch another scenario already "
-                                "exercises, not the ones that are hardest to pass."
                             )
                         )
                     ]
@@ -906,7 +906,7 @@ async def _auto(args: argparse.Namespace) -> int:
                     if status:
                         break
                     written_count = len(load_written(destination))
-                if not status and written_count != wanted:
+                if not status and written_count < wanted:
                     emit(
                         "harness.stage.failed",
                         label,

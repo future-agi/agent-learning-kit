@@ -102,3 +102,22 @@ def test_a_second_save_keeps_what_an_earlier_save_put_on_disk(tmp_path: Path) ->
     record_written([Scenario(name="gamma")], tmp_path)
     saved([])
     assert sorted(one.name for one in load_scenarios(tmp_path)) == ["alpha", "beta", "gamma"]
+
+
+def test_the_hosted_repair_never_asks_for_a_scenario_to_be_deleted() -> None:
+    """Overshooting the count is not worth destroying proved work.
+
+    Asked to remove six of two hundred and six, the stage deleted the six deepest scenarios in the
+    run: the only ones carrying real addresses and reaching a booking, against an instruction that
+    told it to drop duplicates rather than the hardest cases. The loop now runs only when the suite
+    is short, and the bundler reconciles an over-count afterwards.
+    """
+    from pathlib import Path as _Path
+
+    source = (
+        _Path(__file__).resolve().parents[2]
+        / "src" / "fi" / "alk" / "harness" / "cli.py"
+    ).read_text(encoding="utf-8")
+
+    assert "while written_count < wanted and repair_attempt < 2:" in source
+    assert "Remove exactly" not in source
