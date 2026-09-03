@@ -344,8 +344,14 @@ def callers_for(index: int, wanted: int) -> str:
     )
     picks = [ranked[(index + step) % len(ranked)] for step in range(max(1, wanted))]
     said = (
-        "\n\nStart from these callers, and move off them only where the scenario calls for "
-        f"somebody else: {', '.join(picks)}."
+        # "Start from these" reads as a suggestion and was treated as one: dealt hardest-first, the
+        # share of accommodating callers went up rather than down. These are the callers, one per
+        # scenario in order, and swapping one needs a reason from the situation rather than a
+        # preference.
+        "\n\nYour callers, one per scenario in the order you write them: "
+        f"{', '.join(picks)}. Use them as given. If a scenario genuinely cannot be run by the "
+        "caller it was dealt, say which one and why when you report back, rather than quietly "
+        "substituting somebody easier to serve."
     )
     if accents:
         # Spread several offered accents across this writer's callers rather than naming just one,
