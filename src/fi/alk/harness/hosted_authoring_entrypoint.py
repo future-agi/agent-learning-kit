@@ -32,6 +32,7 @@ _PASSTHROUGH = {
     # here as well; without it a hosted run silently ignores the split and uses the run-wide one.
     "ALK_SCENARIOS_HARNESS",
     "ALK_SCENARIOS_MODEL",
+    "HARNESS_PARALLEL_SCENARIOS",
     "HARNESS_SUITE_BATCH",
     "HARNESS_WRITERS_AT_ONCE",
 }
