@@ -954,8 +954,10 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
         # p13: `build()` now calls `register_with_platform` after load -- this test is about the
         # R1-5 timeout BUDGET specifically, not registration, so registration is stubbed to a
         # passthrough (registration's own behavior is covered separately, below).
-        async def _passthrough(scenarios_client, scenarios, *, run_name, description="", modality=""):
-            del scenarios_client, run_name, description, modality
+        async def _passthrough(
+            scenarios_client, scenarios, *, run_name, description="", modality="", direction=""
+        ):
+            del scenarios_client, run_name, description, modality, direction
             return scenarios
 
         with mock.patch.object(ss, "register_with_platform", _passthrough):
@@ -1413,3 +1415,22 @@ def test_mutation_id_assignment_skipped_is_killed() -> None:
         assert restored[0].scenario_id == "platform-a"  # confirms the patch was fully undone
 
     asyncio.run(scenario())
+
+
+def test_provision_payload_carries_the_contract_direction():
+    """An outbound contract must reach the platform, or the agent row says inbound and the
+    simulator is told to wait for a greeting that never comes."""
+    from fi.alk.harness import scenario_source as ss
+
+    class _One:
+        scenario_key = "s1"
+
+    outbound = ss._provision_payload("run", [_One()], "prompt", "voice", "outbound")
+    assert outbound["direction"] == "outbound"
+    assert outbound["modality"] == "voice"
+
+    inbound = ss._provision_payload("run", [_One()], "prompt", "voice", "inbound")
+    assert inbound["direction"] == "inbound"
+
+    # Absent stays absent, so an older guest does not start asserting a direction it never read.
+    assert "direction" not in ss._provision_payload("run", [_One()], "prompt", "voice")

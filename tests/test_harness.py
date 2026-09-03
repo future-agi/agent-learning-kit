@@ -2508,6 +2508,29 @@ def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     assert (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
 
 
+def test_a_scenario_inherits_the_contract_direction(tmp_path):
+    """Direction belongs to the agent, not the writer, which never sets it. An outbound agent
+    whose scenarios say inbound has every call opened by the wrong side."""
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(
+        _delta(),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        direction="outbound",
+    )
+    assert not said.get("is_error"), said
+    assert kept[0].direction == "outbound"
+    assert kept[0].agent_speaks_first is False
+    written = json.loads(
+        (root / "scenarios" / "adds-a-big-mac" / "scenario.json").read_text()
+    )
+    assert written["direction"] == "outbound"
+
+
 def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_path):
     """Either the scenario is impossible or the checks are wrong. Both have happened."""
     from fi.alk.harness.scenario_tools import accept_scenario

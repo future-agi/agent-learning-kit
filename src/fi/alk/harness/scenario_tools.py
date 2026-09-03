@@ -268,6 +268,7 @@ def accept_scenario(
     kept: list[Scenario],
     simulator_prompt: str = "",
     hard_constraints: list[str] | None = None,
+    direction: str = "inbound",
     persist: bool = True,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
@@ -277,7 +278,10 @@ def accept_scenario(
     the others have proved. Those writers keep their work in ``kept`` and the caller saves once.
     """
     try:
-        scenario = Scenario.model_validate(payload)
+        # Which way the call goes is a property of the agent, not of one scenario, so it comes
+        # from the contract rather than the writer -- which never sets it and would otherwise
+        # leave every scenario inbound and every outbound call opened by the wrong side.
+        scenario = Scenario.model_validate({**payload, "direction": direction})
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
 
@@ -781,6 +785,7 @@ def scenario_tools(
             kept=kept,
             simulator_prompt=simulator_prompt,
             hard_constraints=contract.hard_constraints,
+            direction=contract.direction,
             persist=can_save,
         )
         if not result.get("is_error"):

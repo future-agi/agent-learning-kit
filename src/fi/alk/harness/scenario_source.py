@@ -375,6 +375,7 @@ class BundleScenarioSource:
             run_name=job.run_id,
             description=str(contract.get("system_prompt_excerpt") or ""),
             modality=str(contract.get("modality") or ""),
+            direction=str(contract.get("direction") or ""),
         )
 
 
@@ -414,6 +415,7 @@ def _provision_payload(
     scenarios: Sequence[_CompiledScenario],
     description: str = "",
     modality: str = "",
+    direction: str = "",
 ) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py:168-190): `operation`/`name`/`personas` (with
@@ -438,6 +440,10 @@ def _provision_payload(
     # only text or voice here, while a conversational agent's contract calls itself chat.
     if modality:
         payload["modality"] = "voice" if modality == "voice" else "text"
+    # Which way the call goes decides who opens it and how the platform records the agent. An
+    # outbound run left to default is stored as inbound, describing the opposite of what it ran.
+    if direction:
+        payload["direction"] = "outbound" if direction == "outbound" else "inbound"
     return payload
 
 
@@ -523,6 +529,7 @@ async def register_with_platform(
     run_name: str,
     description: str = "",
     modality: str = "",
+    direction: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -538,7 +545,7 @@ async def register_with_platform(
     """
     provision_result = await asyncio.to_thread(
         scenarios_client.provision,
-        _provision_payload(run_name, scenarios, description, modality),
+        _provision_payload(run_name, scenarios, description, modality, direction),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:
