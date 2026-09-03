@@ -308,7 +308,11 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
         "from tool names and a data schema, so check it against the agent's own source, which "
         "you can read: if it missed an object, split one in two, or turned an action into a "
         "thing, correct it with set_objects before planning anything.\n\n"
-        "Then plan_suite for the number asked for, and write what it plans. Look at the world "
+        "Then plan_suite for the number asked for, and record_canvas what you settle on before "
+        "writing anything. plan_suite only suggests; record_canvas is what makes the plan exist. "
+        "Without it there is no ledger, so nothing knows which buckets are done, a writer cannot "
+        "claim a slice, and a run that stops cannot be resumed.\n\n"
+        "Then write what the canvas holds. Look at the world "
         "with inspect_world so every scenario names real records. Work out each solution with "
         "try_calls before submitting, because a scenario is only kept if its solution passes "
         "its own checks and those checks fail without it.\n\n"
@@ -344,8 +348,10 @@ def load(destination: Path) -> list[Scenario]:
 # protects the machine, the other protects the person waiting. Asking for a thousand scenarios
 # is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
 # served a batch at a time with the rest offered back.
-AT_ONCE = 4
+# One setting decides both the default fan-out and its ceiling. They were 4 and 8, so a run that
+# asked for more writers was silently held at four however wide the machine was.
 MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
+AT_ONCE = min(int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4), MOST_AT_ONCE)
 MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 50)
 
 # Below this, one session writes the suite itself. Delegation buys parallelism and costs turns:
