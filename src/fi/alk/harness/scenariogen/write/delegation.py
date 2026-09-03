@@ -34,9 +34,8 @@ from ...config import (
     stage_model,
     writer_effort,
 )
-from ..plan.canvas import SLICE_SCENARIOS, WORTH_PLANNING
-from ..plan.canvas import load as load_canvas
-from ..plan.tools import GRID_SERVER, Coverage, grid_tools
+from ..plan.canvas import SLICE_SCENARIOS
+from ..plan.tools import Coverage
 from ...sample import Pick, coverage, plan as plan_picks
 from ..model.catalogue import load_catalogue
 from ...contract import AgentContract
@@ -44,7 +43,7 @@ from ..model.scenario import Scenario
 from .tools import (
     SCENARIO_SERVER,
     parallel_suites,
-    scenario_tools,
+    writing_tools,
     world_summary,
 )
 from ..store.suite import (
@@ -116,7 +115,7 @@ def writer_workers(
     """
     # The writers append into the caller's own list, which is what the stage later saves from.
     # Their own list would be invisible to it.
-    server, _ = scenario_tools(
+    server, _ = writing_tools(
         contract,
         destination,
         destination,
@@ -506,7 +505,7 @@ async def _write_slice(
     ask: Callable[..., Any] | None,
 ) -> list[Scenario]:
     """One slice, written by its own session. Returns what it proved, unsaved."""
-    server, kept = scenario_tools(
+    server, kept = writing_tools(
         contract,
         destination,
         destination,

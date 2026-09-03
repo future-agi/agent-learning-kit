@@ -605,12 +605,12 @@ class TestThePlannerMayProbeFreely:
         """
         import asyncio
 
-        from fi.alk.harness.scenariogen.write import tools as scenario_tools
+        from fi.alk.harness.scenariogen.write import tools as write_tools
 
         def no_world(*_args, **_rest):
             raise RuntimeError("no world in this test")
 
-        monkeypatch.setattr(scenario_tools, "restore", no_world)
+        monkeypatch.setattr(write_tools, "restore", no_world)
         probe = self.probe_of(stage)
         said = []
         for _ in range(times):

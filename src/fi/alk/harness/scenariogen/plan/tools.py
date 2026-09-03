@@ -103,7 +103,7 @@ class Coverage:
         self.grid = derive(self.contract, self.axes, objects=tuple(objects))
 
 
-def grid_tools(
+def planning_tools(
     contract: AgentContract,
     destination: Path,
     *,

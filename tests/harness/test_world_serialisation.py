@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness.scenariogen.write import tools as scenario_tools
+from fi.alk.harness.scenariogen.write import tools as write_tools
 from fi.alk.harness.scenariogen.model.catalogue import Catalogue
 
 
@@ -44,10 +44,10 @@ class TestTheWorldIsHeldForTheLengthOfAProof:
                 raise RuntimeError("stop here, the world work is what is under test")
             return go
 
-        monkeypatch.setattr(scenario_tools, "prepared", watch("prepared"))
+        monkeypatch.setattr(write_tools, "prepared", watch("prepared"))
 
         def run():
-            scenario_tools.accept_scenario(
+            write_tools.accept_scenario(
                 payload,
                 world_root=tmp_path,
                 catalogue=Catalogue(sub_goals=[]),
@@ -71,9 +71,9 @@ class TestTheWorldIsHeldForTheLengthOfAProof:
         def boom(*args, **rest):
             raise RuntimeError("duplicate key value violates unique constraint")
 
-        monkeypatch.setattr(scenario_tools, "prepared", boom)
+        monkeypatch.setattr(write_tools, "prepared", boom)
 
-        said = scenario_tools.accept_scenario(
+        said = write_tools.accept_scenario(
             payload,
             world_root=tmp_path,
             catalogue=Catalogue(sub_goals=[]),
@@ -96,7 +96,7 @@ class TestReadingTheWorldAlsoRewritesIt:
     """
 
     def test_reading_the_world_is_serialised_with_proving(self, monkeypatch, tmp_path, payload):
-        from fi.alk.harness.scenariogen.write import tools as scenario_tools
+        from fi.alk.harness.scenariogen.write import tools as write_tools
         from fi.alk.harness.scenariogen.model.catalogue import Catalogue
         from fi.alk.harness.contract import AgentContract, ToolSpec
 
@@ -108,11 +108,11 @@ class TestReadingTheWorldAlsoRewritesIt:
         held = []
 
         def watch(*args, **rest):
-            held.append(scenario_tools.WORLD_IN_USE._is_owned())
+            held.append(write_tools.WORLD_IN_USE._is_owned())
             raise RuntimeError("far enough: the lock is what is under test")
 
-        monkeypatch.setattr(scenario_tools, "restore", watch)
-        server, _ = scenario_tools.scenario_tools(
+        monkeypatch.setattr(write_tools, "restore", watch)
+        server, _ = write_tools.writing_tools(
             contract, tmp_path, tmp_path, wanted=0, share=[]
         )
         import asyncio
@@ -128,17 +128,17 @@ class TestReadingTheWorldAlsoRewritesIt:
         )
 
     def test_the_world_summary_holds_it_too(self, monkeypatch, tmp_path):
-        from fi.alk.harness.scenariogen.write import tools as scenario_tools
+        from fi.alk.harness.scenariogen.write import tools as write_tools
 
         held = []
 
         def watch(*args, **rest):
-            held.append(scenario_tools.WORLD_IN_USE._is_owned())
+            held.append(write_tools.WORLD_IN_USE._is_owned())
             raise RuntimeError("far enough")
 
-        monkeypatch.setattr(scenario_tools, "restore", watch)
+        monkeypatch.setattr(write_tools, "restore", watch)
         try:
-            scenario_tools.world_summary(tmp_path)
+            write_tools.world_summary(tmp_path)
         except Exception:
             pass
         assert held and all(held)

@@ -1917,7 +1917,7 @@ def test_every_stage_publishes_exactly_the_tools_it_claims(tmp_path):
     from fi.alk.harness.scenariogen.write import tools as scenarios
 
     root, contract = _saved_world(tmp_path)
-    server, _kept = scenarios.scenario_tools(contract, root, root, wanted=1)
+    server, _kept = scenarios.writing_tools(contract, root, root, wanted=1)
     assert _published(server) == sorted(scenarios.TOOL_NAMES)
 
     built, _world = world.world_tools(contract, root)
@@ -4304,11 +4304,11 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     from fi.alk.harness.tools import CONTRACT_SERVER  # noqa: F401
     from fi.alk.harness.world import tools as world_tools
 
-    from fi.alk.harness.scenariogen.write import tools as scenario_tools
-    from fi.alk.harness.scenariogen.plan import tools as grid_tools
+    from fi.alk.harness.scenariogen.write import tools as write_tools
+    from fi.alk.harness.scenariogen.plan import tools as plan_tools
 
     # The scenarios stage carries both servers, so its skills may name tools from either.
-    suite = set(scenario_tools.TOOL_NAMES) | set(grid_tools.tool_names())
+    suite = set(write_tools.TOOL_NAMES) | set(plan_tools.tool_names())
     surface = {
         "understand-agent": {"submit_contract"},
         "build-environment": set(world_tools.TOOL_NAMES),

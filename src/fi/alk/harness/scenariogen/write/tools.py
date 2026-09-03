@@ -38,7 +38,6 @@ from ..quality.checks import (
 )
 from ...simulator import load_simulator_prompt
 from ...tools import brief, schema
-from ..store.setup_code import changes_the_world
 from ..store.suite import (
     forget_journal,
     journalled,
@@ -241,7 +240,7 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
     return problems
 
 
-def scenario_tools(
+def writing_tools(
     contract: AgentContract,
     world_root: Path,
     destination: Path,

@@ -10,17 +10,13 @@ of these harder" is the next thing said rather than a regeneration from nothing.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from dataclasses import dataclass
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..plan.axes import axes_for
-from ...backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
-from ...backends.base import MOST_WORKERS_AT_ONCE
+from ...backends import SessionSpec, resolve, tool
 
 from ...config import (
     artifact_dir,
@@ -33,11 +29,10 @@ from ...config import (
     stage_model,
     writer_effort,
 )
-from ..plan.canvas import SLICE_SCENARIOS, WORTH_PLANNING
+from ..plan.canvas import WORTH_PLANNING
 from ..plan.canvas import load as load_canvas
-from ..plan.tools import GRID_SERVER, Coverage, grid_tools
-from ...sample import Pick, coverage, plan as plan_picks
-from ..model.catalogue import load_catalogue
+from ..plan.tools import GRID_SERVER, planning_tools
+from ...sample import coverage
 from ...contract import AgentContract
 from ..model.scenario import Scenario
 from .delegation import (
@@ -58,7 +53,7 @@ from .delegation import (
 from .tools import (
     SCENARIO_SERVER,
     parallel_suites,
-    scenario_tools,
+    writing_tools,
     world_summary,
 )
 from ..store.suite import (
@@ -114,7 +109,7 @@ def open_stage(
         if wanted >= FEWEST_WORTH_DELEGATING
         else {}
     )
-    server, kept = scenario_tools(
+    server, kept = writing_tools(
         contract,
         destination,
         destination,
@@ -124,7 +119,7 @@ def open_stage(
         # While there is a plan to write, probing the agent is the work rather than a detour.
         probing=planning,
     )
-    grid_server, held = grid_tools(contract, destination, wanted=wanted)
+    grid_server, held = planning_tools(contract, destination, wanted=wanted)
     held.canvas = load_canvas(destination)
     # Large suites are planned before they are written. Written one at a time they converge:
     # each scenario is composed with the last few in view, and by fifty the suite has settled

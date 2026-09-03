@@ -13,17 +13,11 @@ same way, and it needs no model to do it.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
-from collections import Counter
-from math import ceil
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
-from ..store.setup_code import fingerprint
-from .catalogue import Catalogue
-from ...simulator import variables_in
 
 
 class Step(BaseModel):

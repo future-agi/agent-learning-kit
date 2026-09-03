@@ -80,14 +80,6 @@ class Catalogue(BaseModel):
         return next((one for one in self.suite_evals if one.name == name), None)
 
 
-def validate_suite_eval(suite_eval: SuiteEval) -> list[str]:
-    if not suite_eval.name.strip():
-        return ["no name"]
-    if not suite_eval.required_inputs:
-        return [f"{suite_eval.name}: no required inputs"]
-    return []
-
-
 def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
     """Problems that make a sub-goal unusable.
 

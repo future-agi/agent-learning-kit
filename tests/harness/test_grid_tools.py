@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from fi.alk.harness.contract import AgentContract, ToolSpec
-from fi.alk.harness.scenariogen.plan.tools import grid_tools
+from fi.alk.harness.scenariogen.plan.tools import planning_tools
 from fi.alk.harness.scenariogen.write import delegation as writer_fanout
 from fi.alk.harness.scenariogen.write.tools import SCENARIO_SERVER
 from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
@@ -56,13 +56,13 @@ def where(tmp_path: Path):
 
 class TestSeeingAndCorrectingTheGrid:
     def test_the_grid_is_shown_with_its_arithmetic(self, contract, where):
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "show_grid")
         assert "objects x" in said and "valid" in said
 
     def test_correcting_the_objects_replans_everything(self, contract, where):
         """The contract is a summary. The stage reads the source and can see what it missed."""
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         before = len(state.grid.cells)
         said = call(
             server,
@@ -79,19 +79,19 @@ class TestSeeingAndCorrectingTheGrid:
         Pruning on tool-name matching would make a correction shrink the grid, which is the
         opposite of what correcting it is for: the corrector read the source, this did not.
         """
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         call(server, "set_objects", {"objects": ["invoice"]})
         assert "invoice" in call(server, "plan_suite", {"count": 5})
 
     def test_an_empty_correction_is_refused(self, contract, where):
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         assert failed(server, "set_objects", {"objects": []})
 
 
 class TestPlanning:
     @pytest.mark.parametrize("count", [1, 7, 40])
     def test_a_plan_names_one_coordinate_per_scenario(self, contract, where, count):
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "plan_suite", {"count": count})
         assert f"A suggested {count}." in said
         assert "because:" in said
@@ -99,12 +99,12 @@ class TestPlanning:
     def test_the_plan_presents_itself_as_a_suggestion(self, contract, where):
         """Choosing what to test is the model's call. This is arithmetic over the grid and
         knows nothing about which of the agent's operations are dangerous in practice."""
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "plan_suite", {"count": 5})
         assert "Yours to change" in said
 
     def test_a_nonsense_count_is_refused_rather_than_guessed(self, contract, where):
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         assert failed(server, "plan_suite", {"count": 0})
         assert failed(server, "plan_suite", {"count": "lots"})
 
@@ -126,13 +126,13 @@ class TestChangingASuiteThatAlreadyExists:
         )
 
     def test_nothing_saved_reads_as_nothing_rather_than_an_error(self, contract, where):
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         assert "No scenarios" in call(server, "list_scenarios")
         assert "nothing is covered" in call(server, "show_coverage").lower()
 
     def test_the_saved_suite_is_what_gets_listed(self, contract, where):
         self.saved(where, ["cancel-ride__baseline", "diagnose-fare__evasive"])
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "list_scenarios")
         assert "2 saved" in said
         assert "cancel-ride__baseline" in said and "diagnose-fare__evasive" in said
@@ -140,7 +140,7 @@ class TestChangingASuiteThatAlreadyExists:
     def test_coverage_is_recovered_from_names_on_disk(self, contract, where):
         """A suite written last week has to report the same way as one written a minute ago."""
         self.saved(where, ["cancel-ride__baseline", "diagnose-fare__evasive"])
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "show_coverage")
         assert "covering 2 of" in said
         assert "state: 1/" in said
@@ -148,14 +148,14 @@ class TestChangingASuiteThatAlreadyExists:
 
     def test_a_scenario_named_off_the_grid_is_called_out_not_counted(self, contract, where):
         self.saved(where, ["scenario_1", "edge_case_a"])
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "show_coverage")
         assert "covering 0 of" in said
         assert "does not match a cell" in said
 
     def test_expanding_copies_the_suite_across_callers_and_saves(self, contract, where):
         self.saved(where, ["cancel-ride__baseline"])
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         said = call(server, "expand_suite")
         assert "no model call" in said
         from fi.alk.harness.scenariogen.store.suite import load_scenarios
@@ -166,14 +166,14 @@ class TestChangingASuiteThatAlreadyExists:
 
     def test_expanding_respects_a_total(self, contract, where):
         self.saved(where, ["cancel-ride__baseline", "diagnose-fare__baseline"])
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         call(server, "expand_suite", {"total": 6})
         from fi.alk.harness.scenariogen.store.suite import load_scenarios
 
         assert len(load_scenarios(where)) == 6
 
     def test_expanding_nothing_is_refused_with_a_reason(self, contract, where):
-        server, _ = grid_tools(contract, where)
+        server, _ = planning_tools(contract, where)
         assert failed(server, "expand_suite")
 
 
@@ -307,37 +307,37 @@ class TestAFanOutCanActuallySave:
     """
 
     def test_share_hands_back_the_same_list_not_a_copy(self, contract, where):
-        from fi.alk.harness.scenariogen.write.tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import writing_tools
 
         mine: list = []
-        _, kept = scenario_tools(contract, where, where, wanted=0, share=mine)
+        _, kept = writing_tools(contract, where, where, wanted=0, share=mine)
         assert kept is mine, "share must not copy, or the caller cannot see what was accepted"
 
     def test_start_from_still_copies(self, contract, where):
         """The other case is unchanged: a writer seeded from disk must not alias it."""
-        from fi.alk.harness.scenariogen.write.tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import writing_tools
 
         seed: list = []
-        _, kept = scenario_tools(contract, where, where, wanted=0, start_from=seed)
+        _, kept = writing_tools(contract, where, where, wanted=0, start_from=seed)
         assert kept is not seed
 
     def test_the_stage_and_its_writers_share_one_list(self, contract, where, monkeypatch):
         from fi.alk.harness.scenariogen.write import stage as scenarios
-        from fi.alk.harness.scenariogen.write.tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import writing_tools
 
         monkeypatch.setattr(scenarios, "world_summary", lambda _root: "(no world here)")
 
         monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
         seen: list = []
-        real = scenario_tools
+        real = writing_tools
 
         def spy(*args, **rest):
             server, kept = real(*args, **rest)
             seen.append(kept)
             return server, kept
 
-        monkeypatch.setattr(scenarios, "scenario_tools", spy)
-        monkeypatch.setattr(writer_fanout, "scenario_tools", spy)
+        monkeypatch.setattr(scenarios, "writing_tools", spy)
+        monkeypatch.setattr(writer_fanout, "writing_tools", spy)
         # Above the delegation threshold, so writers are declared.
         scenarios.open_stage(contract, out=where, wanted=50)
         assert len(seen) >= 2, "expected a server for the stage and one for its writers"
@@ -349,18 +349,18 @@ class TestAFanOutCanActuallySave:
         With one shared list a writer holding `drop_scenario` could clear a sibling's proved work
         out from under the stage, and `drop_scenario('*')` would empty the suite on disk mid-run.
         """
-        from fi.alk.harness.scenariogen.write.tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import writing_tools
 
-        writer, _ = scenario_tools(contract, where, where, wanted=0, can_save=False, share=[])
+        writer, _ = writing_tools(contract, where, where, wanted=0, can_save=False, share=[])
         offered = {spec.name for spec in writer.tools}
         assert "drop_scenario" not in offered
         assert "save_scenarios" not in offered
         assert "submit_scenario" in offered, "a writer must still be able to contribute"
 
     def test_a_saving_session_keeps_it(self, contract, where):
-        from fi.alk.harness.scenariogen.write.tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import writing_tools
 
-        stage, _ = scenario_tools(contract, where, where, wanted=10)
+        stage, _ = writing_tools(contract, where, where, wanted=10)
         assert "drop_scenario" in {spec.name for spec in stage.tools}
 
     def test_what_a_writer_accepts_is_what_the_stage_saves(self, contract, where, monkeypatch):
@@ -371,13 +371,13 @@ class TestAFanOutCanActuallySave:
         does and asks the stage to save.
         """
         from fi.alk.harness.scenariogen.write import stage as stage_module
-        from fi.alk.harness.scenariogen.write.tools import scenario_tools
+        from fi.alk.harness.scenariogen.write.tools import writing_tools
 
         monkeypatch.setattr(stage_module, "world_summary", lambda _root: "(no world here)")
         monkeypatch.setattr(writer_fanout, "world_summary", lambda _root: "(no world here)")
 
         shared: list = []
-        stage, kept = scenario_tools(contract, where, where, wanted=1, share=shared)
+        stage, kept = writing_tools(contract, where, where, wanted=1, share=shared)
         writers = writer_fanout.writer_workers(contract, where, share=shared)
         writer = writers[writer_fanout.WRITER].servers[SCENARIO_SERVER]
 
@@ -424,7 +424,7 @@ class TestTheCanvasLoopEndToEnd:
         )
 
     def test_a_plan_is_recorded_and_read_back(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         said = self.canvas_of(server, cells)
         assert "6 scenarios planned:" in said
@@ -433,7 +433,7 @@ class TestTheCanvasLoopEndToEnd:
         assert "0 written of 6 planned" in call(server, "show_canvas")
 
     def test_a_slice_claims_its_angles_so_nothing_is_written_twice(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         first = call(server, "claim_slice", {"scenarios": 6, "writer": "w1"})
@@ -442,7 +442,7 @@ class TestTheCanvasLoopEndToEnd:
 
     def test_what_a_writer_claims_is_checked_against_disk(self, contract, where):
         """The writer says three; the disk says none; the disk wins and the gap is named."""
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         call(server, "claim_slice", {"writer": "w1"})
@@ -455,7 +455,7 @@ class TestTheCanvasLoopEndToEnd:
         assert "writer said 3" in said and "does not match" in said
 
     def test_a_part_filled_angle_comes_back_for_somebody_else(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         call(server, "claim_slice", {"writer": "w1"})
@@ -463,7 +463,7 @@ class TestTheCanvasLoopEndToEnd:
         assert "TH01-01" in call(server, "claim_slice", {"writer": "w2"})
 
     def test_an_angle_a_writer_says_is_impossible_is_not_dealt_again(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         call(server, "claim_slice", {"writer": "w1"})
@@ -476,7 +476,7 @@ class TestTheCanvasLoopEndToEnd:
 
     def test_replanning_keeps_what_writers_already_did(self, contract, where):
         """Re-recording is how a plan is corrected mid-run; it must not erase the ledger."""
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         state.canvas.named("TH01-01").done = 2
@@ -491,7 +491,7 @@ class TestTheCanvasLoopEndToEnd:
         drops it or crams it into the bucket it was given, and the canvas goes on claiming a
         completeness it never had.
         """
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         before = state.canvas.planned
@@ -510,7 +510,7 @@ class TestTheCanvasLoopEndToEnd:
         assert state.canvas.planned == before + 2
 
     def test_a_found_bucket_gets_dealt_like_any_other(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         call(server, "claim_slice", {"writer": "w1"})
@@ -531,7 +531,7 @@ class TestTheCanvasLoopEndToEnd:
         assert "TH02-F01" in call(server, "claim_slice", {"writer": "w2"})
 
     def test_writer_ids_cannot_collide_with_planned_ones(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         for _ in range(3):
@@ -579,7 +579,7 @@ class TestTheCanvasLoopEndToEnd:
         A model that tries either runs long or truncates, and either way the whole plan is lost.
         So recording adds rather than replaces, and the earlier instalments have to survive.
         """
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:3]
         call(server, "record_canvas", {
             "target": 12,
@@ -601,7 +601,7 @@ class TestTheCanvasLoopEndToEnd:
         assert [one.name for one in state.canvas.axes] == ["s.market"]
 
     def test_replacing_is_possible_but_has_to_be_asked_for(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:3]
         call(server, "record_canvas", {
             "target": 12,
@@ -618,7 +618,7 @@ class TestTheCanvasLoopEndToEnd:
         assert {one.id for one in state.canvas.angles} == {"TH02-01"}
 
     def test_an_instalment_keeps_progress_already_made(self, contract, where):
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:3]
         call(server, "record_canvas", {
             "target": 12,
@@ -649,7 +649,7 @@ class TestTheCanvasLoopEndToEnd:
         from fi.alk.harness.scenariogen.model.scenario import Scenario
         from fi.alk.harness.scenariogen.store.suite import write_scenarios
 
-        server, state = grid_tools(contract, where)
+        server, state = planning_tools(contract, where)
         cells = sorted({one.name for one in state.grid.cells})[:2]
         self.canvas_of(server, cells)
         write_scenarios(
@@ -679,9 +679,9 @@ def test_the_stage_s_count_wins_over_the_target_the_model_types(contract, where,
     import asyncio
 
     from fi.alk.harness.scenariogen.plan.canvas import load as load_canvas
-    from fi.alk.harness.scenariogen.plan.tools import grid_tools
+    from fi.alk.harness.scenariogen.plan.tools import planning_tools
 
-    server, _state = grid_tools(contract, tmp_path, wanted=500)
+    server, _state = planning_tools(contract, tmp_path, wanted=500)
     record = next(one for one in server.tools if one.name == "record_canvas")
     asyncio.run(
         record.handler(
@@ -714,11 +714,11 @@ def test_folding_credits_journalled_scenarios_not_only_folders(contract, tmp_pat
     buckets whose scenarios existed all along."""
     import asyncio
 
-    from fi.alk.harness.scenariogen.plan.tools import grid_tools
+    from fi.alk.harness.scenariogen.plan.tools import planning_tools
     from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenariogen.store.suite import record_written
 
-    server, state = grid_tools(contract, tmp_path, wanted=200)
+    server, state = planning_tools(contract, tmp_path, wanted=200)
     record = next(one for one in server.tools if one.name == "record_canvas")
     asyncio.run(
         record.handler(
@@ -779,11 +779,11 @@ def test_folding_recovers_work_when_the_reported_names_are_wrong(contract, tmp_p
     come back invented. Measured: every fold reported names that were nowhere on disk."""
     import asyncio
 
-    from fi.alk.harness.scenariogen.plan.tools import grid_tools
+    from fi.alk.harness.scenariogen.plan.tools import planning_tools
     from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.scenariogen.store.suite import record_written
 
-    server, state = grid_tools(contract, tmp_path, wanted=200)
+    server, state = planning_tools(contract, tmp_path, wanted=200)
     record = next(one for one in server.tools if one.name == "record_canvas")
     asyncio.run(
         record.handler(
@@ -834,10 +834,10 @@ def test_a_stage_with_writers_cannot_submit_scenarios_itself(contract, tmp_path)
     """Offered both, the model does the work itself: measured on a 200 run, the stage made 59 of
     the submissions and dispatched four writers, then spent its turns proving instead of dealing.
     The same argument already withholds generate_suite."""
-    from fi.alk.harness.scenariogen.write.tools import scenario_tools
+    from fi.alk.harness.scenariogen.write.tools import writing_tools
 
-    delegating, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=200, delegates=True)
-    alone, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=200, delegates=False)
+    delegating, _ = writing_tools(contract, tmp_path, tmp_path, wanted=200, delegates=True)
+    alone, _ = writing_tools(contract, tmp_path, tmp_path, wanted=200, delegates=False)
 
     assert "submit_scenario" not in {one.name for one in delegating.tools}
     assert "submit_scenario" in {one.name for one in alone.tools}
@@ -862,7 +862,7 @@ def test_a_small_ask_keeps_its_own_pen(contract, tmp_path, monkeypatch):
             if wanted >= stage_module.FEWEST_WORTH_DELEGATING
             else {}
         )
-        server, _ = stage_module.scenario_tools(
+        server, _ = stage_module.writing_tools(
             contract, tmp_path, tmp_path, wanted=wanted, delegates=bool(workers)
         )
         has_pen = "submit_scenario" in {one.name for one in server.tools}
