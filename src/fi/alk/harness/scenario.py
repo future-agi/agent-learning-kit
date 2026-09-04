@@ -348,6 +348,7 @@ def validate_scenario(
     problems.extend(fixture_problems(scenario))
     problems.extend(alignment_problems(scenario, world_state))
     problems.extend(hollow_scenario_problems(scenario))
+    problems.extend(naming_problems(scenario))
     return problems
 
 
@@ -488,6 +489,32 @@ def _handed_to_caller(text: str) -> set[str]:
         for match in _HANDED_OVER.finditer(text or "")
         if not _NOT_A_RECORD.match(match.group(1))
     }
+
+
+def naming_problems(scenario: Scenario) -> list[str]:
+    """Whether the folder name says what is tested, or only who was on the phone.
+
+    The folder name is how a failure is read weeks later. A caller's name in it says the caller was
+    carrying the difference the test should have been carrying, which is the same mistake as planning
+    a second scenario because the person could be somebody else. Measured on an earlier suite: twelve
+    of thirty one were still named for the caller after the skill asked them not to be, which is why
+    this is checked rather than requested.
+    """
+    caller = str(getattr(scenario.persona, "name", "") or "").strip().lower()
+    if not caller:
+        return []
+    # Each part of the name, not the whole string: "marcus vance" is never a token of
+    # `refuse_expired_card_marcus`, so matching the full name lets every first-name suffix through.
+    parts = {part for part in caller.split() if len(part) > 2}
+    written = set(scenario.name.lower().replace("-", " ").replace("_", " ").split())
+    named_in = sorted(parts & written)
+    if not named_in:
+        return []
+    return [
+        f"the name contains the caller's own name ({', '.join(named_in)}). Name it for the behaviour "
+        "under test, so a red result says which rule broke rather than who was on the phone, and so "
+        "the suite sorts by what it covers rather than by who called"
+    ]
 
 
 def hollow_scenario_problems(scenario: Scenario) -> list[str]:
