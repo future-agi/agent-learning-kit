@@ -125,6 +125,8 @@ SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
 # complete set the in-process text/voice simulators may consume.
 _SIMULATOR_SECRET_ALIASES = frozenset(
     {
+        "ALK_BACKGROUND_NOISE",
+        "ALK_BACKGROUND_NOISE_CATALOG",
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
@@ -137,6 +139,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_GENAI_USE_VERTEXAI",
+        "HARNESS_BACKGROUND_NOISE_VOLUME",
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
