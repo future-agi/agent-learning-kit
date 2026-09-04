@@ -173,11 +173,13 @@ MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 1000)
 # that keeps finding smaller things to say.
 TOP_UP_ROUNDS = 1
 
-# A writer refused by the provider is retried rather than abandoned: the brief is still worth writing
-# and the slice keeps what it already proved. Two extra attempts, waiting longer each time, is enough
-# for a quota window to reopen without holding a run open indefinitely.
-RATE_LIMIT_ATTEMPTS = 3
-RATE_LIMIT_BACKOFF_SECONDS = 30
+# A session refused by the provider is retried rather than abandoned: its work is still worth doing and
+# a slice keeps what it already proved. The quota is measured over a minute, so the first wait has to
+# clear a minute or the retry asks inside the same window and is refused again for the same reason.
+# Five attempts because losing a slice costs its whole share of the suite, and waiting is cheap by
+# comparison.
+RATE_LIMIT_ATTEMPTS = 5
+RATE_LIMIT_BACKOFF_SECONDS = 60
 
 
 def _rate_limited(broke: BaseException) -> bool:
