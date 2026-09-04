@@ -2342,10 +2342,10 @@ def test_an_empty_persona_is_rejected():
         scenario, catalogue, {}, "{{ persona }}\n{{ instruction }}"
     )
 
-    assert "persona has no details" in problems
+    assert "persona has no name: the caller reaches the call as a placeholder" in problems
 
 
-def test_a_persona_must_contain_the_profile_that_drives_variation():
+def test_a_thin_persona_is_kept_since_only_the_name_is_load_bearing():
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
     from fi.alk.harness.scenariogen.quality.checks import validate_scenario
@@ -2367,8 +2367,10 @@ def test_a_persona_must_contain_the_profile_that_drives_variation():
         scenario, catalogue, {}, "{{ persona }}\n{{ instruction }}"
     )
 
-    assert any("persona is incomplete" in problem for problem in problems)
-    assert all(field in problems[0] for field in ("personality", "languages", "accent"))
+    # A thin profile is no longer refused. Only the name is load-bearing, because the platform
+    # builds the caller from the persona and a nameless one arrives as a placeholder; refusing a
+    # scenario over a missing occupation cost the writer a turn and improved nothing.
+    assert not any("persona is incomplete" in problem for problem in problems)
 
 
 def test_same_call_contract_state_cannot_be_hidden_in_scenario_setup():

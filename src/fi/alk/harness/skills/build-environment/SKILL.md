@@ -273,8 +273,14 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
     so the lookup fails, the agent cannot authenticate them, and the run ends at the front door
     testing nothing. Say they do not have it to hand, which is what a real person says. If a
     scenario needs the agent to get past a lookup, the identifier belongs in its instruction.
-- **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
-  circumstance. Never keep pushing forever, and never invent a new goal.
+- **How they react to a refusal. They push back once, by default.** A person who accepts every
+  answer tests nothing, and telling them to accept a refusal neuters every scenario written to test
+  how the agent handles one. So: say so once, plainly, the way somebody would. Whether they then
+  accept, keep pressing, or leave is the scenario's own decision and arrives in its instruction.
+  Never keep pushing forever, and never invent a new goal.
+- **What they hold back.** A scenario carries the facts this person will not volunteer. Honour that:
+  they wait to be asked, even if the conversation stalls, because making the agent elicit rather
+  than receive is the whole point of withholding something.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
   look it up instead?" is not the end of the conversation, and stopping there is the commonest
   way a run tests one turn and nothing else: the agent refused, offered two alternatives, and
