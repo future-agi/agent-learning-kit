@@ -199,6 +199,28 @@ class _MissingVoiceConfig:
         return "voice_capability_unavailable: missing " + "; ".join(parts)
 
 
+def _resolve_connector(job: HarnessJob, target_provider_secret_values: Mapping[str, str]) -> str:
+    """Pin the job's transport connector from the credentials actually present.
+
+    A fresh one-shot ships ``job.json`` with ``connector="auto"``: the platform only writes the
+    authored connector back onto the job *after* authoring, by which time this guest has already
+    booted from the un-resolved payload.  Mirror the platform rule so a LiveKit-credentialed
+    ``auto`` job dispatches to the target agent instead of the simulator lane with no identity.
+    """
+    connector = job.agent.connector.strip().lower()
+    if connector != "auto":
+        return connector
+    if job.agent.config.get(LIVEKIT_URL_CONFIG_KEY) or target_provider_secret_values.get(
+        LIVEKIT_URL_ALIAS
+    ):
+        return "livekit"
+    if target_provider_secret_values.get(VAPI_API_KEY_ALIAS):
+        return "vapi"
+    if target_provider_secret_values.get(RETELL_API_KEY_ALIAS):
+        return "retell"
+    return connector
+
+
 def _check_config(
     job: HarnessJob,
     target_provider_secret_values: Mapping[str, str],
@@ -232,7 +254,7 @@ def _check_config(
         or "deepgram"
     ).lower()
 
-    connector = job.agent.connector.strip().lower()
+    connector = _resolve_connector(job, target_provider_secret_values)
     livekit_values = (
         target_provider_secret_values if connector == "livekit" else simulator_values
     )
@@ -814,7 +836,7 @@ class CallRunnerImpl:
         # process but against a per-world sandboxed agent process reached over the network; no
         # other in-process worker races this job-level environment.
         target_environ = os.environ if environ is None else environ
-        connector = context.job.agent.connector.strip().lower()
+        connector = _resolve_connector(context.job, context.target_provider_secret_values)
         target_aliases = [VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS]
         if connector == "livekit":
             target_aliases.extend(
@@ -899,7 +921,9 @@ class CallRunnerImpl:
             # job-level voice config gap).
             raise CallAborted(self._missing_config.message())
 
-        connector = self._context.job.agent.connector.strip().lower()
+        connector = _resolve_connector(
+            self._context.job, self._context.target_provider_secret_values
+        )
         agent_name = _dispatch_agent_name(runtime) if connector == "livekit" else None
         if connector == "livekit" and agent_name is None:
             raise CallAborted(
