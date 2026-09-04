@@ -451,7 +451,7 @@ depend on: if a scenario needs an order delivered, its own setup delivers it. Th
 rehearsing with `try_calls` run on a throwaway copy and change nothing anybody else sees.
 
 You have two ways to change things, and **neither names what the world is kept in**. A scenario that
-wrote SQL would only work against a world that happened to be a database, and the store varies more
+wrote SQL would only work against a world that happened to use that engine, and the store varies more
 between agents than anything else.
 
 **Prefer the agent's own tools.** They go through the same path the agent will, so anything the world
@@ -467,7 +467,7 @@ is kept in: `world.put(collection, record)` adds one, `world.change(collection, 
 alters one, `world.drop(collection, key, by=...)` removes one. Use the direct route only for states no
 tool can produce: a record already in a condition the agent could never create itself.
 
-**Collections are not all lists.** A table gives a list of records; a collection the agent's own code
+**Collections are not all lists.** A collection held in a store gives a list of records; one the agent's own code
 keeps is often a mapping, and iterating it yields keys rather than records. Look with `inspect_world`
 before writing against one.
 

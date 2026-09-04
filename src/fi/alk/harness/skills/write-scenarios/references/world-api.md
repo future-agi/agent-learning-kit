@@ -9,13 +9,20 @@ Where no tool of the agent's can produce the state you need, change the world's 
 records yourself:
 
 ```python
-world.put(collection, record)  # add one record; a table already owns its primary key
+world.put(collection, record)  # add one record; a stored collection owns its own identifier
 world.change(collection, key, changes, by=...)  # change one record
 world.drop(collection, key, by=...)  # remove one, or all of them with no key
 ```
 
-Only use `world.put(..., key=...)` for an in-memory mapping that is not a table: a table's primary key
-is already in the record. `world.state()` shows every collection and what is in it.
+Only use `world.put(..., key=...)` for a collection the agent keeps in memory and addresses by an
+outside key. A collection held in a store already carries its own identifier in the record, so passing
+`key=` there is wrong. `world.state()` shows every collection and what is in it.
+
+Nothing here names the engine underneath, and nothing you write should. The same three calls serve a
+world backed by a relational engine, a columnar one, or the agent's own in-process data, because the
+harness stands the engine up and the world presents collections and records whatever it is. A setup that
+reaches past these calls, to SQL or to any engine's own client, only works for the one world it was
+written against.
 
 ```python
 def setup(world):
@@ -33,9 +40,9 @@ target needs a seed or reset seam rather than writing a scenario that cannot run
 
 ### A collection is not always a list
 
-`world.state()` gives every collection this world has, and their shapes differ by agent. A table gives
-a list of records. A collection the agent's own code keeps is often a mapping keyed by identifier, and
-iterating that yields the keys, which are strings, so reading a field off one fails.
+`world.state()` gives every collection this world has, and their shapes differ by agent. A collection
+held in a store gives a list of records. One the agent's own code keeps is often a mapping keyed by
+identifier, and iterating that yields the keys, which are strings, so reading a field off one fails.
 
 ```python
 held = world.state()["some_collection"]
