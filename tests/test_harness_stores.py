@@ -72,6 +72,10 @@ CREATE TABLE orders (
     item        text NOT NULL,
     quantity    int  NOT NULL CHECK (quantity > 0)
 );
+CREATE TABLE boolean_rows (
+    id             text PRIMARY KEY,
+    phone_verified boolean NOT NULL
+);
 """
 
 SEED = """
@@ -107,7 +111,7 @@ def seeded(store):
 @pg
 def test_the_schema_is_the_one_that_was_applied(seeded) -> None:
     """The harness never invents tables. What is here is what the migration created."""
-    assert sorted(seeded.state()) == ["customers", "orders"]
+    assert sorted(seeded.state()) == ["boolean_rows", "customers", "orders"]
 
 
 @pg
@@ -164,6 +168,66 @@ def test_restore_survives_foreign_keys_without_ordering_the_tables(seeded) -> No
 
     seeded.restore(baseline)
     assert seeded.state() == baseline.rows
+
+
+@pg
+def test_boolean_equivalents_work_for_scenario_insert_update_and_restore(
+    seeded,
+) -> None:
+    """Generated setup commonly crosses JSON/SQLite as 0/1 before reaching Postgres.
+
+    All three runtime write paths share ``_adapt``. Prove each one against a real PostgreSQL
+    boolean column so the hosted runner cannot regress to binding a smallint again.
+    """
+    inserted = seeded.add("boolean_rows", {"id": "inserted", "phone_verified": 1})
+    assert inserted["phone_verified"] is True
+
+    assert (
+        seeded.amend(
+            "boolean_rows",
+            "inserted",
+            {"phone_verified": 0},
+            by="id",
+        )
+        == 1
+    )
+    assert seeded.state()["boolean_rows"] == [
+        {"id": "inserted", "phone_verified": False}
+    ]
+
+    seeded.restore(
+        Snapshot(rows={"boolean_rows": [{"id": "restored", "phone_verified": "true"}]})
+    )
+    assert seeded.state()["boolean_rows"] == [
+        {"id": "restored", "phone_verified": True}
+    ]
+
+
+def test_postgres_boolean_adaptation_rejects_ambiguous_values() -> None:
+    from fi.alk.harness.world.stores.postgres import _adapt
+
+    with pytest.raises(StoreError, match="expected true/false"):
+        _adapt(2, "boolean")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        (False, False),
+        (1, True),
+        (0, False),
+        ("true", True),
+        ("FALSE", False),
+        (" t ", True),
+        (" 0 ", False),
+    ],
+)
+def test_postgres_normalizes_unambiguous_boolean_equivalents(value, expected) -> None:
+    from fi.alk.harness.world.stores.postgres import _adapt
+
+    adapted = _adapt(value, "BOOLEAN")
+    assert adapted is expected
 
 
 @pg

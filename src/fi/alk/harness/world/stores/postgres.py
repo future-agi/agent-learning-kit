@@ -415,10 +415,30 @@ def _adapt(value: Any, data_type: str = "") -> Any:
     """Hand back a value in the form psycopg will write.
 
     A list in a JSON column must be wrapped, while a list in an ARRAY column must remain a list
-    so psycopg emits a native Postgres array.
+    so psycopg emits a native Postgres array. Scenario setup is JSON/Python authored and may
+    therefore represent a boolean as ``0``/``1`` even though PostgreSQL deliberately does not
+    implicitly cast a bound smallint to boolean. Normalize only the finite, unambiguous boolean
+    vocabulary; using ``bool(value)`` here would silently turn values such as ``2`` or
+    ``"disabled"`` into true.
     """
+    normalized_type = data_type.strip().lower()
+    if value is not None and normalized_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalized_value = value.strip().lower()
+            if normalized_value in {"true", "t", "1"}:
+                return True
+            if normalized_value in {"false", "f", "0"}:
+                return False
+        raise StoreError(
+            "a PostgreSQL boolean column received "
+            f"{value!r}; expected true/false or the equivalent 1/0"
+        )
     if isinstance(value, dict) or (
-        isinstance(value, list) and data_type in ("json", "jsonb")
+        isinstance(value, list) and normalized_type in ("json", "jsonb")
     ):
         from psycopg.types.json import Jsonb
 
