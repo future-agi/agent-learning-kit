@@ -150,7 +150,10 @@ def load(destination: Path) -> list[Scenario]:
 # served a batch at a time with the rest offered back.
 AT_ONCE = 4
 MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
-MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 50)
+# How many a single generate_suite pass will write. A hosted run is unattended, so a cap here
+# does not pause for a person, it just returns fewer than were asked for and stops. Kept as a
+# backstop against a runaway ask rather than as a batch size.
+MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 500)
 
 # How many times the suite is reviewed and topped up after the first pass. One is enough to
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop

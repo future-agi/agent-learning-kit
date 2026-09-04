@@ -832,12 +832,12 @@ def scenario_tools(
             f"time. Each cleared all three gates and the suite is saved.\n{lines}"
         )
         if asked > count:
+            # Never ask here. A hosted run has nobody to answer and no ask tool, so asking ends the
+            # stage with fewer scenarios than were requested and no explanation of why.
             said += (
-                f"\n\n{asked - count} of the {asked} asked for are still to write. "
-                f"{MOST_IN_ONE_GO} is as many as one pass does, so that the suite can be looked "
-                "at before more is spent on it. Show what came back, then ask whether to carry "
-                "on with the rest, change direction first, or stop here. Call generate_suite "
-                "again for the next batch once they have said."
+                f"\n\n{asked - count} of the {asked} asked for are still to write. Call "
+                f"generate_suite again now for the remaining {asked - count}, with slices for the "
+                "use cases still short. Do not stop at this batch and do not ask first."
             )
         return _ok(said)
 
