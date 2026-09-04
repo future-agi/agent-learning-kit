@@ -191,12 +191,20 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
     assert asked_for == [20]
 
     # Fourteen already written, and the model asks for twenty again: six are outstanding.
-    monkeypatch.setattr(st, "load_scenarios", lambda _destination: [object()] * 14)
+    monkeypatch.setattr(
+        st, "load_scenarios", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)]
+    )
+    monkeypatch.setattr(st, "journalled", lambda _d: [])
     asyncio.run(suite.handler({"count": 20}))
     assert asked_for == [20, 6]
 
-    # Once the target is met, it refuses to write more rather than starting another suite.
-    monkeypatch.setattr(st, "load_scenarios", lambda _destination: [object()] * 20)
+    # Once the target is met, it refuses to write more rather than starting another suite. Counted
+    # from the journal here, since a save transiently empties the folders and that is how the cap was
+    # defeated on a real run.
+    monkeypatch.setattr(st, "load_scenarios", lambda _d: [])
+    monkeypatch.setattr(
+        st, "journalled", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)]
+    )
     said = asyncio.run(suite.handler({"count": 20}))
     assert "already holds the 20" in said["content"][0]["text"]
     assert asked_for == [20, 6]

@@ -877,7 +877,14 @@ def scenario_tools(
         # the only honest measure of what is left, so it is read here rather than trusted from the
         # argument.
         if wanted:
-            asked = min(asked, max(0, wanted - len(load_scenarios(destination))))
+            # Counted from the journal as well as the folders. A save prunes the directory before it
+            # rewrites it, so a pass that asks how many exist while that is in flight reads zero and
+            # writes a whole second suite: measured at 257 against a target of 200, which is how this
+            # cap was defeated the first time. The journal is append-only and nothing prunes it.
+            already = {one.name for one in load_scenarios(destination)} | {
+                one.name for one in journalled(destination)
+            }
+            asked = min(asked, max(0, wanted - len(already)))
         if not asked:
             return _ok(
                 f"The suite already holds the {wanted} it was asked for. Nothing more to write: "
