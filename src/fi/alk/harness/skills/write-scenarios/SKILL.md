@@ -383,12 +383,14 @@ Before counting anything, write down the two lists the plan is built from.
 names take and return, reduced to singular nouns. A booking agent has rides, addresses, payment
 methods, accounts. A claims agent has policies, claims, documents, payouts. Four to ten is usual.
 
-**What a person can want done to them.** This list is the same for every agent, which is the point:
+**What a person can want done to them.** This list is the same for every agent, which is the point.
+It is grouped by what the operation does to the world, and that grouping is why it is complete: an
+intent either reads, or writes, or manages the process itself, and there is no fourth thing.
 
 ```
-retrieve   compare   explain   diagnose
-create     update    cancel    execute
-configure  authenticate  navigate  handoff
+reads, nothing changes      retrieve   compare   explain   diagnose
+writes, something changes   create     update    cancel    execute   configure
+manages the process         authenticate   navigate   handoff
 ```
 
 Cross the two. Most cells are empty, and saying so is useful: an agent with no `compare` over payment
@@ -399,6 +401,13 @@ This is what stops a suite padding. Twelve operations against six objects is sev
 cells, so a request for a hundred scenarios has somewhere real to come from, and any two scenarios in
 different cells are genuinely different tests. Two scenarios in the same cell with different callers
 are one test written twice.
+
+**Everything else about a scenario is diversity, not count.** Who the person is, what state they are
+in, how they interact, what the conditions are, whether something adversarial is going on: these make
+a cell's scenario realistic and varied, and they are worth choosing deliberately. What they do not do
+is create another test. A cell written once with a calm caller and again with an anxious one is one
+test. Reach for the next cell instead, and if the cells are genuinely exhausted, say the honest number
+rather than turning one test into five.
 
 Say how many scenarios each cell gets, **in proportion to how much can genuinely go wrong in
 it**. A cell with rules to enforce, information to gather, or state to change earns a large
