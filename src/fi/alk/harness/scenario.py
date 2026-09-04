@@ -32,7 +32,7 @@ class Step(BaseModel):
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     # Source-backed agents often add trusted session state between the model-facing function
-    # and the dependency API: rider ids, resolved addresses, selected fares, and similar values
+    # and the dependency API: internal identifiers, resolved lookups, priced results, and similar
     # must never be exposed as arguments the model supposedly chose.  A reference proof still
     # has to drive the real dependency so its database effects can be checked, so it may carry
     # that dependency payload separately.  Agent runs never read this field.
@@ -309,7 +309,7 @@ def validate_scenario(
         and str(scenario.fixture.get("origin") or "").lower() in {"generated", "mixed"}
         and not (scenario.setup_code or "").strip()
     ):
-        # A fixture claiming data it never creates is the whole "the OTP was never seeded" failure:
+        # A fixture claiming data it never creates is the whole class of scenario that names a value
         # the scenario reads as self-sufficient, the world has none of it, and the agent has nothing
         # to answer with. Caught here because it is provable from the document alone.
         problems.append(
