@@ -39,8 +39,8 @@ tests         one line: the condition this scenario passes on. It is shown to pe
 instruction   what this person is trying to achieve, written to them, plus everything
               they need to pursue it without inventing anything
 persona       who that person is: identity, communication style, languages/accent and characteristics
-setup_code    Python: def setup(world) — what this scenario changes first
-ready_code    Python: def ready(world) — is the world ready for this scenario
+setup_code    Python: def setup(world), what this scenario changes first
+ready_code    Python: def ready(world), whether the world is ready
 solution      what a correct agent would do: [{tool, arguments}]
 sub_goals     names from the shared catalogue that must hold
 fixture       readable facts used by this case, including origin: seed/generated/mixed
@@ -482,7 +482,7 @@ passes while the agent does nothing grades nothing while reporting a result.
 
 Gate 3 has a common trap. If your scenario is about something that must *not* happen, checking
 the world alone cannot show it: an untouched world looks exactly like one where the agent
-correctly refused. Check the calls instead — that the agent tried, and that the attempt was
+correctly refused. Check the calls instead: that the agent tried, and that the attempt was
 refused rather than succeeding.
 
 ## Writing setup_code
@@ -588,7 +588,7 @@ a new one where an existing one means the same thing. That sharing is what lets 
 the same sub-goal failing in seven of twelve scenarios is one sentence somebody can act on.
 
 If something genuinely needs checking and no entry covers it, add one with `add_sub_goal`, with
-its check in code. Prefer code over a judged check — you have the world afterwards and every
+its check in code. Prefer code over a judged check, because you have the world afterwards and every
 call with its arguments, and most things worth checking are visible in one of them.
 
 ## What makes a suite worth running
@@ -608,7 +608,7 @@ Spread across these. Ten happy paths tell you nothing you did not already know.
 
 ## If the contract is wrong
 
-You will sometimes find that the agent's contract does not match what the world does — a tool
+You will sometimes find that the agent's contract does not match what the world does: a tool
 that accepts a value it was not recorded as accepting, a rule that is not really a rule. Correct
 it with `amend_contract`, `add_rule`, `drop_rule` or `fix_tool` and say why. Every amendment is
 recorded on the contract.
