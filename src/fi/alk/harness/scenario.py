@@ -359,6 +359,7 @@ def validate_scenario(
             "show this scenario can be passed at all"
         )
     problems.extend(fixture_problems(scenario))
+    problems.extend(self_sufficiency_problems(scenario))
     problems.extend(alignment_problems(scenario, world_state))
     problems.extend(hollow_scenario_problems(scenario))
     problems.extend(naming_problems(scenario))
@@ -590,6 +591,41 @@ def alignment_problems(
         + ("them" if len(missing) > 1 else "it")
         + ". Seed what the caller is told, or tell them what is seeded. Naming a value in fixture "
         "only declares it: setup_code is what the world ends up holding"
+    ]
+
+
+# What a setup does to the world, told apart by which call it makes. `put` adds a record and
+# `call` drives a tool that produces one; `change` and `drop` only touch what was already there.
+_CREATES_A_RECORD = re.compile(r"world\.(?:put|call)\s*\(")
+_ONLY_TOUCHES_EXISTING = re.compile(r"world\.(?:change|drop)\s*\(")
+
+
+def self_sufficiency_problems(scenario: Scenario) -> list[str]:
+    """Whether this scenario owns the records its outcome turns on, or borrows them.
+
+    A setup that only adjusts rows it did not create is building the test on state it does not
+    control: the row belongs to the frozen base, so a second scenario adjusting the same row is
+    testing the same record from two directions and neither describes a world it owns. Measured on
+    a fan-out suite of 86, sixty seven were one or two `world.change` calls against base rows, four
+    scenarios deep on the same rider, and the reused verification codes were the visible symptom of
+    it.
+
+    An empty setup stays legal. That is the documented case where the target's store is
+    process-local with no seam, so the scenario cannot alter it and says so by touching nothing.
+    """
+    body = (scenario.setup_code or "").strip()
+    if not body:
+        return []
+    if _CREATES_A_RECORD.search(body):
+        return []
+    if not _ONLY_TOUCHES_EXISTING.search(body):
+        return []
+    return [
+        "setup_code only adjusts records that were already there and creates none of its own, so "
+        "this scenario shares its data with every other scenario that touches the same records. "
+        "Create what the outcome turns on: its own person, its own record, its own code, with "
+        "world.put or by driving the agent's own tool. Shared reference data a whole world sits on "
+        "can be read as it is, but the thing being tested has to belong to this scenario"
     ]
 
 

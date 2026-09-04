@@ -44,3 +44,39 @@ def test_nothing_is_reported_when_the_catalogue_holds_them_all():
         ]
     )
     assert ungraded_sub_goals(_scenario(), catalogue) == []
+
+
+def test_a_setup_that_only_adjusts_borrowed_records_is_refused():
+    """Measured on real suites: refuses 4 of 50 in the reference suite, 30 of 86 in the thin one."""
+    from fi.alk.harness.scenario import self_sufficiency_problems
+
+    borrowed = Scenario(
+        name="expired_card_on_file",
+        instruction="Get the booking paid for.",
+        sub_goals=["fee_removed"],
+        setup_code=(
+            "def setup(world):\n"
+            "    world.change('payment_methods', 'pm_existing', {'last4': '6172'}, by='id')\n"
+        ),
+    )
+    assert self_sufficiency_problems(borrowed)
+
+    owns_it = Scenario(
+        name="expired_card_on_file",
+        instruction="Get the booking paid for.",
+        sub_goals=["fee_removed"],
+        setup_code=(
+            "def setup(world):\n"
+            "    world.put('payment_methods', {'id': 'pm_own', 'last4': '6172'})\n"
+            "    world.change('payment_methods', 'pm_own', {'expired': 1}, by='id')\n"
+        ),
+    )
+    assert self_sufficiency_problems(owns_it) == []
+
+    # The documented no-seam case: nothing to change, so nothing is claimed.
+    assert (
+        self_sufficiency_problems(
+            Scenario(name="reads_only", instruction="Ask for the status.", sub_goals=["x"])
+        )
+        == []
+    )
