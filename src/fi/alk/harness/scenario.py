@@ -346,6 +346,7 @@ def validate_scenario(
             "show this scenario can be passed at all"
         )
     problems.extend(fixture_problems(scenario))
+    problems.extend(code_alignment_problems(scenario))
     return problems
 
 
@@ -446,6 +447,70 @@ def _six_digit_values(scenario: Scenario) -> list[str]:
         )
     )
     return found
+
+
+# Prose the writer attaches to a scenario, where a code is stated in words rather than under a key
+# a traversal would recognise. A contradiction here is the hardest kind to see by reading, because
+# each field is plausible on its own.
+_CODE_IN_PROSE = re.compile(
+    r"(?:otp|verification[_ ]?code|\bcode\b)[^\n]{0,80}?(?<!\d)(\d{6})(?!\d)",
+    re.IGNORECASE,
+)
+
+
+def _prose_codes(scenario: Scenario) -> list[str]:
+    """Codes stated in the scenario's own prose: withheld facts, hazards, invariants, notes."""
+    prose: list[str] = []
+    for field in ("tests", "branch"):
+        value = getattr(scenario, field, None)
+        if isinstance(value, str):
+            prose.append(value)
+        elif isinstance(value, (list, tuple)):
+            prose.extend(str(item) for item in value)
+    return [match.group(1) for line in prose for match in _CODE_IN_PROSE.finditer(line)]
+
+
+def _instruction_codes(scenario: Scenario) -> list[str]:
+    """Six-digit values the caller is told, which are the ones they will read out."""
+    return re.findall(r"(?<!\d)\d{6}(?!\d)", scenario.instruction or "")
+
+
+def code_alignment_problems(scenario: Scenario) -> list[str]:
+    """Whether the codes the caller is told and the codes the world holds are the same codes.
+
+    The failure this exists for: an instruction telling the caller one code, the setup seeding
+    another, and a third appearing somewhere else in the same scenario. The call then cannot
+    succeed however well the agent behaves, and the scenario reports a finding about the agent that
+    is really a finding about itself.
+
+    A scenario testing a rejected code legitimately names two, one wrong and one right, so the rule
+    is not "exactly one". It is that every code the world holds is a code the caller was told, and
+    that at least one code the caller was told is actually in the world.
+    """
+    told = set(_instruction_codes(scenario))
+    held = set(_six_digit_values(scenario)) | set(_prose_codes(scenario))
+    if not told and not held:
+        return []
+    problems: list[str] = []
+    orphaned = sorted(held - told)
+    if orphaned:
+        problems.append(
+            "verification code(s) "
+            + ", ".join(orphaned)
+            + " are in this scenario's data but the instruction never tells the caller them, so "
+            "they can never be read out. Seed the code the instruction names, or name the code it "
+            "seeds"
+        )
+    seeded = set(re.findall(r"(?<!\d)\d{6}(?!\d)", scenario.setup_code or ""))
+    if told and not (told & seeded):
+        problems.append(
+            "the instruction tells the caller code(s) "
+            + ", ".join(sorted(told))
+            + ", and setup_code puts none of them in the world, so there is no correct code to "
+            "verify against. Naming it in fixture only declares it: the fixture is a manifest, "
+            "setup_code is what the world ends up holding"
+        )
+    return problems
 
 
 def fixture_problems(scenario: Scenario) -> list[str]:
