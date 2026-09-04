@@ -122,6 +122,12 @@ _DEFAULT_CALL_TIMEOUT_SECONDS = 600.0
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
 _RUN_SECONDS_PAD_SECONDS = 60.0
+
+# What one spoken turn costs, generously: a measured 25-turn booking ran 315.8s, about 12.6s a
+# turn, so thirty leaves room for a slow model without letting a dead call idle for minutes.
+_SECONDS_PER_TURN = 30.0
+# Connecting, greeting and closing, which do not scale with the turn count.
+_CALL_BASE_SECONDS = 90.0
 # Headroom beyond `spec.execution.timeout.run_seconds` -- SimulationRunner.run() already wraps
 # `plugin.run(...)` in its OWN `asyncio.wait_for(..., timeout=spec.execution.timeout.run_seconds)`
 # (runner.py) and catches that TimeoutError into a graceful `SimulationReport(status=TIMED_OUT)`.
@@ -966,6 +972,18 @@ class CallRunnerImpl:
             if isinstance(raw_timeout, (int, float))
             else _DEFAULT_CALL_TIMEOUT_SECONDS
         )
+        # A scenario states how many turns it needs, so a six-turn call has no business holding a
+        # twelve-minute deadline. Nothing bounds a call by turns -- the only stop is the clock --
+        # so when the far side dies mid-conversation the run sits idle until the deadline and is
+        # then discarded as a timeout, losing the call and the wall-clock. Taking the smaller of
+        # the configured ceiling and what this scenario could plausibly need makes that failure
+        # prompt instead of expensive, and never shortens a call that is still talking.
+        turns = doc.get("max_turns")
+        if isinstance(turns, int) and turns > 0:
+            call_timeout_seconds = min(
+                call_timeout_seconds,
+                turns * _SECONDS_PER_TURN + _CALL_BASE_SECONDS,
+            )
         run_seconds = (
             call_timeout_seconds
             + CONNECT_TIMEOUT_SECONDS
