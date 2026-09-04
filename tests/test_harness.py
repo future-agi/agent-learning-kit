@@ -2729,12 +2729,15 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     said = accept_scenario(
         # The hazard is reworded so the vacuous sub-goal still grades it by name: this test is
         # about a check that passes with nothing done, not about an ungraded hazard.
-        _delta(sub_goals=["always"], hazard="the item is always out of stock here"),
+        # Two sub-goals and a two-step solution, so the single-check gate does not fire first:
+        # this test is about a check that passes with nothing done.
+        _delta(sub_goals=["always", "item-added"], hazard="the item is always out of stock here"),
         world_root=root,
         catalogue=catalogue,
         kept=[],
     )
-    assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
+    # Named per sub-goal when there is more than one, so match the claim rather than one phrasing.
+    assert said["is_error"] and "pass without the agent doing anything" in said["content"][0]["text"]
 
 
 def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pass(

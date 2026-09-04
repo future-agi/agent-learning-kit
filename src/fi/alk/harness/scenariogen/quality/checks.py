@@ -150,8 +150,9 @@ def validate_scenario(
     # same: the caller plays along either way. Nine of thirty one scenarios did this, reproducing
     # the documented anti-pattern almost verbatim, so it is refused rather than discouraged.
     leaks = re.search(
-        r"\bif (?:the )?(?:assistant|agent)\b[^.]{0,80}\b(?:says|refuses|tells|offers|confirms|"
-        r"asks|cannot|can't|declines)\b",
+        r"\b(?:if|when|once|should) (?:the )?(?:assistant|agent)\b[^.]{0,80}\b(?:says|said|"
+        r"refuses|refuse|tells|informs|offers|confirms|explains|states|mentions|asks|cannot|"
+        r"can't|declines|is unable|responds|replies)\b",
         scenario.instruction,
         re.I,
     )
@@ -217,6 +218,18 @@ def validate_scenario(
                 f"{scenario.hazard.strip()[:60]!r} turns on. An agent that ignored it would pass, "
                 "which means the bucket is filled rather than verified"
             )
+
+    # Seven scenarios about seven different conditions each carried one check, and it was the same
+    # check: that a transfer happened. An agent that escalated every caller passed all seven, so
+    # fifteen percent of the suite was one test with seven names. A scenario whose entire grade is
+    # a single check shared with its siblings has not been told apart from them, whatever its
+    # hazard says.
+    if len(scenario.sub_goals) < 2 and len(scenario.solution) <= 2:
+        problems.append(
+            "this is graded by one check and reaches it in one or two steps, so any scenario in "
+            "the same bucket grades identically. Add a check that only this case passes, or carry "
+            "it far enough that the wrong action becomes visible"
+        )
 
     if not scenario.failure_modes:
         problems.append(
