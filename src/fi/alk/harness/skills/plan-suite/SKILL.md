@@ -67,9 +67,7 @@ happened. A count without those behind it is a promise the writers cannot keep, 
 near-copies.
 
 **Who is calling is never one of them.** A different name, age, accent or city is the same test in a
-different costume. Measured on a suite of two hundred planned that way, the same case was written
-three times with a different caller each time, and the two hundred collapsed to thirty two distinct
-tests. Never plan a second scenario because the person could be somebody else.
+different costume. Never plan a second scenario because the person could be somebody else.
 
 **This is also how the plan scales.** Two hundred scenarios means two hundred distinct things going
 wrong, not a bigger number against the same handful. If the agent cannot name that many, say so and
@@ -80,10 +78,9 @@ For each slice, say what the agent should do, exactly one of **succeed**, **refu
 **escalate**; and, only where something is deliberately making it hard, one of **impersonation**,
 **injection**, **fraud**, **emergency**, **pressure**. These answer different questions and are not
 alternatives: an injection attempt expects a refusal and carries the injection overlay, so record
-both. An earlier vocabulary of happy, edge, adversarial and failing was discarded because those
-overlap. An injection is adversarial and also bound to fail, "edge" is an intensity rather than a
-kind, and outcome and cause were mixed into one label, so two planners labelled the same slice
-differently and the count stopped meaning anything.
+both. Do not label a slice happy, edge or adversarial: those overlap, since an injection is
+adversarial and also bound to fail, and "edge" describes intensity rather than kind. Outcome and cause
+are separate questions, so answer them separately.
 
 The ordinary path is worth one slice, and only one. Everything else is a way it can go wrong. A plan
 whose slices all expect success has tested the demonstration, not the agent.

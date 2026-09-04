@@ -296,8 +296,9 @@ already shipped, and setup leaves every order pending, so the agent refuses corr
 scenario fails it for being right.
 
 The rule: read your own instruction back, list every condition it assumes, and make sure `setup_code`
-establishes each one and `ready_code` proves it. An empty `setup_code` is only honest when the base world
-already holds everything the instruction presumes.
+establishes each one and `ready_code` proves it. If the instruction hands the person a value to say
+back, a code or a reference or an account number, `setup_code` is what puts that exact value where the
+agent will look for it.
 
 ## Two scenarios are different only if the right answer differs
 
@@ -477,13 +478,19 @@ refused rather than succeeding.
 
 ## Writing setup_code
 
-Python defining `setup(world)`. Leave it empty when the base world is already right.
+Python defining `setup(world)`.
 
-**Write every setup against the base world, never against a scenario you wrote before it.** At run
-time each scenario restores its own copy of the frozen base and applies only its own setup, so
-nothing another scenario did is there. This is easy to get wrong while writing several in a row:
-you have just set an order to "delivered" for one scenario, and the next one reads as though that
-still holds. It does not. If a scenario needs a record in a particular state, its own setup puts
+**Create the records this scenario turns on.** Every record whose state decides the outcome is made
+here, with values belonging to this scenario: its own person, its own order, its own booking, its own
+code. Shared reference data the whole world sits on, a product catalogue or a list of markets, can be
+read as it is and used as a model for what a realistic new record looks like. What you must not do is
+build the test on rows that were already there: another scenario may change them, two scenarios then
+quietly test the same row, and neither one is describing a world it controls.
+
+**Write every setup against the base world, never against another scenario.** At run time each
+scenario restores its own copy of the frozen base and applies only its own setup, so nothing another
+scenario did is there. Writers run at the same time and in any order, so there is no "before" to
+depend on: if a scenario needs an order delivered, its own setup delivers it. If a scenario needs a record in a particular state, its own setup puts
 it there, whatever any earlier scenario happened to do. The same goes for the calls you make while
 rehearsing with `try_calls`: those run on a throwaway copy and change nothing anybody else sees.
 
