@@ -98,3 +98,46 @@ def test_a_writer_that_dies_after_proving_still_leaves_its_work(tmp_path):
     assert [x.name for x in back] == ["cancel_after_fee_quoted"]
     assert back[0].instruction.startswith("Cancel it")
     assert journalled(tmp_path / "nothing-here") == []
+
+
+def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tmp_path):
+    """Absence of a check file means judged, which is wrong when the catalogue settles it in code."""
+    import json
+
+    import pytest
+
+    from fi.alk.harness.scenario_source import ScenarioDocumentInvalid, load_scenarios
+
+    bundle = tmp_path
+    (bundle / "sub_goals.json").write_text(
+        json.dumps(
+            {
+                "sub_goals": [
+                    {"name": "fee_removed", "what": "the fee is gone",
+                     "check": "def check(world, calls):\n    return None\n"},
+                    {"name": "explained_kindly", "what": "tone", "judged": "read the transcript"},
+                ]
+            }
+        )
+    )
+    folder = bundle / "scenarios" / "refund_after_shipping"
+    folder.mkdir(parents=True)
+    (folder / "scenario.json").write_text(
+        json.dumps({"scenario_key": "refund", "scenario_id": "",
+                    "sub_goals": ["fee_removed", "explained_kindly"],
+                    "name": "refund_after_shipping", "instruction": "Get the fee taken off."})
+    )
+    (folder / "setup.py").write_text("def setup(world):\n    return None\n")
+    (folder / "ready.py").write_text("def ready(world):\n    return None\n")
+
+    with pytest.raises(ScenarioDocumentInvalid) as refused:
+        load_scenarios(bundle)
+    assert "fee_removed" in str(refused.value)
+
+    # With the check materialised, the judged one beside it is still judged.
+    checks = folder / "checks"
+    checks.mkdir()
+    (checks / "fee_removed.py").write_text("def check(world, calls):\n    return None\n")
+    loaded = load_scenarios(bundle)
+    assert [one.scenario_key for one in loaded] == ["refund"]
+    assert loaded[0].presented["situation"] == "Get the fee taken off."
