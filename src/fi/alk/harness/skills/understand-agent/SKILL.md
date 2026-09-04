@@ -51,15 +51,36 @@ Find, in roughly this order:
 
 5. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
    browser it drives. This decides how it is later run, so getting it wrong reroutes every test.
-   Many agents can run more than one way and the code alone will not say which is being tested —
-   **ask** rather than guessing.
+   **Decide it from the source and always record it.** A run is unattended, so there is nobody to
+   ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
+   whole run tests nothing. Read it off what the agent depends on:
 
-6. **What it depends on.** Everything the agent reaches for that has to exist before it can
+   - **voice** if it joins a room or answers a line: a LiveKit or telephony SDK, a room or dispatch
+     name, an STT or TTS provider, an audio session it enters on connect.
+   - **chat** if a person reaches it as text: an HTTP endpoint taking messages, a completions-shaped
+     API, a socket carrying turns.
+   - **browser** if it drives a page rather than being talked to.
+
+   When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
+   in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
+
+6. **Which side places the call.** Voice only, and read from the agent's own instructions rather
+   than inferred from its tools. An agent told it **placed** this call ("you placed this call",
+   "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent
+   people dial into ("callers dial in", "thanks for calling") is `inbound`. Record it as
+   `call_direction`, and leave it out for chat, which a person always starts.
+
+   This is not who speaks first: an outbound agent usually still greets. It decides how the
+   simulated person is briefed, and briefing someone who did not dial as though they had an errand
+   to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
+   can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
+
+7. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
    what it provides, and which tools cannot work without it. The environment stage builds these,
    so a dependency you do not record is a tool that will have nothing to answer it.
 
-7. **Whether its tools have code, and how to reach it.** This is the difference between testing
+8. **Whether its tools have code, and how to reach it.** This is the difference between testing
    the agent and testing somebody's reimplementation of it, so it is worth real effort.
 
    For each tool, find the function that actually runs and record where it lives and how it is
@@ -79,12 +100,12 @@ Find, in roughly this order:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
    never writes a replacement implementation.
 
-8. **How its code says no.** Code written for production often reports failure by returning a
+9. **How its code says no.** Code written for production often reports failure by returning a
    value rather than raising, so a returned string can be a refusal. Read one or two of its tools
    and record the convention. Without it, every refusal is recorded as a success, which hides the
    behaviour most worth testing.
 
-9. **What it takes to run.** Its install command from its own lockfile or requirements, the
+10. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
    Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
@@ -92,12 +113,12 @@ Find, in roughly this order:
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
    startable but the simulator cannot honestly claim to have exercised it.
 
-10. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
+11. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
     so if it is hardcoded: that is the difference between substituting a store cleanly and having
     to change the agent's code, which is a decision for the person, not for you.
 
-11. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
+12. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
     every field of every kind of record, and any values a field is constrained to. Record the
     **contents** in proportion — a small dataset goes in whole; for a large one a representative
     sample is what belongs here, chosen to include the awkward rows an agent has to cope with: a
@@ -107,7 +128,7 @@ Find, in roughly this order:
     fidelity rather than gaining it. What is needed is enough for a world that exercises the same
     flows and can refuse for the same reasons.
 
-12. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
+13. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
     not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
     not write a situation with a character, a sequence of events and an outcome. Those are
     scenarios and they are written later, from these sentences.

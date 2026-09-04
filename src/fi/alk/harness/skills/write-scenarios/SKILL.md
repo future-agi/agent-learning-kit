@@ -232,6 +232,42 @@ required profile: `name`, `personality`, `communication_style`, `languages`, `ac
 least one `keywords` entry. The harness rejects an incomplete persona rather than quietly generating a
 generic caller.
 
+## When the agent placed the call
+
+Read `call_direction` on the contract. It is `inbound` for an agent people dial into, and that is
+what everything above assumes: the person rang with something they want, so the instruction gives
+them an objective to pursue.
+
+`outbound` inverts that, and it is not the same scenario with a reworded greeting. **This person did
+not dial anyone.** They have no errand to raise and no reason to explain themselves, so an
+instruction that hands them a request is unwritable by them: they would have to volunteer it before
+the agent has said why it called, which is precisely what a real person does not do.
+
+Write their situation and what they would agree to if asked, never an opening request:
+
+```
+BAD    Book an Uber Comfort ride from your home to your work office.
+       (they never called Uber; nothing prompts them to ask for this)
+
+GOOD   You are at home getting ready for work. If someone from Uber rings about the
+       ride you have on file, you would take it, leaving from home and going to the
+       office. You will not raise any of that yourself.
+```
+
+Then set `caller_awareness`, which is the thing an outbound suite really varies. Each value is a
+different test of the agent, so cover more than one across a use case:
+
+- `expecting` — they were told to expect the call and roughly what it concerns. Tests that the
+  agent can get to the task.
+- `partial` — they half remember arranging something and not the details. Tests whether the agent
+  re-establishes the specifics instead of assuming them.
+- `unaware` — they have no idea why anyone is ringing. Tests whether the agent identifies itself
+  and gives a reason before asking for anything. This is the default when you leave it out, and the
+  hardest one to pass.
+
+An outbound scenario still needs everything else: the facts they hold, the seeded data behind them,
+and a terminal outcome. Only the shape of the opening changes.
+
 ## Writing setup, and the mistake to avoid
 
 **Whatever the instruction presumes about the world, setup has to make true.** This is where
