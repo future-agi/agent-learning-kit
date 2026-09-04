@@ -462,12 +462,30 @@ def scenario_tools(
                     "somewhere, a caller leaving a hotel or standing on a street is not in a "
                     "quiet room. Left out, it is decided from the scenario name.",
                 },
+                "call_direction": {
+                    "type": "string",
+                    "enum": ["inbound", "outbound"],
+                    "description": "Who placed the call. Match the contract unless this scenario "
+                    "deliberately tests the other one. Outbound changes what the instruction has "
+                    "to be: a person who did not dial has no objective to pursue.",
+                },
+                "caller_awareness": {
+                    "type": "string",
+                    "enum": ["expecting", "partial", "unaware"],
+                    "description": "Outbound only, and the thing the scenario is really varying: "
+                    "whether this person was told to expect the call, half remembers arranging "
+                    "something, or has no idea why anyone is ringing. Left out it is unaware, "
+                    "which the agent has to work hardest for.",
+                },
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
                     "State the objective first, in their own terms, so they pursue it rather "
                     "than narrate a situation: 'Get the cancellation fee refunded', not 'You "
-                    "were charged a fee'. Then give them everything they need to hold the "
+                    "were charged a fee'. On an OUTBOUND scenario invert that: they did not "
+                    "call anyone and have no objective, so give them their situation and what "
+                    "they would agree to if asked, never an opening request. Then give them "
+                    "everything they need to hold the "
                     "conversation without inventing anything: the facts they know, the values "
                     "they can be asked for, and what they will only say once asked. Every value "
                     "real and read out of the world.\n"

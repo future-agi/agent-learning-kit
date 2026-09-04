@@ -228,7 +228,10 @@ class Scenario(BaseModel):
     # Whether the agent placed this call or answered it. Voice only: a chat is always started by
     # the person, so it stays inbound. An outbound caller has no opening request to make, which is
     # a different test of the agent rather than the same one with a reworded greeting.
-    call_direction: str = "inbound"
+    # Empty means defer to the run and then to the contract, which is where the agent's own
+    # direction was identified. Defaulting it to "inbound" here would be written into the saved
+    # document and silently outrank both of them.
+    call_direction: str = ""
     # For an outbound call, how much this person already knows about why they are being rung:
     # "expecting", "partial" or "unaware". Unset means unaware, the case the agent must work
     # hardest for.
