@@ -11,6 +11,7 @@ of these harder" is the next thing said rather than a regeneration from nothing.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import random
@@ -378,13 +379,29 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
 # Initial letters dealt out so parallel writers cannot invent the same people. Three per writer, which
 # is enough choice to suit a scenario and keeps seven writers disjoint before the letters wrap; beyond
 # that two writers share initials but still choose different names. Numbers are partitioned by a
-# two-digit prefix instead, which stays unique for a hundred writers, because a repeated verification
-# code is a real collision where a repeated initial is not.
+# three-digit prefix instead: a hundred slots collided twice on a run with twenty slices, which is
+# what the birthday arithmetic predicts, and a thousand makes it rare. A repeated verification code is
+# a real collision; a repeated initial is not.
 _NAME_LETTERS = "ABCDEFGHIJKLMNOPRSTVWY"
 _LETTER_BLOCK = "abc"
 
 
-def callers_for(index: int, wanted: int) -> str:
+def _slot(of: str, index: int) -> int:
+    """A stable number for one slice, so its share of the value space does not move between passes.
+
+    Using the position in the current batch looked right and was not: a second `generate_suite` pass
+    numbers its slices from zero again, so its first writer is handed the same letters and the same
+    leading digits as the first writer of the pass before it, and their codes collide. Measured on a
+    377-scenario run: two verification codes shared, both between passes. Derived from the slice's own
+    name instead, which does not change when the batch does, and deterministically so two runs of the
+    same plan partition the same way.
+    """
+    if not of:
+        return index
+    return int(hashlib.sha256(of.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
     Instruction alone cannot do this. Each writer is blind to the others, so each independently
@@ -414,15 +431,20 @@ def callers_for(index: int, wanted: int) -> str:
     # verification code shared between them. Partitioning the space of values costs nothing and makes
     # a collision impossible: each writer owns some initial letters and one leading digit, so no
     # shared list of names or codes has to exist for the values to stay distinct.
+    slot = _slot(slice_name, index)
+    # More letters where the slice is larger: a writer inventing twelve people from three initials
+    # reuses a name, which is most of why distinctness measured 73 percent rather than the 90 the
+    # suite rule wants.
+    block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
     letters = "".join(
-        _NAME_LETTERS[(index * len(_LETTER_BLOCK) + step) % len(_NAME_LETTERS)]
-        for step in range(len(_LETTER_BLOCK))
+        _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)] for step in range(block)
     )
     said += (
         f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
         "every number you invent that the agent will look up, a code or a reference or an account "
-        f"number, must begin with {index % 100:02d}. Other writers own the other letters and "
-        "prefixes, so this is what keeps two scenarios from sharing a name or a code."
+        f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
+        "prefixes, so this is what keeps two scenarios from sharing a name or a code. No two people "
+        "you invent may share a given name either, however many you write."
     )
     if accents:
         # Spread several offered accents across this writer's callers rather than naming just one,
