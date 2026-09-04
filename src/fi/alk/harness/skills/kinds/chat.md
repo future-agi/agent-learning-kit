@@ -25,7 +25,7 @@ outbound guidance in the write skill does not apply here.
 - **Ambiguity a speaker would have resolved by tone.** "great, that's just what I needed" from
   somebody who has been complaining for four turns.
 
-## The dials this world has
+## What this modality lets you vary
 
 Register: how somebody types is who they are. Someone terse sends four words and no punctuation.
 Someone anxious sends three messages in a row before the agent has answered. Someone formal writes

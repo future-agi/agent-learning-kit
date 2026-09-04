@@ -38,6 +38,7 @@ from .tools import schema
 logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
+PLAN_SKILL = "plan-suite"
 
 # The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
 # only report gaps and never submit or save a scenario itself.
@@ -79,6 +80,10 @@ def open_stage(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
+            # Planning and writing are two stages. This session does the first, so it gets both;
+            # a slice writer gets the writing skill alone, because the plan is already made and
+            # widening a slice is the one thing it must not do.
+            + (f"\n\n{load_skill(PLAN_SKILL)}" if worth_delegating(wanted) else "")
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.

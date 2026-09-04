@@ -26,7 +26,7 @@ Which way the call goes, and how much the person already knows, are covered in t
 
 A suite of voice scenarios that could all have been typed has not tested the modality.
 
-## The dials this world has
+## What this modality lets you vary
 
 `background_noise` is per scenario, not a suite setting. Choose it from the situation rather than
 sprinkling it: a caller in a vehicle, a caller in an office, a caller in a crowd. A quiet scenario is

@@ -369,101 +369,15 @@ GOOD   solution   [find_rider(phone=...), get_account(rider_id=...),
        (the transfer now has to be reached by discovering the reason for it)
 ```
 
-## Plan the whole suite, then hand it to the writers
+## Your slice came from a plan
 
-Writing scenarios one at a time produces a suite that clumps: five variations on the easy path and
-nothing on the parts that break. So partition the work first, out loud, before the first
-`submit_scenario`.
+Somebody has already read the agent, crossed what it acts on with what can be wanted of it, and
+decided which cells are worth covering and how many scenarios each earns. Your brief is one of those
+cells. Write inside it.
 
-### Find the cells first
-
-Before counting anything, write down the two lists the plan is built from.
-
-**The things this agent acts on**, read from its own tools rather than invented: whatever its tool
-names take and return, reduced to singular nouns. A booking agent has rides, addresses, payment
-methods, accounts. A claims agent has policies, claims, documents, payouts. Four to ten is usual.
-
-**What a person can want done to them.** This list is the same for every agent, which is the point.
-It is grouped by what the operation does to the world, and that grouping is why it is complete: an
-intent either reads, or writes, or manages the process itself, and there is no fourth thing.
-
-```
-reads, nothing changes      retrieve   compare   explain   diagnose
-writes, something changes   create     update    cancel    execute   configure
-manages the process         authenticate   navigate   handoff
-```
-
-Cross the two. Most cells are empty, and saying so is useful: an agent with no `compare` over payment
-methods either cannot do it or has a gap worth reporting. The cells that are real are your slices, and
-they are named for the pair, `cancel a ride`, `authenticate a payment method`, never for a person.
-
-This is what stops a suite padding. Twelve operations against six objects is seventy two candidate
-cells, so a request for a hundred scenarios has somewhere real to come from, and any two scenarios in
-different cells are genuinely different tests. Two scenarios in the same cell with different callers
-are one test written twice.
-
-**Everything else about a scenario is diversity, not count.** Who the person is, what state they are
-in, how they interact, what the conditions are, whether something adversarial is going on: these make
-a cell's scenario realistic and varied, and they are worth choosing deliberately. What they do not do
-is create another test. A cell written once with a calm caller and again with an anxious one is one
-test. Reach for the next cell instead, and if the cells are genuinely exhausted, say the honest number
-rather than turning one test into five.
-
-Say how many scenarios each cell gets, **in proportion to how much can genuinely go wrong in
-it**. A cell with rules to enforce, information to gather, or state to change earns a large
-share; one where little can fail earns one scenario or none.
-
-**A slice asking for more than one scenario has to name what goes wrong in each.** Put them in
-`why`, one per scenario: a fact that is missing, two that contradict, a request the rules forbid, a
-record that is not what the person believes, a tool asked for before the thing it requires has
-happened. A count without those behind it is a promise the writers cannot keep, and it comes back as
-near-copies.
-
-**Who is calling is never one of them.** A different name, age, accent or city is the same test in a
-different costume. Measured on a suite of two hundred planned that way, the same case was written
-three times with a different caller each time, and the two hundred collapsed to thirty two distinct
-tests. Never plan a second scenario because the person could be somebody else.
-
-**This is also how the plan scales.** Two hundred scenarios means two hundred distinct things going
-wrong, not a bigger number against the same handful. If the agent cannot name that many, say so and
-plan fewer: a smaller suite that is entirely real is worth more than a padded one, because padding
-hides the gap instead of showing it.
-
-For each slice, say what the agent should do, exactly one of **succeed**, **refuse**, **ask**,
-**escalate**; and, only where something is deliberately making it hard, one of **impersonation**,
-**injection**, **fraud**, **emergency**, **pressure**. These answer different questions and are not
-alternatives: an injection attempt expects a refusal and carries the injection overlay, so record
-both. An earlier vocabulary of happy, edge, adversarial and failing was discarded because those
-overlap. An injection is adversarial and also bound to fail, "edge" is an intensity rather than a
-kind, and outcome and cause were mixed into one label, so two planners labelled the same slice
-differently and the count stopped meaning anything.
-
-The ordinary path is worth one slice, and only one. Everything else is a way it can go wrong. A plan
-whose slices all expect success has tested the demonstration, not the agent.
-
-**Then call `generate_suite`, and pass your plan to it as `slices`.** It runs one writer per slice,
-several at the same time, reviews what comes back and fills what was missed. That is the only way a
-suite of twenty or two hundred finishes: writing them one at a time runs out of turns long before the
-number is reached.
-
-The split is the part only you can do, because you have just read the world and know which use cases
-have something in them. Each slice names its use case, the angle it should take, how many scenarios
-it is worth, and why. Left to itself the work is divided evenly, which is how a use case with one
-real branch pads to three and one with six gets three.
-
-Expect slices to be uneven, and prefer more small slices to a few large ones: each writer stays
-inside its turn budget, and one that fails costs its own slice rather than a third of the suite. Two
-signs the sizing is wrong: every slice holds one scenario, which means you listed scenarios instead
-of grouping them; or every slice holds the same number, which means you padded to reach a target.
-
-Use `submit_scenario` only for what it is good at: one scenario somebody asked for by name, a
-replacement for one that came back wrong, or filling a named gap in a suite that already exists.
-**Anything described as a number of scenarios is a suite, and goes through `generate_suite`.**
-
-When you are writing a single scenario that way, submit it in the same response as the inspection,
-then prove and save one at a time: the UI must show progress, and already-proved work must survive a
-stopped or timed-out turn. That is a rule about one-at-a-time writing, not a reason to write a suite
-one at a time.
+Two things follow. Do not widen the cell to take in something interesting you noticed on the way: say
+so at the end instead, and let the plan decide. And do not write a second scenario because the caller
+could be somebody else, because a cell written twice with different people is one test written twice.
 
 ## Fixture quality is part of correctness
 
