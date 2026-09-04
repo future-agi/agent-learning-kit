@@ -350,7 +350,7 @@ GOOD   solution   [find_rider(phone=...), get_account(rider_id=...),
        (the transfer now has to be reached by discovering the reason for it)
 ```
 
-## Plan the whole suite, then write incrementally
+## Plan the whole suite, then hand it to the writers
 
 Writing scenarios one at a time produces a suite that clumps: five variations on the easy path and
 nothing on the parts that break. So partition the work first, out loud, before the first
@@ -365,23 +365,28 @@ world.
 
 Keep that plan concise and continue immediately unless the person explicitly asked to review it.
 
-**Pass your plan to it.** The tool takes the split as an argument, and you have just read the
-world and know which use cases have
-something in them; it is the part of this only you can do. Each slice names its use case,
-the angle it should take, how many scenarios it is worth, and why. Left to itself the work is
-divided evenly, which is how a use case with one real branch pads to three and one with six gets
-three.
+**Then call `generate_suite`, and pass your plan to it as `slices`.** It runs one writer per slice,
+several at the same time, reviews what comes back and fills what was missed. That is the only way a
+suite of twenty or two hundred finishes: writing them one at a time runs out of turns long before
+the number is reached.
+
+The split is the part only you can do, because you have just read the world and know which use cases
+have something in them. Each slice names its use case, the angle it should take, how many scenarios
+it is worth, and why. Left to itself the work is divided evenly, which is how a use case with one
+real branch pads to three and one with six gets three.
 
 A large request comes back a batch at a time rather than all at once, with the rest offered. When
 that happens, show what came back and ask whether to carry on, change direction first, or stop.
 Do not silently loop until the number is reached.
 
-Use `submit_scenario` for what it is good at: one scenario somebody asked for by name, a
-replacement for one that came back wrong, or filling a specific gap in a suite that already
-exists. Anything described as a number of scenarios is a suite.
-After inspecting the world, submit the first scenario in the same response. Then prove and save
-one scenario at a time. Never silently compose the whole suite before the next tool call: the UI
-must show progress, and already-proved work must survive a stopped or timed-out model turn.
+Use `submit_scenario` only for what it is good at: one scenario somebody asked for by name, a
+replacement for one that came back wrong, or filling a named gap in a suite that already exists.
+**Anything described as a number of scenarios is a suite, and goes through `generate_suite`.**
+
+When you are writing a single scenario that way, submit it in the same response as the inspection,
+then prove and save one at a time: the UI must show progress, and already-proved work must survive a
+stopped or timed-out turn. That is a rule about one-at-a-time writing, not a reason to write a suite
+one at a time.
 
 ## Fixture quality is part of correctness
 
