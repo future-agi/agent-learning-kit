@@ -145,6 +145,16 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
     # and leave nobody able to say which one ran.
     body.pop("setup_code", None)
     body.pop("ready_code", None)
+    # Which of these are graded by a model rather than by code, and therefore have no file below.
+    # Without it, absence of a check file means both "judged" and "we failed to write it", and the
+    # reader has to guess: it guessed judged, so a scenario whose check never landed passed.
+    # A name this catalogue cannot resolve at all is deliberately left out, so the reader refuses
+    # it instead of grading nothing.
+    body["judged_sub_goals"] = [
+        name
+        for name in scenario.sub_goals
+        if (found := catalogue.named(name)) is not None and not found.deterministic()
+    ]
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )

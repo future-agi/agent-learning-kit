@@ -456,6 +456,9 @@ def writing_tools(
             one for one in catalogue.sub_goals if one.name != sub_goal.name
         ]
         catalogue.sub_goals.append(sub_goal)
+        # Saving rewrites the whole file, and every writer holds its own copy read when its tools
+        # were built, so writing this one's list alone drops what the others added since.
+        catalogue.sub_goals = catalogue.merged(load_catalogue(destination)).sub_goals
         save_catalogue(catalogue, destination)
         return _ok(
             f"{sub_goal.name} added"

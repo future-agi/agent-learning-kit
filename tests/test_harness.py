@@ -4883,6 +4883,105 @@ def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
     assert again.solution == scenario.solution
 
 
+def test_a_check_reaches_the_folder_even_when_the_callers_catalogue_is_stale(tmp_path):
+    """Writers add the discriminating sub-goals as they go, so the copy a save was started with
+    does not have them. Skipping those left twenty five of forty nine scenarios reaching the
+    runner with nothing grading what they were written to catch."""
+    from fi.alk.harness.scenariogen.model.catalogue import (
+        Catalogue,
+        SubGoal,
+        save_catalogue,
+    )
+    from fi.alk.harness.scenariogen.store.folder import folder_for
+    from fi.alk.harness.scenariogen.store.suite import write_scenarios
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    added = SubGoal(
+        name="otp_code_sent",
+        what="an OTP was sent",
+        check="def check(world, calls):\n    del world, calls\n    return None\n",
+    )
+    save_catalogue(catalogue.merged(Catalogue(sub_goals=[added])), root)
+
+    scenario = Scenario.model_validate({**_delta(), "sub_goals": ["item-added", "otp_code_sent"]})
+    # The catalogue this save was handed predates the sub-goal, exactly as a stage's own copy does.
+    write_scenarios([scenario], root, catalogue)
+
+    checks = folder_for(root, scenario.name) / "checks"
+    assert (checks / "otp_code_sent.py").is_file()
+
+
+def test_the_folder_says_which_of_its_sub_goals_are_judged(tmp_path):
+    """Absence of a check file meant both 'judged' and 'we lost it', so the reader had to guess."""
+    import json as _json
+
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    graded = catalogue.merged(
+        Catalogue(
+            sub_goals=[
+                SubGoal(name="tone_was_kind", what="the refusal was explained", judged="a model has to read it"),
+            ]
+        )
+    )
+    scenario = Scenario.model_validate(
+        {**_delta(), "sub_goals": ["item-added", "tone_was_kind"]}
+    )
+    write_folder(scenario, graded, root)
+
+    body = _json.loads((folder_for(root, scenario.name) / "scenario.json").read_text())
+    assert body["judged_sub_goals"] == ["tone_was_kind"]
+
+
+def test_a_sub_goal_the_catalogue_cannot_resolve_is_not_called_judged(tmp_path):
+    """It is not judged, it is unresolvable, and saying so is what lets the reader refuse it."""
+    import json as _json
+
+    from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate({**_delta(), "sub_goals": ["item-added", "never_defined"]})
+    write_folder(scenario, catalogue, root)
+
+    body = _json.loads((folder_for(root, scenario.name) / "scenario.json").read_text())
+    assert body["judged_sub_goals"] == []
+
+
+def test_adding_a_sub_goal_keeps_what_another_writer_added(tmp_path):
+    """Saving rewrites the whole file from one writer's copy, so concurrent writers used to drop
+    each other's entries and the folder write then had nothing to resolve the name against."""
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal, load_catalogue
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    sibling = Catalogue(
+        sub_goals=[
+            SubGoal(
+                name="otp_code_sent",
+                what="an OTP was sent",
+                check="def check(world, calls):\n    del world, calls\n    return None\n",
+            )
+        ]
+    )
+    from fi.alk.harness.scenariogen.model.catalogue import save_catalogue
+
+    save_catalogue(catalogue.merged(sibling), root)
+
+    mine = SubGoal(
+        name="fare_quoted",
+        what="a fare was quoted",
+        check="def check(world, calls):\n    del world, calls\n    return None\n",
+    )
+    # What add_sub_goal does: append to this session's copy, fold the file back in, save.
+    catalogue.sub_goals.append(mine)
+    catalogue.sub_goals = catalogue.merged(load_catalogue(root)).sub_goals
+    save_catalogue(catalogue, root)
+
+    names = load_catalogue(root).names()
+    assert {"otp_code_sent", "fare_quoted"} <= names
+
+
 def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):
     """The same file, the same answer, whether the harness runs it or a person does. If those
     two could disagree, neither could be trusted."""

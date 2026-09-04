@@ -864,6 +864,69 @@ def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_sched
 # =================================================================================================
 
 
+def test_a_missing_check_is_refused_when_the_document_says_it_is_not_judged(tmp_path: Path) -> None:
+    """The reader used to take any missing check file for a judged sub-goal, and the placeholder a
+    judged sub-goal gets reports held, so a check lost on its way to the folder read as a pass."""
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "otp_before_charge",
+        raw_body={
+            "name": "otp_before_charge",
+            "scenario_key": "s1",
+            "scenario_id": "id1",
+            "sub_goals": ["otp_code_sent", "tone_was_kind"],
+            "judged_sub_goals": ["tone_was_kind"],
+        },
+        setup_code="def setup(world):\n    return None\n",
+        ready_code="def ready(world):\n    return None\n",
+    )
+
+    with pytest.raises(ss.ScenarioDocumentInvalid) as raised:
+        ss.load_scenarios(tmp_path)
+    assert "otp_code_sent" in str(raised.value)
+
+
+def test_a_judged_sub_goal_the_document_names_still_loads_without_a_file(tmp_path: Path) -> None:
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "explains_the_refusal",
+        raw_body={
+            "name": "explains_the_refusal",
+            "scenario_key": "s1",
+            "scenario_id": "id1",
+            "sub_goals": ["tone_was_kind"],
+            "judged_sub_goals": ["tone_was_kind"],
+        },
+        setup_code="def setup(world):\n    return None\n",
+        ready_code="def ready(world):\n    return None\n",
+    )
+
+    scenarios = ss.load_scenarios(tmp_path)
+    assert [goal.judged != "" for goal in scenarios[0].sub_goals] == [True]
+
+
+def test_a_hand_written_folder_making_no_claim_still_reads_a_missing_check_as_judged(
+    tmp_path: Path,
+) -> None:
+    """A suite edited by hand carries no `judged_sub_goals`, so it asserts nothing about which
+    names are judged and the older reading is the only sound one."""
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "by_hand",
+        scenario_key="s1",
+        scenario_id="id1",
+        sub_goals=["tone_was_kind"],
+        setup_code="def setup(world):\n    return None\n",
+        ready_code="def ready(world):\n    return None\n",
+    )
+
+    scenarios = ss.load_scenarios(tmp_path)
+    assert [goal.judged != "" for goal in scenarios[0].sub_goals] == [True]
+
+
 def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Path) -> None:
     from fi.alk.harness.scenariogen.store import folder as fmod
     from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
@@ -1424,6 +1487,10 @@ def test_provision_payload_carries_the_contract_direction():
 
     class _One:
         scenario_key = "s1"
+        name = ""
+        situation = ""
+        outcome = ""
+        persona: dict = {}
 
     outbound = ss._provision_payload("run", [_One()], "prompt", "voice", "outbound")
     assert outbound["direction"] == "outbound"

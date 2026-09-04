@@ -77,6 +77,22 @@ class Catalogue(BaseModel):
     def names(self) -> set[str]:
         return {one.name for one in self.sub_goals}
 
+    def merged(self, other: "Catalogue") -> "Catalogue":
+        """This catalogue plus anything only `other` holds, this one winning on a shared name.
+
+        Writers run at the same time and each reads the file once, when its tools are built, so
+        every copy goes stale the moment a sibling adds a sub-goal. Whatever writes has to fold the
+        file back in first, or it saves its own view over everybody else's.
+        """
+        mine = self.names()
+        return Catalogue(
+            sub_goals=[
+                *self.sub_goals,
+                *(one for one in other.sub_goals if one.name not in mine),
+            ],
+            suite_evals=self.suite_evals,
+        )
+
     def suite_eval(self, name: str) -> SuiteEval | None:
         return next((one for one in self.suite_evals if one.name == name), None)
 

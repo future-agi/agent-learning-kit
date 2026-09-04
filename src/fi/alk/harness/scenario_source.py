@@ -267,6 +267,13 @@ def _load_one(folder: Path) -> _CompiledScenario:
     setup = _compile_entry(setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup")
     ready = _compile_entry(ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready")
 
+    # Which names the document itself says are judged. `write_folder` records this; a suite
+    # written by hand carries no such claim, and for those absence of a file still means judged.
+    declared_judged = body.get("judged_sub_goals")
+    claims_judged = isinstance(declared_judged, list) and all(
+        isinstance(one, str) for one in declared_judged
+    )
+
     sub_goals: list[_CompiledSubGoal] = []
     for name in sub_goal_names:
         check_path = folder / _CHECKS_DIRNAME / f"{name}.py"
@@ -278,6 +285,15 @@ def _load_one(folder: Path) -> _CompiledScenario:
                                     # vacuous pass -- absence of the file is what means "judged".
             )
             judged = ""
+        elif claims_judged and name not in declared_judged:
+            # The document names its judged sub-goals and this is not one of them, so the check was
+            # written and then lost on its way to the folder. Refused rather than read as judged:
+            # `_judged_placeholder_check` reports held, so grading this scenario on a check that
+            # never arrived would report a pass for behaviour nothing looked at.
+            raise ScenarioDocumentInvalid(
+                f"{folder.name}: sub_goals names {name!r}, which is not judged, but "
+                f"{_CHECKS_DIRNAME}/{name}.py is missing -- nothing would grade it"
+            )
         else:
             # No `checks/<name>.py` -- per `write_folder`'s own `deterministic()` filter, this
             # name is a JUDGED sub-goal.

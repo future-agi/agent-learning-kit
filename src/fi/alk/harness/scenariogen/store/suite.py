@@ -26,8 +26,17 @@ from ..model.scenario import Scenario
 def write_scenarios(
     scenarios: list[Scenario], destination: Path, catalogue: Catalogue | None = None
 ) -> Path:
-    """Write every scenario out as its own folder, and regenerate the index over them."""
-    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
+    """Write every scenario out as its own folder, and regenerate the index over them.
+
+    The file on disk is folded into whatever the caller holds, because a check is only written
+    for a sub-goal the catalogue handed here can resolve. A session reads the catalogue once, when
+    its tools are built; the writers then add the discriminating sub-goals as they go. Saving from
+    that first copy skipped every one of them: twenty five of forty nine scenarios in one run
+    reached the runner with their distinguishing check absent, which the reader takes for a judged
+    sub-goal and reports as held.
+    """
+    on_disk = load_catalogue(destination)
+    catalogue = on_disk if catalogue is None else catalogue.merged(on_disk)
     for one in scenarios:
         write_folder(one, catalogue, destination)
     _forget_dropped(scenarios, destination)
