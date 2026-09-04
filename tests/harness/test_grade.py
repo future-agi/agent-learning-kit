@@ -200,3 +200,14 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
     said = asyncio.run(suite.handler({"count": 20}))
     assert "already holds the 20" in said["content"][0]["text"]
     assert asked_for == [20, 6]
+
+
+def test_a_placeholder_code_is_refused_however_it_is_arranged():
+    """The hand-kept list caught 111111 and let 000111 through, which reached a 200-scenario suite twice."""
+    from fi.alk.harness.scenario import _predictable
+
+    for placeholder in ("000111", "111111", "123456", "987654", "010101", "447744"):
+        assert _predictable(placeholder), placeholder
+    # Real codes from suites on disk stay allowed, which is what stops this refusing everything.
+    for real in ("004928", "592804", "731905", "638204", "112233"):
+        assert not _predictable(real), real

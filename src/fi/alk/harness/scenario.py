@@ -629,11 +629,28 @@ def self_sufficiency_problems(scenario: Scenario) -> list[str]:
     ]
 
 
+def _predictable(code: str) -> bool:
+    """Whether a one-time code is one nobody would be issued.
+
+    The hand-kept list of obvious ones caught `111111` and `123456` and let `000111` through, which then
+    turned up twice in a 200-scenario suite. Tested as a property instead: a code built from one or two
+    digits, or one that simply counts up or down, is a placeholder however it is arranged.
+    """
+    if not code.isdigit() or len(code) < 4:
+        return code in _WEAK_CODES
+    if len(set(code)) <= 2:
+        return True
+    steps = {ord(later) - ord(earlier) for earlier, later in zip(code, code[1:])}
+    if steps in ({1}, {-1}):
+        return True
+    return code in _WEAK_CODES
+
+
 def fixture_problems(scenario: Scenario) -> list[str]:
     """Reject demo-shaped data before a paid run makes it look like production traffic."""
     problems: list[str] = []
     codes = _six_digit_values(scenario)
-    weak = sorted({code for code in codes if code in _WEAK_CODES})
+    weak = sorted({code for code in codes if _predictable(code)})
     if weak:
         problems.append(
             "fixture uses predictable verification code(s): "
