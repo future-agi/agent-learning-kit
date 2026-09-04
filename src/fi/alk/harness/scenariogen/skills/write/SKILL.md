@@ -64,6 +64,10 @@ Run this against the scenario before calling `submit_scenario`.
 - [ ] the instruction says what they want and how hard they push, and **never what the agent will do**
 - [ ] no clause of the shape "if the assistant tells you...", including informs, explains, states, mentions, refuses, offers, confirms, cannot, replies
 - [ ] no clause describing what the agent does before the person reacts, such as "once the agent reads back the summary and asks..."; the person does not know what the agent will do
+- [ ] no reaction script of the form "if asked X, say Y": state the fact, so any route has an answer
+- [ ] the instruction carries the facts this person holds, including the ones the expected route never needs
+- [ ] every value reads as real production data: no digit sequences for phone numbers, no round demo amounts, no repeated-digit codes
+- [ ] they do not thank the agent, trade pleasantries, volunteer, or narrate
 - [ ] their opening line is their own, not a repeat of another scenario's
 
 **Grading**
@@ -138,12 +142,70 @@ Say, in their words:
 | Say | Do not say |
 |---|---|
 | what they want, concretely, with the real values | what a correct agent should do about it |
-| what they will not volunteer until asked | the rubric, or the pass condition |
-| how hard they push, and what makes them stop | how the conversation ends |
-| what they do if refused: press once, accept, or leave | that the assistant will refuse |
+| every fact they hold, whether or not the expected path needs it | the rubric, or the pass condition |
+| what they will not volunteer until asked | how the conversation ends |
+| how hard they push, and what makes them stop | that the assistant will refuse |
 
 The moment the instruction says what the agent does, the transcript reads correct whether the agent
 was or not, and the scenario grades nothing.
+
+### Give the goal, never the route
+
+Write what this person is trying to achieve and what they know. Do not write their side of a
+conversation that has not happened yet.
+
+An instruction that reads *"if asked to confirm the address, confirm that 1200 Guerrero Street is
+correct; if offered options, ask for the standard one"* has two faults at once. It names the route
+the agent is expected to take, so the scenario stops testing whether the agent takes it. And it
+leaves the person with nothing to say the moment the agent does something else, which is most of the
+time, because a probabilistic agent reaches the same end by different routes.
+
+Write the fact, not the reaction. *"Home is 1200 Guerrero Street. You want the cheapest standard
+option."* Now any question about the address or the option has an answer, in any order, however the
+agent asks it.
+
+### The person's own data belongs in the instruction
+
+List what this person would actually have to hand, because the agent will ask for things the
+expected path never mentions.
+
+| Give them | So that |
+|---|---|
+| their own contact details, exactly as the world holds them | an identity check can succeed or fail for the right reason |
+| the identifiers they would plausibly know: a reference, the last digits of a card, an account label | a lookup is not blocked by a person who simply has no answer |
+| the history behind the request: what happened, roughly when, what they were told | a question about the past does not stall the call |
+| what they would say if pressed on any of it | the call survives a route nobody planned |
+
+A person with no answer to an unplanned question does one of two things, and both destroy the run:
+they invent a value, which cannot match any record, or they stall, which ends the call early. Neither
+is a finding about the agent.
+
+Then mark in `withheld` the facts they will not volunteer until asked. That is what forces the agent
+to elicit rather than receive.
+
+### Realistic values, always
+
+Everything this person says or knows has to look like production data, because a scenario built on
+obviously fake values tests a conversation nobody will ever have.
+
+- Phone numbers that read as real numbers in the right region, never a sequence of digits.
+- Names, addresses and places that exist or plausibly could, with the detail a real one carries.
+- Codes, references and identifiers with the shape the real system uses, not `1234` or a run of
+  repeated digits.
+- Amounts and balances at the awkward values the scenario needs, not round demo figures.
+
+The same applies to everything the setup writes into the world. The person's data and the world's
+data have to agree and both have to look real.
+
+### They are a person, not a customer service exercise
+
+- **They do not thank the agent**, and they do not close by trading pleasantries.
+- **They are not polite for the sake of it.** They are direct about what they want.
+- **They do not volunteer.** They answer what they are asked and nothing more, and anything marked
+  withheld waits to be asked for.
+- **They do not narrate.** No stage directions, no describing their own manner.
+- **They open the way a person opens**, not by announcing themselves and their errand in one tidy
+  sentence.
 
 Most people are harder to serve than the polite, articulate, patient one. An agent that only meets
 the cooperative person has not been tested.

@@ -32,9 +32,28 @@ a purpose: what they came for, what they will and will not give up, when they wo
 An outbound instruction that opens with a request has been written as inbound, and the scenario then
 tests an errand the agent never rang about.
 
-Either way, the person still needs the facts they hold in the instruction: an outbound caller asked
-to confirm something must know what they would say when the agent asks for a detail it did not
-supply.
+### How much the person already knows, on an outbound call
+
+This is a real axis and it changes the whole call, so choose it deliberately and say which one the
+person is:
+
+| They are | What that means in the instruction |
+|---|---|
+| expecting the call | They know what it is about and roughly what they agreed. Give them their version of it, which may differ from the world's. |
+| half remembering | They know something happened but not the detail: not the date, not the amount, not which of two things. Say what they do recall and what they have lost. |
+| new to it entirely | They have no context at all. The agent has to establish who they are and why it is calling before anything else can happen. Give them the facts they hold about themselves and nothing about the reason. |
+
+Each needs different data in the instruction. Somebody expecting the call can be asked to confirm a
+detail, so they must hold it. Somebody half remembering has to be able to say what they think it was
+and be corrected. Somebody new has nothing to confirm, so their instruction carries only their own
+details and how they react to an unexpected call.
+
+A person who was not expecting the call and has no facts to offer produces a short, empty
+conversation. That is a badly written scenario, not a finding about the agent.
+
+Either way, the person still needs the facts they hold written into the instruction: an outbound
+caller asked to confirm something must know what they would say when the agent asks for a detail the
+scenario did not anticipate.
 
 ## What a voice scenario can test that a chat one cannot
 
