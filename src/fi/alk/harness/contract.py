@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+# Voice only, and only two: either the agent placed the call or it answered one.
+CALL_DIRECTIONS = ("inbound", "outbound")
 
 _STRING_FIELDS = (
     "agent",

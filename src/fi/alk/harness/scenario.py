@@ -26,6 +26,17 @@ from .catalogue import Catalogue
 from .simulator import variables_in
 
 
+# What a fixture's `origin` may say, and which of those claim the scenario creates data itself.
+FIXTURE_ORIGINS = ("seed", "generated", "mixed")
+ORIGINS_THAT_CREATE = ("generated", "mixed")
+
+# For an outbound call, how much the person already knows about why they are being rung. The order
+# is the axis: told to expect it, half remembers, no idea at all. Named once so the schema a writer
+# is offered, the suite's spread rule and the caller's own briefing cannot drift apart.
+CALLER_AWARENESS = ("expecting", "partial", "unaware")
+LEAST_AWARE = "unaware"
+
+
 class Step(BaseModel):
     """One action in a reference solution."""
 
@@ -298,15 +309,17 @@ def validate_scenario(
         problems.append(
             "no fixture manifest: declare the seed/generated/mixed data this scenario relies on"
         )
-    elif scenario.fixture and str(scenario.fixture.get("origin") or "").lower() not in {
-        "seed",
-        "generated",
-        "mixed",
-    }:
-        problems.append("fixture.origin must be seed, generated, or mixed")
+    elif scenario.fixture and str(
+        scenario.fixture.get("origin") or ""
+    ).lower() not in set(FIXTURE_ORIGINS):
+        problems.append(
+            "fixture.origin must be "
+            + ", ".join(FIXTURE_ORIGINS[:-1])
+            + f", or {FIXTURE_ORIGINS[-1]}"
+        )
     elif (
         scenario.fixture
-        and str(scenario.fixture.get("origin") or "").lower() in {"generated", "mixed"}
+        and str(scenario.fixture.get("origin") or "").lower() in set(ORIGINS_THAT_CREATE)
         and not (scenario.setup_code or "").strip()
     ):
         # A fixture claiming data it never creates is the whole class of scenario that names a value
@@ -686,21 +699,24 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
     # of the opening untested.
     outbound = [one for one in scenarios if one.call_direction == "outbound"]
     if len(outbound) >= 3:
-        spread = Counter(one.caller_awareness or "unaware" for one in outbound)
+        spread = Counter(one.caller_awareness or LEAST_AWARE for one in outbound)
         if len(spread) < 2:
             problems.append(
                 f"all {len(outbound)} outbound scenarios are caller_awareness "
-                f"{next(iter(spread))!r}; cover at least two of expecting, partial, unaware"
+                f"{next(iter(spread))!r}; cover at least two of "
+                + ", ".join(CALLER_AWARENESS)
             )
         elif max(spread.values()) > ceil(len(outbound) * 0.7):
             worst, count = spread.most_common(1)[0]
             problems.append(
                 f"{count} of {len(outbound)} outbound scenarios are caller_awareness {worst!r}; "
-                "keep any one of expecting, partial, unaware under 70 percent of them"
+                "keep any one of "
+                + ", ".join(CALLER_AWARENESS)
+                + " under 70 percent of them"
             )
-        if not spread.get("unaware"):
+        if not spread.get(LEAST_AWARE):
             problems.append(
-                "no outbound scenario has caller_awareness 'unaware', the one that tests whether "
+                f"no outbound scenario has caller_awareness {LEAST_AWARE!r}, the one that tests whether "
                 "the agent says who it is and why it called before asking for anything"
             )
     # A code naturally appears several times inside one scenario (fixture, caller script,

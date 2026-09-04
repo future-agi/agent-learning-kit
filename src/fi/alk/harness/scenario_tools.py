@@ -26,10 +26,11 @@ from .catalogue import (
     save_catalogue,
     validate_sub_goal,
 )
-from .contract import AgentContract
+from .contract import CALL_DIRECTIONS, AgentContract
 from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
+    CALLER_AWARENESS,
     Scenario,
     Step,
     contract_sequence_problems,
@@ -471,14 +472,14 @@ def scenario_tools(
                 },
                 "call_direction": {
                     "type": "string",
-                    "enum": ["inbound", "outbound"],
+                    "enum": list(CALL_DIRECTIONS),
                     "description": "Who placed the call. Match the contract unless this scenario "
                     "deliberately tests the other one. Outbound changes what the instruction has "
                     "to be: a person who did not dial has no objective to pursue.",
                 },
                 "caller_awareness": {
                     "type": "string",
-                    "enum": ["expecting", "partial", "unaware"],
+                    "enum": list(CALLER_AWARENESS),
                     "description": "Outbound only, and the thing the scenario is really varying: "
                     "whether this person was told to expect the call, half remembers arranging "
                     "something, or has no idea why anyone is ringing. Left out it is unaware, "
