@@ -756,6 +756,20 @@ class LiveKitEngine(BaseEngine):
         conversation_direction: str,
         agent_first_silence_timeout_seconds: float,
     ) -> _CaseOutcome:
+        # Teardown is a run of independent steps that each used to take the full
+        # ``cleanup_timeout``. Ten of them at up to sixty seconds is six hundred seconds of
+        # cleanup against a run budget of five hundred and seventy, so one slow teardown spent
+        # the whole budget and the case was discarded as a timeout with its conversation already
+        # finished. Share one deadline across the run instead, started at the first cleanup that
+        # actually waits, so every path gets the same bound however it got there.
+        _cleanup_started: list[float] = []
+
+        def _cleanup_budget() -> float:
+            if not _cleanup_started:
+                _cleanup_started.append(time.monotonic())
+            spent = time.monotonic() - _cleanup_started[0]
+            return max(1.0, cleanup_timeout - spent)
+
         api_key = os.environ.get(runtime.api_key_env)
         api_secret = os.environ.get(runtime.api_secret_env)
         if not api_key or not api_secret:
@@ -1392,7 +1406,7 @@ class LiveKitEngine(BaseEngine):
                         api_client.room.delete_room(
                             api.DeleteRoomRequest(room=room_name)
                         ),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
@@ -1475,7 +1489,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await _close_agent_session(
                         session_to_close,
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1489,7 +1503,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await asyncio.wait_for(
                         models.aclose(),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1503,7 +1517,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await asyncio.wait_for(
                         recorder.aclose(),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1516,10 +1530,10 @@ class LiveKitEngine(BaseEngine):
             if audio_bridge is not None:
                 try:
                     await asyncio.wait_for(
-                        audio_bridge.aclose(), timeout=cleanup_timeout
+                        audio_bridge.aclose(), timeout=_cleanup_budget()
                     )
                     if bridge_task is not None:
-                        await asyncio.wait_for(bridge_task, timeout=cleanup_timeout)
+                        await asyncio.wait_for(bridge_task, timeout=_cleanup_budget())
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -1530,7 +1544,7 @@ class LiveKitEngine(BaseEngine):
                     )
             if room_connected:
                 try:
-                    await asyncio.wait_for(room.disconnect(), timeout=cleanup_timeout)
+                    await asyncio.wait_for(room.disconnect(), timeout=_cleanup_budget())
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -1544,7 +1558,7 @@ class LiveKitEngine(BaseEngine):
                     if provider_call_id is not None:
                         await asyncio.wait_for(
                             vapi_originator.stop(provider_call_id),
-                            timeout=cleanup_timeout,
+                            timeout=_cleanup_budget(),
                         )
                         provider_termination_source = "sdk_originator_cleanup"
                     await vapi_originator.close()
@@ -1564,7 +1578,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await asyncio.wait_for(
                         _delete_sip_dispatch_rule(api_client, sip_dispatch_rule_id),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     if not _is_not_found(exc):
@@ -1581,7 +1595,7 @@ class LiveKitEngine(BaseEngine):
                         api_client.room.delete_room(
                             api.DeleteRoomRequest(room=room_name)
                         ),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     if not _is_not_found(exc):
