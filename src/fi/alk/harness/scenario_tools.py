@@ -51,14 +51,21 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-def parallel_suites() -> bool:
-    """Whether a suite is written by several writers at once.
+# Below this, fanning out costs more than it saves: measured at ten scenarios, fifty four turns
+# without writers against a hundred and nineteen with, for output that was identical scenario by
+# scenario. Above it, one at a time runs out of turns long before the number is reached.
+FEWEST_WORTH_DELEGATING = 20
 
-    Off by default. Writing one scenario at a time is slower but is the path the base branch runs
-    on, and a suite that is written slowly is worth more than one that is not written at all.
-    Set HARNESS_PARALLEL_SCENARIOS=1 to fan out instead.
+
+def worth_delegating(wanted: int) -> bool:
+    """Whether a request of this size should be written by several writers at once.
+
+    Decided from the number asked for, which is the one fact that settles it, rather than from a
+    setting. An environment variable had to survive four separate allowlists between the platform
+    and the process that reads it, three of which silently dropped it, and it exposed as an
+    operator choice something no operator should have to make.
     """
-    return os.environ.get("HARNESS_PARALLEL_SCENARIOS", "").strip() == "1"
+    return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -904,7 +911,7 @@ def scenario_tools(
         # of a fan-out calling this would split its own slice again, and so on.
         + (
             [generate_suite, save_scenarios]
-            if can_save and parallel_suites()
+            if can_save and worth_delegating(wanted)
             else [save_scenarios]
             if can_save
             else []
@@ -929,15 +936,16 @@ _ALWAYS = (
 )
 
 
-def tool_names() -> tuple[str, ...]:
-    """The tools a saving session publishes, which depends on how a suite is written."""
-    if parallel_suites():
+def tool_names(wanted: int = 0) -> tuple[str, ...]:
+    """The tools a saving session publishes, which depends on how large a suite it was asked for."""
+    if worth_delegating(wanted):
         return (*_ALWAYS[:-1], "generate_suite", "save_scenarios")
     return _ALWAYS
 
 
-# Kept as a name because callers import it; it reflects the surface for this process.
-TOOL_NAMES = tool_names()
+# The whole surface, for anything that needs to name every tool this module can publish rather than
+# the subset one request gets. Which of them a session actually receives is decided per request.
+TOOL_NAMES = tool_names(FEWEST_WORTH_DELEGATING)
 
 
 def world_summary(world_root: Path) -> str:
