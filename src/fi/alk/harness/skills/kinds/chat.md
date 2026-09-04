@@ -1,15 +1,18 @@
 ---
 name: chat
 applies_to: modality=chat
+description: What a scenario has to account for when the person reaches the agent by typing. Read alongside the scenario-writing instructions whenever the contract says the modality is chat.
 ---
 
 # Writing scenarios for a chat agent
 
-The craft is the same. What changes is that the person is typing, can see what they wrote, and can
-paste. These are the parts of a scenario that only exist because of that.
+A chat agent is reached by a person typing. That person can see everything they have written, can
+paste from elsewhere, can send three messages before waiting for an answer, and can go quiet for ten
+minutes and come back. Every requirement below follows from one of those facts, and none of them
+replaces the general requirements a scenario has to meet.
 
-A chat is always started by the person, so there is no call direction to read and none to set. The
-outbound guidance in the write skill does not apply here.
+A chat is always started by the person, so there is no call direction to establish: treat every chat
+scenario as one the person initiated, and ignore anything written for calls an agent places.
 
 ## What a chat scenario can test that a voice one cannot
 

@@ -174,12 +174,13 @@ MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 1000)
 TOP_UP_ROUNDS = 1
 
 # A session refused by the provider is retried rather than abandoned: its work is still worth doing and
-# a slice keeps what it already proved. The quota is measured over a minute, so the first wait has to
-# clear a minute or the retry asks inside the same window and is refused again for the same reason.
-# Five attempts because losing a slice costs its whole share of the suite, and waiting is cheap by
-# comparison.
-RATE_LIMIT_ATTEMPTS = 5
+# a slice keeps what it already proved. The quota is measured over a minute, so each wait clears a
+# minute; a shorter one asks inside the same window and is refused again for the same reason. What is
+# bounded is the total, not the number of tries: five minutes of waiting is worth a slice, and a run
+# that waits longer than that is not going to be rescued by waiting more.
 RATE_LIMIT_BACKOFF_SECONDS = 60
+RATE_LIMIT_JITTER_SECONDS = 30
+RATE_LIMIT_TOTAL_WAIT_SECONDS = 300
 
 
 def _rate_limited(broke: BaseException) -> bool:
@@ -191,15 +192,16 @@ def _rate_limited(broke: BaseException) -> bool:
     )
 
 
-def _refusal_pause(attempt: int) -> float:
+def _refusal_pause() -> float:
     """How long to wait before asking again, spread out so sessions do not return together.
 
-    Writers are refused at the same moment because they are asking at the same moment, so a fixed
-    backoff has them all wake together and refuse together. The wait grows with each attempt and
-    carries up to a full step of jitter, which is what breaks the lockstep.
+    Sessions are refused at the same moment because they ask at the same moment, so a fixed wait has
+    them all wake together and refuse together. Each wait clears the quota's minute and carries
+    jitter on top, which is what breaks the lockstep.
     """
-    step = RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1)
-    return round(step + random.uniform(0, RATE_LIMIT_BACKOFF_SECONDS), 1)
+    return round(
+        RATE_LIMIT_BACKOFF_SECONDS + random.uniform(0, RATE_LIMIT_JITTER_SECONDS), 1
+    )
 
 
 async def survive_refusal(
@@ -215,16 +217,21 @@ async def survive_refusal(
     provider refuses, and losing the planning turn costs the whole suite rather than one slice.
     Anything that is not a rate or quota refusal is raised, so a real fault still fails fast.
     """
-    for attempt in range(RATE_LIMIT_ATTEMPTS):
+    waited = 0.0
+    while True:
         try:
             await run()
             return
         except Exception as broke:  # noqa: BLE001 - classified below, re-raised when not a refusal
-            last = attempt == RATE_LIMIT_ATTEMPTS - 1
-            if not _rate_limited(broke) or last or (enough is not None and enough()):
+            pause = _refusal_pause()
+            spent_out = waited + pause > RATE_LIMIT_TOTAL_WAIT_SECONDS
+            if not _rate_limited(broke) or spent_out or (enough is not None and enough()):
                 raise
-            pause = _refusal_pause(attempt)
-            logger.warning("%s was refused for rate or quota; waiting %ss", what, pause)
+            waited += pause
+            logger.warning(
+                "%s was refused for rate or quota; waiting %ss (%ss of %ss spent)",
+                what, pause, round(waited), RATE_LIMIT_TOTAL_WAIT_SECONDS,
+            )
             if on_event:
                 on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
             await asyncio.sleep(pause)

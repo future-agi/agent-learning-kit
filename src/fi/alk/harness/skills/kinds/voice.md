@@ -1,15 +1,19 @@
 ---
 name: voice
 applies_to: modality=voice
+description: What a scenario has to account for when the person reaches the agent by speaking. Read alongside the scenario-writing instructions whenever the contract says the modality is voice.
 ---
 
 # Writing scenarios for a voice agent
 
-The craft is the same. What changes is that the person is speaking, in real time, and cannot see
-anything. These are the parts of a scenario that only exist because of that.
+A voice agent is reached by a person speaking, in real time, who cannot see anything. That person
+answers several questions in one breath, corrects themselves mid-sentence, mishears a digit, talks
+over a confirmation, and sometimes goes silent. Every requirement below follows from one of those
+facts, and none of them replaces the general requirements a scenario has to meet.
 
-Which way the call goes, and how much the person already knows, are covered in the write skill under
-"When the agent placed the call". Read `CALL DIRECTION` there and do not re-derive it here.
+Whether the agent placed this call or answered it changes how the person is written. The contract
+carries that as `CALL DIRECTION`, and the general instructions say what each direction requires: read
+it there rather than deciding it here.
 
 ## What a voice scenario can test that a chat one cannot
 
