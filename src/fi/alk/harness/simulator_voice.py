@@ -69,6 +69,51 @@ SIMULATOR_INSTRUCTIONS = (
     "service does neither repeatedly, and a caller who does sounds nothing like one."
 )
 
+# An outbound call is not an inbound call with the greeting reworded. The person did not dial in,
+# so they have no opening request to make and no reason to explain themselves first. A caller who
+# states their task anyway tests nothing about how the agent opens a call it placed.
+_OUTBOUND_FRAMING = (
+    "\nTHIS CALL WAS PLACED TO YOU. You did not dial anyone. You were doing something else "
+    "when the phone rang.\n"
+    "9. Do not open with a request and do not say what you want. Wait until the agent has said "
+    "who they are and why they are calling. If they do not say, ask.\n"
+    "10. Never supply an account detail, address or code before the agent has explained the "
+    "reason for the call.\n"
+)
+
+# How much this person already knows about why they are being called. Each one is a different test:
+# the first checks the agent can proceed, the last checks it can establish context first.
+_OUTBOUND_AWARENESS = {
+    "expecting": (
+        "11. You were told to expect this call and roughly what it concerns. Once the agent "
+        "identifies itself, cooperate normally.\n"
+    ),
+    "partial": (
+        "11. You half remember arranging something like this and not the details. Say so plainly "
+        "rather than inventing the specifics you were not given.\n"
+    ),
+    "unaware": (
+        "11. You do not know why anyone would be calling you. Ask what this is about, stay "
+        "slightly guarded, and do not confirm who you are until the agent has explained itself.\n"
+    ),
+}
+_DEFAULT_OUTBOUND_AWARENESS = "unaware"
+
+
+def simulator_instructions(direction: str = "", awareness: str = "") -> str:
+    """The caller's rules, framed by whether this call was placed to them or by them.
+
+    Chat has no direction: a chat is always started by the person, so it takes the inbound text.
+    """
+    if str(direction).strip().lower() != "outbound":
+        return SIMULATOR_INSTRUCTIONS
+    chosen = str(awareness).strip().lower() or _DEFAULT_OUTBOUND_AWARENESS
+    return (
+        SIMULATOR_INSTRUCTIONS
+        + _OUTBOUND_FRAMING
+        + _OUTBOUND_AWARENESS.get(chosen, _OUTBOUND_AWARENESS[_DEFAULT_OUTBOUND_AWARENESS])
+    )
+
 _LANGUAGE_CODES: dict[str, str] = {
     "ar": "ar",
     "ar-sa": "ar",
@@ -517,7 +562,10 @@ def simulator_definition(
             "model": model("tts", tts_provider),
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
         },
-        instructions=SIMULATOR_INSTRUCTIONS,
+        instructions=simulator_instructions(
+            get("HARNESS_CALL_DIRECTION") or "",
+            get("HARNESS_CALLER_AWARENESS") or "",
+        ),
         allow_interruptions=True,
     )
 
@@ -694,6 +742,7 @@ __all__ = [
     "CONNECT_TIMEOUT_SECONDS",
     "READINESS_TIMEOUT_SECONDS",
     "SIMULATOR_INSTRUCTIONS",
+    "simulator_instructions",
     "aura_voice_for",
     "caller_scenario",
     "fixture_caller_phone",

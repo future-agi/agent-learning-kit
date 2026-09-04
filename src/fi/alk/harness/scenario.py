@@ -225,6 +225,15 @@ class Scenario(BaseModel):
     # twice; a coin flip here made a seeded run unreproducible.
     background_noise: bool | str = ""
 
+    # Whether the agent placed this call or answered it. Voice only: a chat is always started by
+    # the person, so it stays inbound. An outbound caller has no opening request to make, which is
+    # a different test of the agent rather than the same one with a reworded greeting.
+    call_direction: str = "inbound"
+    # For an outbound call, how much this person already knows about why they are being rung:
+    # "expecting", "partial" or "unaware". Unset means unaware, the case the agent must work
+    # hardest for.
+    caller_awareness: str = ""
+
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
     RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
