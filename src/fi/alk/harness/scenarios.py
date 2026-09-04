@@ -172,6 +172,21 @@ MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 1000)
 # that keeps finding smaller things to say.
 TOP_UP_ROUNDS = 1
 
+# A writer refused by the provider is retried rather than abandoned: the brief is still worth writing
+# and the slice keeps what it already proved. Two extra attempts, waiting longer each time, is enough
+# for a quota window to reopen without holding a run open indefinitely.
+RATE_LIMIT_ATTEMPTS = 3
+RATE_LIMIT_BACKOFF_SECONDS = 30
+
+
+def _rate_limited(broke: BaseException) -> bool:
+    """Whether the provider refused this writer for rate or quota rather than for what it asked."""
+    said = f"{type(broke).__name__} {broke}".lower()
+    return any(
+        mark in said
+        for mark in ("429", "resource_exhausted", "resourceexhausted", "rate limit", "quota")
+    )
+
 
 @dataclass(frozen=True)
 class Slice:
@@ -412,17 +427,42 @@ async def _write_slice(
         ask=ask,
         thinking=True,
     )
-    stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
-    try:
-        async with stage:
-            await stage.say(
-                brief_for(contract, mine, siblings, callers_for(index, mine.count)),
-                on_event=watch,
-            )
-    except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
-        logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
-        if on_event:
-            on_event({"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]})
+    # Each writer drives its own model session, so several of them together are a request rate. When
+    # the provider refuses one, the slice is not wrong and its brief is still worth writing, so wait
+    # for the quota to recover and run it again. `kept` belongs to this slice's own tool server, so a
+    # second attempt adds to what the first proved rather than starting over.
+    for attempt in range(RATE_LIMIT_ATTEMPTS):
+        stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
+        try:
+            async with stage:
+                await stage.say(
+                    brief_for(contract, mine, siblings, callers_for(index, mine.count)),
+                    on_event=watch,
+                )
+            break
+        except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
+            last = attempt == RATE_LIMIT_ATTEMPTS - 1
+            if _rate_limited(broke) and not last and len(kept) < mine.count:
+                pause = RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1)
+                logger.warning(
+                    "slice %s was rate limited with %s of %s written; waiting %ss",
+                    mine.named(), len(kept), mine.count, pause,
+                )
+                if on_event:
+                    on_event(
+                        {
+                            "type": "slice_waiting",
+                            "slice": mine.named(),
+                            "written": len(kept),
+                            "seconds": pause,
+                        }
+                    )
+                await asyncio.sleep(pause)
+                continue
+            logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
+            if on_event:
+                on_event({"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]})
+            break
         return list(kept)
     logger.info("slice %s finished with %s of %s", mine.named(), len(kept), mine.count)
     return list(kept)
