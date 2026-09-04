@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
@@ -182,6 +182,15 @@ class _CompiledScenario:
     sub_goals: tuple[_CompiledSubGoal, ...]
     setup: Callable[[Any], object]
     ready: Callable[[Any], object]
+    # What the caller is and what they are calling about. Carried because the platform builds the
+    # simulator's prompt from these and from nothing else: provisioning a scenario without them
+    # stores an empty persona, and the call runs "Interact about: persona-6" against a caller with
+    # no identity, no task and no reason to be on the phone. Everything the suite is written to
+    # test -- the hazard, the withheld facts, the person -- reaches the call through these fields.
+    name: str = ""
+    situation: str = ""
+    outcome: str = ""
+    persona: dict[str, Any] = field(default_factory=dict)
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -276,12 +285,19 @@ def _load_one(folder: Path) -> _CompiledScenario:
             check = _judged_placeholder_check
         sub_goals.append(_CompiledSubGoal(name=name, judged=judged, check=check))
 
+    persona = body.get("persona")
     return _CompiledScenario(
         scenario_key=scenario_key,
         scenario_id=scenario_id,
         sub_goals=tuple(sub_goals),
         setup=setup,
         ready=ready,
+        name=body.get("name") if isinstance(body.get("name"), str) else "",
+        # The instruction is the caller's task in their own terms, which is what the platform's
+        # situation column holds.
+        situation=body.get("instruction") if isinstance(body.get("instruction"), str) else "",
+        outcome=body.get("tests") if isinstance(body.get("tests"), str) else "",
+        persona=persona if isinstance(persona, dict) else {},
     )
 
 
@@ -410,6 +426,38 @@ def bundle_contract(bundle_dir: Path) -> dict[str, Any]:
     return body if isinstance(body, dict) else {}
 
 
+def _provision_persona(scenario: _CompiledScenario) -> dict[str, Any]:
+    """One persona entry: the scenario's key plus who is calling and what about.
+
+    Only `scenario_key` was sent before, and the rest of the serializer's optional fields were
+    left off. The platform builds the simulator's whole prompt from what arrives here, so every
+    hosted call ran a caller with a placeholder name, the situation "Interact about: <key>" and
+    the outcome "Get the request resolved." -- the authored person, task and hazard never left the
+    sandbox. Sending them is what makes a hosted call test the scenario that was written rather
+    than a generic enquiry wearing its name.
+    """
+    entry: dict[str, Any] = {"scenario_key": scenario.scenario_key}
+    if scenario.name:
+        entry["name"] = scenario.name
+    if scenario.situation:
+        entry["situation"] = scenario.situation
+    if scenario.outcome:
+        entry["outcome"] = scenario.outcome
+    if scenario.persona:
+        persona = dict(scenario.persona)
+        # The platform reads a single `language` to choose the caller's voice, and falls back to a
+        # multilingual one when it finds none. A persona carrying `languages` alone is therefore
+        # spoken in the wrong voice for the language it actually speaks, so the first is offered
+        # under the name the platform looks for without disturbing the list.
+        spoken = persona.get("languages")
+        if not persona.get("language") and isinstance(spoken, list) and spoken:
+            first = spoken[0]
+            if isinstance(first, str) and first.strip():
+                persona["language"] = first.strip()
+        entry["persona"] = persona
+    return entry
+
+
 def _provision_payload(
     run_name: str,
     scenarios: Sequence[_CompiledScenario],
@@ -429,7 +477,7 @@ def _provision_payload(
     payload: dict[str, Any] = {
         "operation": "provision",
         "name": run_name,
-        "personas": [{"scenario_key": scenario.scenario_key} for scenario in scenarios],
+        "personas": [_provision_persona(scenario) for scenario in scenarios],
     }
     # `description` is what the platform stores on the agent and later serves as
     # `call.agent_prompt`; omitted, every hosted call reports an empty prompt.
