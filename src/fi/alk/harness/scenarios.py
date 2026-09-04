@@ -13,8 +13,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -180,12 +181,51 @@ RATE_LIMIT_BACKOFF_SECONDS = 30
 
 
 def _rate_limited(broke: BaseException) -> bool:
-    """Whether the provider refused this writer for rate or quota rather than for what it asked."""
+    """Whether the provider refused this session for rate or quota rather than for what it asked."""
     said = f"{type(broke).__name__} {broke}".lower()
     return any(
         mark in said
         for mark in ("429", "resource_exhausted", "resourceexhausted", "rate limit", "quota")
     )
+
+
+def _refusal_pause(attempt: int) -> float:
+    """How long to wait before asking again, spread out so sessions do not return together.
+
+    Writers are refused at the same moment because they are asking at the same moment, so a fixed
+    backoff has them all wake together and refuse together. The wait grows with each attempt and
+    carries up to a full step of jitter, which is what breaks the lockstep.
+    """
+    step = RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1)
+    return round(step + random.uniform(0, RATE_LIMIT_BACKOFF_SECONDS), 1)
+
+
+async def survive_refusal(
+    run: Callable[[], Awaitable[Any]],
+    *,
+    what: str,
+    on_event: Callable[..., Any] | None = None,
+    enough: Callable[[], bool] | None = None,
+) -> None:
+    """Run something that talks to the model, waiting out a refusal for rate or quota.
+
+    Used by every session that drives its own model turn, because any of them can be the one the
+    provider refuses, and losing the planning turn costs the whole suite rather than one slice.
+    Anything that is not a rate or quota refusal is raised, so a real fault still fails fast.
+    """
+    for attempt in range(RATE_LIMIT_ATTEMPTS):
+        try:
+            await run()
+            return
+        except Exception as broke:  # noqa: BLE001 - classified below, re-raised when not a refusal
+            last = attempt == RATE_LIMIT_ATTEMPTS - 1
+            if not _rate_limited(broke) or last or (enough is not None and enough()):
+                raise
+            pause = _refusal_pause(attempt)
+            logger.warning("%s was refused for rate or quota; waiting %ss", what, pause)
+            if on_event:
+                on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
+            await asyncio.sleep(pause)
 
 
 @dataclass(frozen=True)
@@ -431,38 +471,27 @@ async def _write_slice(
     # the provider refuses one, the slice is not wrong and its brief is still worth writing, so wait
     # for the quota to recover and run it again. `kept` belongs to this slice's own tool server, so a
     # second attempt adds to what the first proved rather than starting over.
-    for attempt in range(RATE_LIMIT_ATTEMPTS):
+    async def attempt_slice() -> None:
         stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
-        try:
-            async with stage:
-                await stage.say(
-                    brief_for(contract, mine, siblings, callers_for(index, mine.count)),
-                    on_event=watch,
-                )
-            break
-        except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
-            last = attempt == RATE_LIMIT_ATTEMPTS - 1
-            if _rate_limited(broke) and not last and len(kept) < mine.count:
-                pause = RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1)
-                logger.warning(
-                    "slice %s was rate limited with %s of %s written; waiting %ss",
-                    mine.named(), len(kept), mine.count, pause,
-                )
-                if on_event:
-                    on_event(
-                        {
-                            "type": "slice_waiting",
-                            "slice": mine.named(),
-                            "written": len(kept),
-                            "seconds": pause,
-                        }
-                    )
-                await asyncio.sleep(pause)
-                continue
-            logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
-            if on_event:
-                on_event({"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]})
-            break
+        async with stage:
+            await stage.say(
+                brief_for(contract, mine, siblings, callers_for(index, mine.count)),
+                on_event=watch,
+            )
+
+    try:
+        # A refusal for rate or quota is waited out; the slice keeps what it already proved, so a
+        # second attempt adds to it. Stop early if the count is already met.
+        await survive_refusal(
+            attempt_slice,
+            what=f"slice {mine.named()}",
+            on_event=on_event,
+            enough=lambda: len(kept) >= mine.count,
+        )
+    except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
+        logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
+        if on_event:
+            on_event({"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]})
         return list(kept)
     logger.info("slice %s finished with %s of %s", mine.named(), len(kept), mine.count)
     return list(kept)
@@ -597,20 +626,28 @@ async def gaps_in(
             # refusing a save leaves proved work in memory only. This is the one place that can act
             # on them, because it is the only pass that reads the whole suite and can commission
             # replacements. Without this they are a message nobody reads.
+            # The suite-level checks are reported at save and enforced nowhere, deliberately:
+            # refusing a save leaves proved work in memory only. This is the one place that can act
+            # on them, because it is the only pass that reads the whole suite and can commission
+            # replacements. Without this they are a message nobody reads.
             skew = suite_diversity_problems(suite)
-            await stage.say(
+            already_wrong = (
+                "Reading the suite as a whole, these are already wrong with it, and a gap that "
+                "fixes one of them is worth more than a new use case:\n"
+                + "\n".join(f"- {problem}" for problem in skew)
+                + "\n\n"
+                if skew
+                else ""
+            )
+            asked = (
                 f"This suite has {len(suite)} scenarios against a target of {wanted}:\n\n"
                 f"{_suite_summary(suite)}\n\n"
-                + (
-                    "Reading the suite as a whole, these are already wrong with it, and a gap that "
-                    "fixes one of them is worth more than a new use case:\n"
-                    + "\n".join(f"- {problem}" for problem in skew)
-                    + "\n\n"
-                    if skew
-                    else ""
-                )
+                + already_wrong
                 + "Say what it is missing, then submit_gaps. Submit an empty list if it is "
                 "covering what it should."
+            )
+            await survive_refusal(
+                lambda: stage.say(asked), what="the suite review", on_event=on_event
             )
     except Exception:  # noqa: BLE001 - a review that fails leaves the suite as written
         return []
@@ -738,7 +775,17 @@ async def write(
         contract, out=out, wanted=wanted, ask=ask, max_turns=max_turns
     )
     async with stage:
-        await stage.say(opening(contract, wanted), on_event=on_event)
+        # The planning turn is the expensive one to lose: a refusal here costs the whole suite, not
+        # one slice, so it waits the same way a writer does.
+        await survive_refusal(
+            lambda: stage.say(opening(contract, wanted), on_event=on_event),
+            what="the opening turn",
+            on_event=on_event,
+        )
         for follow_up in follow_ups or []:
-            await stage.say(follow_up, on_event=on_event)
+            await survive_refusal(
+                lambda message=follow_up: stage.say(message, on_event=on_event),
+                what="a follow-up turn",
+                on_event=on_event,
+            )
     return load(destination)
