@@ -30,6 +30,14 @@ it there rather than deciding it here.
 
 A suite of voice scenarios that could all have been typed has not tested the modality.
 
+## An attempted transfer is not a completed one
+
+A voice run may record that the agent tried to hand the call to a person without the receiving side
+ever picking it up, because completing that handoff needs telephony the run does not have. So a
+scenario about handing off tests the offer or the attempt, and the work that would follow it belongs
+in a separate scenario. A sub-goal that only holds once somebody answers will fail on a correct
+handoff.
+
 ## What this modality lets you vary
 
 `background_noise` is per scenario, not a suite setting. Choose it from the situation rather than

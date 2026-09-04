@@ -319,6 +319,15 @@ def load_skill(name: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"no skill at {path}")
     stage = path.read_text(encoding="utf-8")
+    # Lookup material a skill keeps beside itself, carried in with it. A session runs with its working
+    # directory on the artifacts it is producing, not on the skills tree, and the skills live inside an
+    # installed package, so a skill that says "see references/x.md" is naming a path its reader cannot
+    # reach. Appending them is what makes the split into a main file and its references safe.
+    for reference in sorted((SKILLS_ROOT / name / "references").glob("*.md")):
+        stage += (
+            f"\n\n---\n\n# references/{reference.name}\n\n"
+            f"{reference.read_text(encoding='utf-8')}"
+        )
     if not HARNESS.exists():
         return stage
     return (
