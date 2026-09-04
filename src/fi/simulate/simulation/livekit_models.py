@@ -256,28 +256,39 @@ def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
     return google.LLM(model=model, temperature=config.temperature, **kwargs)
 
 
+# Which control a model accepts for deliberation is a provider fact and cannot be inferred from a
+# version inside its name. Gemini 2.5 and earlier take a token budget and reject a level outright;
+# Gemini 3 takes a level, and the LiveKit plugin answers a budget it cannot use by substituting its
+# own "minimal", which Vertex rejects. A model in neither list is left alone deliberately: running
+# at the provider's own default costs some latency, where sending a control it rejects costs every
+# inference and leaves the caller silent for the whole call with nothing in the transcript to say
+# why. So a model nobody has characterised yet still holds a conversation.
+_THINKING_BY_BUDGET = ("gemini-1.5", "gemini-2.0", "gemini-2.5")
+_THINKING_BY_LEVEL = ("gemini-3",)
+# The least a level-taking model will accept. "minimal" exists in the plugin but Vertex refuses it.
+_LEAST_THINKING_LEVEL = "low"
+
+
 def _simulator_thinking(model: str) -> dict[str, object] | None:
     """How much the simulated caller deliberates before answering.
 
     A person on a phone call answers from what they already know, so thinking buys nothing here and
     is charged twice: once in latency the target hears as an unnatural pause, and again in a call
     whose duration no longer reflects how the conversation actually went. As near off as the model
-    allows. `SIMULATOR_LLM_THINKING` takes a Gemini thinking level, or a token budget as a number.
+    allows. `SIMULATOR_LLM_THINKING` takes a thinking level, or a token budget as a number, and an
+    explicit request is honoured even on a model this module does not recognise.
     """
-    if not model.startswith("gemini"):
-        return None
     asked = os.environ.get("SIMULATOR_LLM_THINKING", "").strip().lower()
     off = asked in ("", "off", "0", "none", "false")
-    # Gemini 3 takes a level, never a budget, and the LiveKit plugin answers a budget it cannot
-    # use by substituting its own "minimal", which Vertex rejects: every inference 400s and the
-    # caller never speaks at all. "low" is the floor the plugin and Vertex both accept.
-    if model.startswith("gemini-3"):
-        return {"thinking_level": "low" if off or asked.isdigit() else asked}
+    if model.startswith(_THINKING_BY_LEVEL):
+        return {"thinking_level": _LEAST_THINKING_LEVEL if off or asked.isdigit() else asked}
+    if model.startswith(_THINKING_BY_BUDGET):
+        if off:
+            return {"thinking_budget": 0}
+        return {"thinking_budget": int(asked)} if asked.isdigit() else {"thinking_level": asked}
     if off:
-        return {"thinking_budget": 0}
-    if asked.isdigit():
-        return {"thinking_budget": int(asked)}
-    return {"thinking_level": asked}
+        return None
+    return {"thinking_budget": int(asked)} if asked.isdigit() else {"thinking_level": asked}
 
 
 def _google_stt(
