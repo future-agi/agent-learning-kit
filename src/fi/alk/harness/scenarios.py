@@ -660,10 +660,6 @@ async def gaps_in(
             # refusing a save leaves proved work in memory only. This is the one place that can act
             # on them, because it is the only pass that reads the whole suite and can commission
             # replacements. Without this they are a message nobody reads.
-            # The suite-level checks are reported at save and enforced nowhere, deliberately:
-            # refusing a save leaves proved work in memory only. This is the one place that can act
-            # on them, because it is the only pass that reads the whole suite and can commission
-            # replacements. Without this they are a message nobody reads.
             skew = suite_diversity_problems(suite)
             already_wrong = (
                 "Reading the suite as a whole, these are already wrong with it, and a gap that "
