@@ -141,3 +141,27 @@ def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tm
     loaded = load_scenarios(bundle)
     assert [one.scenario_key for one in loaded] == ["refund"]
     assert loaded[0].presented["situation"] == "Get the fee taken off."
+
+
+def test_a_slice_writer_stops_at_the_size_it_was_given(tmp_path):
+    """Its turn budget is far larger than its slice, and left alone it keeps writing."""
+    import asyncio
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item"])
+    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=1, can_save=False)
+    submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+    kept.append(Scenario(name="already_here", instruction="one", sub_goals=["x"]))
+
+    said = asyncio.run(submit.handler({"name": "a_second_one", "instruction": "two"}))
+    assert said.get("is_error")
+    assert "This slice is complete" in said["content"][0]["text"]
+
+    # Replacing one of its own is still allowed, which is how a refused scenario gets fixed. It gets
+    # past the cap and into validation, which here has no world to validate against.
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(submit.handler({"name": "already_here", "instruction": "one, fixed"}))

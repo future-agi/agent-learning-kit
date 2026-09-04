@@ -663,6 +663,20 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        # A writer working one slice of a suite stops at the size it was given. Its turn budget is
+        # far larger than its slice, and left to itself it keeps writing: one run proved 559
+        # scenarios against a target of 200, spending three times the quota and three times the wall
+        # clock, and the surplus is trimmed at the end anyway. Replacing a scenario it already has
+        # stays allowed, because fixing a refused one is how a writer finishes its slice.
+        if not can_save and wanted:
+            named = str(args.get("name") or "").strip()
+            already = any(one.name == named for one in kept)
+            if not already and len(kept) >= wanted:
+                return _err(
+                    f"This slice is complete: {len(kept)} of {wanted} written. Do not write another. "
+                    "Say what you covered and what you could not, and stop. Submitting again under "
+                    "an existing name is the only submission left to you, for fixing one of yours."
+                )
         result = accept_scenario(
             args,
             world_root=world_root,
