@@ -548,6 +548,29 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
         problems.append(
             f"only {len(locations)} persona locations across {len(scenarios)} scenarios; need 3"
         )
+    # An outbound suite that is all one awareness tests one opening repeatedly. Enforced rather than
+    # asked for: told to prefer `unaware`, writers made it the default and produced seven of eight,
+    # and told to cover more than one they had settled on `expecting` instead. Both leave two thirds
+    # of the opening untested.
+    outbound = [one for one in scenarios if one.call_direction == "outbound"]
+    if len(outbound) >= 3:
+        spread = Counter(one.caller_awareness or "unaware" for one in outbound)
+        if len(spread) < 2:
+            problems.append(
+                f"all {len(outbound)} outbound scenarios are caller_awareness "
+                f"{next(iter(spread))!r}; cover at least two of expecting, partial, unaware"
+            )
+        elif max(spread.values()) > ceil(len(outbound) * 0.7):
+            worst, count = spread.most_common(1)[0]
+            problems.append(
+                f"{count} of {len(outbound)} outbound scenarios are caller_awareness {worst!r}; "
+                "keep any one of expecting, partial, unaware under 70 percent of them"
+            )
+        if not spread.get("unaware"):
+            problems.append(
+                "no outbound scenario has caller_awareness 'unaware', the one that tests whether "
+                "the agent says who it is and why it called before asking for anything"
+            )
     # A code naturally appears several times inside one scenario (fixture, caller script,
     # reference verify call). Diversity is about reuse *between* callers, not repeated mention
     # of the same fact inside one test.
