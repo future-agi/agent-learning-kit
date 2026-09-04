@@ -242,6 +242,16 @@ def validate_scenario(
     # Advisory was not enough. Measured on the first seven scenarios of a run where every blocking
     # rule was followed, this one was followed once: a rule that only shows up in a suite report
     # after the fact does not change what gets written.
+    # Raw SQL bypasses the world API, and a setup that reaches for it is almost always editing a
+    # seeded row rather than building its own state: every scenario in one suite was a single
+    # UPDATE, so nothing created a record and every setup depended on data it did not own.
+    if "store.execute" in scenario.setup_code or "store.query" in scenario.setup_code:
+        problems.append(
+            "setup_code reaches past the world API into raw SQL. Use world.put to create the "
+            "records this scenario turns on, world.change(collection, key, {...}, by=\"<column>\") "
+            "to edit one, and world.drop to remove one, so the setup states what it builds rather "
+            "than patching whatever the seed happened to contain"
+        )
     if not changes_the_world(scenario.setup_code):
         problems.append(
             "setup_code builds nothing: stand up the records this scenario turns on, and the "

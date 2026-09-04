@@ -55,6 +55,10 @@ world.drop("<collection>", "<key value>", by="<column>")          # remove
 world.state("<collection>")                                       # read it back
 ```
 
+**Use these calls and nothing else.** `world.store.execute` and raw SQL are refused: they bypass
+every guard the API provides, and reaching for them is how a setup ends up as a single `UPDATE`
+against a row it did not create.
+
 **`by=` names the column the record is keyed on, and a table-backed collection refuses the call
 without it.** Omitting it raises `KeyError: <collection> is a table, so changing a record needs the
 column it is keyed on`, and the scenario is refused before it ever runs. Pass the column, not the
