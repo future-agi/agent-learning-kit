@@ -347,6 +347,7 @@ def validate_scenario(
         )
     problems.extend(fixture_problems(scenario))
     problems.extend(alignment_problems(scenario, world_state))
+    problems.extend(hollow_scenario_problems(scenario))
     return problems
 
 
@@ -487,6 +488,29 @@ def _handed_to_caller(text: str) -> set[str]:
         for match in _HANDED_OVER.finditer(text or "")
         if not _NOT_A_RECORD.match(match.group(1))
     }
+
+
+def hollow_scenario_problems(scenario: Scenario) -> list[str]:
+    """Whether the scenario tests reaching an outcome, or only the outcome itself.
+
+    A reference solution of one call, graded by one sub-goal naming that same call, is passed by an
+    agent that makes that call the moment it answers, having established nothing. Measured on a
+    suite of a hundred, eleven scenarios were a single `transfer_to_human` step graded by a single
+    `transferred_to_human` sub-goal, differing from each other only in the pretext, and every one of
+    them was passed by an agent that transfers every caller on arrival.
+
+    The bar is in the write skill and was not enough on its own, so it is checked here.
+    """
+    if len(scenario.solution) > 1:
+        return []
+    if not scenario.solution:
+        return []
+    return [
+        "the reference solution is a single call and there is nothing the agent has to establish "
+        "first, so an agent that makes that call on arrival passes without doing any of the work. "
+        "Either the solution shows how the outcome is reached, gathering what the decision depends "
+        "on before making it, or this is not a scenario"
+    ]
 
 
 def alignment_problems(
