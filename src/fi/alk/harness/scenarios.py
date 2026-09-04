@@ -104,6 +104,10 @@ def open_stage(
         model=chosen_model(),
         ask=ask,
         thinking=True,
+        # Silence means something different once the writing is delegated: see the constant.
+        idle_timeout_seconds=(
+            QUIET_WHILE_DELEGATING_SECONDS if worth_delegating(wanted) else 0.0
+        ),
     )
     return Stage(spec, name=SKILL), destination
 
@@ -173,6 +177,29 @@ MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 1000)
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop
 # that keeps finding smaller things to say.
 TOP_UP_ROUNDS = 1
+
+# How long a session may say nothing before the harness treats it as hung, where the default of
+# ten minutes is wrong for this stage.
+#
+# The planning session's whole turn is one `generate_suite` call, and that call does not return
+# until the writers it started have finished. It is working the entire time and has nothing to
+# emit while it works, so the default bound kills a fan-out mid-flight and throws away everything
+# the writers proved. A hundred scenarios across four writers is comfortably an hour, and any
+# writer may also be waiting out a quota refusal inside that.
+#
+# Still bounded, because the reason the bound exists is real: a dropped provider stream leaves a
+# session alive forever. The outer bound is the run's own authoring deadline.
+QUIET_WHILE_DELEGATING_SECONDS = float(
+    os.environ.get("HARNESS_QUIET_WHILE_DELEGATING") or 5400
+)
+# A writer is quiet while one of its own tool calls runs, and its longest is a proof: restore the
+# world, apply setup, play the solution, then play it again against an untouched world. Minutes,
+# not an hour, and keeping this shorter than the planner's bound is what frees a stuck writer's
+# slot for the next slice instead of holding it until the whole stage times out.
+QUIET_WHILE_WRITING_SECONDS = float(
+    os.environ.get("HARNESS_QUIET_WHILE_WRITING") or 1800
+)
+
 
 # A session refused by the provider is retried rather than abandoned: its work is still worth doing and
 # a slice keeps what it already proved. The quota is measured over a minute, so each wait clears a
@@ -523,6 +550,7 @@ async def _write_slice(
         model=chosen_model(),
         ask=ask,
         thinking=True,
+        idle_timeout_seconds=QUIET_WHILE_WRITING_SECONDS,
     )
     # Each writer drives its own model session, so several of them together are a request rate. When
     # the provider refuses one, the slice is not wrong and its brief is still worth writing, so wait

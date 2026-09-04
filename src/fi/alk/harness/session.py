@@ -253,17 +253,21 @@ class Stage:
         await self._session.send(message)
         turn = Turn()
         replies = self._session.replies().__aiter__()
+        # A stage may ask for a longer silence than the default, because for some stages silence
+        # is the work: a session whose turn is one tool call that fans out to other sessions
+        # emits nothing until that call returns, and killing it then throws away everything the
+        # delegates proved.
+        idle_bound = self._spec.idle_timeout_seconds or STAGE_IDLE_TIMEOUT_SECONDS
         while True:
             try:
                 received = await asyncio.wait_for(
-                    replies.__anext__(), timeout=STAGE_IDLE_TIMEOUT_SECONDS
+                    replies.__anext__(), timeout=idle_bound
                 )
             except StopAsyncIteration:
                 break
             except TimeoutError as exc:
                 raise StageIdleTimeout(
-                    f"{self.name or 'model'} produced no event for "
-                    f"{STAGE_IDLE_TIMEOUT_SECONDS:g}s"
+                    f"{self.name or 'model'} produced no event for {idle_bound:g}s"
                 ) from exc
             for event in self._events(received, turn):
                 # Which stage this came from, stamped once here rather than by every caller,

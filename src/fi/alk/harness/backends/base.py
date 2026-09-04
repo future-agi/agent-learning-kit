@@ -122,6 +122,11 @@ class SessionSpec:
     # stage (understand, interactive) passes its gate in fully built; backends without a
     # permission callback concept ignore it, which is safe because their gating is structural.
     permission_override: Any = None
+    # How long this stage may go without emitting anything before it is treated as hung. Zero
+    # takes the harness default. A stage whose work happens inside one long tool call needs its
+    # own bound: it is working the whole time and has nothing to say while it does, so the
+    # default reads honest work as a hang and kills it.
+    idle_timeout_seconds: float = 0.0
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
