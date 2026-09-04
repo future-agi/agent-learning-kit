@@ -323,6 +323,15 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
     return slices
 
 
+# Initial letters dealt out so parallel writers cannot invent the same people. Three per writer, which
+# is enough choice to suit a scenario and keeps seven writers disjoint before the letters wrap; beyond
+# that two writers share initials but still choose different names. Numbers are partitioned by a
+# two-digit prefix instead, which stays unique for a hundred writers, because a repeated verification
+# code is a real collision where a repeated initial is not.
+_NAME_LETTERS = "ABCDEFGHIJKLMNOPRSTVWY"
+_LETTER_BLOCK = "abc"
+
+
 def callers_for(index: int, wanted: int) -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
@@ -347,6 +356,21 @@ def callers_for(index: int, wanted: int) -> str:
     said = (
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
+    )
+    # Writers cannot see each other, so left to themselves they invent the same handful of people and
+    # the same round numbers, and the suite comes back with one name on a dozen scenarios and one
+    # verification code shared between them. Partitioning the space of values costs nothing and makes
+    # a collision impossible: each writer owns some initial letters and one leading digit, so no
+    # shared list of names or codes has to exist for the values to stay distinct.
+    letters = "".join(
+        _NAME_LETTERS[(index * len(_LETTER_BLOCK) + step) % len(_NAME_LETTERS)]
+        for step in range(len(_LETTER_BLOCK))
+    )
+    said += (
+        f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
+        "every number you invent that the agent will look up, a code or a reference or an account "
+        f"number, must begin with {index % 100:02d}. Other writers own the other letters and "
+        "prefixes, so this is what keeps two scenarios from sharing a name or a code."
     )
     if accents:
         # Spread several offered accents across this writer's callers rather than naming just one,
