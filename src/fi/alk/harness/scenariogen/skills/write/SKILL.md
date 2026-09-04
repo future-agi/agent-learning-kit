@@ -252,6 +252,9 @@ pass. Write to the sections above, then check yourself against this.
 - [ ] the folder name says what behaviour is under test, and **contains no part of the caller's name**
 - [ ] the instruction does not name a different person from the persona
 - [ ] the persona has a name, or the caller reaches the call as a placeholder
+- [ ] its personality, accent and language come from the vocabulary the platform recognises, since a value it cannot map selects no voice and no behaviour
+- [ ] `withheld` is not empty unless this person genuinely holds nothing back
+- [ ] `varies` says what this scenario survives that a weaker one would not
 
 **What is planted**
 

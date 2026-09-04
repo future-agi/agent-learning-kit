@@ -70,6 +70,14 @@ def validate_scenario(
         getattr(scenario.persona, "name", "") or ""
     ).strip():
         problems.append("persona has no name: the caller reaches the call as a placeholder")
+    elif scenario.persona is not None:
+        # The platform picks the caller's voice and behaviour from these values, so one it does not
+        # recognise reaches the call as nothing at all. Only the fields something downstream reads,
+        # and only when the vocabulary was found; how complete the rest of the profile is does not
+        # matter and is not checked.
+        from ..model.persona import unrecognised
+
+        problems.extend(unrecognised(scenario.persona.model_dump()))
     if not scenario.sub_goals:
         problems.append(
             "no sub_goals: nothing would be graded. Name the entries of the catalogue this "
