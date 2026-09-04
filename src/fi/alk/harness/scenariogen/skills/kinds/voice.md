@@ -8,6 +8,34 @@ applies_to: modality=voice
 The craft is the same. What changes is that the caller is speaking, in real time, and cannot see
 anything. These are the parts of a scenario that only exist because of that.
 
+## Which way the call goes changes the instruction
+
+The contract says `direction`. Read it before writing a single instruction, because the two
+directions need the person written differently and getting it wrong tests the wrong half of the
+conversation.
+
+**Inbound: the person rang the agent.** They have an errand, they know why they are calling, and
+they open by saying what they want. The agent greets first and they answer. Write the instruction as
+a purpose: what they came for, what they will and will not give up, when they would give up.
+
+**Outbound: the agent rang the person.** This inverts almost everything:
+
+- They have **no errand of their own.** They were doing something else.
+- They do **not know who is calling** until the agent says so, and they should not act as if they do.
+- They open with a greeting, not a request. "Hello?" is the whole first turn.
+- They may be **suspicious**: an unexpected call about their account is what a scam sounds like, so
+  asking the agent to prove itself is correct behaviour, not obstruction.
+- They may be **busy or unwilling.** Declining to talk now is a legitimate outcome and worth testing.
+- What the call is about is the **agent's** purpose. The instruction says how this person reacts to
+  it, not what they wanted.
+
+An outbound instruction that opens with a request has been written as inbound, and the scenario then
+tests an errand the agent never rang about.
+
+Either way, the person still needs the facts they hold in the instruction: an outbound caller asked
+to confirm something must know what they would say when the agent asks for a detail it did not
+supply.
+
 ## What a voice scenario can test that a chat one cannot
 
 - **The caller answers three questions in one breath**, in their own order, before being asked.
