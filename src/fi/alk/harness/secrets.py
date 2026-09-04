@@ -96,6 +96,10 @@ def worker_environment(
         "HARNESS_WEBHOOK_URL",
         "HARNESS_RUNTIME_WEBHOOK_URL",
         "HARNESS_VOICE_INFRA_RETRIES",
+        # Whether a suite is written by several writers at once. Read during authoring, in the
+        # child this set filters, so without it the flag is stripped and the tool that fans
+        # writers out is never offered to the model.
+        "HARNESS_PARALLEL_SCENARIOS",
         # Runner-owned model configuration. Uploaded agent values with these names remain in the
         # runtime namespace and cannot replace controller credentials.
         "ALK_AGENT_MODEL",
@@ -148,6 +152,7 @@ def worker_environment(
         "HARNESS_WEBHOOK_URL",
         "HARNESS_RUNTIME_WEBHOOK_URL",
         "HARNESS_VOICE_INFRA_RETRIES",
+        "HARNESS_PARALLEL_SCENARIOS",
         "ALK_AGENT_MODEL",
         "ALK_JUDGE_MODEL",
         "ALK_USER_MODEL",
