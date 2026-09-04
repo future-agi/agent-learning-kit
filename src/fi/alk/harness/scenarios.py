@@ -26,6 +26,7 @@ from .catalogue import load_catalogue
 from .contract import AgentContract
 from .scenario import Scenario, suite_diversity_problems
 from .scenario_tools import (
+    journalled,
     worth_delegating,
     SCENARIO_SERVER,
     load_scenarios,
@@ -799,7 +800,21 @@ async def write_in_parallel(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    suite = merged([load_scenarios(destination), *written])
+    proved = merged([load_scenarios(destination), *written])
+    # What a writer proved but never handed back, because its session died after proving it. Matched
+    # by name so a scenario already in hand is not added twice under a numbered name.
+    recovered = [
+        one for one in journalled(destination) if one.name not in {x.name for x in proved}
+    ]
+    if recovered:
+        logger.warning(
+            "recovered %s scenarios from the journal that no writer returned: %s",
+            len(recovered),
+            ", ".join(one.name for one in recovered),
+        )
+        if on_event:
+            on_event({"type": "recovered", "kept": len(recovered)})
+    suite = merged([proved, recovered])
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.

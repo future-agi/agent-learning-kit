@@ -132,6 +132,48 @@ def load_scenarios(destination: Path) -> list[Scenario]:
     return read_all(destination)
 
 
+JOURNAL = "written.jsonl"
+
+
+def journal_scenario(scenario: Scenario, destination: Path) -> None:
+    """Append one proved scenario to the journal, which is the only record a dead writer leaves.
+
+    A delegated writer cannot write folders: saving the suite deletes every folder it does not know
+    about, so a writer persisting its own would delete its siblings' work. It therefore keeps what it
+    proved in memory, and until now a writer whose session died took its scenarios with it. A whole
+    hundred-scenario run was lost that way. This file is append-only and nothing prunes it, so what
+    was proved survives the session that proved it.
+    """
+    try:
+        path = Path(destination) / JOURNAL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as journal:
+            journal.write(json.dumps(scenario.model_dump(), ensure_ascii=False) + "\n")
+    except Exception as broke:  # noqa: BLE001 - a scenario is never lost over bookkeeping
+        logger.warning("could not journal %s: %s", scenario.name, broke)
+
+
+def journalled(destination: Path) -> list[Scenario]:
+    """Every scenario the journal holds, newest wins, skipping anything unreadable.
+
+    Appended by writers as they prove, so a retried slice re-journals and the same name appears more
+    than once. Read by the caller that saves, to recover what a writer proved and never returned.
+    """
+    path = Path(destination) / JOURNAL
+    if not path.is_file():
+        return []
+    found: dict[str, Scenario] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            one = Scenario.model_validate(json.loads(line))
+        except Exception:  # noqa: BLE001 - a half-written line is expected while writers run
+            continue
+        found[one.name] = one
+    return list(found.values())
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -191,6 +233,10 @@ def accept_scenario(
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
     if persist:
         write_scenarios(kept, world_root, catalogue)
+    else:
+        # A writer sharing the destination cannot write folders, so the journal is where its proved
+        # work survives the session that proved it.
+        journal_scenario(scenario, world_root)
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "

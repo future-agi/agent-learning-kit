@@ -80,3 +80,21 @@ def test_a_setup_that_only_adjusts_borrowed_records_is_refused():
         )
         == []
     )
+
+
+def test_a_writer_that_dies_after_proving_still_leaves_its_work(tmp_path):
+    """A delegated writer cannot write folders, so the journal is the only record it leaves."""
+    from fi.alk.harness.scenario_tools import journal_scenario, journalled
+
+    one = Scenario(
+        name="cancel_after_fee_quoted",
+        instruction="Get the ride cancelled.",
+        sub_goals=["ride_cancelled"],
+    )
+    journal_scenario(one, tmp_path)
+    # A retried slice journals the same name again, and the later line wins rather than duplicating.
+    journal_scenario(one.model_copy(update={"instruction": "Cancel it, and ask what it costs."}), tmp_path)
+    back = journalled(tmp_path)
+    assert [x.name for x in back] == ["cancel_after_fee_quoted"]
+    assert back[0].instruction.startswith("Cancel it")
+    assert journalled(tmp_path / "nothing-here") == []
