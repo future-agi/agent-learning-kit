@@ -870,6 +870,20 @@ def scenario_tools(
                 "across. Write them one at a time with submit_scenario, or fix the contract."
             )
 
+        # Never write more than the suite still needs. A pass that comes back short is told how many
+        # are outstanding and to call again, and a model that calls again with the original number
+        # instead of the remainder gets a second full suite: measured at 377 kept against a target of
+        # 200, three times the quota for scenarios that are trimmed away again. The count on disk is
+        # the only honest measure of what is left, so it is read here rather than trusted from the
+        # argument.
+        if wanted:
+            asked = min(asked, max(0, wanted - len(load_scenarios(destination))))
+        if not asked:
+            return _ok(
+                f"The suite already holds the {wanted} it was asked for. Nothing more to write: "
+                "review what is there, replace any scenario you are unhappy with by name, and "
+                "call save_scenarios."
+            )
         # A large ask is served a batch at a time. Spinning up a writer per scenario would put
         # hundreds of model sessions on one machine, and the person waiting would see nothing
         # for an hour. A batch they can read, and an offer of the rest, is the better trade.

@@ -165,3 +165,38 @@ def test_a_slice_writer_stops_at_the_size_it_was_given(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         asyncio.run(submit.handler({"name": "already_here", "instruction": "one, fixed"}))
+
+
+def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch):
+    """Called again with the original number, it wrote a second full suite: 377 against a target of 200."""
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as st
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    # Above FEWEST_WORTH_DELEGATING, or the fan-out tool is not published at all.
+    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=20)
+    suite = next(spec for spec in server.tools if spec.name == "generate_suite")
+
+    asked_for: list[int] = []
+
+    async def _fake_parallel(contract, *, out, wanted, use_cases, slices, at_once):
+        asked_for.append(wanted)
+        return []
+
+    monkeypatch.setattr("fi.alk.harness.scenarios.write_in_parallel", _fake_parallel)
+    # Nothing on disk yet: the full ask goes through.
+    asyncio.run(suite.handler({"count": 20}))
+    assert asked_for == [20]
+
+    # Fourteen already written, and the model asks for twenty again: six are outstanding.
+    monkeypatch.setattr(st, "load_scenarios", lambda _destination: [object()] * 14)
+    asyncio.run(suite.handler({"count": 20}))
+    assert asked_for == [20, 6]
+
+    # Once the target is met, it refuses to write more rather than starting another suite.
+    monkeypatch.setattr(st, "load_scenarios", lambda _destination: [object()] * 20)
+    said = asyncio.run(suite.handler({"count": 20}))
+    assert "already holds the 20" in said["content"][0]["text"]
+    assert asked_for == [20, 6]
