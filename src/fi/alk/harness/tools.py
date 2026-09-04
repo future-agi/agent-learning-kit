@@ -261,6 +261,17 @@ def contract_tools(destination: Path) -> Any:
                                 '{"priority": ["low", "normal", "urgent"]}.',
                             },
                             "description": {"type": "string"},
+                            "requires": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Tools that must have run before this one stops "
+                                "refusing, read from a guard in its own body. Only state the agent "
+                                "builds during the conversation counts: a quote taken, an option "
+                                "selected. Identity established when the call opens does not, "
+                                "since it holds before any tool runs. Empty means callable first "
+                                "thing, and naming a tool that is not gated makes every future "
+                                "test of it replay a preamble it never needed.",
+                            },
                         },
                         # Nothing required: a tool genuinely taking no arguments is ordinary,
                         # and requiring args here rejects the whole contract because of one.

@@ -43,13 +43,28 @@ Find, in roughly this order:
 3. **Argument values.** Where an argument is constrained to a set, an enum, a literal union, or a
    lookup into fixed data, record the real values.
 
-4. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
+4. **What each tool refuses until something else has happened.** Read each tool's body for a
+   guard that raises before it does any work, and record the tools that make that guard pass in
+   `requires`. Distinguish two kinds, because they cost very different things:
+
+   - A guard on state the agent builds **during the conversation** is a real precondition. If a
+     tool refuses until a quote has been taken or an option selected, name those tools.
+   - A guard on identity the agent establishes **when the call opens** is not. A caller is
+     already recognised by the time any tool runs, so a check on that is satisfied for free.
+
+   Leave `requires` empty when a tool can be called first thing. Getting this wrong in the
+   cautious direction is not safe: a scenario writer with no precondition data assumes the worst
+   and replays the agent's entire flow to reach every tool, because that always works and
+   deviating risks a refusal it cannot predict. Every tool you mark as gated when it is not costs
+   every future test of it a preamble it never needed.
+
+5. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is
    told them and graded against them, and its prompt is where most of them live. Prompts are
    often kept away from the main agent file, so search the whole source for a long instructions
    string before concluding there are none.
 
-5. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
+6. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
    browser it drives. This decides how it is later run, so getting it wrong reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
@@ -64,7 +79,7 @@ Find, in roughly this order:
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
 
-6. **Which side places the call.** Voice only, and read from the agent's own instructions rather
+7. **Which side places the call.** Voice only, and read from the agent's own instructions rather
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent
    people dial into ("callers dial in", "thanks for calling") is `inbound`. Record it as
@@ -75,12 +90,12 @@ Find, in roughly this order:
    to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
    can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
 
-7. **What it depends on.** Everything the agent reaches for that has to exist before it can
+8. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
    what it provides, and which tools cannot work without it. The environment stage builds these,
    so a dependency you do not record is a tool that will have nothing to answer it.
 
-8. **Whether its tools have code, and how to reach it.** This is the difference between testing
+9. **Whether its tools have code, and how to reach it.** This is the difference between testing
    the agent and testing somebody's reimplementation of it, so it is worth real effort.
 
    For each tool, find the function that actually runs and record where it lives and how it is
@@ -100,12 +115,12 @@ Find, in roughly this order:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
    never writes a replacement implementation.
 
-9. **How its code says no.** Code written for production often reports failure by returning a
+10. **How its code says no.** Code written for production often reports failure by returning a
    value rather than raising, so a returned string can be a refusal. Read one or two of its tools
    and record the convention. Without it, every refusal is recorded as a success, which hides the
    behaviour most worth testing.
 
-10. **What it takes to run.** Its install command from its own lockfile or requirements, the
+11. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
    Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
@@ -113,12 +128,12 @@ Find, in roughly this order:
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
    startable but the simulator cannot honestly claim to have exercised it.
 
-11. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
+12. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
     so if it is hardcoded: that is the difference between substituting a store cleanly and having
     to change the agent's code, which is a decision for the person, not for you.
 
-12. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
+13. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
     every field of every kind of record, and any values a field is constrained to. Record the
     **contents** in proportion — a small dataset goes in whole; for a large one a representative
     sample is what belongs here, chosen to include the awkward rows an agent has to cope with: a
@@ -128,7 +143,7 @@ Find, in roughly this order:
     fidelity rather than gaining it. What is needed is enough for a world that exercises the same
     flows and can refuse for the same reasons.
 
-13. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
+14. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
     not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
     not write a situation with a character, a sequence of events and an outcome. Those are
     scenarios and they are written later, from these sentences.

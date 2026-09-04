@@ -98,6 +98,10 @@ class ToolSpec(BaseModel):
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
+    # Tools that must have run before this one stops refusing, and only for state the agent builds
+    # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
+    # costs every future test of it a preamble it never needed.
+    requires: list[str] = Field(default_factory=list)
 
 
 class ToolEntry(BaseModel):
