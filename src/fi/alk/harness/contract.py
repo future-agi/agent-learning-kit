@@ -486,8 +486,13 @@ class AgentContract(BaseModel):
                 if tool.arg_values
                 else ""
             )
+            # Preconditions belong on the tool line or they are not read. A writer that cannot see
+            # what a tool refuses until another has run replays the agent's whole flow to reach it.
+            needs = (
+                f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
+            )
             lines.append(
-                f"  - {tool.name}({signature}){values} : {tool.description[:140]}"
+                f"  - {tool.name}({signature}){values}{needs} : {tool.description[:140]}"
             )
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
@@ -495,6 +500,19 @@ class AgentContract(BaseModel):
             "REAL TOOLS (use ONLY these, with these exact arg names and types):\n"
             + ("\n".join(lines) or "  (none)"),
         ]
+        # Voice only, and stated plainly: a scenario written as though the person dialled in tests
+        # nothing when the agent is the one placing the call.
+        if self.modality == "voice" and self.call_direction:
+            parts.insert(
+                2,
+                f"CALL DIRECTION: {self.call_direction} - "
+                + (
+                    "this agent places the call, so the person did not dial and has no request "
+                    "to open with"
+                    if self.call_direction == "outbound"
+                    else "people dial in to this agent"
+                ),
+            )
         if self.hard_constraints:
             parts.append(
                 "HARD CONSTRAINTS the agent MUST follow (nothing may contradict these):\n  - "
