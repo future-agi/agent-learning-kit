@@ -184,13 +184,31 @@ RATE_LIMIT_JITTER_SECONDS = 30
 RATE_LIMIT_TOTAL_WAIT_SECONDS = 300
 
 
-def _rate_limited(broke: BaseException) -> bool:
-    """Whether the provider refused this session for rate or quota rather than for what it asked."""
-    said = f"{type(broke).__name__} {broke}".lower()
+def _rate_limited(said: str) -> bool:
+    """Whether this is the provider refusing for rate or quota rather than for what was asked."""
+    lowered = said.lower()
     return any(
-        mark in said
+        mark in lowered
         for mark in ("429", "resource_exhausted", "resourceexhausted", "rate limit", "quota")
     )
+
+
+def _refusal_in(broke: BaseException | None, ended: Any) -> str:
+    """The refusal, when a turn or an exception is one for rate or quota, and empty otherwise.
+
+    Two shapes because a backend has two ways of reporting a dead model call, and only one of them
+    is an exception. The Vertex backend never raises: it catches everything and finishes the turn
+    with `outcome` "failed" and the provider's own words in `error`. A retry that watched only for
+    exceptions therefore never fired on the backend the hosted run actually uses, which is how a
+    quota refusal went on costing a whole slice while the waiting code looked correct.
+    """
+    if broke is not None:
+        said = f"{type(broke).__name__} {broke}"
+        return said if _rate_limited(said) else ""
+    if str(getattr(ended, "outcome", "") or "") != "failed":
+        return ""
+    said = str(getattr(ended, "error", "") or "")
+    return said if _rate_limited(said) else ""
 
 
 def _refusal_pause() -> float:
@@ -211,7 +229,7 @@ async def survive_refusal(
     what: str,
     on_event: Callable[..., Any] | None = None,
     enough: Callable[[], bool] | None = None,
-) -> None:
+) -> Any:
     """Run something that talks to the model, waiting out a refusal for rate or quota.
 
     Used by every session that drives its own model turn, because any of them can be the one the
@@ -220,22 +238,27 @@ async def survive_refusal(
     """
     waited = 0.0
     while True:
+        broke: BaseException | None = None
+        ended: Any = None
         try:
-            await run()
-            return
-        except Exception as broke:  # noqa: BLE001 - classified below, re-raised when not a refusal
-            pause = _refusal_pause()
-            spent_out = waited + pause > RATE_LIMIT_TOTAL_WAIT_SECONDS
-            if not _rate_limited(broke) or spent_out or (enough is not None and enough()):
-                raise
-            waited += pause
-            logger.warning(
-                "%s was refused for rate or quota; waiting %ss (%ss of %ss spent)",
-                what, pause, round(waited), RATE_LIMIT_TOTAL_WAIT_SECONDS,
-            )
-            if on_event:
-                on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
-            await asyncio.sleep(pause)
+            ended = await run()
+        except Exception as raised:  # noqa: BLE001 - classified below, re-raised when not a refusal
+            broke = raised
+        refusal = _refusal_in(broke, ended)
+        pause = _refusal_pause()
+        spent_out = waited + pause > RATE_LIMIT_TOTAL_WAIT_SECONDS
+        if not refusal or spent_out or (enough is not None and enough()):
+            if broke is not None:
+                raise broke
+            return ended
+        waited += pause
+        logger.warning(
+            "%s was refused for rate or quota; waiting %ss (%ss of %ss spent): %s",
+            what, pause, round(waited), RATE_LIMIT_TOTAL_WAIT_SECONDS, refusal[:200],
+        )
+        if on_event:
+            on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
+        await asyncio.sleep(pause)
 
 
 @dataclass(frozen=True)
@@ -505,10 +528,10 @@ async def _write_slice(
     # the provider refuses one, the slice is not wrong and its brief is still worth writing, so wait
     # for the quota to recover and run it again. `kept` belongs to this slice's own tool server, so a
     # second attempt adds to what the first proved rather than starting over.
-    async def attempt_slice() -> None:
+    async def attempt_slice() -> Any:
         stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
         async with stage:
-            await stage.say(
+            return await stage.say(
                 brief_for(contract, mine, siblings, callers_for(index, mine.count)),
                 on_event=watch,
             )
