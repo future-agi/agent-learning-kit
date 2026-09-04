@@ -1440,3 +1440,24 @@ def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
     assert fake_environ[RETELL_API_KEY] == "customer-retell-key"
     assert runner._livekit_url == "wss://platform-livekit.example"
     assert runner._missing_config is None
+
+
+def test_auto_connector_resolves_to_livekit_from_target_secrets() -> None:
+    job = _job(connector="auto")
+    assert cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x.livekit.cloud"}) == "livekit"
+
+
+def test_auto_connector_resolves_to_livekit_from_config() -> None:
+    job = _job(connector="auto", config=dict(_ALL_CONFIG))
+    assert cr._resolve_connector(job, {}) == "livekit"
+
+
+def test_auto_connector_resolves_to_vapi_and_retell_from_target_secrets() -> None:
+    job = _job(connector="auto")
+    assert cr._resolve_connector(job, {cr.VAPI_API_KEY_ALIAS: "k"}) == "vapi"
+    assert cr._resolve_connector(job, {cr.RETELL_API_KEY_ALIAS: "k"}) == "retell"
+
+
+def test_explicit_connector_is_never_overridden() -> None:
+    job = _job(connector="retell")
+    assert cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x"}) == "retell"

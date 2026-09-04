@@ -1169,6 +1169,32 @@ class SpawnedWorldProcess:
     dispatch_agent_name: str | None = None
 
 
+_AGENT_NAME_SOURCE_DEFAULT = re.compile(
+    r"agent_name\s*=\s*os\.(?:environ\.get|getenv)\(\s*"
+    r"[\"']LIVEKIT_AGENT_NAME[\"']\s*,\s*[\"'](?P<default>[^\"']+)[\"']"
+)
+
+
+def _agent_name_source_default(source_root: Path) -> str:
+    """Recover the agent's source-declared LIVEKIT_AGENT_NAME default when the bundle process
+    env does not render one (agent reads os.environ.get("LIVEKIT_AGENT_NAME", "<default>")).
+    Mirrors provision._AGENT_NAME_SETTING so a freshly authored bundle carries the dispatch
+    identity the same way a cached bundle does."""
+    try:
+        if not source_root.is_dir():
+            return ""
+        for path in source_root.rglob("*.py"):
+            try:
+                match = _AGENT_NAME_SOURCE_DEFAULT.search(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                continue
+            if match:
+                return match.group("default").strip()
+    except OSError:
+        pass
+    return ""
+
+
 def _dispatch_metadata(
     handles: "dict[str, SpawnedWorldProcess]",
 ) -> dict[str, "JsonValue"]:
@@ -5063,6 +5089,13 @@ class ProcessRuntimeProvider:
 
         metadata: dict[str, str] = {}
         agent_name = env.get("LIVEKIT_AGENT_NAME")
+        if not agent_name:
+            # A freshly authored bundle may not render LIVEKIT_AGENT_NAME onto the control
+            # process when the agent reads its own default via
+            # os.environ.get("LIVEKIT_AGENT_NAME", "<default>"). Recover that source default so a
+            # fresh bundle carries the dispatch identity like a cached one and the CallRunner can
+            # dispatch instead of failing voice_dispatch_identity_unavailable.
+            agent_name = _agent_name_source_default(Path("/work/source"))
         if agent_name:
             metadata["livekit_agent_name"] = _fill(agent_name)
         trace = env.get("HARNESS_TOOL_TRACE")
