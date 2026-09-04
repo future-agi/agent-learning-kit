@@ -23,7 +23,7 @@ from .backends import SessionSpec, ToolServer, tool, tool_server
 from .config import artifact_dir, chosen_model, discovered_skills, load_skill
 from .catalogue import load_catalogue
 from .contract import AgentContract
-from .scenario import Scenario
+from .scenario import Scenario, suite_diversity_problems
 from .scenario_tools import (
     parallel_suites,
     SCENARIO_SERVER,
@@ -545,10 +545,23 @@ async def gaps_in(
     stage = Stage(review, name=f"{SKILL}:review")
     try:
         async with stage:
+            # The suite-level checks are reported at save and enforced nowhere, deliberately:
+            # refusing a save leaves proved work in memory only. This is the one place that can act
+            # on them, because it is the only pass that reads the whole suite and can commission
+            # replacements. Without this they are a message nobody reads.
+            skew = suite_diversity_problems(suite)
             await stage.say(
                 f"This suite has {len(suite)} scenarios against a target of {wanted}:\n\n"
                 f"{_suite_summary(suite)}\n\n"
-                "Say what it is missing, then submit_gaps. Submit an empty list if it is "
+                + (
+                    "Reading the suite as a whole, these are already wrong with it, and a gap that "
+                    "fixes one of them is worth more than a new use case:\n"
+                    + "\n".join(f"- {problem}" for problem in skew)
+                    + "\n\n"
+                    if skew
+                    else ""
+                )
+                + "Say what it is missing, then submit_gaps. Submit an empty list if it is "
                 "covering what it should."
             )
     except Exception:  # noqa: BLE001 - a review that fails leaves the suite as written
