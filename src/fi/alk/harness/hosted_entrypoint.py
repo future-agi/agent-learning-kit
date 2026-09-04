@@ -562,7 +562,7 @@ class NotWiredCallRunner:
 _VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
 
 
-def _bundle_contract_modality(bundle_dir: Path) -> str | None:
+def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
     path = bundle_dir / "contract.json"
     if not path.is_file():
         return None
@@ -572,8 +572,12 @@ def _bundle_contract_modality(bundle_dir: Path) -> str | None:
         return None
     if not isinstance(body, dict):
         return None
-    value = str(body.get("modality") or "").strip().lower()
+    value = str(body.get(key) or "").strip().lower()
     return value or None
+
+
+def _bundle_contract_modality(bundle_dir: Path) -> str | None:
+    return _bundle_contract_value(bundle_dir, "modality")
 
 
 def _default_build_call_runner(
@@ -588,6 +592,11 @@ def _default_build_call_runner(
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
     if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
+        # The understand stage read this off the agent's own instructions, so the contract is where
+        # it is identified. A run-level value still wins, as the operator override it is.
+        declared = _bundle_contract_value(context.bundle_dir, "call_direction")
+        if declared:
+            os.environ.setdefault("ALK_CALL_DIRECTION", declared)
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing

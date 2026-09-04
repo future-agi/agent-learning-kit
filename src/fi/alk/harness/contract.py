@@ -25,6 +25,7 @@ _STRING_FIELDS = (
     "agent",
     "one_liner",
     "modality",
+    "call_direction",
     "system_prompt_excerpt",
     "notes",
 )
@@ -427,6 +428,10 @@ class AgentContract(BaseModel):
     agent: str = ""
     one_liner: str = ""
     modality: str = "chat"
+    # Voice only: whether this agent places calls or answers them. Chat is always started by the
+    # person, so it stays inbound. It changes how the simulated person is briefed, not who speaks
+    # first: an outbound agent still greets, it just has to say who it is and why it called.
+    call_direction: str = "inbound"
     conversational: bool = True
     system_prompt_excerpt: str = ""
     hard_constraints: list[str] = Field(default_factory=list)

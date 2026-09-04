@@ -206,6 +206,17 @@ def contract_tools(destination: Path) -> Any:
                     "session (LiveKit, telephony, TTS/STT) is voice; a text interface is chat; "
                     "a browser-driving agent is browser. This decides how it is later run.",
                 },
+                "call_direction": {
+                    "type": "string",
+                    "enum": ["inbound", "outbound"],
+                    "description": "Voice only, and read from the agent's own instructions rather "
+                    "than guessed. Outbound if it places the call and the person is not expecting "
+                    "it (\"you placed this call\", \"this is us calling about\"); inbound if "
+                    "people dial in to it (\"callers dial in\", \"thanks for calling\"). "
+                    "Leave unset for chat, which a person always starts. This decides how the "
+                    "simulated person is briefed: someone who did not dial has no opening request "
+                    "to make.",
+                },
                 "conversational": {
                     "type": "boolean",
                     "description": "True if a person talks with it turn by turn. False for an "
