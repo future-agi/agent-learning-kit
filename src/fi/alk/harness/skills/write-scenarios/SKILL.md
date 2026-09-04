@@ -265,6 +265,24 @@ different test of the agent, so cover more than one across a use case:
   and gives a reason before asking for anything. This is the default when you leave it out, and the
   hardest one to pass.
 
+**Do not write every outbound scenario as `expecting`.** It is the easiest of the three and the least
+informative: a person who was told the call is coming and what it concerns can reasonably ask for what
+they want, so the scenario stops testing how the agent opens a call it placed. **At least one outbound
+scenario per use case must be `unaware`**, and when a use case gets only one or two scenarios, prefer
+`unaware` over `expecting`. Reach for `expecting` only when the point of that scenario is something
+later in the flow and the opening is deliberately made easy.
+
+The instruction has to match the awareness, or the two fight each other:
+
+```
+BAD    aware=unaware, instruction "When the assistant calls, ask to book a ride to the
+       office."  (they do not know why anyone is calling; they cannot ask for this)
+
+GOOD   aware=unaware, instruction "You are at home getting ready for work. You are not
+       expecting any calls. If a caller explains they are from Uber and asks about a
+       ride, you would go from home to the office. You will not raise it yourself."
+```
+
 An outbound scenario still needs everything else: the facts they hold, the seeded data behind them,
 and a terminal outcome. Only the shape of the opening changes.
 
