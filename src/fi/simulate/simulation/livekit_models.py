@@ -261,13 +261,19 @@ def _simulator_thinking(model: str) -> dict[str, object] | None:
 
     A person on a phone call answers from what they already know, so thinking buys nothing here and
     is charged twice: once in latency the target hears as an unnatural pause, and again in a call
-    whose duration no longer reflects how the conversation actually went. Off unless a run asks for
-    it. `SIMULATOR_LLM_THINKING` takes a Gemini thinking level, or a token budget as a number.
+    whose duration no longer reflects how the conversation actually went. As near off as the model
+    allows. `SIMULATOR_LLM_THINKING` takes a Gemini thinking level, or a token budget as a number.
     """
     if not model.startswith("gemini"):
         return None
     asked = os.environ.get("SIMULATOR_LLM_THINKING", "").strip().lower()
-    if asked in ("", "off", "0", "none", "false"):
+    off = asked in ("", "off", "0", "none", "false")
+    # Gemini 3 takes a level, never a budget, and the LiveKit plugin answers a budget it cannot
+    # use by substituting its own "minimal", which Vertex rejects: every inference 400s and the
+    # caller never speaks at all. "low" is the floor the plugin and Vertex both accept.
+    if model.startswith("gemini-3"):
+        return {"thinking_level": "low" if off or asked.isdigit() else asked}
+    if off:
         return {"thinking_budget": 0}
     if asked.isdigit():
         return {"thinking_budget": int(asked)}
