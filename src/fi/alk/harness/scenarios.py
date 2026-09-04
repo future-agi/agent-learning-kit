@@ -158,7 +158,10 @@ def load(destination: Path) -> list[Scenario]:
 # is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
 # served a batch at a time with the rest offered back.
 AT_ONCE = 4
-MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
+# Writers each drive their own model session, so this is a request rate as much as a concurrency.
+# Eight of them exhausts the provider quota and the writers that get the 429 lose their whole
+# slice, which costs more scenarios than the extra concurrency buys.
+MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4)
 # How many a single generate_suite pass will write. A hosted run is unattended, so a cap here
 # does not pause for a person, it just returns fewer than were asked for and stops. Kept as a
 # backstop against a runaway ask rather than as a batch size.
