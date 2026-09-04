@@ -492,7 +492,7 @@ def _handed_to_caller(text: str) -> set[str]:
 
 
 def naming_problems(scenario: Scenario) -> list[str]:
-    """Whether the folder name says what is tested, or only who was on the phone.
+    """Whether the name says what is tested, or only who the agent was dealing with.
 
     The folder name is how a failure is read weeks later. A caller's name in it says the caller was
     carrying the difference the test should have been carrying, which is the same mistake as planning
@@ -511,9 +511,9 @@ def naming_problems(scenario: Scenario) -> list[str]:
     if not named_in:
         return []
     return [
-        f"the name contains the caller's own name ({', '.join(named_in)}). Name it for the behaviour "
-        "under test, so a red result says which rule broke rather than who was on the phone, and so "
-        "the suite sorts by what it covers rather than by who called"
+        f"the name contains the person's own name ({', '.join(named_in)}). Name it for the behaviour "
+        "under test, so a red result says which rule broke rather than who the agent was dealing "
+        "with, and so the suite sorts by what it covers rather than by who appeared in it"
     ]
 
 
