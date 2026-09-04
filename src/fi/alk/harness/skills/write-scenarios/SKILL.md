@@ -234,57 +234,58 @@ generic caller.
 
 ## When the agent placed the call
 
-Read `call_direction` on the contract. It is `inbound` for an agent people dial into, and that is
-what everything above assumes: the person rang with something they want, so the instruction gives
-them an objective to pursue.
+Read `CALL DIRECTION` on the contract before writing a single instruction. The two directions need the
+person written differently, and getting it wrong tests the wrong half of the conversation.
 
-`outbound` inverts that, and it is not the same scenario with a reworded greeting. **This person did
-not dial anyone.** They have no errand to raise and no reason to explain themselves, so an
-instruction that hands them a request is unwritable by them: they would have to volunteer it before
-the agent has said why it called, which is precisely what a real person does not do.
+**Inbound: the person rang the agent.** Everything above assumes this. They have an errand, they know
+why they are calling, and they open by saying what they want.
 
-Write their situation and what they would agree to if asked, never an opening request:
+**Outbound: the agent rang the person.** This inverts almost everything:
+
+- They have **no errand of their own.** They were doing something else.
+- They do **not know who is calling** until the agent says so, and must not act as if they do.
+- They open with a greeting, not a request. "Hello?" is the whole first turn.
+- They may be **suspicious.** An unexpected call about their account is what a scam sounds like, so
+  asking the agent to prove itself is correct behaviour, not obstruction.
+- They may be **busy or unwilling.** Declining to talk now is a legitimate outcome worth testing.
+- What the call is about is the **agent's** purpose. The instruction says how this person reacts to it,
+  not what they wanted.
 
 ```
 BAD    Book an Uber Comfort ride from your home to your work office.
-       (they never called Uber; nothing prompts them to ask for this)
+       (they never called anyone; nothing prompts them to ask for this)
 
-GOOD   You are at home getting ready for work. If someone from Uber rings about the
-       ride you have on file, you would take it, leaving from home and going to the
-       office. You will not raise any of that yourself.
+GOOD   You are at home getting ready for work. If someone rings about the ride you have
+       on file, you would take it, leaving from home and going to the office. You will
+       not raise any of that yourself.
 ```
 
-Then set `caller_awareness`, which is the thing an outbound suite really varies. Each value is a
-different test of the agent, so cover more than one across a use case:
+An outbound instruction that opens with a request has been written as inbound, and the scenario then
+tests an errand the agent never rang about.
 
-- `expecting` — they were told to expect the call and roughly what it concerns. Tests that the
-  agent can get to the task.
-- `partial` — they half remember arranging something and not the details. Tests whether the agent
-  re-establishes the specifics instead of assuming them.
-- `unaware` — they have no idea why anyone is ringing. Tests whether the agent identifies itself
-  and gives a reason before asking for anything. This is the default when you leave it out, and the
-  hardest one to pass.
+### How much the person already knows
 
-**Do not write every outbound scenario as `expecting`.** It is the easiest of the three and the least
-informative: a person who was told the call is coming and what it concerns can reasonably ask for what
-they want, so the scenario stops testing how the agent opens a call it placed. **At least one outbound
-scenario per use case must be `unaware`**, and when a use case gets only one or two scenarios, prefer
-`unaware` over `expecting`. Reach for `expecting` only when the point of that scenario is something
-later in the flow and the opening is deliberately made easy.
+`caller_awareness` changes the whole call, so choose it deliberately. Each value needs **different data**
+in the instruction:
 
-The instruction has to match the awareness, or the two fight each other:
+| They are | What the instruction must carry |
+|---|---|
+| `expecting` | They know what it is about and roughly what they agreed, so they can be asked to confirm a detail. They must hold that detail, and their version may differ from the world's. |
+| `partial` | They know something happened but not the detail: not the date, not the amount, not which of two things. Say what they do recall and what they have lost. |
+| `unaware` | No context at all. The agent has to establish who they are and why it is calling before anything else. Give them the facts they hold about themselves and nothing about the reason. |
 
-```
-BAD    aware=unaware, instruction "When the assistant calls, ask to book a ride to the
-       office."  (they do not know why anyone is calling; they cannot ask for this)
+**Do not write every outbound scenario as `expecting`.** It is the easiest and least informative: a
+person told the call is coming can reasonably ask for what they want, so the scenario stops testing how
+the agent opens a call it placed. **At least one outbound scenario per use case must be `unaware`**, and
+when a use case gets only one or two, prefer `unaware`.
 
-GOOD   aware=unaware, instruction "You are at home getting ready for work. You are not
-       expecting any calls. If a caller explains they are from Uber and asks about a
-       ride, you would go from home to the office. You will not raise it yourself."
-```
+**But an `unaware` person still needs facts.** Somebody with no context and nothing to offer produces a
+short, empty conversation, and that is a badly written scenario rather than a finding about the agent.
+They hold their own details and how they react to an unexpected call; what they must not hold is the
+reason for it.
 
-An outbound scenario still needs everything else: the facts they hold, the seeded data behind them,
-and a terminal outcome. Only the shape of the opening changes.
+An outbound scenario still needs everything else: the seeded data behind those facts, and a terminal
+outcome. Only the shape of the opening changes.
 
 ## Writing setup, and the mistake to avoid
 
