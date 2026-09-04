@@ -11,6 +11,7 @@ import ast
 import json
 import re
 from collections import Counter
+from collections.abc import Iterable
 from math import ceil
 from typing import Any
 
@@ -591,3 +592,35 @@ def unbacked_condition_problems(scenario: Scenario) -> list[str]:
                 "actually tests."
             )
     return said
+
+
+def duplicate_grading_problems(
+    scenario: Scenario, siblings: Iterable[Scenario]
+) -> list[str]:
+    """Refuse a scenario graded by exactly the checks a sibling is already graded by.
+
+    Checks are shared catalogue entries, so two scenarios naming the same set are read by the
+    same assertions and separate no agent: whatever one passes, the other passes for the same
+    reason. Depth hides this. The single-check form was already refused, but six scenarios about
+    six different account conditions and two about two different ambiguous addresses shared a set
+    apiece at twelve and thirteen steps, and an agent that transferred everybody, or picked either
+    candidate, passed all of them. Forty nine scenarios carried thirty two distinct sets.
+
+    Compared against siblings rather than inside one scenario because that is where the defect
+    lives: nothing is wrong with the set until something else is graded by it too.
+    """
+    if not scenario.sub_goals:
+        return []
+    mine = frozenset(scenario.sub_goals)
+    for other in siblings:
+        # Resubmitting under the same name replaces rather than duplicates.
+        if other.name == scenario.name or frozenset(other.sub_goals) != mine:
+            continue
+        return [
+            f"graded by exactly the checks {other.name!r} is graded by "
+            f"({', '.join(sorted(mine))}), so the two cannot be told apart: the same assertions "
+            "read both, and an agent that mishandles this one passes anyway on that one's terms. "
+            "Add a check that only this case passes, naming what its hazard turns on, and put it "
+            "in the catalogue alongside the rest"
+        ]
+    return []

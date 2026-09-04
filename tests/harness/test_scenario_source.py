@@ -1508,3 +1508,24 @@ def test_vertex_credentials_retry_their_token_fetch():
     start = inspect.getsource(vertex_gemini.VertexGeminiSession.start)
     assert "_retrying_vertex_credentials" in start, "wired into the client"
     assert "_api_key()" in start, "and skipped when a key makes the token fetch unnecessary"
+
+
+def test_two_scenarios_graded_by_the_same_check_set_are_refused() -> None:
+    # Six scenarios about six different account conditions each named the one check that a
+    # transfer happened, and two about two different ambiguous addresses shared a four-check set
+    # at thirteen steps apiece. An agent that transferred everybody, or picked either candidate,
+    # passed the lot. Depth hid it: the earlier gate only fired at two steps or fewer.
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import duplicate_grading_problems
+
+    first = Scenario(name="refuse_expired_card", sub_goals=["no_booking_created", "cards_read"])
+    same = Scenario(name="refuse_low_balance", sub_goals=["cards_read", "no_booking_created"])
+    assert duplicate_grading_problems(same, [first]), "same set in any order is the same grade"
+    assert "refuse_expired_card" in duplicate_grading_problems(same, [first])[0], "names the twin"
+
+    apart = Scenario(
+        name="refuse_low_balance", sub_goals=["cards_read", "no_booking_created", "balance_read"]
+    )
+    assert not duplicate_grading_problems(apart, [first]), "one distinguishing check is enough"
+    assert not duplicate_grading_problems(first, [first]), "resubmitting replaces, never duplicates"
+    assert not duplicate_grading_problems(Scenario(name="ungraded"), [first]), "no checks, no twin"

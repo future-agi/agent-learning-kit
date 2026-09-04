@@ -32,6 +32,7 @@ from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
 from ..model.scenario import Scenario, Step
 from ..quality.checks import (
     contract_sequence_problems,
+    duplicate_grading_problems,
     suite_diversity_problems,
     unbacked_condition_problems,
     validate_scenario,
@@ -141,6 +142,15 @@ def accept_scenario(
                 )
                 problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
                 problems.extend(unbacked_condition_problems(scenario))
+                # Against every sibling this writer cannot see, not only its own list: writers
+                # run in parallel on separate slices, and two of them picking the same check set
+                # is exactly the case worth catching.
+                problems.extend(
+                    duplicate_grading_problems(
+                        scenario,
+                        (*kept, *journalled(world_root), *load_scenarios(world_root)),
+                    )
+                )
             finally:
                 trial.close()
 

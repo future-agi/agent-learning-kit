@@ -30,14 +30,28 @@ gate says so.
   already on file rather than verifying it first, accepting the address the caller said rather
   than the one on the account. Name the wrong action you expect, because naming it is most of
   writing the check that catches it.
-- **`invariant`** is what has to hold for the whole call however it goes. Verify before charging.
-  Never read a full card number back. Stay inside what this agent is for.
+- **`invariant`** is what has to hold for the whole call however it goes: a rule the agent is
+  under, not a step it takes. **Test it before you write it down: could an agent finish the task
+  correctly and still break this?** If it could not, what you have written is the solution again in
+  other words, and it grades nothing the checks are not already grading. A sequence of the actions
+  the reference solution takes, joined by semicolons, always fails that test. What passes it is an
+  obligation that outlives the outcome: something to establish before acting, something never to
+  disclose, a boundary on what this agent may decide alone, a limit that holds whether the call
+  ends in success or refusal.
 - **`failure_modes`** are the ways this is failed, in plain words. A scenario that states only how
   it passes cannot tell anyone what went wrong when it goes red.
 
 **Turns should depend on each other.** If turn four could be answered without turns one to three
 having happened, the scenario is four scenarios in a trench coat. What the agent commits to at the
 end has to be the thing it looked up earlier, under the identifier it was actually given.
+
+**Your checks are what makes this scenario a different test from its neighbours.** Two scenarios
+named by exactly the same checks are read by exactly the same assertions, so neither can fail in a
+way the other passes, however different their worlds look and however many steps they take. That is
+refused. When the check you need does not exist yet, add it with `add_sub_goal` and assert the
+particular your hazard turns on: which option was chosen, which reason was given, which record was
+read. Reaching for a check that is merely nearby is how a suite ends up with one test under six
+names.
 
 **Write the failure you expect, then the check that catches it.** The order matters: a check
 written from a pass condition tends to assert that a step happened, and a check written from a
