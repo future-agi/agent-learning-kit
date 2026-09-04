@@ -347,6 +347,9 @@ exercise a tool.
   test of the same row.
 - **The persona has to be the reason the call is hard**, not decoration. If swapping in a calm,
   fully informed caller would not change the outcome, the persona is doing no work.
+- **The name says what is tested.** `cancel_active_ride_with_fee`, not `dana_cancels_her_ride`. A
+  caller's name in it means the caller was carrying the difference the test should have carried, and
+  it makes the suite sort by who called instead of by what it covers.
 
 **What is not a scenario.** A caller asks for the ordinary thing, the agent does it, both say thank
 you, the call ends. Nothing was withheld, nothing contradicted, no rule was pressed, no state had to
@@ -372,8 +375,33 @@ Writing scenarios one at a time produces a suite that clumps: five variations on
 nothing on the parts that break. So partition the work first, out loud, before the first
 `submit_scenario`.
 
-Say how many scenarios each use case gets, **in proportion to how much can genuinely go wrong in
-it**. A use case with rules to enforce, information to gather, or state to change earns a large
+### Find the cells first
+
+Before counting anything, write down the two lists the plan is built from.
+
+**The things this agent acts on**, read from its own tools rather than invented: whatever its tool
+names take and return, reduced to singular nouns. A booking agent has rides, addresses, payment
+methods, accounts. A claims agent has policies, claims, documents, payouts. Four to ten is usual.
+
+**What a person can want done to them.** This list is the same for every agent, which is the point:
+
+```
+retrieve   compare   explain   diagnose
+create     update    cancel    execute
+configure  authenticate  navigate  handoff
+```
+
+Cross the two. Most cells are empty, and saying so is useful: an agent with no `compare` over payment
+methods either cannot do it or has a gap worth reporting. The cells that are real are your slices, and
+they are named for the pair, `cancel a ride`, `authenticate a payment method`, never for a person.
+
+This is what stops a suite padding. Twelve operations against six objects is seventy two candidate
+cells, so a request for a hundred scenarios has somewhere real to come from, and any two scenarios in
+different cells are genuinely different tests. Two scenarios in the same cell with different callers
+are one test written twice.
+
+Say how many scenarios each cell gets, **in proportion to how much can genuinely go wrong in
+it**. A cell with rules to enforce, information to gather, or state to change earns a large
 share; one where little can fail earns one scenario or none.
 
 **A slice asking for more than one scenario has to name what goes wrong in each.** Put them in
