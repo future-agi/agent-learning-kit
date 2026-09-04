@@ -20,7 +20,7 @@ afterwards.
 ```
 name          short identifier; it becomes this scenario's folder. It must describe the
               scenario that is actually here, including the person in it: a name saying
-              one caller while the scenario runs another, or naming a card or tier the
+              one person while the scenario runs another, or naming a card or tier the
               scenario never uses, misreports every result anybody reads
 use_case      which of the agent's use cases this belongs to, copied from the contract
               word for word. Not paraphrased, not shortened, not reworded to fit this
@@ -56,7 +56,7 @@ in the requested test; do not invent backstory that changes nothing.
 
 **A different name is not a different person.** Personas drift toward one temperament: co-operative,
 articulate, patient, answering exactly what was asked. A suite of those tests the agent against a
-caller it will rarely meet, and it passes on every scenario for the same reason. Vary
+person it will rarely meet, and it passes on every scenario for the same reason. Vary
 `personality` and `communication_style` across the suite, not just identity: someone terse to the
 point of unhelpfulness, someone who volunteers three things at once, someone distracted who has to
 be asked twice, someone who answers a near-miss of the question, someone impatient who pushes back
@@ -135,27 +135,27 @@ not exist, and no lookup will ever find them.
 **Possessing and volunteering are separate.** Whether the person offers a value unprompted is the
 scenario's business. Whether they have it at all is not optional.
 
-**Write the instruction as an objective, not a situation.** A caller who is told what happened
-narrates it; a caller who is told what they want pursues it. Open with the goal in their own words
+**Write the instruction as an objective, not a situation.** A person who is told what happened
+narrates it; one who is told what they want pursues it. Open with the goal in their own words
 ("Get <the thing they want> put right"), not with the history that led to it ("You were charged
 <the amount>"), then give them the facts they hold, the values they can be asked for, and what
 they will only say once asked for it. Every value read out of the world, never invented.
 
-**Never tell the caller what the agent will do.** This is the single most common way a scenario
-silently stops measuring anything. The agent's moves are what the scenario is testing, so a caller
+**Never tell the person what the agent will do.** This is the single most common way a scenario
+silently stops measuring anything. The agent's moves are what the scenario is testing, so a person
 who has been told to expect them will play along whether or not they happen, and the check passes
-on a conversation that never earned it. Write only what this person knows before the call starts.
+on a conversation that never earned it. Write only what this person knows before the session starts.
 
 ```
 BAD    The agent will tell you about <the condition>. Accept it and say yes when
        asked to confirm.
-       (the scenario is testing whether the agent discloses <the condition>. A caller
+       (the scenario is testing whether the agent discloses <the condition>. A person
         primed to accept it agrees even when the agent never says it, so the run
         reports a pass for behaviour that did not occur)
 
 GOOD   You want <the outcome>. You will accept <the condition> if there is one, but
        you want to know <the detail> before you agree to anything.
-       (the caller's own position. If the agent discloses, they accept; if it does
+       (the person's own position. If the agent discloses, they accept; if it does
         not, they ask, and the transcript records which happened)
 ```
 
@@ -171,13 +171,13 @@ the mistake, it is the same mistake in a quieter voice.
 
 ```
 BAD    Your <destination>: <value> (the agent should find this from your <record>)
-       (the caller has no idea the agent has records, let alone which one. The note is
-        written for whoever reads the scenario, not for the person on the call, and it
+       (the person has no idea the agent has records, let alone which one. The note is
+        written for whoever reads the scenario, not for the person on the session, and it
         tells them the mechanism that is being tested)
 
 GOOD   Your <destination> is the same one you used last time. You do not remember the
        exact address and would rather not look it up.
-       (now the caller has a reason to expect the agent to know, which is what makes
+       (now the person has a reason to expect the agent to know, which is what makes
         the agent's lookup worth testing, without being told the lookup exists)
 ```
 
@@ -230,9 +230,9 @@ answer, hidden checks or values the person has not been given. Every conversatio
 supply one when the simulator prompt asks for `{{ persona }}`. Before submitting, fill its
 required profile: `name`, `personality`, `communication_style`, `languages`, `accent`, and at
 least one `keywords` entry. The harness rejects an incomplete persona rather than quietly generating a
-generic caller.
+generic person.
 
-## When the agent placed the call
+## When the agent placed the session
 
 Read `CALL DIRECTION` on the contract before writing a single instruction. The two directions need the
 person written differently, and getting it wrong tests the wrong half of the conversation.
@@ -245,11 +245,11 @@ why they are calling, and they open by saying what they want.
 - They have **no errand of their own.** They were doing something else.
 - They do **not know who is calling** until the agent says so, and must not act as if they do.
 - Their first turn is a bare greeting and nothing more. It answers the agent's opening, which
-  still comes first: the agent greets on connect whichever way the call went.
+  still comes first: the agent greets on connect whichever way the session went.
 - They may be **suspicious.** An unexpected call about their account is what a scam sounds like, so
   asking the agent to prove itself is correct behaviour, not obstruction.
 - They may be **busy or unwilling.** Declining to talk now is a legitimate outcome worth testing.
-- What the call is about is the **agent's** purpose. The instruction says how this person reacts to it,
+- What the session is about is the **agent's** purpose. The instruction says how this person reacts to it,
   not what they wanted.
 
 ```
@@ -276,7 +276,7 @@ in the instruction:
 | `unaware` | No context at all. The agent has to establish who they are and why it is calling before anything else. Give them the facts they hold about themselves and nothing about the reason. |
 
 **Do not write every outbound scenario as `expecting`.** It is the easiest and least informative: a
-person told the call is coming can reasonably ask for what they want, so the scenario stops testing how
+person told the session is coming can reasonably ask for what they want, so the scenario stops testing how
 the agent opens a call it placed. **At least one outbound scenario per use case must be `unaware`**, and
 when a use case gets only one or two, prefer `unaware`.
 
@@ -321,9 +321,9 @@ scenarios and use cases worth one.
 Do not combine branches whose correct outcomes stop one another. A scenario that asks the agent to
 transfer an out-of-scope request must not also require a transaction to finish after that transfer;
 a scenario that correctly refuses, escalates, cancels, or ends the conversation must not carry a
-sub-goal for work that only happens when the conversation continues. Provider web calls may record
-an attempted phone transfer without being able to complete the PSTN handoff, so test the offer or
-attempt in that scenario and test the transaction in a separate scenario.
+sub-goal for work that only happens when the conversation continues. A handoff may be recorded as attempted
+without the receiving side ever taking it, so test the offer in that scenario and test the work that
+would follow it in a separate one.
 
 Before keeping a scenario, read its instruction, solution, and every named sub-goal as a single
 path. If satisfying one sub-goal can correctly prevent another from being reached, split them into
@@ -342,18 +342,18 @@ exercise a tool.
   terminal call passes for an agent that jumps straight there, having established nothing.
 - **Something has to be at stake, and it has to be findable.** Name the one thing this scenario
   would catch that no sibling would. If you cannot say it in a sentence, there is nothing here.
-- **The person seeds what they need.** Every record the call touches is created by this scenario's
+- **The person seeds what they need.** Every record the session touches is created by this scenario's
   `setup_code`, with values of its own. Leaning on whatever the world already holds makes the
   scenario depend on data another scenario may change, and makes two scenarios quietly the same
   test of the same row.
-- **The persona has to be the reason the call is hard**, not decoration. If swapping in a calm,
-  fully informed caller would not change the outcome, the persona is doing no work.
+- **The persona has to be the reason the session is hard**, not decoration. If swapping in a calm,
+  fully informed person would not change the outcome, the persona is doing no work.
 - **The name says what is tested.** `cancel_active_ride_with_fee`, not `dana_cancels_her_ride`. A
-  caller's name in it means the caller was carrying the difference the test should have carried, and
+  person's name in it means the person was carrying the difference the test should have carried, and
   it makes the suite sort by who called instead of by what it covers.
 
-**What is not a scenario.** A caller asks for the ordinary thing, the agent does it, both say thank
-you, the call ends. Nothing was withheld, nothing contradicted, no rule was pressed, no state had to
+**What is not a scenario.** A person asks for the ordinary thing, the agent does it, both say thank
+you, the session ends. Nothing was withheld, nothing contradicted, no rule was pressed, no state had to
 carry, and any working agent passes. That is a demonstration. It costs a real call, a real model, and
 real money to run, and it returns no information about the agent. One slice covers the ordinary path
 for the whole suite; everything else has to earn its place by being able to fail.
@@ -361,7 +361,7 @@ for the whole suite; everything else has to earn its place by being able to fail
 ```
 BAD    solution   [transfer_to_human(reason="Account suspended")]
        sub_goals  [transferred_to_human]
-       (an agent that transfers every caller on arrival passes this. Whether it
+       (an agent that transfers every person on arrival passes this. Whether it
         looked the account up, and found the suspension, is never measured)
 
 GOOD   solution   [find_rider(phone=...), get_account(rider_id=...),
@@ -377,12 +377,12 @@ decided which cells are worth covering and how many scenarios each earns. Your b
 cells. Write inside it.
 
 Two things follow. Do not widen the cell to take in something interesting you noticed on the way: say
-so at the end instead, and let the plan decide. And do not write a second scenario because the caller
+so at the end instead, and let the plan decide. And do not write a second scenario because the person
 could be somebody else, because a cell written twice with different people is one test written twice.
 
 ## Fixture quality is part of correctness
 
-Use source seed data where it exists, but do not make every scenario the same seeded caller with
+Use source seed data where it exists, but do not make every scenario the same seeded person with
 different prose. Add scenario-local records with `setup_code` when coverage needs a person,
 credential, address, balance, status, code, or prior transaction the base world does not contain.
 `ready_code` must verify those exact records.
@@ -397,8 +397,8 @@ reset seam instead of writing an unexecutable scenario.
 
 Every scenario must include a `fixture` manifest whose origin field is set to seed, generated, or
 mixed, plus the exact identity, credentials/verification data, locations, preferences and
-account state the caller may rely on. This manifest is supplied to the live caller model; facts
-hidden only in setup code cannot be answered reliably in a phone call.
+account state the person may rely on. This manifest is supplied to the live person model; facts
+hidden only in setup code cannot be answered reliably in a session.
 
 - Use different realistic names, phone numbers, locations, account histories and payment states.
 - Generate a different non-trivial OTP for each scenario that uses one. Never use `123456`,
@@ -406,7 +406,7 @@ hidden only in setup code cannot be answered reliably in a phone call.
 - Avoid demo clichés such as Alex/Jordan Test, `555` phone numbers, `123 Main Street`, card
   `4242`, and identical addresses unless they are genuinely present in submitted seed data and
   the test specifically depends on that record.
-- Keep every fact internally consistent: the caller's persona, phone, account row, OTP row,
+- Keep every fact internally consistent: the person's persona, phone, account row, OTP row,
   payment method, market, currency, saved places and instruction must describe the same person.
 - Vary outcome as well as wording: success, refusal, correction, ambiguity, retry, stale state,
   unavailable dependency and recovery should not all share one happy-path fixture.
@@ -567,9 +567,9 @@ Work it out with `try_calls` before you submit. Run the calls, pass your `setup_
 the world the agent would actually face, look at the state they leave, and confirm the sub-goals
 you are naming respond to it.
 
-**A one-call solution is almost always wrong.** The agent does not begin the call knowing who it
-is talking to or what is true of their account, so before the call that resolves the scenario it
-has to find that out: identify the caller, read the record, check the state that decides the
+**A one-call solution is almost always wrong.** The agent does not begin the session knowing who it
+is talking to or what is true of their account, so before the session that resolves the scenario it
+has to find that out: identify the person, read the record, check the state that decides the
 answer. Those lookups belong in the solution, and the sub-goals have to name them. Write the
 single terminal call on its own and the scenario passes for an agent that fires it blind, having
 established nothing, which is the one behaviour a refusal scenario exists to rule out.
