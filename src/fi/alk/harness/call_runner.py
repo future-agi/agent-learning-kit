@@ -872,7 +872,6 @@ class CallRunnerImpl:
             BACKGROUND_NOISE_ALIAS,
             BACKGROUND_NOISE_CATALOG_ALIAS,
             BACKGROUND_NOISE_VOLUME_ALIAS,
-            CALL_DIRECTION_ALIAS,
         ):
             value = simulator_secret_values.get(alias)
             if value:
@@ -987,8 +986,10 @@ class CallRunnerImpl:
         # instructions are built deep inside simulator_definition, which sees the environment and
         # not this scenario. Set per scenario and cleared otherwise so one outbound scenario cannot
         # frame the next inbound one.
-        # A scenario that names its own direction wins. Otherwise the run says, because whether an
-        # agent places calls or answers them is a fact about the agent, not about one scenario.
+        # A scenario that names its own direction wins. Otherwise the contract's, which the
+        # understand stage read off the agent's own instructions and `hosted_entrypoint` puts here
+        # for this process. Not an operator setting: whether an agent places calls or answers them
+        # is a fact about the agent, so there is nothing for a run to choose.
         direction = (
             str(
                 doc.get("call_direction")

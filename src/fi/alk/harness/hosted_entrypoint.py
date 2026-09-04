@@ -127,7 +127,6 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
     {
         "ALK_BACKGROUND_NOISE",
         "ALK_BACKGROUND_NOISE_CATALOG",
-        "ALK_CALL_DIRECTION",
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
@@ -593,11 +592,13 @@ def _default_build_call_runner(
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
     if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
-        # The understand stage read this off the agent's own instructions, so the contract is where
-        # it is identified. A run-level value still wins, as the operator override it is.
+        # The understand stage read this off the agent's own instructions, so the contract is the
+        # only source. Carried through the process environment because `CallRunnerImpl` is handed a
+        # context and a scenario document, neither of which reaches the contract; this is an
+        # internal hop, not a knob, and nothing outside sets it.
         declared = _bundle_contract_value(context.bundle_dir, "call_direction")
         if declared:
-            os.environ.setdefault("ALK_CALL_DIRECTION", declared)
+            os.environ["ALK_CALL_DIRECTION"] = declared
         return CallRunnerImpl(adapter, context)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
