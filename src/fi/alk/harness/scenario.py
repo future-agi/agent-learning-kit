@@ -470,6 +470,25 @@ def _quotable_values(text: str) -> set[str]:
     }
 
 
+# A value only has to be reachable if the caller is going to be asked for it. An address they are
+# travelling to, or a price they are quoted, is the agent's to produce; a value they are told to say
+# back is one the agent will check. Domain-neutral: the cue is the verb, not the kind of value.
+_HANDED_OVER = re.compile(
+    r"(?:say|give|read|quote|provide|confirm|tell|repeat|use|enter|supply)\b[^.\n]{0,70}?"
+    r"(?<![\w-])((?=[A-Za-z-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,})(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def _handed_to_caller(text: str) -> set[str]:
+    """Values the instruction tells the caller to say back, which the agent will then check."""
+    return {
+        match.group(1)
+        for match in _HANDED_OVER.finditer(text or "")
+        if not _NOT_A_RECORD.match(match.group(1))
+    }
+
+
 def alignment_problems(
     scenario: Scenario, world_state: dict[str, list[dict[str, Any]]] | None = None
 ) -> list[str]:
@@ -486,7 +505,7 @@ def alignment_problems(
     scenario's `setup_code` or the world it starts from. A fixture entry is not enough, because a
     fixture describes what a scenario relies on and only `setup_code` changes what is there.
     """
-    told = _quotable_values(scenario.instruction)
+    told = _handed_to_caller(scenario.instruction)
     if not told:
         return []
     reachable = _quotable_values(scenario.setup_code or "")
