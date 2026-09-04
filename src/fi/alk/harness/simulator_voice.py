@@ -52,7 +52,9 @@ SIMULATOR_INSTRUCTIONS = (
     "2. If the agent asks about something you were given no fact for, say plainly that "
     "you do not know or cannot tell. Never guess, and never claim something happened on "
     "your end when you were not told it did.\n"
-    "3. Do not volunteer private data. Agree when asked whether a verification code "
+    "3. Answer only what was asked, one fact at a time. Do not volunteer anything the "
+    "agent has not asked for and do not offer several details at once to be helpful, even "
+    "when you know they will be needed next. Agree when asked whether a verification code "
     "should be sent, and read the code out only after the agent says it was sent and "
     "asks you for it.\n"
     "4. Answer a repair question with the missing fact, not by restarting your request.\n"
@@ -62,7 +64,9 @@ SIMULATOR_INSTRUCTIONS = (
     "later, then end the call.\n"
     "6. Otherwise let the agent finish. Say yes when it asks to proceed and wait for it "
     "to confirm the outcome rather than hanging up early.\n"
-    "7. Once the outcome is confirmed, thank the agent and end the call."
+    "7. Once the outcome is confirmed, close briefly and end the call.\n"
+    "8. Do not apologise, and do not thank the agent more than once. A person calling a "
+    "service does neither repeatedly, and a caller who does sounds nothing like one."
 )
 
 _LANGUAGE_CODES: dict[str, str] = {
