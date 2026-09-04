@@ -252,6 +252,57 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
 HARNESS = SKILLS_ROOT / "harness.md"
 
 
+def discovered_skills(**about: str) -> str:
+    """Every extra skill that says it applies to this agent, found by looking rather than by name.
+
+    A skill is a markdown file under ``skills/kinds/`` whose first lines declare what it is for::
+
+        ---
+        name: voice
+        applies_to: modality=voice
+        ---
+
+    The harness reads the directory, keeps the files whose ``applies_to`` matches what it was told
+    about this agent, and appends them in name order. ``applies_to: any`` always matches, and a file
+    with no declaration is skipped rather than guessed at.
+
+    Naming each kind in code would mean editing code to add one, and there will be many: voice, chat,
+    browser, and whatever a customer turns up with next. **Adding support for a kind of agent is
+    adding a file here.**
+    """
+    root = SKILLS_ROOT / "kinds"
+    if not root.is_dir():
+        return ""
+    wanted = {
+        key.lower(): str(value).strip().lower() for key, value in about.items() if value
+    }
+    found: list[tuple[str, str]] = []
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        applies = ""
+        for line in head.splitlines():
+            if line.strip().lower().startswith("applies_to:"):
+                applies = line.split(":", 1)[1].strip().lower()
+        if not applies:
+            continue
+        if applies == "any":
+            found.append((path.stem, text))
+            continue
+        # `key=value`, and every clause has to hold.
+        clauses = [one.strip() for one in applies.split(",") if one.strip()]
+        if all(
+            "=" in clause
+            and wanted.get(clause.split("=", 1)[0].strip())
+            == clause.split("=", 1)[1].strip()
+            for clause in clauses
+        ):
+            found.append((path.stem, text))
+    if not found:
+        return ""
+    return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
+
+
 def load_skill(name: str) -> str:
     """One stage's instructions, behind what the harness as a whole is for.
 

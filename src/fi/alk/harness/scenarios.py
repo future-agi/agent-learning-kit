@@ -20,7 +20,7 @@ from typing import Any
 
 from .backends import SessionSpec, ToolServer, tool, tool_server
 
-from .config import artifact_dir, chosen_model, load_skill
+from .config import artifact_dir, chosen_model, discovered_skills, load_skill
 from .catalogue import load_catalogue
 from .contract import AgentContract
 from .scenario import Scenario
@@ -79,6 +79,10 @@ def open_stage(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
+            # Whatever this kind of agent adds on top. A file under skills/kinds/ that
+            # declares `applies_to: modality=<kind>` is appended here, so supporting a
+            # new kind of agent is adding that file and nothing else.
+            + discovered_skills(modality=contract.modality)
             + (
                 f"\n\nWrite {wanted} scenarios."
                 if not kept
@@ -381,7 +385,11 @@ async def _write_slice(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
-            f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
+            # Whatever this kind of agent adds on top. A file under skills/kinds/ that
+            # declares `applies_to: modality=<kind>` is appended here, so supporting a
+            # new kind of agent is adding that file and nothing else.
+            + discovered_skills(modality=contract.modality)
+            + f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
         servers={
             SCENARIO_SERVER: ToolServer(
