@@ -434,6 +434,7 @@ async def _typed_to(
         judge,
         judge_suite_evals,
         reconcile_task_completion,
+        ungraded_sub_goals,
     )
     from .targets import resolve
 
@@ -469,6 +470,10 @@ async def _typed_to(
     result = Result(
         scenario=scenario.name,
         tests=scenario.tests,
+        problems=[
+            f"{name} is not in this catalogue, so nothing graded it"
+            for name in ungraded_sub_goals(scenario, catalogue)
+        ],
         state_failures=[f"{one.name}: {one.said}" for one in settled if not one.held],
         conduct=judgements,
         checkpoints=checkpoints(settled, judgements),
@@ -554,6 +559,7 @@ async def _spoken_to(
         judge,
         judge_suite_evals,
         reconcile_task_completion,
+        ungraded_sub_goals,
     )
     from .live import wire
     from .tools import configure_source_voice, missing_prerequisites
@@ -762,6 +768,10 @@ async def _spoken_to(
     result = Result(
         scenario=scenario.name,
         tests=scenario.tests,
+        problems=[
+            f"{name} is not in this catalogue, so nothing graded it"
+            for name in ungraded_sub_goals(scenario, catalogue)
+        ],
         state_failures=[f"{one.name}: {one.said}" for one in settled if not one.held],
         conduct=judgements,
         checkpoints=checkpoints(settled, judgements),
