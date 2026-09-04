@@ -1493,7 +1493,16 @@ class LiveKitEngine(BaseEngine):
             # must never be the reason a case fails.
             if customer_agent is not None:
                 try:
-                    await customer_agent._stop_background_audio()
+                    # Bounded like every other teardown step. Closing the ambience player unpublishes
+                    # its track, and when the room's signal client has already died, that wait never
+                    # returns: the SDK loops on resume and restart while this await sits here, and the
+                    # case never completes, so the whole run is discarded on its deadline with a
+                    # finished conversation inside it. Measured: two calls ended on endCall at 15 and
+                    # 17 messages and both reported 570004ms and no test case.
+                    await asyncio.wait_for(
+                        customer_agent._stop_background_audio(),
+                        timeout=_cleanup_budget(),
+                    )
                 except Exception:
                     logger.warning("background audio not closed cleanly", exc_info=True)
             if target_transcription_handler_registered:
@@ -1503,7 +1512,15 @@ class LiveKitEngine(BaseEngine):
             for pending in pending_transcriptions:
                 pending.cancel()
             if pending_transcriptions:
-                await asyncio.gather(*pending_transcriptions, return_exceptions=True)
+                # Cancelled above, but a task blocked reading a stream whose connection is gone does
+                # not observe the cancellation, so this is bounded too.
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending_transcriptions, return_exceptions=True),
+                        timeout=_cleanup_budget(),
+                    )
+                except Exception as exc:  # noqa: BLE001 - teardown never fails a case
+                    logger.warning("transcription tasks did not stop cleanly: %s", exc)
             session_to_close = session or (
                 getattr(customer_agent, "started_session", None)
                 if customer_agent is not None
@@ -1585,7 +1602,9 @@ class LiveKitEngine(BaseEngine):
                             timeout=_cleanup_budget(),
                         )
                         provider_termination_source = "sdk_originator_cleanup"
-                    await vapi_originator.close()
+                    await asyncio.wait_for(
+                        vapi_originator.close(), timeout=_cleanup_budget()
+                    )
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
