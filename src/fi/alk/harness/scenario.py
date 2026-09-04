@@ -304,6 +304,19 @@ def validate_scenario(
         "mixed",
     }:
         problems.append("fixture.origin must be seed, generated, or mixed")
+    elif (
+        scenario.fixture
+        and str(scenario.fixture.get("origin") or "").lower() in {"generated", "mixed"}
+        and not (scenario.setup_code or "").strip()
+    ):
+        # A fixture claiming data it never creates is the whole "the OTP was never seeded" failure:
+        # the scenario reads as self-sufficient, the world has none of it, and the agent has nothing
+        # to answer with. Caught here because it is provable from the document alone.
+        problems.append(
+            f"fixture.origin is {scenario.fixture.get('origin')!r}, which claims this scenario "
+            "creates data, but setup_code is empty. Either seed everything the fixture names, or "
+            "declare origin 'seed' and use only records that already exist"
+        )
 
     unknown = sorted(set(scenario.sub_goals) - catalogue.names())
     if unknown:
