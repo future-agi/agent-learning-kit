@@ -321,6 +321,80 @@ def validate_scenario(
             "show this scenario can be passed at all"
         )
     problems.extend(fixture_problems(scenario))
+    problems.extend(_world_credential_problems(scenario, world_state))
+    return problems
+
+
+def _world_credential_problems(
+    scenario: Scenario, world_state: dict[str, list[dict[str, Any]]]
+) -> list[str]:
+    """Reject caller credentials paired with the wrong world identity.
+
+    Hosted source authoring cannot execute a repository's runtime-owned tools until the sealed
+    bundle is provisioned.  Static scenario validation must therefore catch identity-bound test
+    credentials that a deferred reference rehearsal cannot.  The matching is deliberately
+    schema-shaped rather than application-shaped: any collection containing a phone-like
+    identity and an OTP/verification code participates.
+    """
+    credentials: dict[str, set[str]] = {}
+    for collection, rows in world_state.items():
+        if not any(token in collection.lower() for token in ("otp", "verification")):
+            continue
+        for row in rows:
+            phone = next(
+                (
+                    str(value)
+                    for key, value in row.items()
+                    if "phone" in str(key).lower() and value not in (None, "")
+                ),
+                "",
+            )
+            code = next(
+                (
+                    str(value).replace(" ", "")
+                    for key, value in row.items()
+                    if ("code" in str(key).lower() or "otp" in str(key).lower())
+                    and re.fullmatch(r"\d{4,10}", str(value).replace(" ", ""))
+                ),
+                "",
+            )
+            if phone and code:
+                credentials.setdefault(phone, set()).add(code)
+
+    fixture = scenario.fixture or {}
+    phones: set[str] = set()
+    codes: set[str] = set()
+
+    def collect(value: Any, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child, item in value.items():
+                collect(item, str(child))
+        elif isinstance(value, list):
+            for item in value:
+                collect(item, key)
+        elif "phone" in key.lower() and value not in (None, ""):
+            phones.add(str(value))
+        elif "otp" in key.lower() or key.lower() in {"code", "verification_code"}:
+            candidate = str(value).replace(" ", "")
+            if re.fullmatch(r"\d{4,10}", candidate):
+                codes.add(candidate)
+
+    collect(fixture)
+    if scenario.persona is not None:
+        collect(scenario.persona.metadata)
+        collect(scenario.persona.scripted_caller or {})
+    for step in scenario.solution:
+        if "verify" in step.tool.lower() or "otp" in step.tool.lower():
+            collect(step.arguments)
+
+    problems: list[str] = []
+    for phone in sorted(phones & credentials.keys()):
+        wrong = codes - credentials[phone]
+        if codes and wrong and not (codes & credentials[phone]):
+            problems.append(
+                "verification credential does not belong to the scenario caller "
+                f"{phone}; inspect the world and use that identity's code"
+            )
     return problems
 
 

@@ -2543,7 +2543,8 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     try:
         with caplog.at_level(logging.WARNING, logger="fi.alk.harness.prove"):
             call = play_reference_step(
-                world, Step(tool="lookup_rider_by_phone", arguments={"phone": "+14155550101"})
+                world,
+                Step(tool="lookup_rider_by_phone", arguments={"phone": "+14155550101"}),
             )
     finally:
         world.close()
@@ -2772,6 +2773,44 @@ def test_predictable_and_reused_otp_fixtures_are_rejected():
     ]
     assert "verification codes are reused" not in " ".join(
         suite_diversity_problems(unique)
+    )
+
+
+def test_scenario_otp_must_belong_to_its_caller_in_the_world():
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenario import Scenario, validate_scenario
+
+    catalogue = Catalogue(
+        sub_goals=[SubGoal(name="verified", what="verified", judged="judge it")]
+    )
+    world = {
+        "otp_codes": [
+            {"phone": "+14155550106", "code": "349175"},
+            {"phone": "+14155550107", "code": "592804"},
+        ]
+    }
+    wrong = Scenario(
+        name="wrong-code",
+        instruction="Verify this caller.",
+        fixture={"origin": "seed", "phone": "+14155550106", "otp_code": "592804"},
+        solution=[{"tool": "verify_otp", "arguments": {"code": "592804"}}],
+        sub_goals=["verified"],
+    )
+    correct = Scenario(
+        name="correct-code",
+        instruction="Verify this caller.",
+        fixture={"origin": "seed", "phone": "+14155550106", "otp_code": "349175"},
+        solution=[{"tool": "verify_otp", "arguments": {"code": "349175"}}],
+        sub_goals=["verified"],
+    )
+
+    assert any(
+        "does not belong" in problem
+        for problem in validate_scenario(wrong, catalogue, world)
+    )
+    assert not any(
+        "does not belong" in problem
+        for problem in validate_scenario(correct, catalogue, world)
     )
 
 
@@ -3911,7 +3950,6 @@ def test_sdk_voice_spec_keeps_canonical_and_engine_direction_aligned(monkeypatch
 
     assert spec.execution.direction.value == "agent_first"
     assert spec.environment.config["params"]["conversation_direction"] == "agent_first"
-
 
 
 def test_each_source_worker_lifetime_gets_a_unique_dispatch_name():
@@ -7013,7 +7051,10 @@ def test_scenario_key_never_empties_onto_a_shared_idempotency_key():
 
 def test_background_noise_is_decided_the_same_way_twice():
     """A coin flip here made a seeded run unreproducible; the name decides it instead."""
-    assert Scenario(name="a-b-c").background_noise == Scenario(name="a-b-c").background_noise
+    assert (
+        Scenario(name="a-b-c").background_noise
+        == Scenario(name="a-b-c").background_noise
+    )
     assert Scenario(name="x", background_noise="street").background_noise == "street"
 
 
@@ -7044,6 +7085,8 @@ def test_a_transcript_line_keeps_one_speaker_not_two():
     assert said("user: I need a ride.") == ("customer", "I need a ride.")
     # A colon inside speech is not a speaker label.
     assert said("assistant: Call at 3:30 PM.") == ("agent", "Call at 3:30 PM.")
+
+
 def test_platform_call_start_uses_existing_ongoing_status_flow():
     from fi.alk.harness import platform
 

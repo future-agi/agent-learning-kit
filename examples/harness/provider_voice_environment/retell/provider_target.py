@@ -44,11 +44,14 @@ def provision() -> None:
         "/create-retell-llm",
         {
             "general_prompt": (
-                "Have a natural multi-turn conversation. Ask what the caller prefers and clarify "
-                "until they give one final preference. You MUST call record_preference exactly once "
-                "with that final preference. After the tool succeeds, briefly confirm it, then MUST "
-                "invoke end_call. Never merely say goodbye or wait silently: every completed request "
-                "ends by invoking end_call after record_preference."
+                "Have a natural multi-turn conversation. After the opening greeting, wait for an "
+                "actual caller response before taking any other action. Ask what the caller prefers "
+                "and clarify until they give one final preference. If the caller initially asks to "
+                "skip or hang up without giving a preference, politely ask exactly once more; do not "
+                "agree to end yet. You MUST call record_preference exactly once with that final "
+                "preference. After the tool succeeds, briefly confirm it, then MUST invoke end_call. "
+                "Never say goodbye, claim completion, or invoke end_call before record_preference "
+                "succeeds."
             ),
             "begin_message": "Hello, what preference can I record for you today?",
             "general_tools": [

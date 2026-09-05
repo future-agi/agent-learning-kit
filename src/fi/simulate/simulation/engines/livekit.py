@@ -1646,6 +1646,7 @@ class LiveKitEngine(BaseEngine):
                     resolved_call_id = provider_summary.metadata.get("call_id")
                     if resolved_call_id:
                         provider_call_id = str(resolved_call_id)
+                _recover_successful_provider_end_call(outcome, provider_summary)
             outcome.provider_artifacts.extend(provider_artifacts)
         outcome.metadata.update(
             {
@@ -2470,6 +2471,43 @@ def _caller_never_spoke(messages: list[dict[str, Any]]) -> bool:
     )
 
 
+def _recover_successful_provider_end_call(
+    outcome: _CaseOutcome,
+    provider_summary: EvidenceSourceSummary,
+) -> None:
+    """Keep a clean provider hangup separate from scenario correctness.
+
+    Retell can disconnect immediately after its ``end_call`` tool succeeds, before the final
+    synthesized farewell is committed into LiveKit's transcript.  A minimum-turn guard may have
+    provisionally classified that as an incomplete conversation.  Provider evidence is the
+    authoritative lifecycle signal here: promote the call to completed and let scenario checks
+    report any business-goal failure.  Requiring both roles protects genuine mute/no-conversation
+    failures from being hidden by a malformed provider trace.
+    """
+    if outcome.failure is None or outcome.failure.code not in {
+        "insufficient_conversation",
+        "target_disconnected",
+        "room_disconnected",
+    }:
+        return
+    if not _has_role_alternation(outcome.messages):
+        return
+    calls = provider_summary.metadata.get("tool_calls")
+    if not isinstance(calls, list):
+        return
+    ended_cleanly = any(
+        isinstance(call, dict)
+        and str(call.get("name") or "").strip().lower() == "end_call"
+        and call.get("ok") is not False
+        for call in calls
+    )
+    if not ended_cleanly:
+        return
+    outcome.status = TestCaseStatus.COMPLETED
+    outcome.failure = None
+    outcome.metadata["provider_end_call_recovered"] = True
+
+
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
@@ -2484,6 +2522,26 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if (
+        stop_reason in {"target_disconnected", "room_disconnected"}
+        and _has_role_alternation(messages)
+        and _has_natural_terminal_exchange(messages)
+    ):
+        # A provider target can deliberately end a short call before the generated
+        # minimum-turn budget (for example, by accepting a caller's request to hang
+        # up).  The transport still completed successfully.  Keep call lifecycle
+        # separate from business-goal correctness: the scenario checks/evals decide
+        # whether ending early was acceptable instead of reporting a false
+        # connectivity failure.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={
+                "stop_reason": stop_reason,
+                "short_terminal_exchange": True,
+            },
+        )
     if (
         stop_reason == "conversation_silence_timeout"
         and len(messages) >= min_turn_messages

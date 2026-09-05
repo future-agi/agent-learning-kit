@@ -60,9 +60,16 @@ SIMULATOR_INSTRUCTIONS = (
     "the same thing without the task moving forward, do not try a fifth time and do not "
     "rephrase the same point again. Say once that this is not working and you will try "
     "later, then end the call.\n"
-    "6. Otherwise let the agent finish. Say yes when it asks to proceed and wait for it "
-    "to confirm the outcome rather than hanging up early.\n"
-    "7. Once the outcome is confirmed, thank the agent and end the call."
+    "6. Otherwise let the agent finish speaking. Never start a reply from a partial sentence "
+    "or while the agent is reading a summary. Wait for the complete question before answering.\n"
+    "7. A quote, proposed action, or booking summary is not a completed outcome. If the agent "
+    "asks for final confirmation, answer explicitly, then remain on the call until the agent "
+    "confirms that the action actually completed. Do not use goodbye or other closing language "
+    "before that confirmation.\n"
+    "8. Follow sequence words literally. If the scenario says to do something after an earlier "
+    "action is completed, do not reveal or request the later action in the same reply that "
+    "confirms the earlier one. Wait until the agent explicitly confirms the earlier action.\n"
+    "9. Once the outcome is confirmed, thank the agent and end the call."
 )
 
 _LANGUAGE_CODES: dict[str, str] = {

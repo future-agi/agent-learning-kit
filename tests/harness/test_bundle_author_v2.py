@@ -6,10 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness.bundle_author_v2 import author_bundle_v2, resolve_environment_plan
+from fi.alk.harness.bundle_author_v2 import (
+    _contract_column_declarations,
+    _sqlite_sql,
+    author_bundle_v2,
+    resolve_environment_plan,
+)
 from fi.alk.harness.bundle_v2 import load_bundle_v2
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.process_preflight import preflight_bundle
+from fi.alk.harness.world.runtime import GeneratedWorld
 
 
 def _job(
@@ -87,6 +93,70 @@ def _write_callable_contract(authoring: Path) -> None:
     )
 
 
+def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "customer_tools.py").write_text(
+        "def lookup_account(email):\n    return {'email': email, 'status': 'active'}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "python",
+                    "interface": {
+                        "kind": "openai_chat",
+                        "protocol": "openai",
+                        "include_tools": False,
+                    },
+                },
+                "tools": [
+                    {
+                        "name": "lookup_account",
+                        "args": ["email"],
+                        "arg_types": {"email": "str"},
+                    }
+                ],
+                "tool_entrypoints": [
+                    {
+                        "tool": "lookup_account",
+                        "mode": "import",
+                        "module": "customer_tools",
+                        "callable": "lookup_account",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+
+    handler = (output / "handlers" / "lookup_account.py").read_text(encoding="utf-8")
+    assert "from customer_tools import lookup_account" in handler
+    assert "return settled(lookup_account(**args))" in handler
+    load_bundle_v2(output)
+    world = GeneratedWorld(":memory:")
+    world.handlers["lookup_account"] = handler
+    world.reach(str(source))
+    call = world.call("lookup_account", {"email": "customer@example.com"})
+    assert call.ok is True
+    assert call.result == {
+        "email": "customer@example.com",
+        "status": "active",
+    }
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()
@@ -105,8 +175,57 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
 
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
+    assert agent.environment["HARNESS_MODE"] == "1"
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
+
+
+def test_repository_runtime_environment_is_sealed_into_control_process(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "Dockerfile").write_text("FROM python:3.13\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (source / "alk.yaml").write_text(
+        'schema_version: "1"\nruntime:\n  environment:\n    HOTEL_TODAY: "2026-06-08"\n',
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", with_secrets=True),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.environment["HOTEL_TODAY"] == "2026-06-08"
+
+
+def test_repository_runtime_environment_rejects_secrets(tmp_path: Path) -> None:
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "alk.yaml").write_text(
+        'schema_version: "1"\nruntime:\n  environment:\n    OPENAI_API_KEY: checked-in\n',
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+
+    with pytest.raises(RuntimeError, match="runtime_environment_secret_forbidden"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto", with_secrets=True),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
 
 
 def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) -> None:
@@ -292,6 +411,15 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
         )
         assert control.started_check is not None
         assert control.started_check.log_marker == "registered worker"
+    source_processes = [
+        process
+        for process in loaded.processes
+        if hasattr(process, "environment") and process.name != "tool-proxy"
+    ]
+    assert source_processes
+    assert all(
+        process.environment.get("HARNESS_MODE") == "1" for process in source_processes
+    )
     preflight_bundle(
         output,
         loaded,
@@ -524,6 +652,82 @@ def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(
         '("id", "is_valid", "is_expired", "attempts", "score") '
         "VALUES ('pm-1', TRUE, FALSE, 3, 0.75);" in seed_sql
     )
+
+
+def test_bundle_uses_contract_boolean_type_when_sqlite_erases_it(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "voice",
+                "data_schema": {
+                    "otp_codes": {
+                        "phone": "TEXT PRIMARY KEY",
+                        "issued_at": "TIMESTAMPTZ NOT NULL DEFAULT now()",
+                        "attempts_left": "INT NOT NULL DEFAULT 3",
+                        "verified": "BOOLEAN NOT NULL DEFAULT FALSE",
+                    },
+                    "market_config": {
+                        "market": "TEXT PRIMARY KEY",
+                        "available_products": "TEXT[] NOT NULL DEFAULT '{}'",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        # This is how SQLite reports booleans from generated authoring worlds.
+        database.execute(
+            "CREATE TABLE otp_codes ("
+            "phone TEXT PRIMARY KEY, issued_at TEXT, "
+            "attempts_left INTEGER NOT NULL DEFAULT 3, "
+            "verified INTEGER NOT NULL DEFAULT 0)"
+        )
+        database.execute(
+            "INSERT INTO otp_codes VALUES (?, ?, ?, ?)",
+            ("+14155550101", "2026-09-04T12:00:00Z", 3, 0),
+        )
+        database.execute(
+            "CREATE TABLE market_config ("
+            "market TEXT PRIMARY KEY, available_products TEXT NOT NULL DEFAULT '[]')"
+        )
+        database.execute(
+            "INSERT INTO market_config VALUES (?, ?)",
+            ("US-SF", '["uberx", "comfort"]'),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    compiled_world = _sqlite_sql(
+        authoring / "world.sqlite",
+        contract_declarations=_contract_column_declarations(
+            json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+        ),
+    )
+    assert "\"available_products\" text[] NOT NULL DEFAULT '{}'" in compiled_world
+    assert "VALUES ('US-SF', '{\"uberx\",\"comfort\"}');" in compiled_world
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert '"issued_at" timestamptz DEFAULT now()' in seed_sql
+    assert '"attempts_left" bigint NOT NULL DEFAULT 3' in seed_sql
+    assert '"verified" boolean NOT NULL DEFAULT FALSE' in seed_sql
+    assert "'2026-09-04T12:00:00Z', 3, FALSE);" in seed_sql
 
 
 def test_bundle_preserves_sqlite_unique_constraints_for_upserts(tmp_path: Path) -> None:

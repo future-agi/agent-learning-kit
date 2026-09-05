@@ -2683,6 +2683,73 @@ def test_room_disconnect_ends_conversation() -> None:
     assert failed.failure.retryable is True
 
 
+def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
+    messages = [
+        {"role": "assistant", "content": "Hello, what can I help with?"},
+        {"role": "user", "content": "Please just hang up."},
+        {"role": "assistant", "content": "No problem. Have a great day."},
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "target_disconnected",
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata == {
+        "stop_reason": "target_disconnected",
+        "short_terminal_exchange": True,
+    }
+
+
+def test_provider_end_call_evidence_recovers_short_call_for_eval() -> None:
+    outcome = livekit._failure_outcome(
+        CaseStatus.FAILED,
+        livekit.FailureStage.RUNNING,
+        "insufficient_conversation",
+        "Conversation ended before the required alternating turns completed",
+        messages=[
+            {"role": "assistant", "content": "What should I save?"},
+            {"role": "user", "content": "Dark mode."},
+        ],
+    )
+    summary = livekit.EvidenceSourceSummary(
+        source_id="retell-call",
+        adapter="retell",
+        evidence_class="provider_reported",
+        metadata={"tool_calls": [{"name": "end_call", "ok": True}]},
+    )
+
+    livekit._recover_successful_provider_end_call(outcome, summary)
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata["provider_end_call_recovered"] is True
+
+
+def test_provider_end_call_does_not_hide_a_no_conversation_failure() -> None:
+    outcome = livekit._failure_outcome(
+        CaseStatus.FAILED,
+        livekit.FailureStage.RUNNING,
+        "insufficient_conversation",
+        "Conversation did not alternate",
+        messages=[{"role": "assistant", "content": "Goodbye."}],
+    )
+    summary = livekit.EvidenceSourceSummary(
+        source_id="retell-call",
+        adapter="retell",
+        evidence_class="provider_reported",
+        metadata={"tool_calls": [{"name": "end_call", "ok": True}]},
+    )
+
+    livekit._recover_successful_provider_end_call(outcome, summary)
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+
+
 def test_target_absent_at_watch_start_counts_as_disconnected() -> None:
     # The target can leave between readiness and listener registration; the
     # event is gone by then, so presence is rechecked once.

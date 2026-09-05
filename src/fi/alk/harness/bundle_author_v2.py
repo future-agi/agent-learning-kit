@@ -49,12 +49,14 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
+from .contract import ToolEntry
 from .job import HarnessJob
 from .job import ProviderExecutionMode
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
+from .world.tools import _binding
 
 
 class BundleAuthorError(RuntimeError):
@@ -210,16 +212,113 @@ def _sqlite_json_type(values: list[Any], sql_type: str) -> str:
     )
 
 
+def _postgres_text_array_literal(value: Any) -> str:
+    decoded = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(decoded, list) or any(
+        isinstance(item, (dict, list)) for item in decoded
+    ):
+        raise BundleAuthorError("sqlite_text_array_invalid: expected scalar JSON array")
+    escaped = [
+        '"' + str(item).replace("\\", "\\\\").replace('"', '\\"') + '"'
+        for item in decoded
+    ]
+    return "{" + ",".join(escaped) + "}"
+
+
 def _sqlite_value(value: Any, sql_type: str) -> Any:
     if value is not None and sql_type == "boolean":
         return bool(value)
     if value is not None and sql_type == "jsonb" and isinstance(value, str):
         return json.loads(value)
+    if value is not None and sql_type == "text[]":
+        return _postgres_text_array_literal(value)
     return value
 
 
-def _sqlite_sql(path: Path) -> str:
+def _contract_column_declarations(
+    contract: dict[str, Any],
+) -> dict[tuple[str, str], str]:
+    """Return authored SQL declarations keyed by table and column.
+
+    SQLite affinity erases semantic types (notably BOOLEAN -> INTEGER and
+    TIMESTAMPTZ -> TEXT). The contract is the authoritative schema description,
+    so retain its safe type/default hints while still deriving keys and indexes
+    from the executable SQLite world.
+    """
+
+    schema = contract.get("data_schema")
+    if not isinstance(schema, dict):
+        return {}
+    return {
+        (str(table), str(column)): str(declaration).strip()
+        for table, raw_columns in schema.items()
+        if isinstance(raw_columns, dict)
+        for column, declaration in raw_columns.items()
+        if str(declaration).strip()
+    }
+
+
+def _contract_sql_type(declaration: str) -> str | None:
+    normalized = declaration.strip().upper()
+    patterns = (
+        (r"^BOOLEAN\b", "boolean"),
+        (r"^(?:BIGINT|INTEGER|INT|SMALLINT)\b", "bigint"),
+        (r"^(?:DOUBLE PRECISION|REAL|FLOAT)\b", "double precision"),
+        (
+            r"^(?:NUMERIC|DECIMAL)(?:\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\))?\b",
+            "numeric",
+        ),
+        (r"^TIMESTAMPTZ\b", "timestamptz"),
+        (r"^TIMESTAMP\b", "timestamp"),
+        (r"^JSONB?\b", "jsonb"),
+        (r"^TEXT\s*\[\s*\]", "text[]"),
+        (r"^(?:TEXT|VARCHAR|CHAR)\b", "text"),
+    )
+    for pattern, sql_type in patterns:
+        if re.match(pattern, normalized):
+            return sql_type
+    return None
+
+
+def _safe_sql_default(raw: Any, *, sql_type: str) -> str | None:
+    """Translate a small, non-executable default grammar to PostgreSQL."""
+
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    while len(value) >= 2 and value[0] == "(" and value[-1] == ")":
+        value = value[1:-1].strip()
+    upper = value.upper()
+    if sql_type == "text[]" and re.fullmatch(r"'(?:[^']|'')*'", value):
+        inner = value[1:-1].replace("''", "'")
+        if inner.startswith("["):
+            return _sql_literal(_postgres_text_array_literal(inner))
+    if sql_type == "boolean" and upper in {"TRUE", "FALSE", "1", "0"}:
+        return "TRUE" if upper in {"TRUE", "1"} else "FALSE"
+    if upper in {"CURRENT_TIMESTAMP", "NOW()"}:
+        return "now()"
+    if re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", value):
+        return value
+    if re.fullmatch(r"'(?:[^']|'')*'", value):
+        return value
+    return None
+
+
+def _contract_default(declaration: str, *, sql_type: str) -> str | None:
+    match = re.search(
+        r"\bDEFAULT\s+(NOW\(\)|CURRENT_TIMESTAMP|TRUE|FALSE|"
+        r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)|'(?:[^']|'')*')",
+        declaration,
+        flags=re.IGNORECASE,
+    )
+    return _safe_sql_default(match.group(1), sql_type=sql_type) if match else None
+
+
+def _sqlite_sql(
+    path: Path, *, contract_declarations: dict[tuple[str, str], str] | None = None
+) -> str:
     statements: list[str] = []
+    contract_declarations = contract_declarations or {}
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
@@ -245,7 +344,8 @@ def _sqlite_sql(path: Path) -> str:
             ]
             for row in info:
                 name = str(row[1])
-                sql_type = _sqlite_json_type(
+                declaration = contract_declarations.get((table, name), "")
+                sql_type = _contract_sql_type(declaration) or _sqlite_json_type(
                     [record[name] for record in selected],
                     _sqlite_type(str(row[2] or "")),
                 )
@@ -260,6 +360,11 @@ def _sqlite_sql(path: Path) -> str:
                 )
                 if int(row[3] or 0) and not int(row[5] or 0):
                     suffix += " NOT NULL"
+                default = _safe_sql_default(row[4], sql_type=sql_type)
+                if default is None and declaration:
+                    default = _contract_default(declaration, sql_type=sql_type)
+                if default is not None:
+                    suffix += f" DEFAULT {default}"
                 definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
                 columns.append(name)
                 column_types.append(sql_type)
@@ -353,7 +458,9 @@ def _store_json_seed_sql(path: Path) -> str:
     )
 
 
-def _adopted_seed_sql(authoring: Path) -> tuple[str, list[str]]:
+def _adopted_seed_sql(
+    authoring: Path, *, contract: dict[str, Any] | None = None
+) -> tuple[str, list[str]]:
     schema = authoring / "schema.sql"
     if schema.is_file():
         sql = schema.read_text(encoding="utf-8")
@@ -365,7 +472,10 @@ def _adopted_seed_sql(authoring: Path) -> tuple[str, list[str]]:
         return sql, adopted
     sqlite = authoring / "world.sqlite"
     if sqlite.is_file():
-        return _sqlite_sql(sqlite), ["world.sqlite"]
+        return _sqlite_sql(
+            sqlite,
+            contract_declarations=_contract_column_declarations(contract or {}),
+        ), ["world.sqlite"]
     collections = authoring / "collections.json"
     if collections.is_file():
         return _collections_sql(collections), ["collections.json"]
@@ -389,6 +499,56 @@ def _load_compose(path: Path) -> dict[str, Any]:
     if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
         raise BundleAuthorError("compose_invalid: services must be an object")
     return body
+
+
+_RUNTIME_ENVIRONMENT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+_SECRET_ENVIRONMENT_NAME = re.compile(
+    r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_?KEY)", re.IGNORECASE
+)
+
+
+def _declared_runtime_environment(source: Path) -> dict[str, str]:
+    """Load public, non-secret process defaults declared by the repository.
+
+    Bundle V2 processes do not execute a Docker image and therefore cannot inherit image-level
+    ``ENV`` values. Repositories that need deterministic runtime knobs can declare them in
+    ``alk.yaml`` under ``runtime.environment``. Values are sealed into the bundle manifest, so
+    credential-shaped names and shell-style interpolation are rejected; secrets must continue
+    to travel through purpose-scoped refs.
+    """
+    path = source / "alk.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise BundleAuthorError(f"runtime_manifest_invalid: {exc}") from exc
+    if not isinstance(body, dict):
+        raise BundleAuthorError("runtime_manifest_invalid: root must be an object")
+    runtime = body.get("runtime") or {}
+    if not isinstance(runtime, dict):
+        raise BundleAuthorError("runtime_manifest_invalid: runtime must be an object")
+    raw_environment = runtime.get("environment") or {}
+    if not isinstance(raw_environment, dict):
+        raise BundleAuthorError(
+            "runtime_manifest_invalid: runtime.environment must be an object"
+        )
+    environment: dict[str, str] = {}
+    for raw_name, raw_value in raw_environment.items():
+        name = str(raw_name)
+        if not _RUNTIME_ENVIRONMENT_NAME.fullmatch(name):
+            raise BundleAuthorError(f"runtime_environment_name_invalid: {name}")
+        if _SECRET_ENVIRONMENT_NAME.search(name):
+            raise BundleAuthorError(f"runtime_environment_secret_forbidden: {name}")
+        if not isinstance(raw_value, (str, int, float, bool)):
+            raise BundleAuthorError(f"runtime_environment_value_invalid: {name}")
+        value = str(raw_value)
+        if "${" in value or "{{" in value:
+            raise BundleAuthorError(
+                f"runtime_environment_interpolation_forbidden: {name}"
+            )
+        environment[name] = value
+    return environment
 
 
 def _python_process(
@@ -418,7 +578,10 @@ def _python_process(
         working_directory=working_directory,
         build_commands=build,
         run_command=run,
-        environment=environment or {},
+        # Match the established Compose harness lane: submitted processes may adapt
+        # deterministic test-only provider seams without receiving an extra credential or
+        # control-plane capability.
+        environment={"HARNESS_MODE": "1", **(environment or {})},
         fixed_port=port,
         started_check=StartedCheck(port=True, timeout_seconds=180) if port else None,
         secret_purposes=[SecretPurpose.TARGET_PROVIDER] if needs_secrets else [],
@@ -662,6 +825,7 @@ def resolve_environment_plan(
         )
     }
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
+    declared_runtime_environment = _declared_runtime_environment(root)
 
     if compose is not None:
         body = _load_compose(compose)
@@ -753,6 +917,7 @@ def resolve_environment_plan(
             if service_name == control_name and "tools-api" in source_services:
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if is_livekit and service_name == control_name:
+                environment = {**declared_runtime_environment, **environment}
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
                     "uber-voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
@@ -865,13 +1030,14 @@ def resolve_environment_plan(
         port = None if is_livekit else 8080
         environment = (
             {
+                **declared_runtime_environment,
                 "LIVEKIT_AGENT_NAME": (
                     root.name.replace("_", "-") + "-{{JOB_ID}}-w{{WORLD_INDEX}}"
                 ),
                 "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
             }
             if is_livekit
-            else {}
+            else dict(declared_runtime_environment)
         )
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(root) if is_callback else None
@@ -987,6 +1153,54 @@ def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
     return adopted
 
 
+def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> list[str]:
+    """Seal bindings for caller-executed tools that live in the submitted source.
+
+    HTTP/chat agents can return a tool request for the harness caller to execute.  Contract
+    discovery already records the repository's real import/construct entrypoint; hosted bundle
+    authoring must carry that binding into the guest just as local world authoring does.  This
+    compiles only recorded source entrypoints and never supplies a replacement implementation.
+    Explicit authoring handlers win, which preserves bindings that needed custom invocation code.
+    """
+    raw_entries = contract.get("tool_entrypoints")
+    if not isinstance(raw_entries, list):
+        return []
+    handlers = staging / "handlers"
+    written: list[str] = []
+    for raw in raw_entries:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError as exc:
+            raise BundleAuthorError(f"contract_tool_entry_invalid: {exc}") from exc
+        if entry.mode not in {"import", "construct"}:
+            continue
+        if not entry.module or not entry.callable:
+            raise BundleAuthorError(
+                f"contract_tool_entry_incomplete: {entry.tool}: "
+                f"{entry.mode} requires module and callable"
+            )
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", entry.tool):
+            raise BundleAuthorError(f"contract_tool_name_unsafe: {entry.tool!r}")
+        handlers.mkdir(parents=True, exist_ok=True)
+        destination = handlers / f"{entry.tool}.py"
+        if destination.exists():
+            continue
+        destination.write_text(
+            _binding(
+                module=entry.module,
+                called=entry.callable,
+                style="method" if entry.mode == "construct" else "function",
+                first_arg=entry.first_arg,
+                factory=entry.factory,
+            ),
+            encoding="utf-8",
+        )
+        written.append(f"handlers/{entry.tool}.py")
+    return written
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -1051,6 +1265,9 @@ def author_bundle_v2(
     try:
         _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
         adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)
+        adopted_chat_files.extend(
+            _compile_source_tool_handlers(contract_body, temporary)
+        )
         if any(process.name == "tool-proxy" for process in plan.processes):
             generated = temporary / "generated" / "tool-proxy"
             generated.mkdir(parents=True)
@@ -1068,7 +1285,7 @@ def author_bundle_v2(
             "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
             "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
         )
-        schema, adopted_seed = _adopted_seed_sql(authoring_root)
+        schema, adopted_seed = _adopted_seed_sql(authoring_root, contract=contract_body)
         seed_path.write_text(prefix + schema, encoding="utf-8")
         migrations = ["seed/world.sql"]
         store = StoreEntry(
@@ -1142,7 +1359,8 @@ def author_bundle_v2(
                     {
                         str(tool.get("name") or "").strip()
                         for tool in contract_body.get("tools", [])
-                        if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+                        if isinstance(tool, dict)
+                        and str(tool.get("name") or "").strip()
                     }
                 ),
                 event_path=str(
