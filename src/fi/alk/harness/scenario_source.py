@@ -237,6 +237,16 @@ def _presented(body: dict[str, Any], *, scenario_key: str) -> dict[str, Any]:
 
     from .platform import persona_of
 
+    # Derive a short display name for the scenario.  The document may carry
+    # an explicit ``use_case``; when it does not, the scenario_key slug
+    # (e.g. ``refuse-booking-suspended-account``) is humanised so
+    # ``display_scenario_name`` never falls through to the long instruction
+    # text that ``name`` often contains in voice scenarios.
+    use_case = str(body.get("use_case") or "").strip()
+    if not use_case and scenario_key:
+        use_case = scenario_key.replace("-", " ").replace("_", " ")
+        use_case = use_case[:1].upper() + use_case[1:]
+
     try:
         return persona_of(
             SimpleNamespace(
@@ -245,6 +255,7 @@ def _presented(body: dict[str, Any], *, scenario_key: str) -> dict[str, Any]:
                 scenario_key=scenario_key,
                 instruction=str(body.get("instruction") or ""),
                 tests=str(body.get("tests") or ""),
+                use_case=use_case,
             )
         )
     except Exception:  # noqa: BLE001 - a scenario never fails to run over how it is displayed
@@ -445,8 +456,11 @@ class BundleScenarioSource:
         # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
         # subset), so the suite is what gets registered and the sample is only what gets called. The
         # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        run_name = _derive_run_name(job, bundle_dir)
+        agent_name = _derive_agent_name(job, bundle_dir)
         registered = await register_with_platform(
-            scenarios_client, scenarios, run_name=job.run_id
+            scenarios_client, scenarios, run_name=run_name,
+            agent_name=agent_name,
         )
         return sampled_for_calling(registered)
 
@@ -466,7 +480,55 @@ def _preallocation_error(code: str, message: str) -> Exception:
     )
 
 
-def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+def _read_bundle_contract(bundle_dir: Path) -> dict[str, Any]:
+    """Best-effort read of the authored contract from the bundle directory."""
+    path = bundle_dir / "contract.json"
+    if not path.is_file():
+        return {}
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+        return body if isinstance(body, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _derive_run_name(job: Any, bundle_dir: Path) -> str:
+    """Human-readable simulation run name from the contract or job source.
+
+    Prefer the authored contract's ``agent`` field (e.g.
+    ``uber_voice_agent`` -> ``Uber Voice Agent``); fall back to the last
+    path segment of ``source.repository`` (e.g.
+    ``future-agi/ride-voice-agent`` -> ``ride-voice-agent``).
+    """
+    contract = _read_bundle_contract(bundle_dir)
+    agent = str(contract.get("agent") or "").strip()
+    if agent:
+        return agent.replace("_", " ").replace("-", " ").title()[:200]
+
+    repo = getattr(getattr(job, "source", None), "repository", None) or ""
+    if "/" in repo:
+        return repo.rsplit("/", 1)[-1][:200]
+    if repo:
+        return repo[:200]
+    return "simulation"
+
+
+def _derive_agent_name(job: Any, bundle_dir: Path) -> str:
+    """Agent name for the provision payload, from contract or source repo."""
+    contract = _read_bundle_contract(bundle_dir)
+    agent = str(contract.get("agent") or "").strip()
+    if agent:
+        return agent.replace("_", " ").replace("-", " ").title()[:200]
+
+    repo = getattr(getattr(job, "source", None), "repository", None) or ""
+    if "/" in repo:
+        return repo.rsplit("/", 1)[-1][:200]
+    if repo:
+        return repo[:200]
+    return "alk-agent"
+
+
+def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario], *, agent_name: str = "") -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py): `operation`, `name` and `personas` are
     required; each persona's `name`, `role`, `situation`, `outcome` and `persona` are optional and
@@ -474,7 +536,7 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) ->
     `scenario.json` for scheduler-facing fields only, and the cost was a platform that could show a
     call but not who was on it or what they came for.
     """
-    return {
+    payload = {
         "operation": "provision",
         "name": run_name,
         # Everything the serializer accepts, where the document had it: name, role, situation,
@@ -485,6 +547,9 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) ->
             for scenario in scenarios
         ],
     }
+    if agent_name:
+        payload["agent_name"] = agent_name
+    return payload
 
 
 def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
@@ -567,6 +632,7 @@ async def register_with_platform(
     scenarios: Sequence[_CompiledScenario],
     *,
     run_name: str,
+    agent_name: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -581,7 +647,8 @@ async def register_with_platform(
     failure) -> only then build and return the new scenario list with `scenario_id` filled in.
     """
     provision_result = await asyncio.to_thread(
-        scenarios_client.provision, _provision_payload(run_name, scenarios)
+        scenarios_client.provision,
+        _provision_payload(run_name, scenarios, agent_name=agent_name),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:
