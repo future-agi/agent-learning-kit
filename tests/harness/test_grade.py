@@ -218,3 +218,19 @@ def test_a_placeholder_code_is_refused_however_it_is_arranged():
     # Real codes from suites on disk stay allowed, which is what stops this refusing everything.
     for real in ("004928", "592804", "731905", "638204", "112233"):
         assert not _predictable(real), real
+
+
+def test_the_whole_suite_is_registered_and_only_a_sample_is_run():
+    """Sampling before pre-allocation had the platform refuse: expected exactly 30 personas, got 5."""
+    import inspect
+
+    from fi.alk.harness.scenario_source import BundleScenarioSource, sampled_for_calling
+
+    source = inspect.getsource(BundleScenarioSource.build)
+    registered = source.index("register_with_platform")
+    sampled = source.index("sampled_for_calling")
+    assert registered < sampled, "the suite must be registered before the sample is taken"
+
+    # And the sample itself still caps a large suite while leaving a small one whole.
+    assert len(sampled_for_calling(list(range(30)))) == 5
+    assert len(sampled_for_calling(list(range(12)))) == 12

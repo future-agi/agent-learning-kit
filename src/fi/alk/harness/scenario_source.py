@@ -445,9 +445,6 @@ class BundleScenarioSource:
         # non-`allow_blank` `CharField`, hosted_harness.py:169). `ScenarioDocumentInvalid` reuses
         # `run_job`'s EXISTING `except ScenarioDocumentInvalid` clause (domain=environment) --
         # nothing new to catch there.
-        # Only the sample is pre-allocated, so the platform shows five calls that will happen
-        # rather than two hundred rows that never will.
-        scenarios = sampled_for_calling(scenarios)
         if any(not scenario.scenario_key for scenario in scenarios):
             raise ScenarioDocumentInvalid(
                 f"{bundle_dir / SCENARIOS_DIRNAME}: a scenario document has no non-empty "
@@ -459,7 +456,17 @@ class BundleScenarioSource:
         # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
         # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
         # terminal (or the fenced exit) -- nothing new to catch here.
-        return await register_with_platform(scenarios_client, scenarios, run_name=job.run_id)
+        # Pre-allocate the WHOLE suite, then run a sample of it.
+        #
+        # The sample used to be taken first, so the platform was handed five personas for a suite of
+        # thirty and refused the job: "expected exactly 30 personas, got 5". Pre-allocation is sealed
+        # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
+        # subset), so the suite is what gets registered and the sample is only what gets called. The
+        # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        registered = await register_with_platform(
+            scenarios_client, scenarios, run_name=job.run_id
+        )
+        return sampled_for_calling(registered)
 
 
 def _preallocation_error(code: str, message: str) -> Exception:
