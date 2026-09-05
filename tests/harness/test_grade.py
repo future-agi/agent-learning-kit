@@ -250,19 +250,16 @@ def test_an_empty_save_does_not_take_the_suite_with_it(tmp_path):
 
 
 def test_every_scenario_is_called_unless_a_run_caps_it(monkeypatch):
-    """The cap was a testing measure for one person's provider credits, never product behaviour."""
-    import importlib
+    """The cap was a testing measure for one person's provider credits, never product behaviour.
 
+    The module constant is patched rather than the environment: reloading the module to re-read
+    `os.environ` swaps its identity underneath every other test in the session, which broke four of
+    them.
+    """
     from fi.alk.harness import scenario_source
 
-    monkeypatch.delenv("HARNESS_CALLS_AT_MOST", raising=False)
-    importlib.reload(scenario_source)
+    monkeypatch.setattr(scenario_source, "CALLS_AT_MOST", 0)
     assert len(scenario_source.sampled_for_calling(list(range(200)))) == 200
 
-    monkeypatch.setenv("HARNESS_CALLS_AT_MOST", "5")
-    importlib.reload(scenario_source)
-    picked = scenario_source.sampled_for_calling(list(range(200)))
-    assert picked == [0, 40, 80, 120, 160]
-
-    monkeypatch.delenv("HARNESS_CALLS_AT_MOST", raising=False)
-    importlib.reload(scenario_source)
+    monkeypatch.setattr(scenario_source, "CALLS_AT_MOST", 5)
+    assert scenario_source.sampled_for_calling(list(range(200))) == [0, 40, 80, 120, 160]
