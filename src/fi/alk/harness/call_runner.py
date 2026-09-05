@@ -92,6 +92,10 @@ SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
 SIMULATOR_STT_MODEL_ALIAS = "SIMULATOR_STT_MODEL"
 SIMULATOR_TTS_PROVIDER_ALIAS = "SIMULATOR_TTS_PROVIDER"
 SIMULATOR_TTS_MODEL_ALIAS = "SIMULATOR_TTS_MODEL"
+BACKGROUND_NOISE_ALIAS = "ALK_BACKGROUND_NOISE"
+BACKGROUND_NOISE_CATALOG_ALIAS = "ALK_BACKGROUND_NOISE_CATALOG"
+BACKGROUND_NOISE_VOLUME_ALIAS = "HARNESS_BACKGROUND_NOISE_VOLUME"
+CALL_DIRECTION_ALIAS = "ALK_CALL_DIRECTION"
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
@@ -865,6 +869,9 @@ class CallRunnerImpl:
             SIMULATOR_STT_MODEL_ALIAS,
             SIMULATOR_TTS_PROVIDER_ALIAS,
             SIMULATOR_TTS_MODEL_ALIAS,
+            BACKGROUND_NOISE_ALIAS,
+            BACKGROUND_NOISE_CATALOG_ALIAS,
+            BACKGROUND_NOISE_VOLUME_ALIAS,
         ):
             value = simulator_secret_values.get(alias)
             if value:
@@ -974,6 +981,34 @@ class CallRunnerImpl:
             self._environ["HARNESS_BACKGROUND_NOISE"] = noise
         else:
             self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
+
+        # Read the same way and for the same reason as the noise source above: the simulator's
+        # instructions are built deep inside simulator_definition, which sees the environment and
+        # not this scenario. Set per scenario and cleared otherwise so one outbound scenario cannot
+        # frame the next inbound one.
+        # A scenario that names its own direction wins. Otherwise the contract's, which the
+        # understand stage read off the agent's own instructions and `hosted_entrypoint` puts here
+        # for this process. Not an operator setting: whether an agent places calls or answers them
+        # is a fact about the agent, so there is nothing for a run to choose.
+        direction = (
+            str(
+                doc.get("call_direction")
+                or os.environ.get(CALL_DIRECTION_ALIAS)
+                or "inbound"
+            )
+            .strip()
+            .lower()
+        )
+        if direction == "outbound":
+            self._environ["HARNESS_CALL_DIRECTION"] = direction
+            awareness = str(doc.get("caller_awareness") or "").strip().lower()
+            if awareness:
+                self._environ["HARNESS_CALLER_AWARENESS"] = awareness
+            else:
+                self._environ.pop("HARNESS_CALLER_AWARENESS", None)
+        else:
+            self._environ.pop("HARNESS_CALL_DIRECTION", None)
+            self._environ.pop("HARNESS_CALLER_AWARENESS", None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector

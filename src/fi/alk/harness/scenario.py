@@ -26,13 +26,24 @@ from .catalogue import Catalogue
 from .simulator import variables_in
 
 
+# What a fixture's `origin` may say, and which of those claim the scenario creates data itself.
+FIXTURE_ORIGINS = ("seed", "generated", "mixed")
+ORIGINS_THAT_CREATE = ("generated", "mixed")
+
+# For an outbound call, how much the person already knows about why they are being rung. The order
+# is the axis: told to expect it, half remembers, no idea at all. Named once so the schema a writer
+# is offered, the suite's spread rule and the caller's own briefing cannot drift apart.
+CALLER_AWARENESS = ("expecting", "partial", "unaware")
+LEAST_AWARE = "unaware"
+
+
 class Step(BaseModel):
     """One action in a reference solution."""
 
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     # Source-backed agents often add trusted session state between the model-facing function
-    # and the dependency API: rider ids, resolved addresses, selected fares, and similar values
+    # and the dependency API: internal identifiers, resolved lookups, priced results, and similar
     # must never be exposed as arguments the model supposedly chose.  A reference proof still
     # has to drive the real dependency so its database effects can be checked, so it may carry
     # that dependency payload separately.  Agent runs never read this field.
@@ -225,6 +236,18 @@ class Scenario(BaseModel):
     # twice; a coin flip here made a seeded run unreproducible.
     background_noise: bool | str = ""
 
+    # Whether the agent placed this call or answered it. Voice only: a chat is always started by
+    # the person, so it stays inbound. An outbound caller has no opening request to make, which is
+    # a different test of the agent rather than the same one with a reworded greeting.
+    # Empty means defer to the run and then to the contract, which is where the agent's own
+    # direction was identified. Defaulting it to "inbound" here would be written into the saved
+    # document and silently outrank both of them.
+    call_direction: str = ""
+    # For an outbound call, how much this person already knows about why they are being rung:
+    # "expecting", "partial" or "unaware". Unset means unaware, the case the agent must work
+    # hardest for.
+    caller_awareness: str = ""
+
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
     RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
@@ -286,12 +309,27 @@ def validate_scenario(
         problems.append(
             "no fixture manifest: declare the seed/generated/mixed data this scenario relies on"
         )
-    elif scenario.fixture and str(scenario.fixture.get("origin") or "").lower() not in {
-        "seed",
-        "generated",
-        "mixed",
-    }:
-        problems.append("fixture.origin must be seed, generated, or mixed")
+    elif scenario.fixture and str(
+        scenario.fixture.get("origin") or ""
+    ).lower() not in set(FIXTURE_ORIGINS):
+        problems.append(
+            "fixture.origin must be "
+            + ", ".join(FIXTURE_ORIGINS[:-1])
+            + f", or {FIXTURE_ORIGINS[-1]}"
+        )
+    elif (
+        scenario.fixture
+        and str(scenario.fixture.get("origin") or "").lower() in set(ORIGINS_THAT_CREATE)
+        and not (scenario.setup_code or "").strip()
+    ):
+        # A fixture claiming data it never creates is the whole class of scenario that names a value
+        # the scenario reads as self-sufficient, the world has none of it, and the agent has nothing
+        # to answer with. Caught here because it is provable from the document alone.
+        problems.append(
+            f"fixture.origin is {scenario.fixture.get('origin')!r}, which claims this scenario "
+            "creates data, but setup_code is empty. Either seed everything the fixture names, or "
+            "declare origin 'seed' and use only records that already exist"
+        )
 
     unknown = sorted(set(scenario.sub_goals) - catalogue.names())
     if unknown:
@@ -322,6 +360,10 @@ def validate_scenario(
         )
     problems.extend(fixture_problems(scenario))
     problems.extend(_world_credential_problems(scenario, world_state))
+    problems.extend(self_sufficiency_problems(scenario))
+    problems.extend(alignment_problems(scenario, world_state))
+    problems.extend(hollow_scenario_problems(scenario))
+    problems.extend(naming_problems(scenario))
     return problems
 
 
@@ -497,11 +539,192 @@ def _six_digit_values(scenario: Scenario) -> list[str]:
     return found
 
 
+# A value the instruction hands the caller so they can say it back: a code, a reference, an account
+# number, an id. Deliberately not named after any one domain, because the failure is the same
+# whatever the agent does: the caller reads out something the agent then cannot find.
+_QUOTED_VALUE = re.compile(r"(?<![\w-])(?=[A-Za-z-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,}(?![\w-])")
+
+# Values that look quotable but are never records the agent looks up.
+_NOT_A_RECORD = re.compile(
+    r"^(?:\d{1,2}[:.]\d{2}|\d{1,4}(?:st|nd|rd|th)|20\d{2}|1?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)$",
+    re.IGNORECASE,
+)
+
+
+def _quotable_values(text: str) -> set[str]:
+    """Tokens in a piece of text that read as a value somebody would be asked to repeat."""
+    return {
+        token
+        for token in _QUOTED_VALUE.findall(text or "")
+        if not _NOT_A_RECORD.match(token)
+    }
+
+
+# A value only has to be reachable if the caller is going to be asked for it. An address they are
+# travelling to, or a price they are quoted, is the agent's to produce; a value they are told to say
+# back is one the agent will check. Domain-neutral: the cue is the verb, not the kind of value.
+_HANDED_OVER = re.compile(
+    r"(?:say|give|read|quote|provide|confirm|tell|repeat|use|enter|supply)\b[^.\n]{0,70}?"
+    r"(?<![\w-])((?=[A-Za-z-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,})(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def _handed_to_caller(text: str) -> set[str]:
+    """Values the instruction tells the caller to say back, which the agent will then check."""
+    return {
+        match.group(1)
+        for match in _HANDED_OVER.finditer(text or "")
+        if not _NOT_A_RECORD.match(match.group(1))
+    }
+
+
+def naming_problems(scenario: Scenario) -> list[str]:
+    """Whether the name says what is tested, or only who the agent was dealing with.
+
+    The folder name is how a failure is read weeks later. A caller's name in it says the caller was
+    carrying the difference the test should have been carrying, which is the same mistake as planning
+    a second scenario because the person could be somebody else. Measured on an earlier suite: twelve
+    of thirty one were still named for the caller after the skill asked them not to be, which is why
+    this is checked rather than requested.
+    """
+    caller = str(getattr(scenario.persona, "name", "") or "").strip().lower()
+    if not caller:
+        return []
+    # Each part of the name, not the whole string: "marcus vance" is never a token of
+    # `refuse_expired_card_marcus`, so matching the full name lets every first-name suffix through.
+    parts = {part for part in caller.split() if len(part) > 2}
+    written = set(scenario.name.lower().replace("-", " ").replace("_", " ").split())
+    named_in = sorted(parts & written)
+    if not named_in:
+        return []
+    return [
+        f"the name contains the person's own name ({', '.join(named_in)}). Name it for the behaviour "
+        "under test, so a red result says which rule broke rather than who the agent was dealing "
+        "with, and so the suite sorts by what it covers rather than by who appeared in it"
+    ]
+
+
+def hollow_scenario_problems(scenario: Scenario) -> list[str]:
+    """Whether the scenario tests reaching an outcome, or only the outcome itself.
+
+    A reference solution of one call, graded by one sub-goal naming that same call, is passed by an
+    agent that makes that call the moment it answers, having established nothing. Measured on a
+    suite of a hundred, eleven scenarios were a single `transfer_to_human` step graded by a single
+    `transferred_to_human` sub-goal, differing from each other only in the pretext, and every one of
+    them was passed by an agent that transfers every caller on arrival.
+
+    The bar is in the write skill and was not enough on its own, so it is checked here.
+    """
+    if len(scenario.solution) > 1:
+        return []
+    if not scenario.solution:
+        return []
+    return [
+        "the reference solution is a single call and there is nothing the agent has to establish "
+        "first, so an agent that makes that call on arrival passes without doing any of the work. "
+        "Either the solution shows how the outcome is reached, gathering what the decision depends "
+        "on before making it, or this is not a scenario"
+    ]
+
+
+def alignment_problems(
+    scenario: Scenario, world_state: dict[str, list[dict[str, Any]]] | None = None
+) -> list[str]:
+    """Whether the values the caller is told are values the world actually holds.
+
+    The failure this exists for, seen across a whole suite: an instruction telling the caller a
+    verification code, a reference or an account number that the scenario never seeds and the world
+    never had. The call cannot succeed however well the agent behaves, and the result is reported as
+    a finding about the agent when it is a finding about the scenario.
+
+    Deliberately domain-neutral. A code, a booking reference, a policy number and an order id all
+    fail the same way, so the rule is about values rather than about any one kind of value: anything
+    the instruction hands the caller has to be somewhere the agent can reach, which means this
+    scenario's `setup_code` or the world it starts from. A fixture entry is not enough, because a
+    fixture describes what a scenario relies on and only `setup_code` changes what is there.
+    """
+    told = _handed_to_caller(scenario.instruction)
+    if not told:
+        return []
+    reachable = _quotable_values(scenario.setup_code or "")
+    for step in scenario.solution:
+        reachable |= _quotable_values(json.dumps(step.arguments, default=str))
+        reachable |= _quotable_values(
+            json.dumps(step.environment_arguments, default=str)
+        )
+    if world_state:
+        reachable |= _quotable_values(json.dumps(world_state, default=str)[:200000])
+    missing = sorted(told - reachable)
+    if not missing:
+        return []
+    return [
+        "the instruction gives the caller "
+        + ", ".join(missing)
+        + " to say back, and neither setup_code nor the world holds "
+        + ("them" if len(missing) > 1 else "it")
+        + ". Seed what the caller is told, or tell them what is seeded. Naming a value in fixture "
+        "only declares it: setup_code is what the world ends up holding"
+    ]
+
+
+# What a setup does to the world, told apart by which call it makes. `put` adds a record and
+# `call` drives a tool that produces one; `change` and `drop` only touch what was already there.
+_CREATES_A_RECORD = re.compile(r"world\.(?:put|call)\s*\(")
+_ONLY_TOUCHES_EXISTING = re.compile(r"world\.(?:change|drop)\s*\(")
+
+
+def self_sufficiency_problems(scenario: Scenario) -> list[str]:
+    """Whether this scenario owns the records its outcome turns on, or borrows them.
+
+    A setup that only adjusts rows it did not create is building the test on state it does not
+    control: the row belongs to the frozen base, so a second scenario adjusting the same row is
+    testing the same record from two directions and neither describes a world it owns. Measured on
+    a fan-out suite of 86, sixty seven were one or two `world.change` calls against base rows, four
+    scenarios deep on the same rider, and the reused verification codes were the visible symptom of
+    it.
+
+    An empty setup stays legal. That is the documented case where the target's store is
+    process-local with no seam, so the scenario cannot alter it and says so by touching nothing.
+    """
+    body = (scenario.setup_code or "").strip()
+    if not body:
+        return []
+    if _CREATES_A_RECORD.search(body):
+        return []
+    if not _ONLY_TOUCHES_EXISTING.search(body):
+        return []
+    return [
+        "setup_code only adjusts records that were already there and creates none of its own, so "
+        "this scenario shares its data with every other scenario that touches the same records. "
+        "Create what the outcome turns on: its own person, its own record, its own code, with "
+        "world.put or by driving the agent's own tool. Shared reference data a whole world sits on "
+        "can be read as it is, but the thing being tested has to belong to this scenario"
+    ]
+
+
+def _predictable(code: str) -> bool:
+    """Whether a one-time code is one nobody would be issued.
+
+    The hand-kept list of obvious ones caught `111111` and `123456` and let `000111` through, which then
+    turned up twice in a 200-scenario suite. Tested as a property instead: a code built from one or two
+    digits, or one that simply counts up or down, is a placeholder however it is arranged.
+    """
+    if not code.isdigit() or len(code) < 4:
+        return code in _WEAK_CODES
+    if len(set(code)) <= 2:
+        return True
+    steps = {ord(later) - ord(earlier) for earlier, later in zip(code, code[1:])}
+    if steps in ({1}, {-1}):
+        return True
+    return code in _WEAK_CODES
+
+
 def fixture_problems(scenario: Scenario) -> list[str]:
     """Reject demo-shaped data before a paid run makes it look like production traffic."""
     problems: list[str] = []
     codes = _six_digit_values(scenario)
-    weak = sorted({code for code in codes if code in _WEAK_CODES})
+    weak = sorted({code for code in codes if _predictable(code)})
     if weak:
         problems.append(
             "fixture uses predictable verification code(s): "
@@ -597,6 +820,32 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
         problems.append(
             f"only {len(locations)} persona locations across {len(scenarios)} scenarios; need 3"
         )
+    # An outbound suite that is all one awareness tests one opening repeatedly. Enforced rather than
+    # asked for: told to prefer `unaware`, writers made it the default and produced seven of eight,
+    # and told to cover more than one they had settled on `expecting` instead. Both leave two thirds
+    # of the opening untested.
+    outbound = [one for one in scenarios if one.call_direction == "outbound"]
+    if len(outbound) >= 3:
+        spread = Counter(one.caller_awareness or LEAST_AWARE for one in outbound)
+        if len(spread) < 2:
+            problems.append(
+                f"all {len(outbound)} outbound scenarios are caller_awareness "
+                f"{next(iter(spread))!r}; cover at least two of "
+                + ", ".join(CALLER_AWARENESS)
+            )
+        elif max(spread.values()) > ceil(len(outbound) * 0.7):
+            worst, count = spread.most_common(1)[0]
+            problems.append(
+                f"{count} of {len(outbound)} outbound scenarios are caller_awareness {worst!r}; "
+                "keep any one of "
+                + ", ".join(CALLER_AWARENESS)
+                + " under 70 percent of them"
+            )
+        if not spread.get(LEAST_AWARE):
+            problems.append(
+                f"no outbound scenario has caller_awareness {LEAST_AWARE!r}, the one that tests whether "
+                "the agent says who it is and why it called before asking for anything"
+            )
     # A code naturally appears several times inside one scenario (fixture, caller script,
     # reference verify call). Diversity is about reuse *between* callers, not repeated mention
     # of the same fact inside one test.

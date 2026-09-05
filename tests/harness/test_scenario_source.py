@@ -1016,7 +1016,7 @@ def test_mutation_judged_flag_dropped_is_killed_by_5b_verdict_assertions() -> No
     # drives its own `asyncio.run` internally, and nothing here awaits anything.
     original_load_one = ss._load_one
 
-    def _dropped_judged(folder: Path):
+    def _dropped_judged(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
         broken_goals = tuple(
             ss._CompiledSubGoal(name=g.name, judged="", check=g.check) for g in compiled.sub_goals
@@ -1046,7 +1046,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
 
     original_load_one = ss._load_one
 
-    def _synthesizes_key(folder: Path):
+    def _synthesizes_key(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
         key = compiled.scenario_key or "synthesized-key"
         return ss._CompiledScenario(

@@ -11,21 +11,24 @@ of these harder" is the next thing said rather than a regeneration from nothing.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
+import random
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from .backends import SessionSpec, ToolServer, tool, tool_server
 
-from .config import artifact_dir, chosen_model, load_skill
+from .config import artifact_dir, chosen_model, discovered_skills, load_skill
 from .catalogue import load_catalogue
 from .contract import AgentContract
-from .scenario import Scenario
+from .scenario import Scenario, suite_diversity_problems
 from .scenario_tools import (
-    parallel_suites,
+    journalled,
+    worth_delegating,
     SCENARIO_SERVER,
     load_scenarios,
     scenario_tools,
@@ -38,6 +41,7 @@ from .tools import schema
 logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
+PLAN_SKILL = "plan-suite"
 
 # The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
 # only report gaps and never submit or save a scenario itself.
@@ -79,6 +83,14 @@ def open_stage(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
+            # Planning and writing are two stages. This session does the first, so it gets both;
+            # a slice writer gets the writing skill alone, because the plan is already made and
+            # widening a slice is the one thing it must not do.
+            + (f"\n\n{load_skill(PLAN_SKILL)}" if worth_delegating(wanted) else "")
+            # Whatever this kind of agent adds on top. A file under skills/kinds/ that
+            # declares `applies_to: modality=<kind>` is appended here, so supporting a
+            # new kind of agent is adding that file and nothing else.
+            + discovered_skills(modality=contract.modality)
             + (
                 f"\n\nWrite {wanted} scenarios."
                 if not kept
@@ -94,6 +106,10 @@ def open_stage(
         model=chosen_model(),
         ask=ask,
         thinking=True,
+        # Silence means something different once the writing is delegated: see the constant.
+        idle_timeout_seconds=(
+            QUIET_WHILE_DELEGATING_SECONDS if worth_delegating(wanted) else 0.0
+        ),
     )
     return Stage(spec, name=SKILL), destination
 
@@ -117,8 +133,9 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
         "checks and those checks fail without it. In a source-provisioned world, keep each "
         "solution step's arguments exactly model-facing. If the raw dependency needs trusted "
         "fields injected by the worker, put its complete payload in environment_arguments; "
-        "never pretend the model supplied rider ids, resolved routes, fares, or other hidden "
-        "state. Treat every contract phrase like 'from this call' literally: the reference "
+        "never pretend the model supplied an internal identifier, a resolved lookup, a priced "
+        "result, or any other value it could not have known. Treat every contract phrase that ties "
+        "a value to this conversation literally: the reference "
         "solution must create that state earlier in the same conversation. Never pre-seed "
         "opaque state that the agent has no public tool or session state to retrieve. Cover the "
         "ordinary case, the request that has "
@@ -130,7 +147,7 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
             "\n\nFor a suite rather than one scenario, say briefly how you are splitting it "
             "across the agent's use cases and then write it with generate_suite in the same "
             "turn: it runs a writer per use case at the same time and saves what they prove."
-            if parallel_suites()
+            if worth_delegating(wanted)
             else ""
         )
     )
@@ -149,13 +166,124 @@ def load(destination: Path) -> list[Scenario]:
 # is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
 # served a batch at a time with the rest offered back.
 AT_ONCE = 4
-MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
-MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 50)
+# Writers each drive their own model session, so this is a request rate as much as a concurrency.
+# Eight of them exhausts the provider quota and the writers that get the 429 lose their whole
+# slice, which costs more scenarios than the extra concurrency buys.
+MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4)
+# How many a single generate_suite pass will write. A hosted run is unattended, so a cap here
+# does not pause for a person, it just returns fewer than were asked for and stops. Kept as a
+# backstop against a runaway ask rather than as a batch size.
+MOST_IN_ONE_GO = 1000
 
 # How many times the suite is reviewed and topped up after the first pass. One is enough to
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop
 # that keeps finding smaller things to say.
 TOP_UP_ROUNDS = 1
+
+# How long a session may say nothing before the harness treats it as hung, where the default of
+# ten minutes is wrong for this stage.
+#
+# The planning session's whole turn is one `generate_suite` call, and that call does not return
+# until the writers it started have finished. It is working the entire time and has nothing to
+# emit while it works, so the default bound kills a fan-out mid-flight and throws away everything
+# the writers proved. A hundred scenarios across four writers is comfortably an hour, and any
+# writer may also be waiting out a quota refusal inside that.
+#
+# Still bounded, because the reason the bound exists is real: a dropped provider stream leaves a
+# session alive forever. The outer bound is the run's own authoring deadline.
+QUIET_WHILE_DELEGATING_SECONDS = 5400.0
+# A writer is quiet while one of its own tool calls runs, and its longest is a proof: restore the
+# world, apply setup, play the solution, then play it again against an untouched world. Minutes,
+# not an hour, and keeping this shorter than the planner's bound is what frees a stuck writer's
+# slot for the next slice instead of holding it until the whole stage times out.
+QUIET_WHILE_WRITING_SECONDS = 1800.0
+
+
+# A session refused by the provider is retried rather than abandoned: its work is still worth doing and
+# a slice keeps what it already proved. The quota is measured over a minute, so each wait clears a
+# minute; a shorter one asks inside the same window and is refused again for the same reason. What is
+# bounded is the total, not the number of tries: five minutes of waiting is worth a slice, and a run
+# that waits longer than that is not going to be rescued by waiting more.
+RATE_LIMIT_BACKOFF_SECONDS = 60
+RATE_LIMIT_JITTER_SECONDS = 30
+RATE_LIMIT_TOTAL_WAIT_SECONDS = 300
+
+
+def _rate_limited(said: str) -> bool:
+    """Whether this is the provider refusing for rate or quota rather than for what was asked."""
+    lowered = said.lower()
+    return any(
+        mark in lowered
+        for mark in ("429", "resource_exhausted", "resourceexhausted", "rate limit", "quota")
+    )
+
+
+def _refusal_in(broke: BaseException | None, ended: Any) -> str:
+    """The refusal, when a turn or an exception is one for rate or quota, and empty otherwise.
+
+    Two shapes because a backend has two ways of reporting a dead model call, and only one of them
+    is an exception. The Vertex backend never raises: it catches everything and finishes the turn
+    with `outcome` "failed" and the provider's own words in `error`. A retry that watched only for
+    exceptions therefore never fired on the backend the hosted run actually uses, which is how a
+    quota refusal went on costing a whole slice while the waiting code looked correct.
+    """
+    if broke is not None:
+        said = f"{type(broke).__name__} {broke}"
+        return said if _rate_limited(said) else ""
+    if str(getattr(ended, "outcome", "") or "") != "failed":
+        return ""
+    said = str(getattr(ended, "error", "") or "")
+    return said if _rate_limited(said) else ""
+
+
+def _refusal_pause() -> float:
+    """How long to wait before asking again, spread out so sessions do not return together.
+
+    Sessions are refused at the same moment because they ask at the same moment, so a fixed wait has
+    them all wake together and refuse together. Each wait clears the quota's minute and carries
+    jitter on top, which is what breaks the lockstep.
+    """
+    return round(
+        RATE_LIMIT_BACKOFF_SECONDS + random.uniform(0, RATE_LIMIT_JITTER_SECONDS), 1
+    )
+
+
+async def survive_refusal(
+    run: Callable[[], Awaitable[Any]],
+    *,
+    what: str,
+    on_event: Callable[..., Any] | None = None,
+    enough: Callable[[], bool] | None = None,
+) -> Any:
+    """Run something that talks to the model, waiting out a refusal for rate or quota.
+
+    Used by every session that drives its own model turn, because any of them can be the one the
+    provider refuses, and losing the planning turn costs the whole suite rather than one slice.
+    Anything that is not a rate or quota refusal is raised, so a real fault still fails fast.
+    """
+    waited = 0.0
+    while True:
+        broke: BaseException | None = None
+        ended: Any = None
+        try:
+            ended = await run()
+        except Exception as raised:  # noqa: BLE001 - classified below, re-raised when not a refusal
+            broke = raised
+        refusal = _refusal_in(broke, ended)
+        pause = _refusal_pause()
+        spent_out = waited + pause > RATE_LIMIT_TOTAL_WAIT_SECONDS
+        if not refusal or spent_out or (enough is not None and enough()):
+            if broke is not None:
+                raise broke
+            return ended
+        waited += pause
+        logger.warning(
+            "%s was refused for rate or quota; waiting %ss (%ss of %ss spent): %s",
+            what, pause, round(waited), RATE_LIMIT_TOTAL_WAIT_SECONDS, refusal[:200],
+        )
+        if on_event:
+            on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
+        await asyncio.sleep(pause)
 
 
 @dataclass(frozen=True)
@@ -244,7 +372,32 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
     return slices
 
 
-def callers_for(index: int, wanted: int) -> str:
+# Initial letters dealt out so parallel writers cannot invent the same people. Three per writer, which
+# is enough choice to suit a scenario and keeps seven writers disjoint before the letters wrap; beyond
+# that two writers share initials but still choose different names. Numbers are partitioned by a
+# three-digit prefix instead: a hundred slots collided twice on a run with twenty slices, which is
+# what the birthday arithmetic predicts, and a thousand makes it rare. A repeated verification code is
+# a real collision; a repeated initial is not.
+_NAME_LETTERS = "ABCDEFGHIJKLMNOPRSTVWY"
+_LETTER_BLOCK = "abc"
+
+
+def _slot(of: str, index: int) -> int:
+    """A stable number for one slice, so its share of the value space does not move between passes.
+
+    Using the position in the current batch looked right and was not: a second `generate_suite` pass
+    numbers its slices from zero again, so its first writer is handed the same letters and the same
+    leading digits as the first writer of the pass before it, and their codes collide. Measured on a
+    377-scenario run: two verification codes shared, both between passes. Derived from the slice's own
+    name instead, which does not change when the batch does, and deterministically so two runs of the
+    same plan partition the same way.
+    """
+    if not of:
+        return index
+    return int(hashlib.sha256(of.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
     Instruction alone cannot do this. Each writer is blind to the others, so each independently
@@ -268,6 +421,28 @@ def callers_for(index: int, wanted: int) -> str:
     said = (
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
+    )
+    # Writers cannot see each other, so left to themselves they invent the same handful of people and
+    # the same round numbers, and the suite comes back with one name on a dozen scenarios and one
+    # verification code shared between them. Partitioning the space of values costs nothing and makes
+    # a collision impossible: each writer owns some initial letters and one leading digit, so no
+    # shared list of names or codes has to exist for the values to stay distinct.
+    slot = _slot(slice_name, index)
+    # More letters where the slice is larger: a writer inventing twelve people from three initials
+    # reuses a name, which is most of why distinctness measured 73 percent rather than the 90 the
+    # suite rule wants.
+    block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
+    letters = "".join(
+        _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)] for step in range(block)
+    )
+    said += (
+        f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
+        "every number you invent that the agent will look up, a code or a reference or an account "
+        f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
+        "prefixes, so this is what keeps two scenarios from sharing a name or a code. Within your own "
+        "slice, no two people may share a given name and no two scenarios may share a code or a "
+        "reference: the prefix keeps you clear of other writers, it does not keep you clear of "
+        "yourself."
     )
     if accents:
         # Spread several offered accents across this writer's callers rather than naming just one,
@@ -378,7 +553,11 @@ async def _write_slice(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
-            f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
+            # Whatever this kind of agent adds on top. A file under skills/kinds/ that
+            # declares `applies_to: modality=<kind>` is appended here, so supporting a
+            # new kind of agent is adding that file and nothing else.
+            + discovered_skills(modality=contract.modality)
+            + f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
         servers={
             SCENARIO_SERVER: ToolServer(
@@ -392,14 +571,29 @@ async def _write_slice(
         model=chosen_model(),
         ask=ask,
         thinking=True,
+        idle_timeout_seconds=QUIET_WHILE_WRITING_SECONDS,
     )
-    stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
-    try:
+    # Each writer drives its own model session, so several of them together are a request rate. When
+    # the provider refuses one, the slice is not wrong and its brief is still worth writing, so wait
+    # for the quota to recover and run it again. `kept` belongs to this slice's own tool server, so a
+    # second attempt adds to what the first proved rather than starting over.
+    async def attempt_slice() -> Any:
+        stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
         async with stage:
-            await stage.say(
+            return await stage.say(
                 brief_for(contract, mine, siblings, callers_for(index, mine.count)),
                 on_event=watch,
             )
+
+    try:
+        # A refusal for rate or quota is waited out; the slice keeps what it already proved, so a
+        # second attempt adds to it. Stop early if the count is already met.
+        await survive_refusal(
+            attempt_slice,
+            what=f"slice {mine.named()}",
+            on_event=on_event,
+            enough=lambda: len(kept) >= mine.count,
+        )
     except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
         logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
         if on_event:
@@ -534,11 +728,28 @@ async def gaps_in(
     stage = Stage(review, name=f"{SKILL}:review")
     try:
         async with stage:
-            await stage.say(
+            # The suite-level checks are reported at save and enforced nowhere, deliberately:
+            # refusing a save leaves proved work in memory only. This is the one place that can act
+            # on them, because it is the only pass that reads the whole suite and can commission
+            # replacements. Without this they are a message nobody reads.
+            skew = suite_diversity_problems(suite)
+            already_wrong = (
+                "Reading the suite as a whole, these are already wrong with it, and a gap that "
+                "fixes one of them is worth more than a new use case:\n"
+                + "\n".join(f"- {problem}" for problem in skew)
+                + "\n\n"
+                if skew
+                else ""
+            )
+            asked = (
                 f"This suite has {len(suite)} scenarios against a target of {wanted}:\n\n"
                 f"{_suite_summary(suite)}\n\n"
-                "Say what it is missing, then submit_gaps. Submit an empty list if it is "
+                + already_wrong
+                + "Say what it is missing, then submit_gaps. Submit an empty list if it is "
                 "covering what it should."
+            )
+            await survive_refusal(
+                lambda: stage.say(asked), what="the suite review", on_event=on_event
             )
     except Exception:  # noqa: BLE001 - a review that fails leaves the suite as written
         return []
@@ -609,7 +820,21 @@ async def write_in_parallel(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    suite = merged([load_scenarios(destination), *written])
+    proved = merged([load_scenarios(destination), *written])
+    # What a writer proved but never handed back, because its session died after proving it. Matched
+    # by name so a scenario already in hand is not added twice under a numbered name.
+    recovered = [
+        one for one in journalled(destination) if one.name not in {x.name for x in proved}
+    ]
+    if recovered:
+        logger.warning(
+            "recovered %s scenarios from the journal that no writer returned: %s",
+            len(recovered),
+            ", ".join(one.name for one in recovered),
+        )
+        if on_event:
+            on_event({"type": "recovered", "kept": len(recovered)})
+    suite = merged([proved, recovered])
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
@@ -666,7 +891,17 @@ async def write(
         contract, out=out, wanted=wanted, ask=ask, max_turns=max_turns
     )
     async with stage:
-        await stage.say(opening(contract, wanted), on_event=on_event)
+        # The planning turn is the expensive one to lose: a refusal here costs the whole suite, not
+        # one slice, so it waits the same way a writer does.
+        await survive_refusal(
+            lambda: stage.say(opening(contract, wanted), on_event=on_event),
+            what="the opening turn",
+            on_event=on_event,
+        )
         for follow_up in follow_ups or []:
-            await stage.say(follow_up, on_event=on_event)
+            await survive_refusal(
+                lambda message=follow_up: stage.say(message, on_event=on_event),
+                what="a follow-up turn",
+                on_event=on_event,
+            )
     return load(destination)

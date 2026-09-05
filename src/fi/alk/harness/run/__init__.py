@@ -32,6 +32,7 @@ from .grade import (
     judge,
     judge_suite_evals,
     summarise,
+    ungraded_sub_goals,
 )
 from .targets import (
     LocalAgent,
@@ -209,6 +210,10 @@ async def run_scenario(
         return Result(
             scenario=scenario.name,
             tests=scenario.tests,
+            problems=[
+                f"{name} is not in this catalogue, so nothing graded it"
+                for name in ungraded_sub_goals(scenario, catalogue)
+            ],
             state_failures=[
                 f"{one.name}: {one.said}" for one in settled if not one.held
             ],

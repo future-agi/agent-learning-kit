@@ -1917,8 +1917,14 @@ def test_every_stage_publishes_exactly_the_tools_it_claims(tmp_path):
     from fi.alk.harness import scenario_tools as scenarios
 
     root, contract = _saved_world(tmp_path)
-    server, _kept = scenarios.scenario_tools(contract, root, root, wanted=1)
-    assert _published(server) == sorted(scenarios.TOOL_NAMES)
+    # The scenario surface depends on how many were asked for: a request too small to be worth
+    # several writers is not offered the tool that runs them. So the agreement to hold is between
+    # a session and the surface claimed for its own request, not one fixed list.
+    for wanted in (1, scenarios.FEWEST_WORTH_DELEGATING):
+        server, _kept = scenarios.scenario_tools(contract, root, root, wanted=wanted)
+        assert _published(server) == sorted(scenarios.tool_names(wanted))
+    assert "generate_suite" not in scenarios.tool_names(1)
+    assert "generate_suite" in scenarios.tool_names(scenarios.FEWEST_WORTH_DELEGATING)
 
     built, _world = world.world_tools(contract, root)
     assert _published(built) == sorted(world.TOOL_NAMES)
@@ -2489,7 +2495,12 @@ def _delta(**overrides):
         "use_case": "order an item",
         "instruction": "Order one Big Mac.",
         "fixture": {"origin": "seed", "item_id": "big_mac"},
-        "solution": [{"tool": "add", "arguments": {"item_id": "big_mac"}}],
+        # Two steps because one is refused: a solution that jumps straight to the outcome is
+        # passed by an agent that fires that call on arrival, having established nothing.
+        "solution": [
+            {"tool": "lst", "arguments": {}},
+            {"tool": "add", "arguments": {"item_id": "big_mac"}},
+        ],
         "sub_goals": ["item-added", "right-item"],
     }
     payload.update(overrides)
@@ -2514,7 +2525,12 @@ def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_pat
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
-        _delta(solution=[{"tool": "add", "arguments": {"item_id": "sushi"}}]),
+        _delta(
+            solution=[
+                {"tool": "lst", "arguments": {}},
+                {"tool": "add", "arguments": {"item_id": "sushi"}},
+            ]
+        ),
         world_root=root,
         catalogue=catalogue,
         kept=[],
@@ -4327,17 +4343,25 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     # not tools, and the list of them is derived rather than hand-kept so it cannot go stale.
     from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.contract import AgentContract, ToolSpec
-    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenario import Persona, Scenario, Step
 
     fields = set()
-    for model in (AgentContract, ToolSpec, Scenario, Persona, SubGoal):
+    for model in (AgentContract, ToolSpec, Scenario, Persona, Step, SubGoal):
         fields |= set(model.model_fields)
     # Names from the check-writing examples the skills contain.
-    from fi.alk.harness.contract import MODALITIES
+    from fi.alk.harness.contract import CALL_DIRECTIONS, MODALITIES
+    from fi.alk.harness.scenario import CALLER_AWARENESS, FIXTURE_ORIGINS
 
+    # Offered values, derived from where they are defined rather than listed here, so a new one
+    # cannot make this test wrong.
     ignore = (
         fields
         | set(MODALITIES)
+        | set(CALL_DIRECTIONS)
+        | set(CALLER_AWARENESS)
+        | set(FIXTURE_ORIGINS)
+        # A fixture key, and one tool argument the skills name while explaining a tool.
+        | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
     )
 
@@ -4359,10 +4383,13 @@ def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
     """A transfer/refusal scenario cannot also require work after the conversation ends."""
     from fi.alk.harness.config import SKILLS_ROOT
 
-    text = (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8")
+    text = (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8").lower()
+    # The rule, not one draft's sentences: a phrasing test pins prose and blocks any rewrite of
+    # the skill, which is a document that gets rewritten.
     assert "one coherent terminal outcome" in text
-    assert "must not also require a transaction to finish after that transfer" in text
-    assert "split them into" in text and "separate scenarios" in text
+    assert "outcomes stop one another" in text
+    assert "must not also require a transaction to finish" in text
+    assert "split them" in text and "separate scenario" in text
 
 
 def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
@@ -7058,17 +7085,18 @@ def test_background_noise_is_decided_the_same_way_twice():
     assert Scenario(name="x", background_noise="street").background_noise == "street"
 
 
-def test_background_noise_needs_opting_in(monkeypatch):
-    """Silence is what a run with no environment set falls into: noise shortens calls, so it is
-    asked for rather than escaped. Anything unrecognised stays silent instead of turning it on."""
+def test_background_noise_is_on_unless_turned_off(monkeypatch):
+    """A caller is somewhere. Noise was opt-in and every deployment forgot, so a run with nothing set
+    now hears it; only an explicit off turns it off, and a typo leaves it on rather than silently
+    reverting to a studio."""
     from fi.alk.harness.background_noise import enabled
 
     monkeypatch.delenv("ALK_BACKGROUND_NOISE", raising=False)
-    assert enabled() is False
-    for off in ("", "0", "off", "false", "no", "ture"):
+    assert enabled() is True
+    for off in ("0", "off", "false", "no", "OFF"):
         monkeypatch.setenv("ALK_BACKGROUND_NOISE", off)
         assert enabled() is False, off
-    for on in ("1", "on", "TRUE", "yes"):
+    for on in ("1", "on", "TRUE", "yes", "ture", ""):
         monkeypatch.setenv("ALK_BACKGROUND_NOISE", on)
         assert enabled() is True, on
 

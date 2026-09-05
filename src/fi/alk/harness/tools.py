@@ -14,7 +14,7 @@ from typing import Any
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
 
-from .contract import MODALITIES, AgentContract, validate_contract
+from .contract import CALL_DIRECTIONS, MODALITIES, AgentContract, validate_contract
 
 CONTRACT_SERVER = "contract"
 
@@ -206,6 +206,17 @@ def contract_tools(destination: Path) -> Any:
                     "session (LiveKit, telephony, TTS/STT) is voice; a text interface is chat; "
                     "a browser-driving agent is browser. This decides how it is later run.",
                 },
+                "call_direction": {
+                    "type": "string",
+                    "enum": list(CALL_DIRECTIONS),
+                    "description": "Voice only, and read from the agent's own instructions rather "
+                    "than guessed. Outbound if it places the call and the person is not expecting "
+                    "it (\"you placed this call\", \"this is us calling about\"); inbound if "
+                    "people dial in to it (\"callers dial in\", \"thanks for calling\"). "
+                    "Leave unset for chat, which a person always starts. This decides how the "
+                    "simulated person is briefed: someone who did not dial has no opening request "
+                    "to make.",
+                },
                 "conversational": {
                     "type": "boolean",
                     "description": "True if a person talks with it turn by turn. False for an "
@@ -250,6 +261,17 @@ def contract_tools(destination: Path) -> Any:
                                 '{"priority": ["low", "normal", "urgent"]}.',
                             },
                             "description": {"type": "string"},
+                            "requires": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Tools that must have run before this one stops "
+                                "refusing, read from a guard in its own body. Only state the agent "
+                                "builds during the conversation counts: a quote taken, an option "
+                                "selected. Identity established when the call opens does not, "
+                                "since it holds before any tool runs. Empty means callable first "
+                                "thing, and naming a tool that is not gated makes every future "
+                                "test of it replay a preamble it never needed.",
+                            },
                         },
                         # Nothing required: a tool genuinely taking no arguments is ordinary,
                         # and requiring args here rejects the whole contract because of one.
